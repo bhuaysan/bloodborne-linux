@@ -443,15 +443,22 @@ TEST(ParseDynamicGame, ReadsTheEboot) {
     EXPECT_EQ(imports("libScePosix", stt_func), 32);
     EXPECT_EQ(imports("libSceAppContent", stt_func), 3);
     // Library names and the module and file names they come from.
-    auto module_of = [&](std::string_view library) -> const Module& {
+    auto module_of = [&](std::string_view library) -> const Module* {
         auto lib = std::find_if(info.libraries.begin(), info.libraries.end(),
                                 [&](const Library& l) { return l.name == library; });
-        EXPECT_NE(lib, info.libraries.end()) << library;
-        return info.needed.at(lib->module.value() - 1);
+        if (lib == info.libraries.end() || !lib->module || *lib->module == 0 ||
+            *lib->module > info.needed.size()) {
+            return nullptr;
+        }
+        return &info.needed[*lib->module - 1];
     };
-    EXPECT_EQ(module_of("libScePosix").name, "libkernel");
-    EXPECT_EQ(module_of("libSceAppContent").name, "libSceAppContentUtil");
-    EXPECT_EQ(module_of("libSceAppContent").file, "libSceAppContent.prx");
+    const Module* posix = module_of("libScePosix");
+    const Module* app_content = module_of("libSceAppContent");
+    ASSERT_TRUE(posix);
+    ASSERT_TRUE(app_content);
+    EXPECT_EQ(posix->name, "libkernel");
+    EXPECT_EQ(app_content->name, "libSceAppContentUtil");
+    EXPECT_EQ(app_content->file, "libSceAppContent.prx");
 }
 
 }  // namespace
