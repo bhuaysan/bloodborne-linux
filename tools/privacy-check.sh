@@ -34,7 +34,11 @@ problems="$( { git ls-tree -r -z --name-only HEAD
 [ -z "$problems" ] || fail "$problems"
 big="$(git rev-list --objects "$range" |
     git cat-file --batch-check='%(objecttype) %(objectsize) %(rest)' |
-    while read -r type size path; do
+    # split by hand: read would strip trailing spaces from the path, and
+    # "symbols/a.csv " would get the larger symbols/*.csv limit
+    while IFS= read -r line; do
+        type="${line%% *}"; line="${line#* }"
+        size="${line%% *}"; path="${line#* }"
         [ "$type" = blob ] || continue
         [ "$size" -le "$(size_limit "$path")" ] || echo "file too large ($size bytes): $path"
     done)"
