@@ -75,7 +75,7 @@ Who runs which steps:
 
 | Caller | Steps |
 |---|---|
-| `bb-load` (M2) | 1 (#43); 2 with `bb::hle::resolve` and 4 added by #44 |
+| `bb-load` (M2) | 1 and 4 (#43); 2 with `bb::hle::resolve` added by #44 |
 | differential harness (M2) | 1, 2 with `bb::hle::resolve`, 4 |
 | game runtime (M3) | 1, 2 with `bb::hle::resolve`, 3 with all registered replacements, 4, then TLS setup and the entry point |
 | loader unit tests | 1, 2 with a fake resolver, 4 |
@@ -235,3 +235,5 @@ Not compared: the stack below the call, registers other than the return register
 ## Tools
 
 `bb-load` maps the eboot, binds every import through `bb::hle::resolve`, prints the base, the segments, the number of relocations by type and the number of imports by library, and exits without running game code. Its output is checked against `tools/elfimports`.
+
+The game directory comes from `--game-dir` or else `BB_GAME_DIR` in the environment. Unlike the tests, `bb-load` doesn't read `local.env`: it is a user-facing program and runs outside the repository too. The #43 version maps and finalizes the eboot and prints the base, the entry point, the segments (link address, memory and file size, protection), the TLS template, the `PT_SCE_PROCPARAM` address and the imports by library (functions and objects, in the order of `tools/elfimports`). #44 adds the relocation step and the counts by relocation type. A test runs it on the eboot and compares the counts with those of `tools/elfimports` for `eboot.elf`: 701 imports in 39 libraries.

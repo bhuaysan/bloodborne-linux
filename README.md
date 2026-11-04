@@ -45,6 +45,12 @@ ctest --preset debug
 
 Each preset builds into `build/<preset>/`. Tests that need the game skip when `BB_GAME_DIR` is not set.
 
+`bb-load` checks that your dump loads: it maps the game executable, then prints its segments, TLS template and imports, without running any game code. It takes the game from `BB_GAME_DIR` or `--game-dir`:
+
+```sh
+build/debug/src/tools/bb-load --game-dir /path/to/your/CUSA03173
+```
+
 CI (GitHub Actions, `.github/workflows/ci.yml`) builds all three presets on Ubuntu 24.04 with warnings as errors, runs the tests and checks every commit of a pull request with `tools/privacy-check.sh`. CI has no game files, so the game tests skip there.
 
 ## Documentation
