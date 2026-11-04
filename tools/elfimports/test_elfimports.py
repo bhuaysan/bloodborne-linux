@@ -11,7 +11,6 @@ import contextlib
 import csv
 import hashlib
 import io
-import re
 import shutil
 import sys
 import tempfile
@@ -26,7 +25,7 @@ import elfimports as ei  # noqa: E402
 import ps4elf as p  # noqa: E402
 import self2elf  # noqa: E402
 
-FUNC, OBJECT, SECTION = 2, 1, 3
+NOTYPE, FUNC, OBJECT, SECTION = 0, 2, 1, 3
 GLOBAL, WEAK, LOCAL = 1, 2, 0
 
 NID_A = "AAAAAAAAAAA"
@@ -133,7 +132,7 @@ def game_like() -> tuple[bytes, bytes, bytes]:
                .export_lib(1, "libBundled")
                .sym(f"{NID_A}#A#B").sym(f"{NID_C}#A#B")
                .sym(f"{NID_A}#B#A", defined=True).sym(f"{NID_B}#B#A", OBJECT, WEAK, True)
-               .sym("module_start", defined=True))
+               .sym("module_start", NOTYPE, WEAK))
     other = (Builder(prx=True, module="libOther", soname="libOther.prx")
              .needed("libkernel.prx", 1, "libkernel").import_lib(0, "libkernel")
              .export_lib(1, "libOther").sym(f"{NID_B}#A#B").sym(f"{NID_C}#B#A", defined=True))
@@ -182,10 +181,6 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(self.prx.plain_symbols, ["module_start"])
         self.assertEqual(self.prx.soname, "libBundled.prx")
 
-    def test_needed_not_paired_when_numbering_differs(self):
-        data = Builder().needed("a.prx", 2, "a").build()
-        self.assertIsNone(analyze(data).modules[2].needed)
-
 
 class RejectTests(unittest.TestCase):
     def assertRejects(self, builder: Builder, message: str):
@@ -212,6 +207,15 @@ class RejectTests(unittest.TestCase):
 
     def test_malformed_name(self):
         self.assertRejects(self.base().sym(f"{NID_A}#A"), "malformed symbol name")
+
+    def test_needed_numbering_differs(self):
+        self.assertRejects(Builder().needed("a.prx", 2, "a"), "not numbered 1..n")
+
+    def test_plain_import_refused(self):
+        self.assertRejects(self.base().sym("memcpy"), "without a NID")
+
+    def test_plain_module_start_must_be_weak_reference(self):
+        self.assertRejects(self.base().sym("module_start", FUNC, GLOBAL, True), "without a NID")
 
     def test_unnamed_non_section_symbol(self):
         self.assertRejects(self.base().sym(""), "malformed symbol name")
@@ -243,13 +247,24 @@ class CrossFileTests(unittest.TestCase):
         exe, bundled, other = game_like()
         self.infos = [analyze(exe, "game.elf"), analyze(bundled, "bundled.elf"),
                       analyze(other, "other.elf")]
-        self.provided = ei.providers([i for i in self.infos if i.is_prx])
-        self.text = ei.summary(self.infos, self.provided)
+        self.text = ei.summary(self.infos)
 
     def test_providers(self):
-        self.assertEqual(self.provided, {("libBundled", NID_A): "bundled.elf",
-                                         ("libBundled", NID_B): "bundled.elf",
-                                         ("libOther", NID_C): "other.elf"})
+        self.assertEqual(ei.providers([i for i in self.infos if i.is_prx]),
+                         {("libBundled", "libBundled", NID_A): "bundled.elf",
+                          ("libBundled", "libBundled", NID_B): "bundled.elf",
+                          ("libOther", "libOther", NID_C): "other.elf"})
+
+    def test_resolvers_only_use_loaded_prxs(self):
+        resolved = ei.resolvers(self.infos)
+        self.assertEqual(set(resolved["game.elf"].values()), {"bundled.elf"})
+        self.assertEqual(resolved["other.elf"], {})
+
+    def test_duplicate_export_refused(self):
+        twin = Builder(prx=True, module="libBundled", soname="twin.prx").export_lib(1, "libBundled")
+        twin.sym(f"{NID_C}#B#A", defined=True)
+        with self.assertRaisesRegex(p.ElfError, "exported by bundled.elf and twin.elf"):
+            ei.providers([self.infos[1], analyze(twin.build(), "twin.elf")])
 
     def test_static_load_set(self):
         self.assertEqual([i.name for i in ei.static_load_set(self.infos)],
@@ -268,9 +283,35 @@ class CrossFileTests(unittest.TestCase):
     def test_unresolved_bundled_import(self):
         exe = (Builder().needed("libBundled.prx", 1, "libBundled").import_lib(0, "libBundled")
                .sym(f"{NID_C}#A#B").build())
-        infos = [analyze(exe, "game.elf"), self.infos[1]]
-        text = ei.summary(infos, ei.providers(infos[1:]))
+        text = ei.summary([analyze(exe, "game.elf"), self.infos[1]])
         self.assertIn("- game.elf: 1 from libBundled", text)
+
+    def test_export_of_unloaded_prx_is_not_bundled(self):
+        # The game imports from module libBundled, but its DT_NEEDED names another file, so
+        # bundled.elf is not loaded and can't provide the import.
+        exe = (Builder().needed("libBundled_x.prx", 1, "libBundled").import_lib(0, "libBundled")
+               .sym(f"{NID_A}#A#B").build())
+        text = ei.summary([analyze(exe, "game.elf"), self.infos[1]])
+        self.assertIn("| libBundled | libBundled | 1 | 1 func | game.elf |", text)
+        self.assertIn("- game.elf: 1 from libBundled", text)
+        self.assertIn("|---|---|---|---|\n\n## Unresolved", text)  # no bundled use
+
+    def test_same_library_from_two_modules(self):
+        exe = (Builder().needed("a.prx", 1, "modA").needed("b.prx", 2, "modB")
+               .import_lib(0, "libX").import_lib(1, "libX")
+               .sym(f"{NID_A}#A#B").sym(f"{NID_B}#B#C").build())
+        text = ei.summary([analyze(exe, "game.elf")])
+        self.assertIn("| libX | modA | 1 | 1 func | game.elf |", text)
+        self.assertIn("| libX | modB | 1 | 1 func | game.elf |", text)
+
+    def test_nid_with_two_types_counts_once(self):
+        # The same libkernel-style NID, imported as func by the game and as object by a PRX.
+        prx =(Builder(prx=True, module="p", soname="p.prx").needed("k.prx", 1, "k")
+               .import_lib(0, "k").sym(f"{NID_A}#A#B", OBJECT).build())
+        exe = (Builder().needed("k.prx", 1, "k").needed("p.prx", 2, "p").import_lib(0, "k")
+               .sym(f"{NID_A}#A#B").build())
+        text = ei.summary([analyze(exe, "game.elf"), analyze(prx, "p.elf")])
+        self.assertIn("| k | k | 1 | 1 mixed | game.elf, p.elf |", text)
 
     def test_summary_has_no_nids(self):
         for nid in (NID_A, NID_B, NID_C):
@@ -316,6 +357,14 @@ class MainTests(unittest.TestCase):
             exports = [r for r in csv.DictReader(fh) if r["direction"] == "export"]
         self.assertEqual([r["value"] for r in exports], ["0x1030", "0x1040"])
 
+    def test_outputs_of_earlier_runs_removed(self):
+        out = self.tmp / "out"
+        self.run_main("-o", str(out))
+        (out / "notes.txt").write_text("not ours")
+        self.assertEqual(self.run_main(str(self.files[0]), "-o", str(out)), (0, ""))
+        self.assertEqual(sorted(f.name for f in out.iterdir()),
+                         ["game.csv", "notes.txt", "summary.md"])
+
     def test_unpinned_file_refused_and_nothing_written(self):
         stray = self.tmp / "in" / "stray.elf"
         stray.parent.mkdir()
@@ -338,7 +387,6 @@ class MainTests(unittest.TestCase):
 
 
 GAME_DIR = ei.load_game_dir()
-NID_PATTERN = re.compile(r"\b[A-Za-z0-9+-]{11}\b")
 
 
 @unittest.skipUnless(GAME_DIR, "BB_GAME_DIR not set (environment or local.env)")
@@ -351,13 +399,13 @@ class GameTests(unittest.TestCase):
             self.assertIsNotNone(known, path.name)
             infos.append(ei.analyze(known, p.parse(data)))
         self.assertEqual({i.name for i in infos}, set(ei.KNOWN_FILES.values()))
-        provided = ei.providers([i for i in infos if i.is_prx])
-        text = ei.summary(infos, provided)
+        text = ei.summary(infos)
         self.assertIn("## Unresolved imports from bundled libraries\n\nNone.", text)
         self.assertEqual([i.name for i in ei.static_load_set(infos)],
                          ["eboot.elf", "libSceFios2.elf", "libc.elf"])
+        # Plain substring search: NIDs may start or end with + or -, which word boundaries miss.
         nids = {e.nid for i in infos for e in i.imports + i.exports}
-        self.assertFalse(nids & set(NID_PATTERN.findall(text)), "summary contains NIDs")
+        self.assertEqual([n for n in nids if n in text], [], "summary contains NIDs")
 
 
 if __name__ == "__main__":

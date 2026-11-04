@@ -46,7 +46,9 @@ NID_LENGTH = 11
 STT_NAMES = {0: "notype", 1: "object", 2: "func", 6: "tls"}
 STB_NAMES = {0: "local", 1: "global", 2: "weak"}
 STT_SECTION = 3
+STB_WEAK = 2
 SHN_UNDEF = 0
+PLAIN_NAMES = {"module_start", "module_stop"}
 
 
 @dataclass
@@ -87,7 +89,7 @@ class ElfInfo:
     libraries: dict[tuple[bool, int], Library]  # by (exported, id)
     imports: list[Entry] = field(default_factory=list)
     exports: list[Entry] = field(default_factory=list)
-    plain_symbols: list[str] = field(default_factory=list)  # e.g. module_start
+    plain_symbols: list[str] = field(default_factory=list)  # module_start, module_stop
 
 
 def decode_id(text: str) -> int:
@@ -143,10 +145,12 @@ def analyze(name: str, image: DynImage) -> ElfInfo:
         need(lib is not None and lib.attr is None, f"attribute record for unknown library {lib_id}")
         lib.attr = attr
 
-    # In all pinned files the needed modules are numbered 1..n in DT_NEEDED order.
-    if sorted(modules) == list(range(1, len(needed) + 1)):
-        for mod_id, file_name in enumerate(needed, start=1):
-            modules[mod_id].needed = file_name
+    # In all pinned files the needed modules are numbered 1..n in DT_NEEDED order. Module names
+    # can differ from the file names, so without that numbering there is no safe pairing.
+    need(sorted(modules) == list(range(1, len(needed) + 1)),
+         "needed module records are not numbered 1..n in DT_NEEDED order")
+    for mod_id, file_name in enumerate(needed, start=1):
+        modules[mod_id].needed = file_name
 
     info = ElfInfo(name, image.e_type == ET_SCE_DYNAMIC, soname, self_module, modules, libraries)
     for sym in image.symbols[1:]:
@@ -155,6 +159,10 @@ def analyze(name: str, image: DynImage) -> ElfInfo:
         parts = sym.name.decode("ascii").split("#")
         if len(parts) != 3:
             need(len(parts) == 1 and sym.name != b"", f"malformed symbol name {sym.name!r}")
+            # The only plain names in the pinned files are weak, untyped references with value 0.
+            # Anything else might be an import we would silently drop, so refuse it.
+            need(parts[0] in PLAIN_NAMES and sym.bind == STB_WEAK and sym.shndx == SHN_UNDEF,
+                 f"unexpected symbol {sym.name!r} without a NID")
             info.plain_symbols.append(parts[0])
             continue
         nid, lib_text, mod_text = parts
@@ -176,47 +184,79 @@ def analyze(name: str, image: DynImage) -> ElfInfo:
 
 
 # --- across files -----------------------------------------------------------------------------
+#
+# An import names the module it comes from, and every bundled PRX exports its libraries under its
+# own module name. So an import is resolved by (module, library, NID), and only against the PRXs
+# that the importing file loads through DT_NEEDED.
 
-def providers(infos: list[ElfInfo]) -> dict[tuple[str, str], str]:
-    """(library, NID) -> name of the bundled PRX that exports it."""
-    out: dict[tuple[str, str], str] = {}
-    for info in infos:
+Key = tuple[str, str, str]  # (module, library, NID)
+
+
+def key(entry: Entry) -> Key:
+    return entry.module.name, entry.library.name, entry.nid
+
+
+def providers(prxs: list[ElfInfo]) -> dict[Key, str]:
+    """(module, library, NID) -> name of the bundled PRX that exports it."""
+    owner: dict[tuple[str, str], str] = {}
+    out: dict[Key, str] = {}
+    for info in prxs:
         for entry in info.exports:
-            out.setdefault((entry.library.name, entry.nid), info.name)
+            mod, lib, _ = key(entry)
+            first = owner.setdefault((mod, lib), info.name)
+            need(first == info.name, f"library {lib} of module {mod} is exported by {first} "
+                                     f"and {info.name}")
+            out[key(entry)] = info.name
+    return out
+
+
+def closure(info: ElfInfo, infos: list[ElfInfo]) -> list[ElfInfo]:
+    """The file plus the given PRXs it pulls in through DT_NEEDED, transitively."""
+    by_soname = {i.soname: i for i in infos if i.is_prx and i.soname}
+    todo = [info]
+    out: list[ElfInfo] = []
+    while todo:
+        cur = todo.pop(0)
+        if cur in out:
+            continue
+        out.append(cur)
+        todo += [by_soname[m.needed] for m in cur.modules.values() if m.needed in by_soname]
     return out
 
 
 def static_load_set(infos: list[ElfInfo]) -> list[ElfInfo]:
     """The executable plus the bundled PRXs it pulls in through DT_NEEDED, transitively."""
-    by_soname = {info.soname: info for info in infos if info.is_prx and info.soname}
-    todo = [info for info in infos if not info.is_prx]
     loaded: list[ElfInfo] = []
-    while todo:
-        info = todo.pop(0)
-        if info in loaded:
-            continue
-        loaded.append(info)
-        todo += [by_soname[m.needed] for m in info.modules.values() if m.needed in by_soname]
+    for exe in (i for i in infos if not i.is_prx):
+        loaded += [i for i in closure(exe, infos) if i not in loaded]
     return loaded
 
 
-def write_csv(path: Path, info: ElfInfo, provided: dict[tuple[str, str], str]) -> None:
+def resolvers(infos: list[ElfInfo]) -> dict[str, dict[Key, str]]:
+    """File name -> exports of the PRXs that file loads (its closure without itself)."""
+    return {info.name: providers(closure(info, infos)[1:]) for info in infos}
+
+
+def write_csv(path: Path, info: ElfInfo, provided: dict[Key, str]) -> None:
     with path.open("w", newline="") as fh:
         out = csv.writer(fh)
         out.writerow(["direction", "nid", "library", "module", "type", "bind", "provided_by",
                       "value"])
         for entry in info.imports:
-            source = provided.get((entry.library.name, entry.nid), "firmware")
             out.writerow(["import", entry.nid, entry.library.name, entry.module.name, entry.type,
-                          entry.bind, source, ""])
+                          entry.bind, provided.get(key(entry), "firmware"), ""])
         for entry in info.exports:
             out.writerow(["export", entry.nid, entry.library.name, entry.module.name, entry.type,
                           entry.bind, info.name, f"{entry.value:#x}"])
 
 
 def _counts(entries: list[Entry]) -> Counter:
-    """Unique NIDs per symbol type. A NID can appear twice, e.g. as a weak and a global entry."""
-    return Counter(t for _, t in {(e.nid, e.type) for e in entries})
+    """Symbol type per unique NID. A NID can appear twice, e.g. as a weak and a global entry. A NID
+    seen with two types counts once, as "mixed", so the counts add up to the number of NIDs."""
+    types: dict[str, set[str]] = defaultdict(set)
+    for e in entries:
+        types[e.nid].add(e.type)
+    return Counter(next(iter(t)) if len(t) == 1 else "mixed" for t in types.values())
 
 
 def _types(counts: Counter) -> str:
@@ -225,7 +265,16 @@ def _types(counts: Counter) -> str:
     return ", ".join(f"{counts[k]} {k}" for k in keys if counts[k]) or "none"
 
 
-def summary(infos: list[ElfInfo], provided: dict[tuple[str, str], str]) -> str:
+def _nids(entries: list[Entry]) -> int:
+    return len({e.nid for e in entries})
+
+
+def summary(infos: list[ElfInfo]) -> str:
+    resolved = resolvers(infos)
+    everything = providers([i for i in infos if i.is_prx])
+    owner = {(mod, lib): prx for (mod, lib, _), prx in everything.items()}
+    exported: Counter = Counter((mod, lib) for mod, lib, _ in everything)
+
     lines = ["# Import summary", "",
              "Generated by tools/elfimports. Contains no NIDs. The full lists are in the CSVs.", "",
              "## Files", "",
@@ -243,40 +292,39 @@ def summary(infos: list[ElfInfo], provided: dict[tuple[str, str], str]) -> str:
               "Not referenced through DT_NEEDED by any file in the set: "
               + (", ".join(i.name for i in infos if i not in loaded) or "none") + "."]
 
-    # Firmware scope: imports of the static load set that no bundled PRX provides.
-    scope: dict[str, list[Entry]] = defaultdict(list)
-    users: dict[str, set[str]] = defaultdict(set)
-    bundled_use: dict[str, list[Entry]] = defaultdict(list)
+    # Firmware scope: imports of the static load set that no PRX loaded by the file provides.
+    # Grouped by (library, module): the same library name may come from two modules.
+    scope: dict[tuple[str, str], list[Entry]] = defaultdict(list)
+    users: dict[tuple[str, str], set[str]] = defaultdict(set)
+    bundled_use: dict[tuple[str, str], list[Entry]] = defaultdict(list)
     for info in loaded:
         for entry in info.imports:
-            if (entry.library.name, entry.nid) in provided:
-                bundled_use[entry.library.name].append(entry)
+            group = entry.library.name, entry.module.name
+            if key(entry) in resolved[info.name]:
+                bundled_use[group].append(entry)
             else:
-                scope[entry.library.name].append(entry)
-                users[entry.library.name].add(info.name)
-    modules = {e.library.name: e.module.name for es in scope.values() for e in es}
+                scope[group].append(entry)
+                users[group].add(info.name)
 
-    def nids(entries: list[Entry]) -> int:
-        return len({e.nid for e in entries})
-
-    total = sum(nids(es) for es in scope.values())
+    total = sum(_nids(es) for es in scope.values())
     lines += ["", "## Firmware imports of the static load set", "",
               f"{total} NIDs in {len(scope)} libraries.", "",
               "| Library | Module | NIDs | Types | Imported by |", "|---|---|---|---|---|"]
-    for lib in sorted(scope, key=lambda k: (-nids(scope[k]), k)):
-        lines.append(f"| {lib} | {modules[lib]} | {nids(scope[lib])} | "
-                     f"{_types(_counts(scope[lib]))} | {', '.join(sorted(users[lib]))} |")
+    for group in sorted(scope, key=lambda g: (-_nids(scope[g]), g)):
+        lib, mod = group
+        lines.append(f"| {lib} | {mod} | {_nids(scope[group])} | "
+                     f"{_types(_counts(scope[group]))} | {', '.join(sorted(users[group]))} |")
 
     lines += ["", "## Bundled libraries used by the static load set", "",
               "| Library | Provided by | NIDs used | NIDs exported |", "|---|---|---|---|"]
-    exported: Counter = Counter(lib for lib, _ in provided)
-    owner = {lib: prx for (lib, _), prx in provided.items()}
-    for lib in sorted(bundled_use):
-        lines.append(f"| {lib} | {owner[lib]} | {nids(bundled_use[lib])} | {exported[lib]} |")
+    for lib, mod in sorted(bundled_use):
+        lines.append(f"| {lib} | {owner[mod, lib]} | {_nids(bundled_use[lib, mod])} | "
+                     f"{exported[mod, lib]} |")
 
-    # Imports from a library that a bundled PRX exports but whose NID it doesn't export.
+    # Imports from a library that a given PRX exports, but that the file doesn't get from it:
+    # the PRX doesn't export that NID, or the file doesn't load the PRX.
     missing = [(info.name, e.library.name) for info in infos for e in info.imports
-               if e.library.name in owner and (e.library.name, e.nid) not in provided]
+               if (e.module.name, e.library.name) in owner and key(e) not in resolved[info.name]]
     lines += ["", "## Unresolved imports from bundled libraries", ""]
     if missing:
         lines += [f"- {file}: {n} from {lib}" for (file, lib), n in sorted(Counter(missing).items())]
@@ -298,8 +346,8 @@ def summary(infos: list[ElfInfo], provided: dict[tuple[str, str], str]) -> str:
         lines += ["", "## Firmware imports of the other PRXs", "",
                   "| File | Libraries |", "|---|---|"]
         for info in others:
-            firmware = {(e.library.name, e.nid) for e in info.imports} - provided.keys()
-            libs = Counter(lib for lib, _ in firmware)
+            firmware = {key(e) for e in info.imports} - resolved[info.name].keys()
+            libs = Counter(lib for _, lib, _ in firmware)
             lines.append(f"| {info.name} | "
                          + ", ".join(f"{lib} ({n})" for lib, n in sorted(libs.items())) + " |")
     return "\n".join(lines) + "\n"
@@ -352,11 +400,19 @@ def main(argv: list[str] | None = None) -> int:
         print("error: the same file was given twice", file=sys.stderr)
         return 1
 
-    provided = providers([info for info in infos if info.is_prx])
+    try:
+        text = summary(infos)
+    except ElfError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    resolved = resolvers(infos)
+
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Drop outputs of earlier runs, which may cover other files. Only our own file names.
+    for stale in [Path(n).stem + ".csv" for n in KNOWN_FILES.values()] + ["summary.md"]:
+        (out_dir / stale).unlink(missing_ok=True)
     for info in infos:
-        write_csv(out_dir / (Path(info.name).stem + ".csv"), info, provided)
-    text = summary(infos, provided)
+        write_csv(out_dir / (Path(info.name).stem + ".csv"), info, resolved[info.name])
     (out_dir / "summary.md").write_text(text)
     print(text, end="")
     return 0

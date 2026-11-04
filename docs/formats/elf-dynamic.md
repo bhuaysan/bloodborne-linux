@@ -76,7 +76,7 @@ Symbol table entries are standard `Elf64_Sym`. Imported symbols are undefined (`
 - the NID is 11 characters from a base64-style alphabet (letters, digits, `+`, `-`),
 - the library and module parts are ids written as base64 digits, see [Module and library records](#module-and-library-records).
 
-Exported symbols use the same form and point at their definition (`st_value`). Their library id names one of the file's own exported libraries, and their module id is 0, the file itself. A few symbols keep plain names (`module_start`, `module_stop`, PRX only). Each file also has one unnamed local `STT_SECTION` symbol, which carries nothing.
+Exported symbols use the same form and point at their definition (`st_value`). Their library id names one of the file's own exported libraries, and their module id is 0, the file itself. Six of the seven PRXs (all but libc) also have `module_start` and `module_stop` under plain names, as weak, untyped, undefined symbols with value 0. They are neither imports nor exports. `tools/elfimports` refuses any other plain name. Each file also has one unnamed local `STT_SECTION` symbol, which carries nothing.
 
 Symbol types in use: `STT_FUNC` (2), `STT_OBJECT` (1) for imported and exported data, and `STT_TLS` (6) for 4 exports of libc. Bindings are `STB_GLOBAL`, and `STB_WEAK` in libc's exports.
 
