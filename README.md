@@ -27,6 +27,24 @@ Executable analysis (M1) is done: tools under `tools/` extract the executable, m
 export BB_GAME_DIR=/path/to/your/CUSA03173
 ```
 
+## Building
+
+The runtime is C++20, built with CMake (3.25 or newer) and Ninja. The unit tests use GoogleTest, which the build finds as an installed package (on Fedora: `cmake ninja-build gtest-devel libasan libubsan`; on Debian and Ubuntu: `cmake ninja-build libgtest-dev`).
+
+```sh
+cmake --preset debug          # or relwithdebinfo, release
+cmake --build --preset debug
+ctest --preset debug
+```
+
+| Preset | Use |
+|---|---|
+| `debug` | everyday development, with AddressSanitizer and UndefinedBehaviorSanitizer |
+| `relwithdebinfo` | optimized and debuggable, for playtesting and profiling |
+| `release` | optimized |
+
+Each preset builds into `build/<preset>/`. Tests that need the game skip when `BB_GAME_DIR` is not set.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md)
