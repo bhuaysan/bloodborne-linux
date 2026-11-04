@@ -105,11 +105,12 @@ struct Image {
     std::optional<uint64_t> function_size(uint64_t link) const;  // see Hooks
     bool finalized() const;
     void finalize_protection();
+    Reservation mapping;                      // the reserved range, unmapped on destruction
 };
 }
 ```
 
-The image owns its mapping and unmaps it on destruction. `DynamicInfo` holds the parsed tables from `PT_SCE_DYNLIBDATA` (`docs/formats/elf-dynamic.md`): the symbols, both relocation tables, the module and library records, the `Import` of each undefined `NID#library#module` symbol, and the values of `DT_SCE_PLTGOT`, `DT_INIT`, `DT_FINI`, the preinit, init and fini arrays (link address and size), `DT_NEEDED` (in order) and `DT_TEXTREL`. The records are checked as `tools/elfimports` checks them. Only the parsed data is kept, not the raw segment.
+The image owns its mapping through `mapping` and unmaps it on destruction. It is move-only; a move keeps every runtime address valid. `DynamicInfo` holds the parsed tables from `PT_SCE_DYNLIBDATA` (`docs/formats/elf-dynamic.md`): the symbols, both relocation tables, the module and library records, the `Import` of each undefined `NID#library#module` symbol, and the values of `DT_SCE_PLTGOT`, `DT_INIT`, `DT_FINI`, the preinit, init and fini arrays (link address and size), `DT_NEEDED` (in order) and `DT_TEXTREL`. The records are checked as `tools/elfimports` checks them. Only the parsed data is kept, not the raw segment.
 
 ### Relocations
 
