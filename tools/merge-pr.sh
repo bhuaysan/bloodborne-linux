@@ -34,6 +34,8 @@ set -eu
 # expanded against files in the PR's worktree, and a directory named like
 # ":(glob)x" would replace the .gitattributes pathspec.
 set -f
+# These would make git ignore the :(glob) and :! magic in the pathspecs.
+unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS
 
 usage() { echo "usage: $0 [--maintainer] [--sha <commit>] <pr-number>" >&2; exit 2; }
 maintainer=0
