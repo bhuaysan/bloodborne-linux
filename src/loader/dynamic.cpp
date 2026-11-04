@@ -45,6 +45,10 @@ constexpr Tag dt_sce_symtabsz{0x6100003F, "DT_SCE_SYMTABSZ"};
 constexpr std::size_t dyn_size = 16;
 constexpr std::size_t sym_size = 24;
 constexpr std::size_t rela_size = 24;
+constexpr std::size_t nid_length = 11;
+// The digits of NIDs and of the ids in symbol names, values 0..63.
+constexpr std::string_view base64_digits =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-";
 
 // The program header of `type`, or nullptr. Throws LoadError when there are several.
 const Phdr* find_phdr(std::span<const Phdr> phdrs, std::uint32_t type, std::string_view what) {
@@ -97,6 +101,79 @@ Library* find_library(std::vector<Library>& libraries, bool exported, std::uint1
     return it == libraries.end() ? nullptr : &*it;
 }
 
+// A one-digit id of a symbol name. Larger ids are refused: how they are written is unknown.
+std::optional<std::uint16_t> decode_id(std::string_view text) {
+    if (text.size() != 1 || base64_digits.find(text[0]) == std::string_view::npos) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint16_t>(base64_digits.find(text[0]));
+}
+
+// Sets sym.kind and sym.decoded from the name, checked against the records of `info`.
+void classify(DynamicInfo& info, Symbol& sym, std::uint64_t index) {
+    auto fail = [&](std::string_view why) {
+        throw LoadError(std::format("symbol {} '{}': {}", index, sym.name, why));
+    };
+    if (index == 0 || (sym.type == stt_section && sym.name.empty())) {
+        return;  // the null symbol and the one unnamed section symbol carry nothing
+    }
+    std::vector<std::string_view> parts;
+    for (std::string_view rest = sym.name;;) {
+        auto hash = rest.find('#');
+        parts.push_back(rest.substr(0, hash));
+        if (hash == std::string_view::npos) {
+            break;
+        }
+        rest.remove_prefix(hash + 1);
+    }
+    if (parts.size() == 1) {
+        // Anything else might be an import that would be dropped silently.
+        if (sym.name != "module_start" && sym.name != "module_stop") {
+            fail("plain name other than module_start or module_stop");
+        }
+        if (sym.bind != stb_weak || sym.type != stt_notype || sym.shndx != 0) {
+            fail("plain name that is not a weak, untyped, undefined symbol");
+        }
+        sym.kind = Symbol::Kind::plain_weak;
+        return;
+    }
+    if (parts.size() != 3) {
+        fail("name is not NID#library#module");
+    }
+    if (parts[0].size() != nid_length ||
+        parts[0].find_first_not_of(base64_digits) != std::string_view::npos) {
+        fail("malformed NID");
+    }
+    auto lib_id = decode_id(parts[1]);
+    auto mod_id = decode_id(parts[2]);
+    if (!lib_id || !mod_id) {
+        fail("library or module id is not one base64 digit");
+    }
+    bool defined = sym.shndx != 0;
+    Library* lib = find_library(info.libraries, defined, *lib_id);
+    if (lib == nullptr) {
+        fail(std::format("no {} library with id {}", defined ? "exported" : "imported", *lib_id));
+    }
+    const Module* mod = nullptr;
+    if (defined) {
+        mod = *mod_id == 0 ? &info.self : nullptr;
+    } else if (*mod_id >= 1 && *mod_id <= info.needed.size()) {
+        mod = &info.needed[*mod_id - 1];
+    }
+    if (mod == nullptr) {
+        fail(std::format("no {} module with id {}", defined ? "own" : "needed", *mod_id));
+    }
+    if (lib->module && *lib->module != mod->id) {
+        fail(std::format("library {} is used with two modules", lib->name));
+    }
+    lib->module = mod->id;
+    if (!defined && sym.type != stt_func && sym.type != stt_object) {
+        fail(std::format("import of symbol type {}", sym.type));
+    }
+    sym.kind = defined ? Symbol::Kind::exported : Symbol::Kind::import;
+    sym.decoded = Import{std::string(parts[0]), lib->name, mod->name, sym.type};
+}
+
 // Reads the module and library records into `info`.
 void read_records(DynamicInfo& info,
                   std::span<const std::pair<std::uint64_t, std::uint64_t>> entries,
@@ -120,7 +197,7 @@ void read_records(DynamicInfo& info,
                 throw LoadError(std::format("duplicate library id {}", rec.id));
             }
             info.libraries.push_back(Library{rec.id, str(rec.low, "library record"), rec.version,
-                                             exported, std::nullopt});
+                                             exported, std::nullopt, std::nullopt});
         } else if (tag == dt_sce_export_lib_attr || tag == dt_sce_import_lib_attr) {
             if (rec.version != 0) {
                 throw LoadError(
@@ -258,11 +335,15 @@ DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> 
         std::uint64_t at = i * sym_size;
         auto name = read_le<std::uint32_t>(symtab, at, "symbol");
         auto st_info = read_le<std::uint8_t>(symtab, at + 4, "symbol");
-        info.symbols.push_back(Symbol{read_string(strtab, name, "symbol name"),
-                                      static_cast<std::uint8_t>(st_info & 0xF),
-                                      static_cast<std::uint8_t>(st_info >> 4),
-                                      read_le<std::uint16_t>(symtab, at + 6, "symbol"),
-                                      read_le<std::uint64_t>(symtab, at + 8, "symbol")});
+        Symbol sym{read_string(strtab, name, "symbol name"),
+                   static_cast<std::uint8_t>(st_info & 0xF),
+                   static_cast<std::uint8_t>(st_info >> 4),
+                   read_le<std::uint16_t>(symtab, at + 6, "symbol"),
+                   read_le<std::uint64_t>(symtab, at + 8, "symbol"),
+                   Symbol::Kind::none,
+                   {}};
+        classify(info, sym, i);
+        info.symbols.push_back(std::move(sym));
     }
     info.plt_relocs = read_relas(jmprel, info.symbols.size(), "PLT relocations");
     info.relocs = read_relas(relatab, info.symbols.size(), "relocations");

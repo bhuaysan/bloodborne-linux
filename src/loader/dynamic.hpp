@@ -13,6 +13,12 @@
 
 namespace bb::loader {
 
+inline constexpr std::uint8_t stt_notype = 0;
+inline constexpr std::uint8_t stt_object = 1;
+inline constexpr std::uint8_t stt_func = 2;
+inline constexpr std::uint8_t stt_section = 3;
+inline constexpr std::uint8_t stb_weak = 2;
+
 inline constexpr std::uint32_t r_x86_64_64 = 1;
 inline constexpr std::uint32_t r_x86_64_glob_dat = 6;
 inline constexpr std::uint32_t r_x86_64_jump_slot = 7;
@@ -32,15 +38,31 @@ struct Library {
     std::string name;
     std::uint16_t version;
     bool exported;
-    std::optional<std::uint32_t> attr;  // from the attribute record, meaning unknown
+    std::optional<std::uint32_t> attr;    // from the attribute record, meaning unknown
+    std::optional<std::uint16_t> module;  // module id of the symbols that use it, if any
+};
+
+// A NID#library#module symbol name decoded through the records. Imports go to the resolver.
+struct Import {
+    std::string nid;              // 11 characters
+    std::string library, module;  // names from the library and module records
+    std::uint8_t type;            // STT_FUNC or STT_OBJECT for imports
 };
 
 // An Elf64_Sym with its name read from the string table.
 struct Symbol {
+    enum class Kind : std::uint8_t {
+        none,        // index 0 and the unnamed section symbol
+        import,      // undefined, of an imported library
+        exported,    // defined, of an exported library
+        plain_weak,  // module_start or module_stop: weak, untyped, undefined, never an import
+    };
     std::string name;  // the name as stored, e.g. NID#library#module
     std::uint8_t type, bind;
     std::uint16_t shndx;  // 0 for undefined symbols
     std::uint64_t value;  // link address for defined symbols
+    Kind kind;
+    Import decoded;  // for imports and exports
 };
 
 struct Rela {
@@ -64,7 +86,7 @@ struct DynamicInfo {
 };
 
 // The dynamic data of the PS4 ELF `elf` with program headers `phdrs`. Every offset, size, count,
-// string and record is checked, the records as tools/elfimports checks them.
+// string, record and symbol name is checked, the records as tools/elfimports checks them.
 // Throws LoadError naming the first problem.
 DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> phdrs);
 

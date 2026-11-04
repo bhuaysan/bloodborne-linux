@@ -189,23 +189,42 @@ TEST(ParseDynamic, ReadsTheTables) {
     const Library& foo = info.libraries[0];
     EXPECT_EQ(foo.name, "libFoo");
     EXPECT_FALSE(foo.exported);
+    EXPECT_EQ(foo.module, 1);
     EXPECT_FALSE(foo.attr);
     const Library& bar = info.libraries[1];
     EXPECT_EQ(bar.id, 1);
+    EXPECT_FALSE(bar.module);  // declared, nothing imported from it
     EXPECT_EQ(bar.attr, 9U);
     const Library& own = info.libraries[2];
     EXPECT_EQ(own.name, "libSelf");
     EXPECT_TRUE(own.exported);
+    EXPECT_EQ(own.module, 0);
     EXPECT_EQ(own.attr, 1U);
 
     ASSERT_EQ(info.symbols.size(), 6U);
+    EXPECT_EQ(info.symbols[0].kind, Symbol::Kind::none);
     const Symbol& import = info.symbols[1];
     EXPECT_EQ(import.name, "AAAAAAAAAAA#A#B");
     EXPECT_EQ(import.type, 2);
     EXPECT_EQ(import.bind, 1);
     EXPECT_EQ(import.shndx, 0);
+    EXPECT_EQ(import.kind, Symbol::Kind::import);
+    EXPECT_EQ(import.decoded.nid, "AAAAAAAAAAA");
+    EXPECT_EQ(import.decoded.library, "libFoo");
+    EXPECT_EQ(import.decoded.module, "libFoo");
+    EXPECT_EQ(import.decoded.type, stt_func);
     EXPECT_EQ(info.symbols[2].name, "module_start");
     EXPECT_EQ(info.symbols[2].bind, 2);
+    EXPECT_EQ(info.symbols[2].kind, Symbol::Kind::plain_weak);
+    EXPECT_EQ(info.symbols[3].kind, Symbol::Kind::none);
+    const Symbol& exported = info.symbols[4];
+    EXPECT_EQ(exported.kind, Symbol::Kind::exported);
+    EXPECT_EQ(exported.value, 0x4100U);
+    EXPECT_EQ(exported.decoded.library, "libSelf");
+    EXPECT_EQ(exported.decoded.module, "self");
+    EXPECT_EQ(info.symbols[5].kind, Symbol::Kind::import);
+    EXPECT_EQ(info.symbols[5].decoded.nid, "CCCCCCCCC+-");
+    EXPECT_EQ(info.symbols[5].decoded.type, stt_object);
     EXPECT_EQ(info.pltgot, 0x4000U);
     EXPECT_TRUE(info.textrel);
 
@@ -301,6 +320,45 @@ TEST(ParseDynamic, RejectsBadRecords) {
     }
 }
 
+TEST(ParseDynamic, RejectsBadSymbols) {
+    struct Case {
+        std::string_view name;
+        std::uint8_t info;  // binding << 4 | type
+        std::uint16_t shndx;
+        std::string_view message;
+    };
+    const Case cases[] = {
+        {"foo", 0x20, 0, "symbol 6 'foo': plain name other than module_start or module_stop"},
+        {"", 0x12, 0, "plain name other than"},
+        {"module_stop", 0x10, 0, "plain name that is not a weak, untyped, undefined symbol"},
+        {"module_stop", 0x22, 0, "plain name that is not a weak, untyped, undefined symbol"},
+        {"module_stop", 0x20, 1, "plain name that is not a weak, untyped, undefined symbol"},
+        {"AAAAAAAAAAA#A", 0x12, 0, "name is not NID#library#module"},
+        {"AAAAAAAAAAA#A#B#C", 0x12, 0, "name is not NID#library#module"},
+        {"AAAAAAAAAA#A#B", 0x12, 0, "malformed NID"},
+        {"AAAAAAAAAA_#A#B", 0x12, 0, "malformed NID"},
+        {"AAAAAAAAAAA#AA#B", 0x12, 0, "library or module id is not one base64 digit"},
+        {"AAAAAAAAAAA#A#", 0x12, 0, "library or module id is not one base64 digit"},
+        {"AAAAAAAAAAA#C#B", 0x12, 0, "no imported library with id 2"},
+        {"AAAAAAAAAAA#B#A", 0x12, 1, "no exported library with id 1"},
+        {"AAAAAAAAAAA#A#A", 0x12, 0, "no needed module with id 0"},
+        {"AAAAAAAAAAA#A#D", 0x12, 0, "no needed module with id 3"},
+        {"AAAAAAAAAAA#A#B", 0x12, 1, "no own module with id 1"},
+        {"AAAAAAAAAAA#A#C", 0x12, 0, "library libFoo is used with two modules"},
+        {"AAAAAAAAAAA#A#B", 0x10, 0, "import of symbol type 0"},
+        {"AAAAAAAAAAA#A#B", 0x16, 0, "import of symbol type 6"},
+    };
+    for (const Case& c : cases) {
+        Synthetic s;
+        s.add_symbol(s.str(c.name), c.info, c.shndx, 0);
+        expect_load_error(s.build(), c.message);
+    }
+    Synthetic other_module;  // libBar from module libBar is fine
+    other_module.add_symbol(other_module.str("AAAAAAAAAAA#B#C"), 0x12, 0, 0);
+    Elf elf = other_module.build();
+    EXPECT_EQ(parse_dynamic(elf.bytes, elf.phdrs).symbols[6].decoded.module, "libBar");
+}
+
 TEST(ParseDynamic, RejectsBadSegments) {
     auto with_phdrs = [](const std::function<void(std::vector<Phdr>&)>& edit) {
         Elf elf = Synthetic{}.build();
@@ -364,6 +422,36 @@ TEST(ParseDynamicGame, ReadsTheEboot) {
     auto exported = [](const Library& lib) { return lib.exported; };
     EXPECT_EQ(std::count_if(info.libraries.begin(), info.libraries.end(), exported), 0);
     EXPECT_EQ(info.libraries.size(), 43U);
+    auto unused = [](const Library& lib) { return !lib.module; };
+    EXPECT_EQ(std::count_if(info.libraries.begin(), info.libraries.end(), unused), 4);
+    auto imports = [&](std::string_view library, std::uint8_t type) {
+        return std::count_if(info.symbols.begin(), info.symbols.end(), [&](const Symbol& s) {
+            return s.kind == Symbol::Kind::import && s.decoded.library == library &&
+                   s.decoded.type == type;
+        });
+    };
+    auto kind = [&](Symbol::Kind k) {
+        return std::count_if(info.symbols.begin(), info.symbols.end(),
+                             [&](const Symbol& s) { return s.kind == k; });
+    };
+    EXPECT_EQ(kind(Symbol::Kind::import), 701);
+    EXPECT_EQ(kind(Symbol::Kind::none), 2);
+    EXPECT_EQ(imports("libc", stt_func), 197);
+    EXPECT_EQ(imports("libc", stt_object), 19);
+    EXPECT_EQ(imports("libkernel", stt_func), 79);
+    EXPECT_EQ(imports("libkernel", stt_object), 1);
+    EXPECT_EQ(imports("libScePosix", stt_func), 32);
+    EXPECT_EQ(imports("libSceAppContent", stt_func), 3);
+    // Library names and the module and file names they come from.
+    auto module_of = [&](std::string_view library) -> const Module& {
+        auto lib = std::find_if(info.libraries.begin(), info.libraries.end(),
+                                [&](const Library& l) { return l.name == library; });
+        EXPECT_NE(lib, info.libraries.end()) << library;
+        return info.needed.at(lib->module.value() - 1);
+    };
+    EXPECT_EQ(module_of("libScePosix").name, "libkernel");
+    EXPECT_EQ(module_of("libSceAppContent").name, "libSceAppContentUtil");
+    EXPECT_EQ(module_of("libSceAppContent").file, "libSceAppContent.prx");
 }
 
 }  // namespace
