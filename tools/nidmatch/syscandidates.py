@@ -9,13 +9,17 @@ Lists, each one name per line, in analysis/nids/candidates/ (local, regenerate a
 The names are only candidates. nidmatch accepts one only if it hashes to a NID of the game. The
 header of each list records where it came from, and the label of a match is the list's stem.
 
+By default the manual pages are found with manpath(1) and the libraries where the dynamic linker
+finds them, so the tool works the same on any distribution.
+
 Usage:
-    syscandidates.py [--man-dir DIR] [--lib-dir DIR]
+    syscandidates.py [--man-dir DIR ...] [--lib-dir DIR]
 """
 
 from __future__ import annotations
 
 import argparse
+import ctypes
 import re
 import subprocess
 import sys
@@ -29,14 +33,40 @@ IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 LIBS = {"glibc": ["libc.so.6", "libm.so.6"], "libstdcxx": ["libstdc++.so.6"]}
 
 
-def man_names(man_dir: Path, section: str) -> set[str]:
+def man_dirs() -> list[Path]:
+    """The system's manual page directories, as man(1) itself searches them."""
+    try:
+        out = subprocess.run(["manpath"], capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise OSError(f"manpath failed ({exc}), pass --man-dir") from exc
+    return [Path(d) for d in out.strip().split(":") if d]
+
+
+def man_names(man_dirs: list[Path], section: str) -> set[str]:
     # Page files are named <name>.<section>[<suffix>][.gz], e.g. pthread_create.3.gz, BIO_read.3ssl.gz
     names = set()
-    for path in (man_dir / f"man{section}").iterdir():
-        name = path.name.split(f".{section}", 1)[0]
-        if IDENT_RE.fullmatch(name):
-            names.add(name)
+    for man_dir in man_dirs:
+        section_dir = man_dir / f"man{section}"
+        if not section_dir.is_dir():
+            continue
+        for path in section_dir.iterdir():
+            name = path.name.split(f".{section}", 1)[0]
+            if IDENT_RE.fullmatch(name):
+                names.add(name)
     return names
+
+
+def find_library(soname: str) -> Path:
+    """The file the dynamic linker loads for soname: load it here and look it up in our mappings."""
+    ctypes.CDLL(soname)  # OSError if the linker does not find it
+    for line in Path("/proc/self/maps").read_text().splitlines():
+        fields = line.split(maxsplit=5)
+        if len(fields) == 6:
+            path = Path(fields[5])
+            # The mapped file may be the versioned target of the link, e.g. libstdc++.so.6.0.33.
+            if path.name == soname or path.name.startswith(soname + "."):
+                return path
+    raise OSError(f"{soname} is loaded but not in /proc/self/maps, pass --lib-dir")
 
 
 def defined_symbols(lib: Path) -> set[str]:
@@ -58,20 +88,24 @@ def write_list(path: Path, header: list[str], names: set[str]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--man-dir", type=Path, default=Path("/usr/share/man"))
-    parser.add_argument("--lib-dir", type=Path, default=Path("/usr/lib64"))
+    parser.add_argument("--man-dir", type=Path, action="append",
+                        help="manual page directory (repeatable, default: from manpath)")
+    parser.add_argument("--lib-dir", type=Path,
+                        help="directory with the libraries (default: where the dynamic linker "
+                             "finds them)")
     args = parser.parse_args(argv)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     try:
+        dirs = args.man_dir or man_dirs()
         for section in ("2", "3"):
             write_list(OUT_DIR / f"man{section}.txt",
                        [f"Names of the installed manual pages, section {section}"],
-                       man_names(args.man_dir, section))
+                       man_names(dirs, section))
         for label, libs in LIBS.items():
             names: set[str] = set()
             for lib in libs:
-                names |= defined_symbols(args.lib_dir / lib)
+                names |= defined_symbols(args.lib_dir / lib if args.lib_dir else find_library(lib))
             write_list(OUT_DIR / f"{label}.txt",
                        [f"Symbols defined by the system's {', '.join(libs)}"], names)
     except (OSError, subprocess.CalledProcessError, UnicodeEncodeError) as exc:
