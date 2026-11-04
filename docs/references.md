@@ -9,6 +9,7 @@ Every external source consulted for this project is listed here. Off-limits sour
 | [Ghidra](https://github.com/NationalSecurityAgency/ghidra) 12.1.4 | Apache-2.0 | Disassembly and decompiler-assisted analysis |
 | [REA](https://github.com/morluto/rea) 6.8.0 | MIT | Agent-driven reverse engineering workflow on top of Ghidra |
 | PyGhidra 3.1.0 and JPype 1.5.2 (bundled with Ghidra) | Apache-2.0 | Running headless Ghidra scripts in Python 3 (`tools/ghidra-sync`) |
+| [actions/checkout](https://github.com/actions/checkout) v7.0.1 (pinned by commit SHA) | MIT | Checking out the repository in the GitHub Actions CI (`.github/workflows/ci.yml`) |
 | GNU binutils (`objdump`, `readelf`) | GPL-3.0 | Quick inspection of ELF files |
 | GNU coreutils 9.10 `sha256sum` (installed) | GPL-3.0+ | Expected digests for the SHA-256 unit tests (`tests/common/sha256_test.cpp`) |
 | libelf (elfutils) | LGPL-3.0+ / GPL-2.0+ | Cross-check of the SysV hash function used by `tools/elf2std` (test vectors) |
