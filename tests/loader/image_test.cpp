@@ -199,6 +199,12 @@ TEST(MapElf, RefusesBadSegments) {
         [] { map_elf(build_elf([](auto& p) { p[1].vaddr = 0x1000; }), test_base); },
         "share a page");
     expect_error<LoadError>(
+        [] { map_elf(build_elf([](auto& p) { p[1].vaddr = 0xffff'ffff'ffff'f000; }), test_base); },
+        "is too large");
+    expect_error<LoadError>(
+        [] { map_elf(build_elf([](auto& p) { p[1].align = 0x3000; }), test_base); },
+        "is not a power of two");
+    expect_error<LoadError>(
         [] { map_elf(build_elf([](auto& p) { p[1].offset = 0x1'0000'0000; }), test_base); },
         "PT_LOAD file data");
     expect_error<LoadError>(
