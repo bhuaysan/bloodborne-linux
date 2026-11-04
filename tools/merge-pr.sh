@@ -30,6 +30,10 @@
 #      SIGKILL can't be handled: after a kill -9, check origin/main and
 #      the PR branch before re-running.
 set -eu
+# No pathname expansion: the unquoted $PROTECTED below would otherwise be
+# expanded against files in the PR's worktree, and a directory named like
+# ":(glob)x" would replace the .gitattributes pathspec.
+set -f
 
 usage() { echo "usage: $0 [--maintainer] [--sha <commit>] <pr-number>" >&2; exit 2; }
 maintainer=0
