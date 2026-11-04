@@ -33,6 +33,20 @@ PS4 executables import functions by NID, a short hash derived from the symbol na
 3. Accept a name only if its NID matches an import. Record it in the NID table with where the candidate came from.
 4. Unmatched NIDs keep a descriptive placeholder name based on observed behavior, e.g. `kernel_unk_<NID>`.
 
+### Derived candidates
+
+Candidates may also be derived from names we already have, by rules. Example: our matches pair `pthread_attr_setstacksize` with `scePthreadAttrSetstacksize`, so a rule may turn other POSIX names into the same form. A rule must meet all of these:
+
+- It is code in `tools/nidmatch/`, so anyone can run it again and get the same candidates.
+- Its inputs are allowed sources only: standard C/POSIX/FreeBSD names (manual pages, system libraries), strings in the dump, and names already matched in `symbols/nids.csv`. Fixed words in the rule, such as a prefix, must appear in those matches or strings.
+- It is motivated by our own matches, and its entry in [formats/nid.md](formats/nid.md) cites them.
+- It has its own source label, so every name it produces can be traced back to it.
+- It never uses the name prefixes of the libraries in the exposure log below. The same applies to libSceSaveDataDialog, whose names start with the libSceSaveData prefix. A derived name for one of these libraries is not accepted; it still needs an independent source.
+
+A matching NID is still required, so a rule can only ever name real imports. Wrong guesses cost nothing.
+
+Names that someone (person or agent) simply knows from elsewhere are **not** a candidate source, because that knowledge may come from off-limits material. A hand-picked name in `symbols/candidates/` needs a reason from the game itself (how it uses the function) or from allowed documentation, written next to it.
+
 Commit a NID only together with what we know about it: a matched name in `symbols/nids.csv`, or a placeholder name and an implementation or stub in the runtime. The complete import and export lists are tool output from the game files (`tools/elfimports` writes them to `analysis/imports/`) and are never committed.
 
 ## Exposure log
