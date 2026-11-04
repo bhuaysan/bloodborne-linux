@@ -127,6 +127,7 @@ Every import must resolve to a non-zero address. The game runtime, `bb-load` and
 namespace bb::hle {
 void register_function(std::string_view library, std::string_view nid, void* impl);
 uintptr_t resolve(const loader::Import& imp);  // impl, else stub
+uintptr_t import_address(std::string_view library, std::string_view nid);  // cached result of resolve
 void set_stub_observer(StubObserver* observer); // nullptr restores logging
 }
 ```
