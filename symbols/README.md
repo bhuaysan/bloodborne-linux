@@ -70,11 +70,11 @@ Export writes one header per subsystem and rewrites it only when it changed. A h
 What a header looks like:
 
 - `#include "<other>.h"` for each other subsystem it uses, then `#pragma pack(push, 1)` and forward declarations of its structs and unions.
-- Types sorted by name, except that a type comes after the types it contains by value.
+- Types sorted by name, except that a type comes after the types it contains by value and after every typedef it names, through a pointer too.
 - Enums with their values sorted by value, in decimal.
 - Structs with an offset comment on every field. Every gap, including padding at the end, is a field `undefined1 _pad_0x<offset>[n]`. With packing 1 the layout follows from the header alone, whatever the alignment of the fields. The prefix `_pad_` is reserved for this.
 - `_Static_assert(sizeof(...) == size, "name")` after every struct, union and enum.
 
 Import parses the headers with Ghidra's C parser in include order, puts each type into `/bb/<subsystem>` and replaces a type of the same name there. It runs before the functions are applied, so signatures can use our types. It never deletes a type. Structs and unions come back unpacked, with their gaps as undefined bytes, the way the structure editor makes them. The sizes from `_Static_assert` are checked, and an enum gets its size and values from the header.
 
-Not supported yet, export stops with an error: bit fields, function definitions (and so function pointers), pointers to arrays, pointers of a size other than 8, nested categories below `/bb/<subsystem>`, references to types outside `/bb`. Includes must not form a cycle, so two subsystems can't point at each other's types. Field comments and type descriptions are not exported.
+Not supported yet, export stops with an error: bit fields, function definitions (and so function pointers), pointers to arrays, pointers of a size other than 8, nested categories below `/bb/<subsystem>`, references to types outside `/bb`, unions larger than their largest member (add a member that covers the whole union). Includes must not form a cycle, so two subsystems can't point at each other's types, not even through a pointer. Export checks all of this before it writes any header. Field comments and type descriptions are not exported.
