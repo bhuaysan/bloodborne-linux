@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -17,6 +18,7 @@
 
 #include "loader/bytes.hpp"
 #include "loader/elf.hpp"
+#include "support/game.hpp"
 
 namespace {
 
@@ -324,6 +326,48 @@ TEST(Image, ChecksLinkAddresses) {
     EXPECT_EQ(reinterpret_cast<std::uintptr_t>(image.fn<void()>(0x10)), test_base + 0x10);
     expect_error<std::out_of_range>([&] { image.fn<void()>(data_link); },
                                     "link address 0x4000 lies outside the executable segments");
+}
+
+TEST(MapEboot, RefusesAnotherBuild) {
+    auto dir = std::filesystem::path(testing::TempDir()) / "bb-map-eboot-test";
+    std::filesystem::create_directories(dir);
+    std::ofstream(dir / "eboot.bin") << "not the pinned eboot";
+    expect_error<LoadError>([&] { map_eboot(dir, test_base); }, "eboot.bin has SHA-256 ");
+    std::filesystem::remove_all(dir);
+    expect_error<std::system_error>([&] { map_eboot(dir, test_base); }, "eboot.bin");
+    EXPECT_EQ(protection(test_base), "unmapped");
+}
+
+TEST(MapEbootGame, MapsTheEbootAtTheDefaultBase) {
+    BB_REQUIRE_GAME(game);
+    Image image = map_eboot(game);
+    EXPECT_EQ(image.base, default_base);
+    EXPECT_EQ(image.entry, 0xA0U);
+    ASSERT_EQ(image.segments.size(), 2U);
+    const Segment& code = image.segments[0];
+    EXPECT_EQ(code.link_addr, 0U);
+    EXPECT_EQ(code.mem_size, 0x50D96DCU);
+    EXPECT_EQ(code.file_size, 0x50D96DCU);
+    EXPECT_EQ(code.prot, PROT_READ | PROT_EXEC);
+    const Segment& data = image.segments[1];
+    EXPECT_EQ(data.link_addr, 0x50DC000U);
+    EXPECT_EQ(data.mem_size, 0x5F70F4U);
+    EXPECT_EQ(data.file_size, 0x309B38U);
+    EXPECT_EQ(data.prot, PROT_READ | PROT_WRITE);
+    ASSERT_TRUE(image.tls);
+    EXPECT_EQ(image.tls->link_addr, 0x50DC040U);
+    EXPECT_EQ(image.tls->file_size, 0U);
+    EXPECT_EQ(image.tls->mem_size, 0x750U);
+    EXPECT_EQ(image.tls->align, 0x10U);
+    EXPECT_EQ(image.proc_param, 0x50DC000U);
+
+    image.finalize_protection();
+    EXPECT_EQ(protection(default_base), "r-xp");
+    EXPECT_EQ(protection(default_base + 0x50D96DB), "r-xp");
+    EXPECT_EQ(protection(default_base + 0x50DB000), "---p");  // gap before the data segment
+    EXPECT_EQ(protection(default_base + 0x50DC000), "rw-p");
+    EXPECT_EQ(protection(default_base + 0x56D30F3), "rw-p");
+    EXPECT_EQ(protection(default_base + 0x56D4000), "unmapped");
 }
 
 }  // namespace

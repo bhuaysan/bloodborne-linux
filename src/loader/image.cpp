@@ -13,8 +13,11 @@
 #include <system_error>
 #include <utility>
 
+#include "common/file.hpp"
+#include "common/sha256.hpp"
 #include "loader/bytes.hpp"
 #include "loader/elf.hpp"
+#include "loader/self.hpp"
 
 namespace bb::loader {
 namespace {
@@ -248,6 +251,17 @@ Image map_elf(std::span<const std::byte> elf, std::uintptr_t base) {
     }
     image.dyn = parse_dynamic(elf, phdrs);
     return image;
+}
+
+Image map_eboot(const std::filesystem::path& game_dir, std::uintptr_t base) {
+    std::vector<std::byte> self = common::read_file(game_dir / "eboot.bin");
+    std::string digest = common::to_hex(common::sha256(self));
+    if (digest != eboot_bin_sha256) {
+        throw LoadError(std::format(
+            "{} has SHA-256 {}, expected {} (CUSA03173 patch 1.09, see docs/clean-room.md)",
+            (game_dir / "eboot.bin").string(), digest, eboot_bin_sha256));
+    }
+    return map_elf(self_to_elf(self), base);
 }
 
 }  // namespace bb::loader
