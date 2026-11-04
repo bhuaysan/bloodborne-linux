@@ -26,9 +26,11 @@ bad="$(git log --format='%an <%ae>%n%cn <%ce>' "$range" | sort -u | grep -vxF "$
 
 # 2. files: forbidden paths in HEAD or added by any commit of the range
 # (a file deleted again is still in history), size of every new blob
-problems="$( { git ls-tree -r --name-only HEAD
-               git log --format= --name-only --diff-filter=AR "$range"; } |
-    sort -u | while IFS= read -r f; do path_problem "$f"; done)"
+# -z: git quotes unusual names otherwise, and "d\303\274r/x.bin" would
+# not match *.bin
+problems="$( { git ls-tree -r -z --name-only HEAD
+               git log -z --format= --name-only --diff-filter=AR "$range"; } |
+    tr '\0' '\n' | sort -u | while IFS= read -r f; do path_problem "$f"; done)"
 [ -z "$problems" ] || fail "$problems"
 big="$(git rev-list --objects "$range" |
     git cat-file --batch-check='%(objecttype) %(objectsize) %(rest)' |
@@ -41,7 +43,9 @@ big="$(git rev-list --objects "$range" |
 # 3. added lines and new file names of every commit, as
 #    "<commit> <file>: <line>" so a hit points at what to fix
 pat="$(privacy_pattern)"
-hits="$(git log -p -U0 --no-color --format='commit %h' "$range" | awk '
+# --text and no textconv: a .gitattributes must not hide content as binary
+hits="$(git -c core.quotePath=false log -p -U0 --text --no-textconv --no-ext-diff \
+        --no-color --format='commit %h' "$range" | awk '
     /^commit [0-9a-f]+$/ { c = $2; next }
     /^diff --git / { h = 0; f = $0; sub(/^diff --git a\/.* b\//, "", f); print c " " f ": (file name)"; next }
     /^@@/ { h = 1; next }
