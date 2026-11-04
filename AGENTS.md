@@ -95,11 +95,11 @@ Code is never reviewed only in the session that wrote it.
    - Every finding of the independent review is fixed, or moved to a linked issue because it needs its own design work, or withdrawn by the reviewer in a re-review. The PR's author can't dismiss a finding on its own. A finding it disagrees with goes to the maintainer.
    - Every function the PR marks `replaced` in `symbols/functions.csv` passed its differential test and its disassembly review (item 2).
    - The PR stays within the 500-line limit above.
-   - The PR doesn't change the guardrails: `AGENTS.md`, `docs/clean-room.md`, `tools/githooks/`, `tools/merge-pr.sh`, `tools/privacy-check.sh`, `tools/run-tests.sh` or `.github/workflows/`.
+   - The PR doesn't change the guardrails: `AGENTS.md`, `docs/clean-room.md`, `.gitignore`, `.github/`, `tools/githooks/`, `tools/merge-pr.sh`, `tools/privacy-check.sh`, `tools/run-tests.sh` or `tools/common/toolenv.py` (it finds the game for the tests).
    - Each new source in `docs/references.md` falls clearly into a category that `docs/clean-room.md` allows, as checked by the independent review.
 
    Anything that fails the gate goes to the maintainer. `tools/merge-pr.sh` refuses guardrail changes and oversized PRs unless the maintainer runs it with `--maintainer`. Agents never pass that flag.
-   **Never use GitHub's merge button or `gh pr merge`**: GitHub writes the account's display name into the commit. Merge with `tools/merge-pr.sh <N>` instead. It rebases locally, checks authorship, runs the tests and the privacy check, and fast-forwards `main`.
+   **Never use GitHub's merge button or `gh pr merge`**: GitHub writes the account's display name into the commit. Merge with `tools/merge-pr.sh <N>` instead. It rebases locally, runs the tests and the privacy check (which includes authorship) on the rebased commits, and fast-forwards `main`.
 4. **Per milestone:** a dedicated review session over the milestone's range covers:
    - a walkthrough of the new code
    - code health and an architecture check

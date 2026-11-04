@@ -5,9 +5,9 @@
 #
 # Usage: tools/merge-pr.sh [--maintainer] <pr-number>
 #
-# Rebases the PR branch onto origin/main in a temporary worktree, checks
-# authorship, runs tools/run-tests.sh and tools/privacy-check.sh on the
-# rebased commits, updates the PR branch, fast-forwards main and, once
+# Rebases the PR branch onto origin/main in a temporary worktree, runs
+# tools/run-tests.sh and tools/privacy-check.sh (which also checks
+# authorship) on the rebased commits, updates the PR branch, fast-forwards main and, once
 # GitHub shows the PR as merged, deletes the branch. The current
 # checkout is never touched.
 #
@@ -29,11 +29,10 @@ if [ "${1:-}" = "--maintainer" ]; then maintainer=1; shift; fi
 pr="$1"
 
 # Paths whose changes always go to the maintainer (pathspecs).
-PROTECTED="AGENTS.md docs/clean-room.md tools/githooks tools/merge-pr.sh tools/privacy-check.sh tools/run-tests.sh .github/workflows"
+PROTECTED="AGENTS.md docs/clean-room.md .gitignore .github tools/githooks tools/merge-pr.sh tools/privacy-check.sh tools/run-tests.sh tools/common/toolenv.py"
 MAX_CODE_LINES=500
 
 repo_root="$(git rev-parse --show-toplevel)"
-want_name="$(git -C "$repo_root" config user.name)"
 want_email="$(git -C "$repo_root" config user.email)"
 case "$want_email" in
     *@users.noreply.github.com) ;;
@@ -60,21 +59,13 @@ git -C "$repo_root" worktree add -q --detach "$wt" "origin/$head"
 cd "$wt"
 git rebase -q origin/main
 
-# every commit on top of main must carry the local identity
-bad="$(git log --format='%an <%ae>%n%cn <%ce>' origin/main..HEAD | sort -u | grep -vxF "$want_name <$want_email>" || true)"
-if [ -n "$bad" ]; then
-    echo "commits with an unexpected identity:" >&2
-    printf '%s\n' "$bad" >&2
-    exit 1
-fi
-
 count="$(git rev-list --count origin/main..HEAD)"
 [ "$count" -gt 0 ] || { echo "nothing to merge" >&2; exit 1; }
 
 # shellcheck disable=SC2086  # PROTECTED is a list of pathspecs
 touched="$(git diff --name-only origin/main HEAD -- $PROTECTED)"
-# changed lines of code: everything except docs, Markdown and symbols/
-lines="$(git diff --numstat origin/main HEAD -- . ':!docs' ':!*.md' ':!symbols' |
+# changed lines of code: everything except docs/ and symbols/
+lines="$(git diff --numstat origin/main HEAD -- . ':!docs' ':!symbols' |
     awk '$1 != "-" { n += $1 + $2 } END { print n + 0 }')"
 if [ "$maintainer" -eq 0 ]; then
     [ -z "$touched" ] || {
