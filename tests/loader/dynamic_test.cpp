@@ -27,8 +27,9 @@ constexpr std::uint64_t dt_sce_pltrel = 0x6100002B, dt_sce_pltrelsz = 0x6100002D
                         dt_sce_relaent = 0x61000033, dt_sce_strtab = 0x61000035,
                         dt_sce_strsz = 0x61000037, dt_sce_symtab = 0x61000039,
                         dt_sce_syment = 0x6100003B, dt_sce_symtabsz = 0x6100003F;
-constexpr std::uint64_t dt_init = 0x0C, dt_init_array = 0x19, dt_init_arraysz = 0x1B,
-                        dt_preinit_array = 0x20, dt_preinit_arraysz = 0x21;
+constexpr std::uint64_t dt_init = 0x0C, dt_fini = 0x0D, dt_init_array = 0x19,
+                        dt_init_arraysz = 0x1B, dt_preinit_array = 0x20,
+                        dt_preinit_arraysz = 0x21;
 constexpr std::uint64_t dt_needed = 1, dt_soname = 0x0E, dt_sce_module_info = 0x6100000D,
                         dt_sce_needed_module = 0x6100000F, dt_sce_export_lib = 0x61000013,
                         dt_sce_import_lib = 0x61000015, dt_sce_export_lib_attr = 0x61000017,
@@ -53,11 +54,12 @@ struct Elf {
     std::vector<Phdr> phdrs;
 };
 
-// A minimal PS4 ELF: a PT_LOAD and a PT_SCE_DYNLIBDATA segment at the end of the file with the
-// tables and the dynamic table. It needs modules libFoo (id 1) and libBar (id 2), imports
-// library libFoo (id 0) from libFoo, declares library libBar (id 1) without importing from it,
-// and exports library libSelf (id 0). It has DT_INIT and the preinit and init arrays, but no
-// DT_FINI and no fini array.
+// A minimal PS4 ELF: an executable and a writable PT_LOAD and a PT_SCE_DYNLIBDATA segment at the
+// end of the file with the tables and the dynamic table. It needs modules libFoo (id 1) and
+// libBar (id 2), imports library libFoo (id 0) from libFoo, declares library libBar (id 1)
+// without importing from it, and exports library libSelf (id 0). It has DT_INIT and the preinit
+// and init arrays, but no DT_FINI and no fini array. The empty preinit array sits at the end of
+// the writable PT_LOAD.
 struct Synthetic {
     Bytes strtab{std::byte{0}};
     Bytes symtab, jmprel, rela;
@@ -85,10 +87,10 @@ struct Synthetic {
                    {dt_sce_export_lib_attr, record(0, 0, 1)},
                    {dt_soname, str("self.prx")},
                    {0x16, 0},  // DT_TEXTREL
-                   {dt_init, 0x4200},
+                   {dt_init, 0x200},
                    {dt_init_array, 0x4300},
                    {dt_init_arraysz, 0x10},
-                   {dt_preinit_array, 0x4310},
+                   {dt_preinit_array, 0x6000},
                    {dt_preinit_arraysz, 0}};
     }
 
@@ -158,6 +160,7 @@ struct Synthetic {
         elf.bytes.resize(dynlib_offset);
         elf.bytes.insert(elf.bytes.end(), blob.begin(), blob.end());
         elf.phdrs = {
+            {pt_load, 5, 0, 0, 0x1000, 0x1000, 0x4000},
             {pt_load, 6, 0x1000, 0x4000, 0x1000, 0x2000, 0x4000},
             {pt_dynamic, 6, dynlib_offset + dyn_offset, 0, dyn_size, dyn_size, 8},
             {pt_sce_dynlibdata, 4, dynlib_offset, 0, blob.size(), 0, 0x10},
@@ -235,13 +238,13 @@ TEST(ParseDynamic, ReadsTheTables) {
     EXPECT_EQ(info.symbols[5].decoded.type, stt_object);
     EXPECT_EQ(info.pltgot, 0x4000U);
     EXPECT_TRUE(info.textrel);
-    EXPECT_EQ(info.init, 0x4200U);
+    EXPECT_EQ(info.init, 0x200U);
     EXPECT_FALSE(info.fini);
     ASSERT_TRUE(info.init_array);
     EXPECT_EQ(info.init_array->addr, 0x4300U);
     EXPECT_EQ(info.init_array->size, 0x10U);
     ASSERT_TRUE(info.preinit_array);
-    EXPECT_EQ(info.preinit_array->addr, 0x4310U);
+    EXPECT_EQ(info.preinit_array->addr, 0x6000U);
     EXPECT_EQ(info.preinit_array->size, 0U);
     EXPECT_FALSE(info.fini_array);
 
@@ -277,6 +280,11 @@ TEST(ParseDynamic, RejectsBadTags) {
         {"DT_INIT_ARRAYSZ 0xc is not a multiple of 8", dt_init_arraysz, 12},
         {"DT_PREINIT_ARRAY without DT_PREINIT_ARRAYSZ", dt_preinit_arraysz, std::nullopt},
         {"DT_INIT_ARRAYSZ without DT_INIT_ARRAY", dt_init_array, std::nullopt},
+        {"DT_INIT 0x4200 outside the executable PT_LOADs", dt_init, 0x4200},
+        {"DT_INIT 0x1000 outside the executable PT_LOADs", dt_init, 0x1000},
+        {"DT_INIT_ARRAY 0x5ff8 + 0x10 outside the PT_LOADs", dt_init_array, 0x5ff8},
+        {"DT_INIT_ARRAY 0x4300 + 0xfffffffffffffff8 outside", dt_init_arraysz, ~std::uint64_t{7}},
+        {"DT_PREINIT_ARRAY 0x6008 + 0x0 outside the PT_LOADs", dt_preinit_array, 0x6008},
     };
     for (const Case& c : cases) {
         expect_load_error(Synthetic{}.build([&](std::vector<Dyn>& dyn) {
@@ -294,6 +302,8 @@ TEST(ParseDynamic, RejectsBadTags) {
                       "duplicate DT_SCE_STRTAB");
     expect_load_error(Synthetic{}.build([](auto& dyn) { dyn.emplace_back(dt_init, 0); }),
                       "duplicate DT_INIT");
+    expect_load_error(Synthetic{}.build([](auto& dyn) { dyn.emplace_back(dt_fini, 0x2000); }),
+                      "DT_FINI 0x2000 outside the executable PT_LOADs");
 }
 
 TEST(ParseDynamic, RejectsBadEntries) {
@@ -387,9 +397,9 @@ TEST(ParseDynamic, RejectsBadSegments) {
         edit(elf.phdrs);
         return elf;
     };
-    expect_load_error(with_phdrs([](auto& p) { p[1].filesz -= 16; }), "no DT_NULL");
-    expect_load_error(with_phdrs([](auto& p) { p[1].offset = 0x2000; }), "PT_DYNAMIC lies outside");
-    expect_load_error(with_phdrs([](auto& p) { p.push_back(p[1]); }), "more than one PT_DYNAMIC");
+    expect_load_error(with_phdrs([](auto& p) { p[2].filesz -= 16; }), "no DT_NULL");
+    expect_load_error(with_phdrs([](auto& p) { p[2].offset = 0x2000; }), "PT_DYNAMIC lies outside");
+    expect_load_error(with_phdrs([](auto& p) { p.push_back(p[2]); }), "more than one PT_DYNAMIC");
     expect_load_error(with_phdrs([](auto& p) { p.pop_back(); }), "no PT_SCE_DYNLIBDATA");
     Elf truncated = Synthetic{}.build();
     truncated.bytes.pop_back();

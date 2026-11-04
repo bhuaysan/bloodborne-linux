@@ -22,6 +22,8 @@ inline constexpr std::uint32_t pt_sce_dynlibdata = 0x61000000;
 inline constexpr std::uint32_t pt_sce_procparam = 0x61000001;
 inline constexpr std::uint32_t pt_sce_libversion = 0x6FFFFF01;
 
+inline constexpr std::uint32_t pf_x = 1;  // Phdr::flags: executable
+
 struct ElfHeader {
     std::uint16_t type, machine;
     std::uint64_t entry, phoff, shoff;

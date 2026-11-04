@@ -74,7 +74,7 @@ struct Rela {
 
 // An array of function pointers, from an address tag and its size tag.
 struct FuncArray {
-    std::uint64_t addr;  // link address, checked against the mapping by the loader
+    std::uint64_t addr;  // link address, addr..addr+size lies in one PT_LOAD's memory
     std::uint64_t size;  // in bytes, a multiple of 8, often 0
 };
 
@@ -88,7 +88,7 @@ struct DynamicInfo {
     std::vector<Rela> relocs;           // DT_SCE_RELA
     std::uint64_t pltgot = 0;           // DT_SCE_PLTGOT, link address
     bool textrel = false;               // DT_TEXTREL
-    // Link addresses, checked against the mapping by the loader. 0 is a valid DT_INIT in PRXs.
+    // Link addresses inside an executable PT_LOAD. 0 is a valid DT_INIT in PRXs.
     std::optional<std::uint64_t> init, fini;  // DT_INIT, DT_FINI
     std::optional<FuncArray> preinit_array, init_array, fini_array;
 };
