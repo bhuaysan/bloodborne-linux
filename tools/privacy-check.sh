@@ -17,10 +17,7 @@ range="$base..HEAD"
 # 1. identity: author and committer of every commit
 want_name="$(git config user.name)"
 want_email="$(git config user.email)"
-case "$want_email" in
-    *@users.noreply.github.com) ;;
-    *) fail "user.email must be a GitHub noreply address" ;;
-esac
+check_identity
 bad="$(git log --format='%an <%ae>%n%cn <%ce>' "$range" | sort -u | grep -vxF "$want_name <$want_email>" || true)"
 [ -z "$bad" ] || fail "commits with an unexpected identity: $(printf '%s' "$bad" | tr '\n' ' ')"
 
@@ -61,11 +58,7 @@ if [ -n "$hits" ]; then
 fi
 
 # 4. commit messages
-msgs="$(git log --format=%B "$range")"
-printf '%s\n' "$msgs" | grep -qE -i -- "$pat" &&
-    fail "a commit message contains personal data or absolute paths"
-printf '%s\n' "$msgs" | grep -qE -i -- "$AI_ATTRIBUTION_PATTERN" &&
-    fail "a commit message contains AI attribution"
+check_message "$(git log --format=%B "$range")" "a commit message"
 
 [ "$FAILED" -eq 0 ] || exit 1
 echo "privacy check clean: $range"

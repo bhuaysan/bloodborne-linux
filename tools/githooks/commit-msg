@@ -3,15 +3,7 @@
 . "$(dirname "$0")/privacy-lib.sh"
 FAILED=0
 msg_file="$1"
-body="$(grep -v '^#' "$msg_file")"
-
-pat="$(privacy_pattern)"
-if printf '%s\n' "$body" | grep -qE -i -- "$pat"; then
-    fail "commit message contains personal data or absolute paths"
-fi
-if printf '%s\n' "$body" | grep -qE -i -- "$AI_ATTRIBUTION_PATTERN"; then
-    fail "commit message contains AI attribution"
-fi
+check_message "$(grep -v '^#' "$msg_file")" "commit message"
 
 [ "$FAILED" -eq 0 ] || exit 1
 exit 0

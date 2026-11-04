@@ -4,11 +4,7 @@
 FAILED=0
 
 # 1. identity
-email="$(git config user.email)"
-case "$email" in
-    *@users.noreply.github.com) ;;
-    *) fail "user.email must be a GitHub noreply address (got a different address)" ;;
-esac
+check_identity
 
 # 2. forbidden file names
 # -z: git quotes unusual names otherwise, so patterns like *.bin miss them

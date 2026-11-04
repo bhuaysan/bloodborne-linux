@@ -49,3 +49,23 @@ fail() {
     printf 'privacy check: %s\n' "$1" >&2
     FAILED=1
 }
+
+# Fails unless user.email is a GitHub noreply address. The address itself
+# is not printed.
+check_identity() {
+    case "$(git config user.email)" in
+        *@users.noreply.github.com) ;;
+        *) fail "user.email must be a GitHub noreply address (got a different address)" ;;
+    esac
+}
+
+# Fails if commit message text contains personal data or AI attribution.
+# $1: the message text, $2: how the errors name it, e.g. "commit message".
+check_message() {
+    if printf '%s\n' "$1" | grep -qE -i -- "$(privacy_pattern)"; then
+        fail "$2 contains personal data or absolute paths"
+    fi
+    if printf '%s\n' "$1" | grep -qE -i -- "$AI_ATTRIBUTION_PATTERN"; then
+        fail "$2 contains AI attribution"
+    fi
+}
