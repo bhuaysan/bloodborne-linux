@@ -49,6 +49,7 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 - Work is tracked in GitHub issues on this repo, grouped by milestones M0–M6 (see `docs/roadmap.md`).
 - Labels: `loader`, `hle:kernel`, `hle:gnm`, `formats`, `decomp`, `tooling`, `research`, `review`.
 - At the end of every work session, post a handoff comment on the issue: done, open, next step, gotchas.
+- If an issue can only start after another one is merged, add a line `Depends on #N` to its body. Automated runs order the work by these lines.
 - One issue per task of about a day or more. Per-function progress goes in `symbols/functions.csv`, not in issues.
 - Agents may create and comment on issues in this repository. Close issues through commits (`Fixes #N`).
 - Issue text follows the same privacy rules as commits.
@@ -87,7 +88,8 @@ Code is never reviewed only in the session that wrote it.
 
 1. **Automatic:** git hooks on every commit. From M2, CI (build with sanitizers, unit and differential tests, privacy check, and formatting and lint once there is code).
 2. **Per decompiled function:** a differential test, plus an independent review that compares the C++ against the original disassembly without seeing the author's reasoning.
-3. **Per PR:** every change goes through a PR. Before merging, an independent review runs on the PR diff in a fresh context. Use high effort for loader, ABI and graphics code. **The maintainer merges.** For trivial PRs (docs, typos), an agent may merge after the maintainer's explicit OK.
+3. **Per PR:** every change goes through a PR. Before merging, an independent review runs on the PR diff in a fresh context. Use high effort for loader, ABI and graphics code. Fix review findings in the same PR unless they need their own design work. Keep PRs to about 500 changed lines of code, and put generated data in a PR of its own.
+   **Merging:** an agent may merge a PR once it passes the gate: tests pass (locally with the game where needed, and in CI once it exists), the independent review has no open findings, and the pre-push privacy check is clean. Anything that fails the gate, or touches the clean-room policy, goes to the maintainer.
    **Never use GitHub's merge button or `gh pr merge`**: GitHub writes the account's display name into the commit. Merge with `tools/merge-pr.sh <N>` instead. It rebases locally, checks authorship and fast-forwards `main`.
 4. **Per milestone:** a dedicated review session over the milestone's range covers:
    - a walkthrough of the new code
@@ -96,7 +98,7 @@ Code is never reviewed only in the session that wrote it.
    - a clean-room audit (`docs/references.md` complete, no names of unclear origin)
    - a privacy audit of the history
    
-   Small fixes go into a follow-up PR. Bigger findings become issues labeled `review`. Then the milestone is tagged.
+   Small fixes go into a follow-up PR. Bigger findings become issues labeled `review`. Then the maintainer tags the milestone.
 
 ## Builds, branches and data
 
