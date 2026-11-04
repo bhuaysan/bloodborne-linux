@@ -47,6 +47,13 @@ SIZE_ASSERT = re.compile(r'^_Static_assert\(sizeof\((?:struct|union|enum) (\w+)\
                          r'(0x[0-9a-fA-F]+|\d+), "\w+"\);$', re.M)
 ENUM = re.compile(r"^enum (\w+) \{\n((?:    \w+ = -?\d+,\n)*)\};$", re.M)
 ENUM_VALUE = re.compile(r"(\w+) = (-?\d+)")
+IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+C_KEYWORDS = frozenset("""
+    auto break case char const continue default do double else enum extern float for goto if
+    inline int long register restrict return short signed sizeof static struct switch typedef
+    union unsigned void volatile while _Alignas _Alignof _Atomic _Bool _Complex _Generic
+    _Imaginary _Noreturn _Static_assert _Thread_local
+""".split())
 
 
 class SyncError(Exception):
@@ -208,11 +215,35 @@ def format_header(subsystem: str, items: list[dict]) -> str:
     return "\n".join([*lines, "", "#pragma pack(pop)", ""])
 
 
+def check_name(where: str, name: str) -> None:
+    """Names go into the headers as they are, so they must be C identifiers the parser reads."""
+    if not IDENTIFIER.fullmatch(name):
+        raise SyncError(f"{where}: {name!r} is not a C identifier "
+                        "(letters, digits and _, not starting with a digit)")
+    if name in C_KEYWORDS:
+        raise SyncError(f"{where}: {name} is a C keyword")
+    if name.startswith("__"):
+        raise SyncError(f"{where}: {name}: names starting with __ are reserved for the compiler")
+
+
+def check_names(subsystem: str, items: list[dict]) -> None:
+    """Type, field and enumerator names of one subsystem."""
+    for item in items:
+        where = f"/bb/{subsystem}/{item['name']}"
+        check_name(f"/bb/{subsystem}: type name", item["name"])
+        for field in item.get("fields", []):
+            check_name(f"{where}: field name", field["name"])
+        for value_name, _ in item.get("values", []):
+            check_name(f"{where}: enum value name", value_name)
+
+
 def write_types(types_dir: Path, exported: dict[str, list[dict]]) -> None:
     """Write each header that changed, or none if one fails. Other headers stay as they are."""
     for subsystem in exported:
         if not SUBSYSTEM.fullmatch(subsystem):
             raise SyncError(f"/bb/{subsystem}: use letters, digits and _ for subsystem names")
+    for subsystem, items in sorted(exported.items()):
+        check_names(subsystem, items)
     homes: dict[str, list[str]] = {}
     for subsystem, items in sorted(exported.items()):
         for item in items:

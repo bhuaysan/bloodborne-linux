@@ -238,6 +238,31 @@ class TypesHeaderTest(unittest.TestCase):
                 g.write_types(self.tmp, exported)
         self.assertEqual(list(self.tmp.iterdir()), [])
 
+    def test_names_must_be_c_identifiers(self):
+        def struct(name: str = "S", field_name: str = "x") -> dict:
+            return {"kind": "struct", "name": name, "size": 4,
+                    "fields": [field(0, 4, field_name, {"name": "int"})]}
+
+        def enum(value_name: str) -> dict:
+            return {"kind": "enum", "name": "E", "size": 4, "values": [[value_name, 0]]}
+
+        bad = {
+            "type with template arguments": [struct(name="Vec<int>")],
+            "type name that is a keyword": [struct(name="int")],
+            "field name that is a keyword": [struct(field_name="default")],
+            "field name with a space": [struct(field_name="a b")],
+            "field name starting with a digit": [struct(field_name="1st")],
+            "reserved field name": [struct(field_name="__x")],
+            "enum value that is a keyword": [enum("_Bool")],
+            "typedef with a dot": [{"kind": "typedef", "name": "a.b", "type": {"name": "int"}}],
+        }
+        for what, items in bad.items():
+            with self.subTest(what), self.assertRaises(g.SyncError):
+                g.write_types(self.tmp, {"core": items})
+        self.assertEqual(list(self.tmp.iterdir()), [])
+        g.write_types(self.tmp, {"core": [struct(name="_S1", field_name="default_")]})
+        self.assertTrue((self.tmp / "core.h").is_file())
+
 
 # A position-independent x86-64 ELF: one PT_LOAD at 0, code at CODE. The entry calls four
 # functions, so Ghidra's analysis finds them and gives them its default names. Ghidra rebases
