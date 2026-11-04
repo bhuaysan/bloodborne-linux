@@ -11,8 +11,8 @@ Every external source consulted for this project is listed here. Off-limits sour
 | PyGhidra 3.1.0 and JPype 1.5.2 (bundled with Ghidra) | Apache-2.0 | Running headless Ghidra scripts in Python 3 (`tools/ghidra-sync`) |
 | GNU binutils (`objdump`, `readelf`) | GPL-3.0 | Quick inspection of ELF files |
 | libelf (elfutils) | LGPL-3.0+ / GPL-2.0+ | Cross-check of the SysV hash function used by `tools/elf2std` (test vectors) |
-| [Linux man-pages](https://www.kernel.org/doc/man-pages/) 6.13 (installed) | Various free licenses | Page names of sections 2 and 3 as NID candidate names (`tools/nidmatch/syscandidates.py`) |
-| GNU C Library 2.43 and libstdc++ 16.2 (installed `libc.so.6`, `libm.so.6`, `libstdc++.so.6`) | LGPL-2.1+ / GPL-3.0+ with runtime exception | Their defined symbol names as NID candidate names (`tools/nidmatch/syscandidates.py`) |
+| [Linux man-pages](https://www.kernel.org/doc/man-pages/) 6.13 (installed) | Various free licenses | Page names of sections 2 and 3 as NID candidate names and as input to the derivation rules (`tools/nidmatch/syscandidates.py`, `derive.py`) |
+| GNU C Library 2.43 and libstdc++ 16.2 (installed `libc.so.6`, `libm.so.6`, `libstdc++.so.6`) | LGPL-2.1+ / GPL-3.0+ with runtime exception | Their defined symbol names as NID candidate names and as input to the derivation rules (`tools/nidmatch/syscandidates.py`, `derive.py`) |
 
 ## Documentation
 

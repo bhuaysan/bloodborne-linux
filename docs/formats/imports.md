@@ -25,7 +25,35 @@ Every import of the static load set from `libc` or `libSceFios2` is exported by 
 
 The other 40 modules come from the system firmware, and so do two more that only the bundled PRXs need: `libSceLibcInternal` and `libSceDiscMap` (both needed by libSceFios2).
 
-The other 5 bundled PRXs (libSceFace, libSceHand, libSceHeadTracker, libSceS3DConversion, libSceSmart) are not needed by any file, and their names don't appear as strings in the eboot. Either the game loads them at runtime through a system call that takes a numeric module id, or it never loads them. Which of the two stays open until the import names are recovered by NID matching.
+The other 5 bundled PRXs (libSceFace, libSceHand, libSceHeadTracker, libSceS3DConversion, libSceSmart) are not needed by any file, and their names don't appear as strings in the eboot. Most likely the game never loads them, see [Modules loaded at runtime](#modules-loaded-at-runtime).
+
+## Modules loaded at runtime
+
+Besides `DT_NEEDED`, the eboot loads system modules by numeric id with `sceSysmoduleLoadModule` (names from [nid.md](nid.md)). It calls the function from 21 places, all with a constant id (`mov edi, imm32` right before the call), 16 distinct ids in all. Each id goes with an imported library, found from the calls right after the load. The table lists our own findings; there is no published table of the ids.
+
+| Id | Load sites | Library used right after | How clear |
+|---|---|---|---|
+| `0x83` | `0x1fdd647`, `0x1fde810` | libScePlayGo (`scePlayGoInitialize`) | init call after the load |
+| `0x96` | `0x2903fce` (checked first with `sceSysmoduleIsLoaded`) | libSceImeDialog (`sceImeDialogInit`) | init call nearby |
+| `0x9d` | `0x1e75245` | libSceNpAuth (`sceNpAuthPollAsync`) | next library call after the load |
+| `0xa0` | `0x28425ce` | libSceSaveData / libSceSaveDataDialog | calls of both after the load |
+| `0xa4` | `0x1c23e8b` | libSceMsgDialog (`sceMsgDialogInitialize`) | init call after the load |
+| `0xa5` | `0x28fdc51` | libSceAvPlayer (`sceAvPlayerInit`) | init call after the load |
+| `0xa8` | `0x1c4037a` | libSceNpCommerce (`sceNpCommerceDialogInitialize`) | init call after the load |
+| `0xa9` | 6 sites from `0x268bce1` | libSceMouse (`sceMouseInit`) | init call after the load |
+| `0xad` | `0x20245ff` | libSceNpTrophy (`sceNpTrophyCreateContext`, …) | only library used in the function |
+| `0xb4` | `0x2026144` | libSceAppContent (`sceAppContentInitialize`) | init call after the load |
+| `0x1e` | `0xcccd55` | libSceNpScore | calls after the load |
+| `0x1c`, `0xb5`, `0x19`, `0xb2`, `0x1a` | `0xc872b0`, one function | online subsystem, see below | not one to one |
+
+The function at `0xc872b0` loads `0x1c`, `0xb5`, `0x19` and `0xb2`, then `0x1a` only if a check on a subsystem object passes. A matching function at `0xc87330` unloads the same ids and accepts error `0x805a1001`, probably "not loaded". Both have exactly one caller, `0x1ecec4b` and `0x1ecf563`. They sit in the code range `0xc87000`–`0xcdb000`, which calls libSceNpWebApi, libSceVoice, libSceNpMatching2, libSceNpManager, libSceNpCommon, libSceNpUtility, libSceNpSignaling and libSceNpProfileDialog. At least five of these have no load site of their own. So these five ids most likely load online libraries.
+
+**The 5 extra bundled PRXs.** Going by their exports, they are camera-image libraries: `sceFaceDetection`, `sceHandDetection`, `sceHeadTrackerInitialize`, and so on. Three facts speak against the game loading them:
+- No file imports anything they export, so the game's code could only reach them through a dynamic symbol lookup.
+- None of their names or paths appears in the eboot, in ASCII or in UTF-16.
+- The eboot imports no camera library.
+
+Every module id it loads goes with a library it imports. This is strong evidence, not proof: the five ids of the online subsystem aren't tied to single libraries yet. The runtime will settle it in M2. Our `sceSysmoduleLoadModule` logs every id, and our file I/O logs any access to `sce_module/`.
 
 ## Firmware imports of the static load set
 
