@@ -51,7 +51,7 @@ Decompiled functions are verified before the game boots. A test process maps the
 Our analysis results (names, signatures, types, matched NIDs) live as text in `symbols/`. Scripts sync them with a local Ghidra project, so the project can be rebuilt at any time and the history is tracked in git.
 
 ### Analysis tooling
-Python tools under `tools/` turn the dump into something Ghidra and `symbols/` can use. The tools that read game files or files derived from them check the pinned hashes. Generated output goes to `analysis/`. Only `nidmatch` and `ghidra-sync` update `symbols/`.
+Python tools under `tools/` turn the dump into something Ghidra and `symbols/` can use. The tools that parse game files or files derived from them check the pinned hashes. `ghidra-sync` doesn't: it passes the ELF named with `--elf` to Ghidra unchecked. Generated output goes to `analysis/`. Only `nidmatch` and `ghidra-sync` update `symbols/`.
 
 ```
 eboot.bin, sce_module/*.prx
