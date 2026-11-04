@@ -15,6 +15,8 @@
 namespace {
 
 using bb::loader::LoadError;
+using bb::loader::read_elf_header;
+using bb::loader::read_phdrs;
 using bb::loader::self_to_elf;
 using Bytes = std::vector<std::byte>;
 
@@ -36,8 +38,8 @@ struct Synthetic {
 };
 
 // A minimal SELF like the ones in docs/formats/self.md: one PT_LOAD with data, a block digest
-// table for it, and a PT_SCE_LIBVERSION trailer.
-Synthetic build_self() {
+// table for it, and a PT_SCE_LIBVERSION trailer. `edit_elf` changes the ELF before it is embedded.
+Synthetic build_self(void (*edit_elf)(Bytes&) = nullptr) {
     std::string_view libversion = "libversion";
     Bytes elf(0x1000 + code_size + libversion.size());
     std::memcpy(elf.data(), "\x7f" "ELF\x02\x01", 6);  // 64-bit, little-endian
@@ -58,6 +60,9 @@ Synthetic build_self() {
         elf[0x1000 + i] = static_cast<std::byte>(i * 7);
     }
     std::memcpy(elf.data() + 0x1000 + code_size, libversion.data(), libversion.size());
+    if (edit_elf) {
+        edit_elf(elf);
+    }
 
     constexpr std::size_t elf_head = 0x40 + 2 * 0x38;
     constexpr std::size_t ext_off = (0x20 + 2 * 0x20 + elf_head + 15) & ~std::size_t{15};
@@ -92,42 +97,69 @@ TEST(SelfToElf, RebuildsTheElf) {
     EXPECT_EQ(self_to_elf(s.self), s.elf);
 }
 
-TEST(SelfToElf, RejectsWrongMagic) {
-    auto s = build_self();
-    s.self[0] = std::byte{0};
-    EXPECT_THROW(self_to_elf(s.self), LoadError);
-}
-
-TEST(SelfToElf, RejectsEncryptedOrCompressedData) {
-    for (std::uint64_t flag : {std::uint64_t{2}, std::uint64_t{8}}) {
-        auto s = build_self();
-        put(s.self, 0x40, data_entry | flag);
-        EXPECT_THROW(self_to_elf(s.self), LoadError) << "flag " << flag;
+// Expects `f` to throw a LoadError whose message contains `error`.
+template <class F>
+void expect_load_error(F f, std::string_view error) {
+    try {
+        f();
+        ADD_FAILURE() << "no LoadError, expected \"" << error << '"';
+    } catch (const LoadError& e) {
+        EXPECT_NE(std::string_view(e.what()).find(error), std::string_view::npos) << e.what();
     }
 }
 
-TEST(SelfToElf, RejectsEntryForMissingProgramHeader) {
-    auto s = build_self();
-    put(s.self, 0x40, data_entry | std::uint64_t{2} << 20);
-    EXPECT_THROW(self_to_elf(s.self), LoadError);
+// One defect each. ELF edits happen before the digest is computed, so only the check under test
+// can reject them. Checking the message makes sure that check fired and not a later one.
+struct Defect {
+    std::string_view error;     // part of the LoadError message
+    void (*edit_elf)(Bytes&);   // applied before the SELF is built, or nullptr
+    void (*edit_self)(Bytes&);  // applied to the finished SELF, or nullptr
+    bool in_parser = false;     // read_elf_header or read_phdrs rejects the edited ELF itself
+};
+
+const Defect defects[] = {
+    {"wrong magic", nullptr, [](Bytes& s) { s[0] = std::byte{0}; }},
+    {"encrypted", nullptr, [](Bytes& s) { put(s, 0x40, data_entry | 2); }},
+    {"encrypted", nullptr, [](Bytes& s) { put(s, 0x40, data_entry | 8); }},
+    {"points at program header 2", nullptr, [](Bytes& s) { put(s, 0x40, data_entry | 2 << 20); }},
+    {"!= p_filesz", nullptr, [](Bytes& s) { put<std::uint64_t>(s, 0x58, code_size - 1); }},
+    {"PT_SCE_LIBVERSION p_filesz", nullptr, [](Bytes& s) { s.pop_back(); }},
+    {"doesn't match the digest", nullptr, [](Bytes& s) { s[s.size() - 20] ^= std::byte{1}; }},
+    {"don't fit the file", nullptr, [](Bytes& s) { put<std::uint16_t>(s, 0x0C, 0x14F); }},
+    {"don't fit the file", nullptr, [](Bytes& s) { put<std::uint16_t>(s, 0x0E, 0xFFFF); }},
+    {"not an ELF file", [](Bytes& e) { e[3] = std::byte{'G'}; }, nullptr, true},
+    {"not a 64-bit", [](Bytes& e) { e[4] = std::byte{1}; }, nullptr, true},
+    {"not a 64-bit", [](Bytes& e) { e[5] = std::byte{2}; }, nullptr, true},
+    {"program header size", [](Bytes& e) { put<std::uint16_t>(e, 0x36, 0x40); }, nullptr, true},
+    {"header layout", [](Bytes& e) { put<std::uint64_t>(e, 0x20, 0x48); }, nullptr},
+    {"header layout", [](Bytes& e) { put<std::uint16_t>(e, 0x34, 0x48); }, nullptr},
+    {"section headers", [](Bytes& e) { put<std::uint64_t>(e, 0x28, 0x2000); }, nullptr},
+    {"section headers", [](Bytes& e) { put<std::uint16_t>(e, 0x3C, 1); }, nullptr},
+    {"0 PT_SCE_LIBVERSION", [](Bytes& e) { put(e, 0x78, bb::loader::pt_load); }, nullptr},
+    {"2 PT_SCE_LIBVERSION", [](Bytes& e) { put(e, 0x40, bb::loader::pt_sce_libversion); },
+     nullptr},
+};
+
+TEST(SelfToElf, RejectsEachDefect) {
+    for (const Defect& d : defects) {
+        SCOPED_TRACE(d.error);
+        auto s = build_self(d.edit_elf);
+        if (d.edit_self) {
+            d.edit_self(s.self);
+        }
+        expect_load_error([&] { self_to_elf(s.self); }, d.error);
+        if (d.in_parser) {
+            expect_load_error([&] { read_phdrs(s.elf, read_elf_header(s.elf)); }, d.error);
+        }
+    }
 }
 
-TEST(SelfToElf, RejectsSizeMismatch) {
-    auto s = build_self();
-    put<std::uint64_t>(s.self, 0x58, code_size - 1);
-    EXPECT_THROW(self_to_elf(s.self), LoadError);
-}
-
-TEST(SelfToElf, RejectsMissingTrailer) {
-    auto s = build_self();
-    s.self.resize(s.self.size() - 1);
-    EXPECT_THROW(self_to_elf(s.self), LoadError);
-}
-
-TEST(SelfToElf, RejectsDigestMismatch) {
-    auto s = build_self();
-    s.self[s.self.size() - 20] ^= std::byte{1};
-    EXPECT_THROW(self_to_elf(s.self), LoadError);
+// The parsers check that their tables fit the data. map_elf calls them on plain ELFs.
+TEST(ReadElf, RejectsTruncatedTables) {
+    auto elf = build_self().elf;
+    expect_load_error([&] { read_elf_header(std::span(elf).first(0x3F)); }, "ELF header");
+    auto eh = read_elf_header(elf);
+    expect_load_error([&] { read_phdrs(std::span(elf).first(0xAF), eh); }, "program headers");
 }
 
 TEST(SelfToElf, RejectsEveryTruncation) {
