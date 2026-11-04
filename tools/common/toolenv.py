@@ -1,5 +1,4 @@
-"""Shared helpers for the Python tools: repository paths, local.env, pinned files and ELF
-header layouts.
+"""Shared helpers for the Python tools: repository paths, local.env and pinned files.
 
 local.env and analysis/ are untracked, so they exist only in the main checkout. A linked git
 worktree (`git worktree add`) has neither. main_checkout() finds the main checkout so that tools
@@ -10,32 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import os
-import struct
 import subprocess
-from dataclasses import astuple, dataclass
 from functools import cache
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-ELF_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")  # 0x40 bytes
-ELF_PHDR = struct.Struct("<IIQQQQQQ")  # 0x38 bytes
-
-
-@dataclass
-class Phdr:
-    p_type: int
-    p_flags: int
-    p_offset: int
-    p_vaddr: int
-    p_paddr: int
-    p_filesz: int
-    p_memsz: int
-    p_align: int
-
-    def pack(self) -> bytes:
-        return ELF_PHDR.pack(*astuple(self))
-
 
 @cache
 def main_checkout() -> Path:

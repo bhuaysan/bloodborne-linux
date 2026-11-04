@@ -22,8 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 from cli import checked_out_dir, convert_each  # noqa: E402
-from toolenv import ELF_HEADER, ELF_PHDR, Phdr, load_game_dir  # noqa: E402
-from ps4elf import ELF_DIR  # noqa: E402
+from toolenv import load_game_dir  # noqa: E402
+from ps4elf import ELF_DIR, ELF_HEADER, ELF_PHDR, Phdr  # noqa: E402
 
 # CUSA03173 patch 1.09. docs/clean-room.md lists the same hashes.
 KNOWN_FILES = {

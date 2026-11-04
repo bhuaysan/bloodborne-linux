@@ -8,10 +8,10 @@ segment. The tables use the standard layouts. See docs/formats/elf-dynamic.md.
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from functools import cached_property
 
-from toolenv import ELF_HEADER, ELF_PHDR, Phdr, analysis_dir
+from toolenv import analysis_dir
 
 # Where self2elf writes the ELFs it rebuilds, in the main checkout.
 ELF_DIR = analysis_dir() / "elf"
@@ -31,9 +31,27 @@ PINNED_ELFS = {
 # Error hint for files that are not one of these. The usual cause is a stale or edited output.
 PINNED_ELFS_HINT = "expected a self2elf output of CUSA03173 patch 1.09, run tools/self2elf again"
 
+ELF_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")  # 0x40 bytes
+ELF_PHDR = struct.Struct("<IIQQQQQQ")  # 0x38 bytes
 DYN = struct.Struct("<QQ")  # 0x10 bytes
 SYM = struct.Struct("<IBBHQQ")  # 0x18 bytes
 RELA = struct.Struct("<QQq")  # 0x18 bytes
+
+
+@dataclass
+class Phdr:
+    p_type: int
+    p_flags: int
+    p_offset: int
+    p_vaddr: int
+    p_paddr: int
+    p_filesz: int
+    p_memsz: int
+    p_align: int
+
+    def pack(self) -> bytes:
+        return ELF_PHDR.pack(*astuple(self))
+
 
 ET_EXEC = 2
 ET_SCE_DYNEXEC = 0xFE10  # eboot.bin

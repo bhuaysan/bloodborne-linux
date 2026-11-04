@@ -38,13 +38,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 from cli import checked_out_dir, convert_each, default_elf_paths  # noqa: E402
-from toolenv import ELF_HEADER, ELF_PHDR, Phdr, analysis_dir  # noqa: E402
+from toolenv import analysis_dir  # noqa: E402
 from ps4elf import (  # noqa: E402
     DT_HASH, DT_JMPREL, DT_LOOS, DT_NULL, DT_PLTGOT, DT_PLTREL, DT_PLTRELSZ, DT_RELA, DT_RELAENT,
     DT_RELASZ, DT_SCE_FIRST, DT_SCE_JMPREL, DT_SCE_LAST, DT_SCE_PLTGOT, DT_SCE_PLTREL,
     DT_SCE_PLTRELSZ, DT_SCE_RELA, DT_SCE_RELAENT, DT_SCE_RELASZ, DT_SCE_STRSZ, DT_SCE_STRTAB,
-    DT_SCE_SYMENT, DT_SCE_SYMTAB, DT_STRSZ, DT_STRTAB, DT_SYMENT, DT_SYMTAB, DYN, ELF_DIR, ET_EXEC,
-    PINNED_ELFS, PINNED_ELFS_HINT, PT_DYNAMIC, PT_LOAD, RELA, ElfError, need, parse,
+    DT_SCE_SYMENT, DT_SCE_SYMTAB, DT_STRSZ, DT_STRTAB, DT_SYMENT, DT_SYMTAB, DYN, ELF_DIR,
+    ELF_HEADER, ELF_PHDR, ET_EXEC, PINNED_ELFS, PINNED_ELFS_HINT, PT_DYNAMIC, PT_LOAD, RELA,
+    ElfError, Phdr, need, parse,
 )
 
 DEFAULT_OUT = analysis_dir() / "elf-std"
