@@ -41,7 +41,7 @@ from ps4elf import (  # noqa: E402,F401  (re-exported for the tests)
     DT_SCE_PLTREL, DT_SCE_PLTRELSZ, DT_SCE_RELA, DT_SCE_RELAENT, DT_SCE_RELASZ, DT_SCE_STRSZ,
     DT_SCE_STRTAB, DT_SCE_SYMENT, DT_SCE_SYMTAB, DT_SCE_SYMTABSZ, DT_STRSZ, DT_STRTAB, DT_SYMENT,
     DT_SYMTAB, DYN, EM_X86_64, ET_EXEC, ET_SCE_DYNAMIC, ET_SCE_DYNEXEC, PINNED_ELFS, PT_DYNAMIC,
-    PT_LOAD, PT_SCE_DYNLIBDATA, RELA_SIZE, SYM, ElfError, parse,
+    PT_LOAD, PT_SCE_DYNLIBDATA, RELA_SIZE, SYM, ElfError, need, parse,
 )
 
 DEFAULT_IN = analysis_dir() / "elf"
@@ -110,25 +110,20 @@ def build_hash_table(names: list[bytes]) -> bytes:
     return struct.pack(f"<II{nbucket}I{nchain}I", nbucket, nchain, *buckets, *chains)
 
 
-def _need(cond: bool, what: str) -> None:
-    if not cond:
-        raise ElfError(what)
-
-
 def convert(data: bytes) -> Result:
     image = parse(data)
     (ident, _, e_machine, e_version, e_entry, e_phoff, e_shoff, e_flags, e_ehsize,
      e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx) = image.header
-    _need(e_shnum == 0, "ELF already has section headers")
+    need(e_shnum == 0, "ELF already has section headers")
     phdrs, dynamic, sce = image.phdrs, image.dynamic, image.tables
     loads = [ph for ph in phdrs if ph.p_type == PT_LOAD]
-    _need(bool(loads), "no PT_LOAD segment")
+    need(bool(loads), "no PT_LOAD segment")
 
     # The new program header goes into the gap after the existing ones.
     phdrs_end = e_phoff + e_phnum * ELF_PHDR.size
     file_start = min(ph.p_offset for ph in phdrs if ph.p_filesz)
     new_phdrs_end = phdrs_end + ELF_PHDR.size
-    _need(new_phdrs_end <= file_start and not any(data[phdrs_end:new_phdrs_end]),
+    need(new_phdrs_end <= file_start and not any(data[phdrs_end:new_phdrs_end]),
           "no free space for an extra program header")
 
     entries = image.entries
@@ -152,10 +147,10 @@ def convert(data: bytes) -> Result:
         # readable in the dynlibdata copy. Any other OS or processor tag is refused, because we
         # can't tell whether its value would need translating. None of the pinned files has one.
         if tag < DT_LOOS:
-            _need(tag not in REPLACED_TAGS, f"unexpected standard tag {tag:#x}")
+            need(tag not in REPLACED_TAGS, f"unexpected standard tag {tag:#x}")
             new_entries.append((tag, value))
         else:
-            _need(DT_SCE_FIRST <= tag <= DT_SCE_LAST, f"unsupported dynamic tag {tag:#x}")
+            need(DT_SCE_FIRST <= tag <= DT_SCE_LAST, f"unsupported dynamic tag {tag:#x}")
     new_entries.append((DT_HASH, load_vaddr + hash_off))
     for sce_tag, std_tag in OFFSET_TAGS.items():
         new_entries.append((std_tag, load_vaddr + sce[sce_tag]))
