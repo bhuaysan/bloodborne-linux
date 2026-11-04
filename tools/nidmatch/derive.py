@@ -35,7 +35,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import itertools
 import os
@@ -216,16 +215,13 @@ def derive(tgt: Targets, seed: set[str], c_names: set[str], idents: set[str],
 def read_seed(path: Path) -> set[str]:
     """Names in nids.csv with at least one source that is not a derivation rule. Names of the
     libraries in NO_DERIVE_LIBRARIES are left out, so their words never feed a rule."""
-    if not path.is_file():
-        return set()
     names: set[str] = set()
     blocked: set[str] = set()
-    with path.open(newline="") as f:
-        for row in csv.DictReader(f):
-            if row["library"] in nm.NO_DERIVE_LIBRARIES:
-                blocked.add(row["name"])
-            elif any(not s.startswith(nm.DERIVED_PREFIX) for s in row["source"].split(";") if s):
-                names.add(row["name"])
+    for _, row in nm.nids_csv_rows(path):
+        if row["library"] in nm.NO_DERIVE_LIBRARIES:
+            blocked.add(row["name"])
+        elif any(not s.startswith(nm.DERIVED_PREFIX) for s in row["source"].split(";") if s):
+            names.add(row["name"])
     return names - blocked
 
 

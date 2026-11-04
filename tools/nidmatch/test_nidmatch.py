@@ -408,6 +408,9 @@ class DeriveTest(unittest.TestCase):
                             "x,libSceRtc,d,hand\n"
                             "x,libA,d,hand\n")
             self.assertEqual(derive.read_seed(path), {"b", "c"})
+            path.write_text("nid,library,name,source\nx,libA,a\n")
+            with self.assertRaisesRegex(m.MatchError, "wrong number of fields"):
+                derive.read_seed(path)
 
 
 class ManNamesTest(unittest.TestCase):

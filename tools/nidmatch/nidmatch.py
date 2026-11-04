@@ -37,6 +37,7 @@ import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
+from collections.abc import Iterator
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
@@ -99,10 +100,21 @@ NidTable = dict[str, dict[str, Use]]
 Candidates = dict[str, set[str]]
 
 
-def check_fields(row: dict[str | None, str | None], where: str) -> None:
-    # DictReader fills a short row with None values and puts the rest of a long row under None.
-    if None in row or None in row.values():
-        raise MatchError(f"{where}: wrong number of fields")
+def nids_csv_rows(path: Path) -> Iterator[tuple[str, dict[str, str]]]:
+    """(file:line, row) for each row of nids.csv, after checking the columns and the field count.
+    Nothing if the file does not exist."""
+    if not path.is_file():
+        return
+    with path.open(newline="") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames != NIDS_FIELDS:
+            raise MatchError(f"{path}: expected columns {','.join(NIDS_FIELDS)}")
+        for lineno, row in enumerate(reader, 2):
+            # DictReader fills a short row with None values and puts the rest of a long row under
+            # None.
+            if None in row or None in row.values():
+                raise MatchError(f"{path}:{lineno}: wrong number of fields")
+            yield f"{path}:{lineno}", row
 
 
 def load_nids(infos: list[ElfInfo]) -> NidTable:
@@ -178,28 +190,20 @@ def read_nids_csv(path: Path, table: NidTable, candidates: Candidates, rederived
     names. `rederived` also holds the labels passed to --withdraw. A row left without a label is
     dropped unless this run finds the name again.
     """
-    if not path.is_file():
-        return
-    with path.open(newline="") as f:
-        reader = csv.DictReader(f)
-        if reader.fieldnames != NIDS_FIELDS:
-            raise MatchError(f"{path}: expected columns {','.join(NIDS_FIELDS)}")
-        for lineno, row in enumerate(reader, 2):
-            where = f"{path}:{lineno}"
-            check_fields(row, where)
-            if not NAME_RE.fullmatch(row["name"]):
-                raise MatchError(f"{where}: not a symbol name: {row['name']!r}")
-            if nid(row["name"]) != row["nid"]:
-                raise MatchError(f"{where}: {row['name']} does not hash to {row['nid']}")
-            if row["library"] not in table.get(row["nid"], {}):
-                raise MatchError(f"{where}: {row['nid']} is not a NID of {row['library']} "
-                                 "in the pinned files")
-            labels = [s for s in row["source"].split(";") if s]
-            if not labels:
-                raise MatchError(f"{where}: no source")
-            for label in labels:
-                if not label.startswith(STRINGS_PREFIX) and label not in rederived:
-                    add(candidates, row["name"], label, where)
+    for where, row in nids_csv_rows(path):
+        if not NAME_RE.fullmatch(row["name"]):
+            raise MatchError(f"{where}: not a symbol name: {row['name']!r}")
+        if nid(row["name"]) != row["nid"]:
+            raise MatchError(f"{where}: {row['name']} does not hash to {row['nid']}")
+        if row["library"] not in table.get(row["nid"], {}):
+            raise MatchError(f"{where}: {row['nid']} is not a NID of {row['library']} "
+                             "in the pinned files")
+        labels = [s for s in row["source"].split(";") if s]
+        if not labels:
+            raise MatchError(f"{where}: no source")
+        for label in labels:
+            if not label.startswith(STRINGS_PREFIX) and label not in rederived:
+                add(candidates, row["name"], label, where)
 
 
 def match(table: NidTable, candidates: Candidates) -> dict[str, tuple[str, set[str]]]:
