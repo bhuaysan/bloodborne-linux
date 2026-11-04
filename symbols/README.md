@@ -13,8 +13,10 @@ They contain addresses and names we chose, never code or data from the game.
   - `status`: `unknown` | `named` | `decompiled` | `replaced`
   - `file`: the source file holding the C++ version, otherwise empty
 - `types/`: struct, enum and typedef definitions as C headers, one header per subsystem.
-- `nids.csv`: matched import NIDs.
-  - `nid`, `library`, `name`, `source` (where the candidate name came from)
+- `nids.csv`: matched NIDs, one row per (NID, library). Written by `tools/nidmatch`, which hashes every row again on each run.
+  - `nid`, `library`, `name`
+  - `source`: where the candidate name came from, as `;`-separated labels (see `docs/formats/nid.md`)
+- `candidates/`: hand-picked NID candidate names, one file per reason, one name per line. Give every name a `#` comment saying why it is a candidate. The file stem is the source label.
 
 ## Sync
 
