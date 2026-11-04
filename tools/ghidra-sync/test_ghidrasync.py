@@ -231,7 +231,9 @@ class TypesHeaderTest(unittest.TestCase):
     def test_write_types_fails_before_writing(self):
         def ptr(to: str) -> list[dict]:
             return [{"kind": "typedef", "name": "P", "type": {"pointer": ours(to, "S", "struct")}}]
-        for exported in ({"a/b": []}, {"a": ptr("b"), "b": ptr("a")}):
+        same = {"kind": "struct", "name": "S", "size": 4, "fields": []}
+        for exported in ({"a/b": []}, {"a": ptr("b"), "b": ptr("a")},
+                         {"a": [same], "b": [same]}):
             with self.subTest(exported=exported), self.assertRaises(g.SyncError):
                 g.write_types(self.tmp, exported)
         self.assertEqual(list(self.tmp.iterdir()), [])

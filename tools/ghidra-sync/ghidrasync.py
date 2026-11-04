@@ -213,6 +213,13 @@ def write_types(types_dir: Path, exported: dict[str, list[dict]]) -> None:
     for subsystem in exported:
         if not SUBSYSTEM.fullmatch(subsystem):
             raise SyncError(f"/bb/{subsystem}: use letters, digits and _ for subsystem names")
+    homes: dict[str, list[str]] = {}
+    for subsystem, items in sorted(exported.items()):
+        for item in items:
+            homes.setdefault(item["name"], []).append(subsystem)
+    clashes = [f"{n} (/bb/{', /bb/'.join(s)})" for n, s in sorted(homes.items()) if len(s) > 1]
+    if clashes:  # C has one namespace for all headers
+        raise SyncError("type names used in more than one subsystem: " + ", ".join(clashes))
     texts = {s: format_header(s, items) for s, items in exported.items()}
     topo_order({s: set(INCLUDE.findall(text)) & set(texts) for s, text in texts.items()},
                "subsystems in /bb (pointers count)")
