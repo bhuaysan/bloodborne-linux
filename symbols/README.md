@@ -20,7 +20,17 @@ They contain addresses and names we chose, never code or data from the game.
 
 ## Sync
 
-`tools/ghidra-sync/ghidrasync.py` moves function names and signatures between a Ghidra project and `functions.csv`. It runs Ghidra headless through PyGhidra, which ships with Ghidra. `GHIDRA_INSTALL_DIR` comes from the environment or `local.env`. On first use `pyghidraRun` sets up its own Python environment from the wheels bundled with Ghidra (no network). Close the project in the Ghidra GUI first, because headless Ghidra needs the project lock.
+`tools/ghidra-sync/ghidrasync.py` moves function names and signatures between a Ghidra project and `functions.csv`. It runs Ghidra headless through PyGhidra, which ships with Ghidra. `GHIDRA_INSTALL_DIR` comes from the environment or `local.env`. Close the project in the Ghidra GUI first, because headless Ghidra needs the project lock.
+
+PyGhidra needs a one-time setup. The tool uses the `python3` it runs under when that has `pyghidra`, otherwise the virtual environment `pyghidraRun` keeps in Ghidra's settings directory (`$XDG_CONFIG_HOME/ghidra/ghidra_<version>_PUBLIC/venv`, default `~/.config`). It never installs anything itself, and the round-trip test skips until one of the two exists. To create the environment, run `$GHIDRA_INSTALL_DIR/support/pyghidraRun` once in a terminal and answer `y` to installing PyGhidra and to a new Ghidra virtual environment (on a Python that is externally managed it creates the environment without asking). Or create it by hand from the bundled packages:
+
+```sh
+venv=~/.config/ghidra/ghidra_<version>_PUBLIC/venv
+python3.13 -m venv "$venv"
+"$venv/bin/pip" install --no-index -f "$GHIDRA_INSTALL_DIR/Ghidra/Features/PyGhidra/pypkg/dist" pyghidra
+```
+
+Ghidra bundles JPype wheels only up to a certain Python version (cp313 for Ghidra 12.1). With a newer Python, pip builds JPype from its source archive, which needs a C++ compiler and the Python headers. An older supported Python avoids that.
 
 ```sh
 # after an analysis session: merge our annotations into symbols/functions.csv

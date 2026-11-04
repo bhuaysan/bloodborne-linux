@@ -2,7 +2,8 @@
 """Tests for ghidrasync. Run: python3 -m unittest discover -s tools/ghidra-sync
 
 The CSV tests need neither Ghidra nor the game. The round trip runs headless Ghidra on a small
-ELF built here and skips when GHIDRA_INSTALL_DIR is unset (environment or local.env).
+ELF built here and skips when GHIDRA_INSTALL_DIR is unset (environment or local.env) or
+PyGhidra is not set up.
 """
 
 from __future__ import annotations
@@ -71,9 +72,11 @@ class FunctionsCsvTest(unittest.TestCase):
             g.read_functions(self.tmp / "functions.csv")
 
     def test_headless_command(self):
-        cmd = g.headless_command(Path("/g"), Path("/p/proj.gpr"), ["-process", "x"],
+        cmd = g.headless_command("py", Path("/g"), Path("/p/proj.gpr"), ["-process", "x"],
                                  [["A.py", "1"], ["B.py"]])
-        self.assertEqual(cmd[-11:], ["/p", "proj", "-process", "x", "-scriptPath",
+        self.assertEqual(cmd[:6], ["py", "-m", "pyghidra.ghidra_launch", "--install-dir", "/g",
+                                   "ghidra.app.util.headless.AnalyzeHeadless"])
+        self.assertEqual(cmd[6:], ["/p", "proj", "-process", "x", "-scriptPath",
                                      str(g.SCRIPTS), "-postScript", "A.py", "1", "-postScript",
                                      "B.py"])
 
@@ -111,8 +114,16 @@ FIXTURE = HEADER + "".join([
 ])
 
 
-@unittest.skipUnless(g.local_env("GHIDRA_INSTALL_DIR"),
-                     "GHIDRA_INSTALL_DIR not set (environment or local.env)")
+def pyghidra_missing() -> str:
+    """Why the round trip cannot run here, or an empty string."""
+    try:
+        g.pyghidra_python(g.ghidra_dir())
+    except g.SyncError as err:
+        return str(err)
+    return ""
+
+
+@unittest.skipIf(MISSING := pyghidra_missing(), MISSING)
 class GhidraRoundTripTest(unittest.TestCase):
     def test_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:

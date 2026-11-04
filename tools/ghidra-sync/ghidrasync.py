@@ -7,7 +7,7 @@ import  applies functions.csv to a project, e.g. a fresh one rebuilt from your o
 
 Only user-defined names and signatures go out: Ghidra's own names (FUN_..., thunks, symbols from
 the ELF) are left in the project. Ghidra runs headless through PyGhidra, which ships with Ghidra
-($GHIDRA_INSTALL_DIR/support/pyghidraRun). See symbols/README.md, section "Sync".
+and needs a one-time setup. See symbols/README.md, section "Sync".
 
 Usage:
     ghidrasync.py export PROJECT.gpr [--program NAME] [--symbols DIR]
@@ -25,6 +25,7 @@ import csv
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -109,31 +110,53 @@ def ghidra_dir() -> Path:
     return Path(value).expanduser()
 
 
-def headless_command(install: Path, project: Path, target: list[str],
-                     scripts: list[list[str]]) -> list[str]:
-    """analyzeHeadless through PyGhidra, so the scripts in ghidra_scripts/ run as Python 3.
+def ghidra_venv(install: Path) -> Path:
+    """The virtual environment pyghidraRun creates in Ghidra's user settings directory."""
+    props = dict(line.split("=", 1) for line in
+                 (install / "Ghidra" / "application.properties").read_text().splitlines()
+                 if "=" in line and not line.startswith(("#", "!")))
+    name = f"ghidra_{props['application.version']}_{props['application.release.name']}"
+    config = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(config) / "ghidra" / name / "venv"
 
-    pyghidraRun picks or creates PyGhidra's virtual environment. When this interpreter already
-    has pyghidra, it is launched directly, as pyghidraRun would do.
+
+def pyghidra_python(install: Path) -> str:
+    """A Python interpreter that has pyghidra: this one, else Ghidra's own venv.
+
+    pyghidraRun is not used: it asks on stdin before installing PyGhidra.
     """
     if importlib.util.find_spec("pyghidra"):
-        launch = [sys.executable, "-m", "pyghidra.ghidra_launch", "--install-dir", str(install),
-                  "ghidra.app.util.headless.AnalyzeHeadless"]
-    else:
-        launch = [str(install / "support" / "pyghidraRun"), "-H"]
-    cmd = [*launch, str(project.parent), project.stem, *target, "-scriptPath", str(SCRIPTS)]
+        return sys.executable
+    python = ghidra_venv(install) / "bin" / "python3"
+    if python.is_file() and subprocess.run([str(python), "-c", "import pyghidra"],
+                                           capture_output=True).returncode == 0:
+        return str(python)
+    raise SyncError(f"PyGhidra is not set up. Run {install / 'support' / 'pyghidraRun'} once "
+                    "and let it install PyGhidra into a new Ghidra virtual environment "
+                    "(see symbols/README.md, section \"Sync\")")
+
+
+def headless_command(python: str, install: Path, project: Path, target: list[str],
+                     scripts: list[list[str]]) -> list[str]:
+    """analyzeHeadless through PyGhidra, so the scripts in ghidra_scripts/ run as Python 3."""
+    cmd = [python, "-m", "pyghidra.ghidra_launch", "--install-dir", str(install),
+           "ghidra.app.util.headless.AnalyzeHeadless", str(project.parent), project.stem,
+           *target, "-scriptPath", str(SCRIPTS)]
     for script in scripts:
         cmd += ["-postScript", *script]
     return cmd
 
 
-def run_headless(project: Path, target: list[str], scripts: list[list[str]]) -> None:
+def run_headless(project: Path, target: list[str], scripts: list[list[str]]) -> str:
+    """Runs Ghidra and returns the tail of its output."""
+    install = ghidra_dir()
+    cmd = headless_command(pyghidra_python(install), install, project, target, scripts)
     project.parent.mkdir(parents=True, exist_ok=True)
-    cmd = headless_command(ghidra_dir(), project, target, scripts)
     run = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    tail = "\n".join((run.stdout + run.stderr).splitlines()[-40:])
     if run.returncode != 0:
-        tail = "\n".join((run.stdout + run.stderr).splitlines()[-40:])
         raise SyncError(f"Ghidra exited with {run.returncode}:\n{tail}")
+    return tail
 
 
 def run_scripts(project: Path, target: list[str], tmp: Path,
@@ -147,12 +170,12 @@ def run_scripts(project: Path, target: list[str], tmp: Path,
     out = tmp / "out.json"
     if export:
         scripts.append(["SymbolsExport.py", str(out)])
-    run_headless(project, target, scripts)
+    tail = run_headless(project, target, scripts)
     # analyzeHeadless exits 0 even when a script fails, so each script writes its result last.
     if to_ghidra is not None and not done.is_file():
-        raise SyncError("the import script did not finish; see Ghidra's log")
+        raise SyncError(f"the import script did not finish:\n{tail}")
     if export and not out.is_file():
-        raise SyncError("the export script did not finish; see Ghidra's log")
+        raise SyncError(f"the export script did not finish:\n{tail}")
     return json.loads(out.read_text())["functions"] if export else None
 
 
