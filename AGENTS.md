@@ -88,6 +88,7 @@ Code is never reviewed only in the session that wrote it.
 1. **Automatic:** git hooks on every commit. From M2, CI (build with sanitizers, unit and differential tests, privacy check, and formatting and lint once there is code).
 2. **Per decompiled function:** a differential test, plus an independent review that compares the C++ against the original disassembly without seeing the author's reasoning.
 3. **Per PR:** every change goes through a PR. Before merging, an independent review runs on the PR diff in a fresh context. Use high effort for loader, ABI and graphics code. **The maintainer merges.** For trivial PRs (docs, typos), an agent may merge after the maintainer's explicit OK.
+   **Never use GitHub's merge button or `gh pr merge`**: GitHub writes the account's display name into the commit. Merge with `tools/merge-pr.sh <N>` instead. It rebases locally, checks authorship and fast-forwards `main`.
 4. **Per milestone:** a dedicated review session over the milestone's range covers:
    - a walkthrough of the new code
    - code health and an architecture check
