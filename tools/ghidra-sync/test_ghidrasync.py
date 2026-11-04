@@ -338,14 +338,16 @@ class GhidraRoundTripTest(unittest.TestCase):
             project = tmp / "proj" / "sync.gpr"
             # import into a fresh project, then export from it in a second session
             with contextlib.redirect_stdout(io.StringIO()):
-                g.sync(project, symbols, ["-import", str(tmp / "test.elf")], True, False)
+                g.sync(project, symbols, ["-import", str(tmp / "test.elf")], "import")
                 (symbols / "functions.csv").write_text(HEADER)
                 shutil.rmtree(symbols / "types")
                 g.sync(project, symbols, ["-process", "test.elf", "-noanalysis", "-readOnly"],
-                       False, True)
+                       "export")
             # importing again replaces our types in place and changes nothing
             with contextlib.redirect_stdout(io.StringIO()):
-                g.sync(project, symbols, ["-process", "test.elf", "-noanalysis"], True, True)
+                g.sync(project, symbols, ["-process", "test.elf", "-noanalysis"], "import")
+                g.sync(project, symbols, ["-process", "test.elf", "-noanalysis", "-readOnly"],
+                       "export")
             exported = g.read_functions(symbols / "functions.csv")
             fixture = table(FIXTURE[len(HEADER):], tmp)
             headers = {p.name: p.read_text() for p in (symbols / "types").iterdir()}
@@ -368,13 +370,13 @@ class GhidraRoundTripTest(unittest.TestCase):
             (symbols / "types" / "core.h").write_text(CORE_H)
             project = tmp / "proj" / "sync.gpr"
             with contextlib.redirect_stdout(io.StringIO()):
-                g.sync(project, symbols, ["-import", str(tmp / "test.elf")], True, False)
+                g.sync(project, symbols, ["-import", str(tmp / "test.elf")], "import")
             # a field named with a C keyword, and a renamed function that must not be applied
             (symbols / "functions.csv").write_text(FIXTURE.replace("add_two,", "renamed,"))
             (symbols / "types" / "bad.h").write_text(
                 "struct Bad {\n    int default;\n};\n")
             with self.assertRaisesRegex(g.SyncError, "TypesImport.py did not finish"):
-                g.sync(project, symbols, ["-process", "test.elf", "-noanalysis"], True, False)
+                g.sync(project, symbols, ["-process", "test.elf", "-noanalysis"], "import")
             script = tmp / "AddUnalignedField.py"
             script.write_text(ADD_UNALIGNED_FIELD)
             functions_out, types_out = tmp / "functions-out.json", tmp / "types-out.json"

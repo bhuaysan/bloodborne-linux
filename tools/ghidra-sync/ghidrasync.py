@@ -357,48 +357,42 @@ def run_headless(project: Path, target: list[str], scripts: list[list[str]]) -> 
     return tail
 
 
-def run_scripts(project: Path, target: list[str], tmp: Path,
-                to_ghidra: dict | None, export: bool) -> dict | None:
-    """Run import (to_ghidra: "headers", "functions") and/or export in one headless session.
-    Types go first: signatures may use them. Returns what the export scripts wrote."""
-    scripts, results = [], []
-    if to_ghidra is not None:
-        for script, key in (("TypesImport.py", "headers"), ("SymbolsImport.py", "functions")):
-            src, done = tmp / f"{key}-in.json", tmp / f"{key}-done.json"
-            src.write_text(json.dumps({key: to_ghidra[key]}))
-            scripts.append([script, str(src), str(done)])
-            results.append((script, done))
-    if export:
-        for script, key in (("SymbolsExport.py", "functions"), ("TypesExport.py", "types")):
-            out = tmp / f"{key}-out.json"
-            scripts.append([script, str(out)])
-            results.append((script, out))
+def run_scripts(project: Path, target: list[str], scripts: list[list[str]]) -> None:
+    """Runs the scripts in one headless session. The last argument of each script is the file it
+    writes last: analyzeHeadless exits 0 even when a script fails."""
     tail = run_headless(project, target, scripts)
-    # analyzeHeadless exits 0 even when a script fails, so each script writes its result last.
-    for script, path in results:
-        if not path.is_file():
-            raise SyncError(f"{script} did not finish:\n{tail}")
-    if not export:
-        return None
-    return {key: value for _, path in results[-2:]
-            for key, value in json.loads(path.read_text()).items()}
+    for script in scripts:
+        if not Path(script[-1]).is_file():
+            raise SyncError(f"{script[0]} did not finish:\n{tail}")
 
 
-def sync(project: Path, symbols: Path, target: list[str], do_import: bool,
-         do_export: bool) -> None:
+def sync(project: Path, symbols: Path, target: list[str], command: str) -> None:
+    """Runs `command`, "import" or "export", in one headless session."""
     csv_path = symbols / "functions.csv"
     rows = read_functions(csv_path)
-    headers = read_headers(symbols / "types") if do_import else []
-    to_ghidra = {"functions": import_rows(rows), "headers": headers} if do_import else None
+    if command == "import":
+        to_ghidra = {"headers": read_headers(symbols / "types"), "functions": import_rows(rows)}
+        with tempfile.TemporaryDirectory(prefix="ghidrasync-") as tmp:
+            scripts = []
+            # Types go first: signatures may use them.
+            for script, key in (("TypesImport.py", "headers"), ("SymbolsImport.py", "functions")):
+                src = Path(tmp) / f"{key}-in.json"
+                src.write_text(json.dumps({key: to_ghidra[key]}))
+                scripts.append([script, str(src), str(Path(tmp) / f"{key}-done.json")])
+            run_scripts(project, target, scripts)
+        print(f"imported {len(to_ghidra['functions'])} functions, "
+              f"{len(to_ghidra['headers'])} headers into {project}")
+        return
     with tempfile.TemporaryDirectory(prefix="ghidrasync-") as tmp:
-        exported = run_scripts(project, target, Path(tmp), to_ghidra, do_export)
-    if exported is not None:
-        write_if_changed(csv_path, format_functions(merge_functions(rows, exported["functions"])))
-        write_types(symbols / "types", exported["types"])
-        print(f"exported {len(exported['functions'])} functions to {csv_path} and "
-              f"{len(exported['types'])} headers to {symbols / 'types'}")
-    if do_import:
-        print(f"imported {len(import_rows(rows))} functions, {len(headers)} headers into {project}")
+        functions_out, types_out = Path(tmp) / "functions-out.json", Path(tmp) / "types-out.json"
+        run_scripts(project, target, [["SymbolsExport.py", str(functions_out)],
+                                      ["TypesExport.py", str(types_out)]])
+        functions = json.loads(functions_out.read_text())["functions"]
+        types = json.loads(types_out.read_text())["types"]
+    write_if_changed(csv_path, format_functions(merge_functions(rows, functions)))
+    write_types(symbols / "types", types)
+    print(f"exported {len(functions)} functions to {csv_path} and "
+          f"{len(types)} headers to {symbols / 'types'}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -422,8 +416,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "export":
             target.append("-readOnly")
     try:
-        sync(args.project.resolve(), args.symbols, target, args.command == "import",
-             args.command == "export")
+        sync(args.project.resolve(), args.symbols, target, args.command)
     except SyncError as err:
         print(f"ghidrasync: {err}", file=sys.stderr)
         return 1
