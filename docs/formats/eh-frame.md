@@ -1,6 +1,6 @@
 # Unwind tables (.eh_frame, .eh_frame_hdr)
 
-The PS4 ELFs carry standard x86-64 unwind tables, the ones C++ exceptions use. They matter for analysis because there is one FDE per function the linker kept, referenced or not, so they give a list of function starts. This page describes what the pinned files contain and how `tools/elf2std` exposes the tables to Ghidra.
+The PS4 ELFs carry standard x86-64 unwind tables, the ones C++ exceptions use. They matter for analysis because there is one FDE per function the linker kept, referenced or not, so they give a list of function starts. This page describes what the pinned files contain and how `tools/elf2std` exposes the tables to Ghidra. It also covers `tools/noreturn`, which uses the FDEs to find imports that never return.
 
 ## Sources and confidence
 
@@ -71,22 +71,48 @@ The names `.text`, `.data`, `.rodata` and `.bss` are used only for these filler 
 
 Ghidra's exception handler analyzer finds the two sections by name, marks them up as data and creates a function at every FDE in the search table. On the dead FDEs it logs "Failed to disassemble" errors (282 in libc) but creates no functions, instructions or bookmarks inside `.eh_frame`.
 
-Full auto-analysis of the eboot, before (no section headers) and after:
+Full auto-analysis of the eboot: before (no section headers), with section headers, and with section headers plus the non-returning imports from `tools/noreturn` (see below):
 
-| | Before | After |
-|---|---|---|
-| Functions | 99,715 | 167,056 |
-| Thunks / thunks to imports / external functions | 1,596 / 1,350 / 681 | 6,097 / 1,393 / 681 |
-| FDEs (search table) without a function at their start | 67,324 | 0 |
-| FDEs without any decoded instruction | 20,950 | 0 |
-| Bytes covered by FDEs that are decoded | 95.94% | 98.52% |
-| Error bookmarks (all "Bad Instruction") | 9 | 26 |
-| Analysis time | 1,525 s | 1,723 s |
+| | Before | Sections | Sections + noreturn |
+|---|---|---|---|
+| Functions | 99,715 | 167,056 | 167,056 |
+| Thunks / thunks to imports / external functions | 1,596 / 1,350 / 681 | 6,097 / 1,393 / 681 | 6,097 / 1,393 / 681 |
+| FDEs (search table) without a function at their start | 67,324 | 0 | 0 |
+| FDEs without any decoded instruction | 20,950 | 0 | 0 |
+| Bytes covered by FDEs that are decoded | 95.94% | 98.52% | 98.45% |
+| Error bookmarks (all "Bad Instruction") | 9 | 26 | 4 |
+| Analysis time | 1,525 s | 1,723 s | 1,767 s |
 
 None of the 45,993 dead FDE addresses gets a function or an instruction. Ghidra logs 12 "Failed to disassemble" errors for them, without bookmarks.
 
-**Error bookmarks.** 5 of the old 9 are gone, because function boundaries from the FDEs stop some wrong flows. The 22 new ones are of a kind that already existed: almost all follow a call to a PLT stub of an import that never returns (mostly `Ou3iL1abvng#p#J` and `lKEN2IebgJ0#q#q`). Ghidra doesn't know these imports don't return, so it decodes the bytes after the call, typically a jump table, and fails. The code is newly reached only because the functions around it now exist. Marking those imports as non-returning in Ghidra should remove them. That is Ghidra configuration, not something the ELF can express.
+**Error bookmarks.** With section headers alone, 5 of the old 9 are gone, because function boundaries from the FDEs stop some wrong flows, but 22 new ones appear. Almost all follow a call to the PLT stub of an import that never returns (mostly `Ou3iL1abvng#p#J` and `lKEN2IebgJ0#q#q`). Ghidra doesn't know these imports don't return, so it decodes the bytes after the call, typically a jump table, and fails. The code is newly reached only because the functions around it now exist. The ELF cannot express "never returns", so this is fixed on the Ghidra side: with the 8 imports found by `tools/noreturn` marked before analysis, 4 error bookmarks remain, all of them among the old 9. The decoded share drops slightly because the bytes after those calls are no longer decoded as code.
 
 Memory blocks: the executable segment `segment_0` (r-x) becomes `.text` (r-x), `.eh_frame` (r--) and `.eh_frame_hdr` (r--). The writable segment `segment_1` becomes `.data` and `.bss` (rw-, `.bss` uninitialized). The new segment keeps its uncovered parts as `segment_N.1`/`segment_N.3` around `.dynstr` and `.dynamic`. A `.shstrtab` and an `_elfSectionHeaders` overlay are added. Addresses and the non-loaded Sony overlays are unchanged.
 
 In libc the only change in imports is that the `DT_PREINIT_ARRAY` function at 0x5b0, which Ghidra used to show as a thunk to a made-up external `_PREINIT_0`, is now an ordinary function.
+
+## Non-returning imports (tools/noreturn)
+
+A call to a function that returns can't be the last instruction of a function, since the caller still has to return or jump somewhere afterwards. So when a direct call through a PLT stub is the last instruction of an FDE's range (followed at most by nop or `int3` padding), the import probably never returns. `tools/noreturn` counts, per import, the direct calls to its stub and how many of them end an FDE. It reports an import as non-returning when at least 2 calls end a function and they are at least half of its calls. One match alone is not enough: a function that never returns itself can end with a call to an ordinary import (the eboot has one such call to `fffwELXNVFA`, fprintf).
+
+In the eboot this gives 8 imports (calls ending a function / all direct calls):
+
+| Import | Name from our NID matching | Ending / calls |
+|---|---|---|
+| `Ou3iL1abvng#p#J` | `__stack_chk_fail` | 28,042 / 35,313 |
+| `eT2UsmTewbU#q#q` | | 2,270 / 2,286 |
+| `lKEN2IebgJ0#q#q` | `longjmp` | 1,596 / 1,899 |
+| `tQIo+GIPklo#q#q` | | 703 / 903 |
+| `ozMAr28BwSY#q#q` | | 172 / 174 |
+| `MELi-cKqWq0#q#q` | | 139 / 159 |
+| `uMei1W9uyNo#q#q` | `exit` | 12 / 18 |
+| `L1SBTkC+Cvw#q#q` | `abort` | 2 / 3 |
+
+Below the threshold are `9nf8joUTSaQ` (17 / 416), `f1zwJ3jAI2k` (12 / 30), `-QgqOT5u2Vk` (2 / 3,215), and three imports with a single call that ends a function (`3kg7rT0NQIs`, `FJrT5LuUBAU` pthread_exit, `fffwELXNVFA` fprintf). The call counts are byte pattern matches over the executable segment, not decoded instructions, so they can include a few false matches.
+
+The tool writes the stub addresses to `analysis/noreturn/<file>.txt`. `tools/noreturn/ghidra_scripts/MarkNoReturn.java` reads that list as a headless pre-script, creates a function at each stub and marks it and the matching external function as non-returning, before auto-analysis runs:
+
+```
+analyzeHeadless <project dir> <project> -import analysis/elf-std/eboot.elf \
+    -scriptPath tools/noreturn/ghidra_scripts -preScript MarkNoReturn.java analysis/noreturn/eboot.txt
+```
