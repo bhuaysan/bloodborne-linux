@@ -6,8 +6,8 @@ its NID equals one that the pinned ELFs import or export. This is the procedure 
 section of docs/clean-room.md. Every match records the candidate sources it came from.
 
 Input:
-    analysis/elf/*.elf            the pinned ELFs: their imports and exports, read with
-                                  tools/elfimports, and their identifiers as candidates,
+    analysis/elf/*.elf            the pinned ELFs, loaded and checked by tools/elfimports:
+                                  their imports and exports, and their identifiers as candidates,
                                   label = strings:<file stem>
     symbols/nids.csv              earlier matches, hashed again on every run (see read_nids_csv)
     symbols/candidates/*.txt      hand-picked names (committed), label = file stem
@@ -41,10 +41,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "elfimports"))
 import elfimports  # noqa: E402
-from elfimports import ElfInfo, Entry  # noqa: E402
+from elfimports import ElfInfo, Entry, LoadError  # noqa: E402
 from nid import nid  # noqa: E402
-from ps4elf import PINNED_ELFS, ElfError, parse  # noqa: E402
-from toolenv import REPO_ROOT, PinnedError, analysis_dir, read_pinned  # noqa: E402
+from ps4elf import ElfError  # noqa: E402
+from toolenv import REPO_ROOT, analysis_dir  # noqa: E402
 
 ELF_DIR = analysis_dir() / "elf"
 OUT_DIR = analysis_dir() / "nids"
@@ -142,33 +142,12 @@ def check_unique_labels(files: list[Path]) -> None:
             raise MatchError(f"{first} and {path} both give the source label {path.stem!r}")
 
 
-def read_pinned_elfs(elf_dir: Path) -> dict[str, bytes]:
-    """File name -> contents of each pinned ELF, checked against its pinned hash."""
-    elfs = {}
-    for file_name in sorted(PINNED_ELFS.values()):
-        path = elf_dir / file_name
-        name, data = read_pinned(path, PINNED_ELFS)
-        if name != file_name:
-            raise MatchError(f"{path} holds the pinned {name}")
-        elfs[file_name] = data
-    return elfs
-
-
-def analyze(elfs: dict[str, bytes]) -> list[ElfInfo]:
-    return [elfimports.analyze(file_name, parse(data)) for file_name, data in elfs.items()]
-
-
 def read_strings(elfs: dict[str, bytes], candidates: Candidates) -> None:
     """Identifier-like runs of bytes in the pinned ELFs. Any of them may be a symbol name."""
     for file_name, data in elfs.items():
         label = STRINGS_PREFIX + Path(file_name).stem
         for token in set(IDENT_RE.findall(data)):
             candidates.setdefault(token.decode("ascii"), set()).add(label)
-
-
-def static_load_set(infos: list[ElfInfo]) -> set[str]:
-    """Stems of the files loaded at startup, from DT_NEEDED exactly as tools/elfimports does."""
-    return {Path(info.name).stem for info in elfimports.static_load_set(infos)}
 
 
 def read_nids_csv(path: Path, table: NidTable, candidates: Candidates, rederived: set[str]) -> None:
@@ -288,8 +267,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        elfs = read_pinned_elfs(ELF_DIR)
-        infos = analyze(elfs)
+        loaded = elfimports.load(elfimports.pinned_paths(ELF_DIR))
+        infos = [info for info, _ in loaded]
+        elfs = {info.name: data for info, data in loaded}
         table = load_nids(infos)
         curated = sorted(CURATED_DIR.glob("*.txt"))
         files = curated + sorted(GENERATED_DIR.glob("*.txt")) + args.files
@@ -301,8 +281,11 @@ def main(argv: list[str] | None = None) -> int:
             read_candidate_file(path, candidates)
         read_strings(elfs, candidates)
         found = match(table, candidates)
-        load_set = static_load_set(infos)
-    except (OSError, UnicodeError, MatchError, PinnedError, ElfError) as exc:
+        load_set = {Path(info.name).stem for info in elfimports.static_load_set(infos)}
+    except LoadError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    except (OSError, UnicodeError, MatchError, ElfError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

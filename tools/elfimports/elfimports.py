@@ -32,7 +32,7 @@ from nid import NID_ALPHABET, is_nid  # noqa: E402
 from ps4elf import (  # noqa: E402
     DT_NEEDED, DT_SCE_EXPORT_LIB, DT_SCE_EXPORT_LIB_ATTR, DT_SCE_IMPORT_LIB,
     DT_SCE_IMPORT_LIB_ATTR, DT_SCE_MODULE_INFO, DT_SCE_NEEDED_MODULE, DT_SONAME, ET_SCE_DYNAMIC,
-    PINNED_ELFS, DynImage, ElfError, need, parse,
+    PINNED_ELFS, PINNED_ELFS_HINT, DynImage, ElfError, need, parse,
 )
 
 DEFAULT_IN = analysis_dir() / "elf"
@@ -179,6 +179,47 @@ def analyze(name: str, image: DynImage) -> ElfInfo:
                       STB_NAMES.get(sym.bind, f"bind{sym.bind}"), sym.value)
         (info.exports if defined else info.imports).append(entry)
     return info
+
+
+# --- loading ----------------------------------------------------------------------------------
+
+
+class LoadError(Exception):
+    """One or more input files failed. Holds one message per problem."""
+
+    def __init__(self, problems: list[str]):
+        super().__init__("\n".join(problems))
+        self.problems = problems
+
+
+def pinned_paths(elf_dir: Path) -> list[Path]:
+    """The pinned file names in `elf_dir`. Other files there are ignored."""
+    return [elf_dir / name for name in sorted(set(KNOWN_FILES.values()))]
+
+
+def load(paths: list[Path]) -> list[tuple[ElfInfo, bytes]]:
+    """Read, check and analyze self2elf outputs. Each file must match a pinned hash.
+
+    Every tool that reads the ELFs goes through this, so they all accept the same inputs. A file
+    named like a pinned file must hold that file, and no file may be given twice. All files are
+    checked before LoadError is raised, so it lists every problem at once.
+    """
+    problems: list[str] = []
+    loaded: list[tuple[ElfInfo, bytes]] = []
+    for path in paths:
+        try:
+            known, data = read_pinned(path, KNOWN_FILES, PINNED_ELFS_HINT)
+            if path.name in KNOWN_FILES.values() and path.name != known:
+                raise ElfError(f"holds the pinned {known}")
+            loaded.append((analyze(known, parse(data)), data))
+        except (OSError, PinnedError, ElfError, UnicodeDecodeError) as exc:
+            problems.append(f"{path}: error: {exc}")
+    names = [info.name for info, _ in loaded]
+    if len(set(names)) != len(names):
+        problems.append("error: the same file was given twice")
+    if problems:
+        raise LoadError(problems)
+    return loaded
 
 
 # --- across files -----------------------------------------------------------------------------
@@ -363,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
     if not files:
         if not DEFAULT_IN.is_dir():
             parser.error(f"no files given and {DEFAULT_IN} does not exist (run self2elf first)")
-        files = [DEFAULT_IN / name for name in sorted(set(KNOWN_FILES.values()))]
+        files = pinned_paths(DEFAULT_IN)
 
     out_dir = args.out_dir.expanduser().resolve()
     forbidden = {p.resolve().parent for p in files} | {DEFAULT_IN.resolve()}
@@ -376,22 +417,11 @@ def main(argv: list[str] | None = None) -> int:
                   file=sys.stderr)
             return 2
 
-    infos: list[ElfInfo] = []
-    failed = 0
-    for path in files:
-        try:
-            known, data = read_pinned(path, KNOWN_FILES)
-            infos.append(analyze(known, parse(data)))
-        except (OSError, PinnedError, ElfError, UnicodeDecodeError) as exc:
-            print(f"{path}: error: {exc}", file=sys.stderr)
-            failed += 1
-    if failed:
+    try:
+        infos = [info for info, _ in load(files)]
+    except LoadError as exc:
         # The cross-file results would be wrong with a file missing, so write nothing.
-        return 1
-
-    names = [info.name for info in infos]
-    if len(set(names)) != len(names):
-        print("error: the same file was given twice", file=sys.stderr)
+        print(exc, file=sys.stderr)
         return 1
 
     try:

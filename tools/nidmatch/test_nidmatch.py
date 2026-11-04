@@ -21,11 +21,12 @@ TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS / "nidmatch"))
 sys.path.insert(0, str(TOOLS / "common"))
 sys.path.insert(0, str(TOOLS / "elfimports"))
+import elfimports  # noqa: E402
 import nidmatch as m  # noqa: E402
 import syscandidates  # noqa: E402
+from elfbuilder import Builder  # noqa: E402
 from nid import NID_ALPHABET, is_nid, nid  # noqa: E402
-from test_elfimports import Builder  # noqa: E402
-from toolenv import PinnedError, load_game_dir  # noqa: E402
+from toolenv import load_game_dir  # noqa: E402
 
 # Exports of the pinned libc.prx, named by matching. strlen (0x2f970) and strcmp (0x30160) were
 # also checked against their disassembly. Derived by us, see docs/formats/nid.md.
@@ -84,12 +85,16 @@ class Fixture:
         self.syms: dict[str, list[tuple[str, str, str, str]]] = {stem: [] for stem in self.stems}
         self.needed: dict[tuple[str, str], str] = {}  # (stem, module) -> DT_NEEDED file name
         self.strings = {"main": ["alpha_func"]}  # identifiers in the file, not symbols
+        self.tampered: set[str] = set()  # stems written with an extra byte after pinning
 
     def imp(self, stem: str, name: str, library: str, module: str | None = None,
             needed: str | None = None) -> Fixture:
         module = module or library
         self.syms[stem].append(("import", name, library, module))
-        self.needed.setdefault((stem, module), needed or f"{module}.prx")
+        file_name = needed or f"{module}.prx"
+        # A file has one DT_NEEDED entry per module, so all imports of a module share it.
+        if self.needed.setdefault((stem, module), file_name) != file_name:
+            raise ValueError(f"{stem} already needs {self.needed[stem, module]} for {module}")
         return self
 
     def exp(self, stem: str, name: str, library: str) -> Fixture:
@@ -123,15 +128,15 @@ class Fixture:
         pinned = {}
         for stem in self.stems:
             data = self.build(stem)
-            (self.elf / f"{stem}.elf").write_bytes(data)
             pinned[hashlib.sha256(data).hexdigest()] = f"{stem}.elf"
+            (self.elf / f"{stem}.elf").write_bytes(data + b"x" * (stem in self.tampered))
         out, err = io.StringIO(), io.StringIO()
         with contextlib.ExitStack() as stack:
             for attr, value in [("ELF_DIR", self.elf), ("OUT_DIR", self.out),
                                 ("GENERATED_DIR", self.out / "candidates"),
-                                ("NIDS_CSV", self.nids_csv), ("CURATED_DIR", self.curated),
-                                ("PINNED_ELFS", pinned)]:
+                                ("NIDS_CSV", self.nids_csv), ("CURATED_DIR", self.curated)]:
                 stack.enter_context(mock.patch.object(m, attr, value))
+            stack.enter_context(mock.patch.object(elfimports, "KNOWN_FILES", pinned))
             stack.enter_context(contextlib.redirect_stdout(out))
             stack.enter_context(contextlib.redirect_stderr(err))
             code = m.main(list(args))
@@ -269,11 +274,12 @@ class MatchTest(unittest.TestCase):
         self.assertIn("both hash to", err)
 
     def test_elf_must_be_pinned(self):
-        (self.fx.elf / "lib.elf").write_bytes(b"changed")
-        pinned = {hashlib.sha256(b"original").hexdigest(): "lib.elf"}
-        with mock.patch.object(m, "PINNED_ELFS", pinned):
-            with self.assertRaisesRegex(PinnedError, "not a pinned file"):
-                m.read_pinned_elfs(self.fx.elf)
+        # A file changed after self2elf wrote it is refused, with a hint to rebuild it.
+        self.fx.tampered.add("lib")
+        code, _, err = self.fx.run()
+        self.assertEqual(code, 1)
+        self.assertIn("lib.elf: error: not a pinned file", err)
+        self.assertIn("run tools/self2elf again", err)
 
     def test_elf_must_have_its_pinned_name(self):
         # Pinned contents under the name of another pinned file.
@@ -281,9 +287,15 @@ class MatchTest(unittest.TestCase):
             (self.fx.elf / name).write_bytes(data)
         pinned = {hashlib.sha256(b"one").hexdigest(): "main.elf",
                   hashlib.sha256(b"two").hexdigest(): "lib.elf"}
-        with mock.patch.object(m, "PINNED_ELFS", pinned):
-            with self.assertRaisesRegex(m.MatchError, "lib.elf holds the pinned main.elf"):
-                m.read_pinned_elfs(self.fx.elf)
+        with mock.patch.object(elfimports, "KNOWN_FILES", pinned):
+            with self.assertRaisesRegex(elfimports.LoadError, "lib.elf: error: holds the pinned "
+                                                              "main.elf"):
+                elfimports.load(elfimports.pinned_paths(self.fx.elf))
+
+    def test_needed_conflict_in_fixture(self):
+        self.fx.imp("other", "x", "libC", module="lib")
+        with self.assertRaises(ValueError):
+            self.fx.imp("other", "delta", "libC", module="lib", needed="lib.sprx")
 
 
 class ManNamesTest(unittest.TestCase):
@@ -299,13 +311,14 @@ class ManNamesTest(unittest.TestCase):
 
 
 @unittest.skipUnless(load_game_dir()
-                     and all((m.ELF_DIR / name).is_file() for name in m.PINNED_ELFS.values()),
+                     and all(path.is_file() for path in elfimports.pinned_paths(m.ELF_DIR)),
                      "needs BB_GAME_DIR and the self2elf outputs in analysis/elf/")
 class GameTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.elfs = m.read_pinned_elfs(m.ELF_DIR)
-        cls.infos = m.analyze(cls.elfs)
+        loaded = elfimports.load(elfimports.pinned_paths(m.ELF_DIR))
+        cls.infos = [info for info, _ in loaded]
+        cls.elfs = {info.name: data for info, data in loaded}
 
     def test_libc_names(self):
         table = m.load_nids(self.infos)
@@ -319,7 +332,8 @@ class GameTest(unittest.TestCase):
 
     def test_static_load_set(self):
         # The eboot and the two bundled PRXs it needs (docs/formats/imports.md).
-        self.assertEqual(m.static_load_set(self.infos), {"eboot", "libc", "libSceFios2"})
+        self.assertEqual([i.name for i in elfimports.static_load_set(self.infos)],
+                         ["eboot.elf", "libSceFios2.elf", "libc.elf"])
 
 
 if __name__ == "__main__":
