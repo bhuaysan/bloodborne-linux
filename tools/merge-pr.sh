@@ -137,6 +137,7 @@ new="$(git rev-parse HEAD)"
 short="$(git rev-parse --short "$new")"
 # $1: what went wrong, $2: next step, $3: state of main if not $short
 unconfirmed() {
+    set +e   # a failing echo (stderr gone after a hangup) must not skip exit 3
     echo "error: $1" >&2
     echo "${3:-main is now $short}; branch $head kept" >&2
     echo "$2" >&2
@@ -166,6 +167,7 @@ main_push_failed() {
         git fetch -q origin "$remote" 2>/dev/null ||
             unconfirmed "$2, and origin/main could not be checked" "$unknown_hint" "origin/main is unknown"
         if ! git merge-base --is-ancestor "$new" "$remote"; then
+            set +e   # keep the exit status below even if stderr is gone
             restore_branch
             echo "$2; main was not updated" >&2
             exit "$1"
