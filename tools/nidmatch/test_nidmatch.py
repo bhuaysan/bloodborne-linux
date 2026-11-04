@@ -25,6 +25,7 @@ import derive  # noqa: E402
 import elfimports  # noqa: E402
 import nidmatch as m  # noqa: E402
 import syscandidates  # noqa: E402
+from cli import pinned_elf_paths  # noqa: E402
 from elfbuilder import Builder  # noqa: E402
 from nid import NID_ALPHABET, NID_SUFFIX, is_nid, nid, nid_digest  # noqa: E402
 from toolenv import load_game_dir  # noqa: E402
@@ -306,7 +307,7 @@ class MatchTest(unittest.TestCase):
         with mock.patch.object(elfimports, "PINNED_ELFS", pinned):
             with self.assertRaisesRegex(elfimports.LoadError, "lib.elf: error: holds the pinned "
                                                               "main.elf"):
-                elfimports.load(elfimports.pinned_paths(self.fx.elf))
+                elfimports.load_dir(self.fx.elf)
 
     def test_needed_conflict_in_fixture(self):
         self.fx.imp("other", "x", "libC", module="lib")
@@ -422,14 +423,13 @@ class ManNamesTest(unittest.TestCase):
 
 
 @unittest.skipUnless(load_game_dir()
-                     and all(path.is_file() for path in elfimports.pinned_paths(m.ELF_DIR)),
+                     and all(path.is_file()
+                             for path in pinned_elf_paths(m.ELF_DIR, elfimports.PINNED_ELFS)),
                      "needs BB_GAME_DIR and the self2elf outputs in analysis/elf/")
 class GameTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        loaded = elfimports.load(elfimports.pinned_paths(m.ELF_DIR))
-        cls.infos = [info for info, _ in loaded]
-        cls.elfs = {info.name: data for info, data in loaded}
+        cls.infos, cls.elfs = elfimports.load_dir(m.ELF_DIR)
 
     def test_libc_names(self):
         table = m.load_nids(self.infos)

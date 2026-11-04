@@ -71,6 +71,16 @@ class MatchError(Exception):
     pass
 
 
+# The errors that end a run of nidmatch or derive with a message instead of a traceback.
+ERRORS = (LoadError, OSError, UnicodeError, MatchError, ElfError)
+
+
+def print_error(exc: Exception) -> int:
+    """Prints one of ERRORS and returns the exit status. LoadError has its own prefixes."""
+    print(exc if isinstance(exc, LoadError) else f"error: {exc}", file=sys.stderr)
+    return 1
+
+
 @dataclass
 class Use:
     """How one library's NID shows up across the pinned files."""
@@ -284,9 +294,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        loaded = elfimports.load(elfimports.pinned_paths(ELF_DIR))
-        infos = [info for info, _ in loaded]
-        elfs = {info.name: data for info, data in loaded}
+        infos, elfs = elfimports.load_dir(ELF_DIR)
         table = load_nids(infos)
         files = sorted(CURATED_DIR.glob("*.txt")) + sorted(GENERATED_DIR.glob("*.txt")) + args.files
         check_unique_labels(files)
@@ -299,12 +307,8 @@ def main(argv: list[str] | None = None) -> int:
         found = match(table, candidates)
         check_derived(table, found)
         load_set = {Path(info.name).stem for info in elfimports.static_load_set(infos)}
-    except LoadError as exc:
-        print(exc, file=sys.stderr)
-        return 1
-    except (OSError, UnicodeError, MatchError, ElfError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+    except ERRORS as exc:
+        return print_error(exc)
 
     text = report(table, found, load_set)
     if not args.no_write:

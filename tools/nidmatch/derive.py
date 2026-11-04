@@ -51,9 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "elfimports"))
 import elfimports  # noqa: E402
 import nidmatch as nm  # noqa: E402
-from elfimports import LoadError  # noqa: E402
 from nid import NID_SUFFIX, nid_digest  # noqa: E402
-from ps4elf import ElfError  # noqa: E402
 
 POSIX_LABEL = "derive-posix"
 WORDS_LABEL = "derive-words"
@@ -260,9 +258,9 @@ def main(argv: list[str] | None = None) -> int:
 
     start = time.monotonic()
     try:
-        loaded = elfimports.load(elfimports.pinned_paths(nm.ELF_DIR))
-        table = nm.load_nids([info for info, _ in loaded])
-        idents = read_identifiers({info.name: data for info, data in loaded})
+        infos, elfs = elfimports.load_dir(nm.ELF_DIR)
+        table = nm.load_nids(infos)
+        idents = read_identifiers(elfs)
         c_names = read_c_names(nm.GENERATED_DIR)
         seed = read_seed(nm.NIDS_CSV)
         result = derive(targets(table), seed, c_names, idents, max(1, args.jobs),
@@ -271,12 +269,8 @@ def main(argv: list[str] | None = None) -> int:
                    "<prefix><C name in CamelCase>", result[POSIX_LABEL])
         write_list(nm.GENERATED_DIR / f"{WORDS_LABEL}.txt",
                    "<prefix><1 to 3 words>", result[WORDS_LABEL])
-    except LoadError as exc:
-        print(exc, file=sys.stderr)
-        return 1
-    except (OSError, UnicodeError, nm.MatchError, ElfError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+    except nm.ERRORS as exc:
+        return nm.print_error(exc)
     return 0
 
 

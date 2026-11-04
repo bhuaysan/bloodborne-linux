@@ -189,16 +189,12 @@ class LoadError(Exception):
         self.problems = problems
 
 
-def pinned_paths(elf_dir: Path) -> list[Path]:
-    return pinned_elf_paths(elf_dir, PINNED_ELFS)
-
-
 def load(paths: list[Path]) -> list[tuple[ElfInfo, bytes]]:
     """Read, check and analyze self2elf outputs. Each file must match a pinned hash.
 
-    Every tool that reads the ELFs goes through this, so they all accept the same inputs. A file
-    named like a pinned file must hold that file, and no file may be given twice. All files are
-    checked before LoadError is raised, so it lists every problem at once.
+    elfimports, nidmatch and derive read the ELFs through this, so they accept the same inputs.
+    A file named like a pinned file must hold that file, and no file may be given twice. All files
+    are checked before LoadError is raised, so it lists every problem at once.
     """
     problems: list[str] = []
     loaded: list[tuple[ElfInfo, bytes]] = []
@@ -216,6 +212,12 @@ def load(paths: list[Path]) -> list[tuple[ElfInfo, bytes]]:
     if problems:
         raise LoadError(problems)
     return loaded
+
+
+def load_dir(elf_dir: Path) -> tuple[list[ElfInfo], dict[str, bytes]]:
+    """load() of the pinned file names in elf_dir: the analyses, and the contents by pinned name."""
+    loaded = load(pinned_elf_paths(elf_dir, PINNED_ELFS))
+    return [info for info, _ in loaded], {info.name: data for info, data in loaded}
 
 
 # --- across files -----------------------------------------------------------------------------
