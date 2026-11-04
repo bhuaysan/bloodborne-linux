@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Sync our Ghidra annotations with symbols/functions.csv.
+"""Sync our Ghidra annotations with symbols/functions.csv and symbols/types/.
 
 export  reads the function names and signatures we set in a Ghidra project and merges them into
-        functions.csv. The status and file columns are ours and stay as they are.
-import  applies functions.csv to a project, e.g. a fresh one rebuilt from your own eboot.
+        functions.csv. The status and file columns are ours and stay as they are. It also writes
+        the data types in our categories /bb/<subsystem> to types/<subsystem>.h.
+import  applies functions.csv and types/*.h to a project, e.g. a fresh one rebuilt from your own
+        eboot.
 
 Only user-defined names and signatures go out: Ghidra's own names (FUN_..., thunks, symbols from
-the ELF) are left in the project. Ghidra runs headless through PyGhidra, which ships with Ghidra
-and needs a one-time setup. See symbols/README.md, section "Sync".
+the ELF) are left in the project, and so are types outside /bb. Ghidra runs headless through
+PyGhidra, which ships with Ghidra and needs a one-time setup. See symbols/README.md, section
+"Sync".
 
 Usage:
     ghidrasync.py export PROJECT.gpr [--program NAME] [--symbols DIR]
@@ -26,6 +29,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -38,6 +42,13 @@ COLUMNS = ["address", "name", "signature", "status", "file"]
 SCRIPTS = Path(__file__).resolve().parent / "ghidra_scripts"
 DEFAULT_SYMBOLS = REPO_ROOT / "symbols"
 DEFAULT_PROGRAM = "eboot.elf"
+HEADER_NOTE = "/* Ghidra category /bb/{}: written by tools/ghidra-sync, see symbols/README.md */"
+SUBSYSTEM = re.compile(r"[A-Za-z0-9_]+")
+INCLUDE = re.compile(r'^#include "(\w+)\.h"$', re.M)
+SIZE_ASSERT = re.compile(r'^_Static_assert\(sizeof\((?:struct|union|enum) (\w+)\) == '
+                         r'(0x[0-9a-fA-F]+|\d+), "\w+"\);$', re.M)
+ENUM = re.compile(r"^enum (\w+) \{\n((?:    \w+ = -?\d+,\n)*)\};$", re.M)
+ENUM_VALUE = re.compile(r"(\w+) = (-?\d+)")
 
 
 class SyncError(Exception):
@@ -99,6 +110,129 @@ def import_rows(rows: dict[int, dict[str, str]]) -> list[dict]:
     """What the Ghidra import script applies: rows with a name or a signature."""
     return [{"address": address, "name": row["name"], "signature": row["signature"]}
             for address, row in sorted(rows.items()) if row["name"] or row["signature"]]
+
+
+# --- types/*.h (pure Python, no Ghidra) -------------------------------------------------------
+# TypesExport.py describes each type as JSON. A reference to a type is {"name"} for a builtin,
+# {"name", "tag", "subsystem"} for one of ours, {"pointer": ref or None} or {"array", "count"}.
+
+def topo_order(deps: dict[str, set[str]], what: str) -> list[str]:
+    """Names with their dependencies first, otherwise sorted by name."""
+    done: list[str] = []
+    while len(done) < len(deps):
+        ready = [n for n in sorted(deps) if n not in done and deps[n] <= set(done)]
+        if not ready:
+            raise SyncError(f"{what} depend on each other: "
+                            + ", ".join(sorted(set(deps) - set(done))))
+        done.append(ready[0])
+    return done
+
+
+def declare(ref: dict, inner: str = "") -> str:
+    """The C declaration of `inner` with type `ref`."""
+    if "pointer" in ref:
+        return declare(ref["pointer"] or {"name": "void"}, "*" + inner)
+    if "array" in ref:
+        return declare(ref["array"], f"{inner}[{ref['count']}]")
+    base = f"{ref['tag']} {ref['name']}" if ref.get("tag") else ref["name"]
+    return f"{base} {inner}" if inner else base
+
+
+def type_refs(ref: dict, by_value: bool = True) -> list[tuple[str, str, bool]]:
+    """(subsystem, name, by value) of our types that `ref` uses."""
+    if "pointer" in ref:
+        return type_refs(ref["pointer"], False) if ref["pointer"] else []
+    if "array" in ref:
+        return type_refs(ref["array"], by_value)
+    return [(ref["subsystem"], ref["name"], by_value)] if "subsystem" in ref else []
+
+
+def uses(item: dict) -> list[tuple[str, str, bool]]:
+    refs = [item["type"]] if item["kind"] == "typedef" else \
+        [f["type"] for f in item.get("fields", [])]
+    return [use for ref in refs for use in type_refs(ref)]
+
+
+def format_fields(item: dict) -> list[str]:
+    """Struct or union members with their offsets. Gaps in a struct become _pad_ arrays."""
+    lines, end = [], 0
+    for field in sorted(item["fields"], key=lambda f: f["offset"]):
+        if item["kind"] == "struct" and field["offset"] > end:
+            lines.append(f"    /* 0x{end:04x} */ undefined1 _pad_0x{end:04x}"
+                         f"[{field['offset'] - end}];")
+        elif item["kind"] == "struct" and field["offset"] < end:
+            raise SyncError(f"{item['name']}: field {field['name']} overlaps the one before it")
+        lines.append(f"    /* 0x{field['offset']:04x} */ "
+                     f"{declare(field['type'], field['name'])};")
+        end = max(end, field["offset"] + field["size"])
+    if item["kind"] == "struct" and item["size"] > end:
+        lines.append(f"    /* 0x{end:04x} */ undefined1 _pad_0x{end:04x}[{item['size'] - end}];")
+    return lines
+
+
+def format_type(item: dict) -> list[str]:
+    kind, name = item["kind"], item["name"]
+    if kind == "typedef":
+        return [f"typedef {declare(item['type'], name)};"]
+    if kind == "enum":
+        values = sorted(item["values"], key=lambda value: (value[1], value[0]))
+        body = [f"    {n} = {v}," for n, v in values]
+    else:
+        body = format_fields(item)
+    return [f"{kind} {name} {{", *body, "};",
+            f'_Static_assert(sizeof({kind} {name}) == {item["size"]:#x}, "{name}");']
+
+
+def format_header(subsystem: str, items: list[dict]) -> str:
+    """types/<subsystem>.h: includes, forward declarations, then the types in dependency order.
+
+    Every gap is spelled out and packing is 1, so the layout does not depend on alignment.
+    """
+    by_name = {item["name"]: item for item in items}
+    deps = {name: {n for s, n, by_value in uses(item) if by_value and s == subsystem} - {name}
+            for name, item in by_name.items()}
+    others = sorted({s for item in items for s, _, _ in uses(item)} - {subsystem})
+    lines = [HEADER_NOTE.format(subsystem), *(f'#include "{s}.h"' for s in others), "",
+             "#pragma pack(push, 1)", ""]
+    lines += [f"{item['kind']} {name};" for name, item in sorted(by_name.items())
+              if item["kind"] in ("struct", "union")]
+    for name in topo_order(deps, f"types in /bb/{subsystem}"):
+        lines += ["", *format_type(by_name[name])]
+    return "\n".join([*lines, "", "#pragma pack(pop)", ""])
+
+
+def write_types(types_dir: Path, exported: dict[str, list[dict]]) -> None:
+    """Write one header per subsystem, only when it changed. Other headers stay as they are."""
+    for subsystem, items in sorted(exported.items()):
+        if not SUBSYSTEM.fullmatch(subsystem):
+            raise SyncError(f"/bb/{subsystem}: use letters, digits and _ for subsystem names")
+        write_if_changed(types_dir / f"{subsystem}.h", format_header(subsystem, items))
+
+
+def read_headers(types_dir: Path) -> list[dict]:
+    """The headers in include order, as TypesImport.py takes them.
+
+    The parser does not know #include, so includes become empty lines. Ghidra's C parser makes
+    every enum 4 bytes with 32-bit values and does not check _Static_assert, so the sizes and
+    the enum values are read here.
+    """
+    texts = {path.stem: path.read_text() for path in sorted(types_dir.glob("*.h"))}
+    deps = {name: set(INCLUDE.findall(text)) - {name} for name, text in texts.items()}
+    for name, includes in deps.items():
+        if includes - set(texts):
+            raise SyncError(f"types/{name}.h includes a missing header: "
+                            + ", ".join(sorted(includes - set(texts))))
+    return [{"subsystem": name, "text": INCLUDE.sub("", texts[name]),
+             "sizes": {t: int(size, 0) for t, size in SIZE_ASSERT.findall(texts[name])},
+             "enums": {e: [[n, int(v)] for n, v in ENUM_VALUE.findall(body)]
+                       for e, body in ENUM.findall(texts[name])}}
+            for name in topo_order(deps, "headers in types/")]
+
+
+def write_if_changed(path: Path, text: str) -> None:
+    if not path.is_file() or path.read_text() != text:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
 
 
 # --- headless Ghidra ---------------------------------------------------------------------------
@@ -163,40 +297,50 @@ def run_headless(project: Path, target: list[str], scripts: list[list[str]]) -> 
 
 
 def run_scripts(project: Path, target: list[str], tmp: Path,
-                to_ghidra: list[dict] | None, export: bool) -> list[dict] | None:
-    """Run import and/or export in one headless session. Returns the exported rows."""
-    scripts = []
-    done = tmp / "done.json"
+                to_ghidra: dict | None, export: bool) -> dict | None:
+    """Run import and/or export in one headless session. Returns what the export scripts wrote.
+
+    to_ghidra has the keys "headers" and "functions". Types go first: signatures may use them.
+    """
+    scripts, results = [], []
     if to_ghidra is not None:
-        (tmp / "in.json").write_text(json.dumps({"functions": to_ghidra}))
-        scripts.append(["SymbolsImport.py", str(tmp / "in.json"), str(done)])
-    out = tmp / "out.json"
+        for script, key in (("TypesImport.py", "headers"), ("SymbolsImport.py", "functions")):
+            src, done = tmp / f"{key}-in.json", tmp / f"{key}-done.json"
+            src.write_text(json.dumps({key: to_ghidra[key]}))
+            scripts.append([script, str(src), str(done)])
+            results.append((script, done))
     if export:
-        scripts.append(["SymbolsExport.py", str(out)])
+        for script, key in (("SymbolsExport.py", "functions"), ("TypesExport.py", "types")):
+            out = tmp / f"{key}-out.json"
+            scripts.append([script, str(out)])
+            results.append((script, out))
     tail = run_headless(project, target, scripts)
     # analyzeHeadless exits 0 even when a script fails, so each script writes its result last.
-    if to_ghidra is not None and not done.is_file():
-        raise SyncError(f"the import script did not finish:\n{tail}")
-    if export and not out.is_file():
-        raise SyncError(f"the export script did not finish:\n{tail}")
-    return json.loads(out.read_text())["functions"] if export else None
+    for script, path in results:
+        if not path.is_file():
+            raise SyncError(f"{script} did not finish:\n{tail}")
+    if not export:
+        return None
+    return {key: value for _, path in results[-2:]
+            for key, value in json.loads(path.read_text()).items()}
 
 
 def sync(project: Path, symbols: Path, target: list[str], do_import: bool,
          do_export: bool) -> None:
     csv_path = symbols / "functions.csv"
     rows = read_functions(csv_path)
+    headers = read_headers(symbols / "types") if do_import else []
+    to_ghidra = {"functions": import_rows(rows), "headers": headers} if do_import else None
     with tempfile.TemporaryDirectory(prefix="ghidrasync-") as tmp:
-        exported = run_scripts(project, target, Path(tmp),
-                               import_rows(rows) if do_import else None, do_export)
+        exported = run_scripts(project, target, Path(tmp), to_ghidra, do_export)
     if exported is not None:
-        text = format_functions(merge_functions(rows, exported))
-        if not csv_path.is_file() or csv_path.read_text() != text:
-            csv_path.parent.mkdir(parents=True, exist_ok=True)
-            csv_path.write_text(text)
-        print(f"exported {len(exported)} functions to {csv_path}")
+        write_if_changed(csv_path, format_functions(merge_functions(rows, exported["functions"])))
+        write_types(symbols / "types", exported["types"])
+        print(f"exported {len(exported['functions'])} functions to {csv_path} and "
+              f"{len(exported['types'])} headers to {symbols / 'types'}")
     if do_import:
-        print(f"imported {len(import_rows(rows))} functions into {project}")
+        print(f"imported {len(import_rows(rows))} functions and {len(headers)} headers "
+              f"into {project}")
 
 
 def main(argv: list[str] | None = None) -> int:

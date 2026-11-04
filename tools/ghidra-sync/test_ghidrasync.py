@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Tests for ghidrasync. Run: python3 -m unittest discover -s tools/ghidra-sync
 
-The CSV tests need neither Ghidra nor the game. The round trip runs headless Ghidra on a small
-ELF built here and skips when GHIDRA_INSTALL_DIR is unset (environment or local.env) or
+The CSV and header tests need neither Ghidra nor the game. The round trip runs headless Ghidra
+on a small ELF built here and skips when GHIDRA_INSTALL_DIR is unset (environment or local.env) or
 PyGhidra is not set up.
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import shutil
 import struct
 import sys
 import tempfile
@@ -81,6 +82,152 @@ class FunctionsCsvTest(unittest.TestCase):
                                      "B.py"])
 
 
+# What an export writes for two subsystems: a struct with gaps, trailing padding and a field off
+# its natural alignment, a union, enums of 1 and 8 bytes, typedefs, pointers, arrays, and
+# references within a header and across headers.
+CORE_H = """\
+/* Ghidra category /bb/core: written by tools/ghidra-sync, see symbols/README.md */
+
+#pragma pack(push, 1)
+
+struct Vec3;
+
+enum Flags {
+    FLAG_NONE = 0,
+    FLAG_BIG = 4294967296,
+};
+_Static_assert(sizeof(enum Flags) == 0x8, "Flags");
+
+enum Kind {
+    KIND_NEG = -1,
+    KIND_A = 0,
+    KIND_B = 2,
+    KIND_C = 2,
+};
+_Static_assert(sizeof(enum Kind) == 0x1, "Kind");
+
+struct Vec3 {
+    /* 0x0000 */ float x;
+    /* 0x0004 */ float y;
+    /* 0x0008 */ float z;
+};
+_Static_assert(sizeof(struct Vec3) == 0xc, "Vec3");
+
+typedef uint handle_t;
+
+#pragma pack(pop)
+"""
+
+GAME_H = """\
+/* Ghidra category /bb/game: written by tools/ghidra-sync, see symbols/README.md */
+#include "core.h"
+
+#pragma pack(push, 1)
+
+struct Actor;
+union Slot;
+
+typedef struct Actor *ActorPtr;
+
+union Slot {
+    /* 0x0000 */ int i;
+    /* 0x0000 */ float f;
+    /* 0x0000 */ void *p;
+};
+_Static_assert(sizeof(union Slot) == 0x8, "Slot");
+
+struct Actor {
+    /* 0x0000 */ struct Vec3 pos;
+    /* 0x000c */ enum Kind kind;
+    /* 0x000d */ undefined1 _pad_0x000d[3];
+    /* 0x0010 */ struct Actor *next;
+    /* 0x0018 */ handle_t handle;
+    /* 0x001c */ undefined1 _pad_0x001c[2];
+    /* 0x001e */ uint misaligned;
+    /* 0x0022 */ char name[4][2];
+    /* 0x002a */ union Slot slots[2];
+    /* 0x003a */ enum Flags flags;
+    /* 0x0042 */ undefined1 _pad_0x0042[6];
+};
+_Static_assert(sizeof(struct Actor) == 0x48, "Actor");
+
+#pragma pack(pop)
+"""
+
+
+def ours(subsystem: str, name: str, tag: str = "") -> dict:
+    return {"name": name, "tag": tag, "subsystem": subsystem}
+
+
+def field(offset: int, size: int, name: str, ref: dict) -> dict:
+    return {"offset": offset, "size": size, "name": name, "type": ref}
+
+
+# GAME_H as TypesExport.py describes it, in the order Ghidra lists the types
+GAME_JSON = [
+    {"kind": "struct", "name": "Actor", "size": 0x48, "fields": [
+        field(0x00, 12, "pos", ours("core", "Vec3", "struct")),
+        field(0x0c, 1, "kind", ours("core", "Kind", "enum")),
+        field(0x10, 8, "next", {"pointer": ours("game", "Actor", "struct")}),
+        field(0x18, 4, "handle", ours("core", "handle_t")),
+        field(0x1e, 4, "misaligned", {"name": "uint"}),
+        field(0x22, 8, "name", {"array": {"array": {"name": "char"}, "count": 2}, "count": 4}),
+        field(0x2a, 16, "slots", {"array": ours("game", "Slot", "union"), "count": 2}),
+        field(0x3a, 8, "flags", ours("core", "Flags", "enum")),
+    ]},
+    {"kind": "typedef", "name": "ActorPtr", "type": {"pointer": ours("game", "Actor", "struct")}},
+    {"kind": "union", "name": "Slot", "size": 8, "fields": [
+        field(0, 4, "i", {"name": "int"}), field(0, 4, "f", {"name": "float"}),
+        field(0, 8, "p", {"pointer": None})]},
+]
+
+
+class TypesHeaderTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def test_format_header(self):
+        self.assertEqual(g.format_header("game", GAME_JSON), GAME_H)
+        self.assertEqual(g.format_header("game", GAME_JSON[::-1]), GAME_H)
+
+    def test_enum_values_sorted_by_value(self):
+        enum = {"kind": "enum", "name": "Kind", "size": 1,
+                "values": [["KIND_C", 2], ["KIND_B", 2], ["KIND_A", 0]]}
+        self.assertIn("    KIND_A = 0,\n    KIND_B = 2,\n    KIND_C = 2,\n",
+                      g.format_header("core", [enum]))
+
+    def test_overlap_and_cycles_fail(self):
+        overlap = {"kind": "struct", "name": "S", "size": 8, "fields": [
+            field(0, 4, "a", {"name": "int"}), field(2, 4, "b", {"name": "int"})]}
+        loop = [{"kind": "struct", "name": n, "size": 4,
+                 "fields": [field(0, 4, "x", ours("core", m, "struct"))]}
+                for n, m in (("A", "B"), ("B", "A"))]
+        for items in ([overlap], loop):
+            with self.subTest(items=items), self.assertRaises(g.SyncError):
+                g.format_header("core", items)
+
+    def test_read_headers(self):
+        types = self.tmp / "types"
+        g.write_types(types, {"game": GAME_JSON})
+        (types / "core.h").write_text(CORE_H)
+        headers = g.read_headers(types)
+        self.assertEqual([h["subsystem"] for h in headers], ["core", "game"])
+        self.assertEqual(headers[0]["sizes"], {"Flags": 8, "Kind": 1, "Vec3": 12})
+        self.assertEqual(headers[1]["sizes"], {"Slot": 8, "Actor": 0x48})
+        self.assertEqual(headers[0]["enums"], {
+            "Flags": [["FLAG_NONE", 0], ["FLAG_BIG", 1 << 32]],
+            "Kind": [["KIND_NEG", -1], ["KIND_A", 0], ["KIND_B", 2], ["KIND_C", 2]]})
+        self.assertNotIn("#include", headers[1]["text"])
+        self.assertEqual(headers[1]["text"].count("\n"), GAME_H.count("\n"))
+        (types / "core.h").write_text('#include "game.h"\n')
+        with self.assertRaises(g.SyncError):
+            g.read_headers(types)
+
+    def test_write_types_rejects_bad_subsystem(self):
+        with self.assertRaises(g.SyncError):
+            g.write_types(self.tmp, {"a/b": []})
+
+
 # A position-independent x86-64 ELF: one PT_LOAD at 0, code at CODE. The entry calls four
 # functions, so Ghidra's analysis finds them and gives them its default names. Ghidra rebases
 # the image to 0x100000; functions.csv addresses stay relative to that.
@@ -132,15 +279,25 @@ class GhidraRoundTripTest(unittest.TestCase):
             symbols = tmp / "symbols"
             symbols.mkdir()
             (symbols / "functions.csv").write_text(FIXTURE)
+            (symbols / "types").mkdir()
+            (symbols / "types" / "core.h").write_text(CORE_H)
+            (symbols / "types" / "game.h").write_text(GAME_H)
             project = tmp / "proj" / "sync.gpr"
             # import into a fresh project, then export from it in a second session
             with contextlib.redirect_stdout(io.StringIO()):
                 g.sync(project, symbols, ["-import", str(tmp / "test.elf")], True, False)
                 (symbols / "functions.csv").write_text(HEADER)
+                shutil.rmtree(symbols / "types")
                 g.sync(project, symbols, ["-process", "test.elf", "-noanalysis", "-readOnly"],
                        False, True)
+            # importing again replaces our types in place and changes nothing
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                g.sync(project, symbols, ["-process", "test.elf", "-noanalysis"], True, True)
+            self.assertIn("and 2 headers", out.getvalue())
             exported = g.read_functions(symbols / "functions.csv")
             fixture = table(FIXTURE[len(HEADER):], tmp)
+            headers = {p.name: p.read_text() for p in (symbols / "types").iterdir()}
+        self.assertEqual(headers, {"core.h": CORE_H, "game.h": GAME_H})
         # Ghidra knows names and signatures only; status and file come from the CSV
         self.assertEqual({a: (r["name"], r["signature"]) for a, r in exported.items()},
                          {a: (r["name"], r["signature"]) for a, r in fixture.items()})
