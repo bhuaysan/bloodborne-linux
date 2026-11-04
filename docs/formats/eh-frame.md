@@ -93,7 +93,7 @@ In libc the only change in imports is that the `DT_PREINIT_ARRAY` function at 0x
 
 ## Non-returning imports (tools/noreturn)
 
-A call to a function that returns can't be the last instruction of a function, since the caller still has to return or jump somewhere afterwards. So when a direct call through a PLT stub is the last instruction of an FDE's range (followed at most by nop or `int3` padding), the import probably never returns. `tools/noreturn` counts, per import, the direct calls to its stub and how many of them end an FDE. It reports an import as non-returning when at least 2 calls end a function and they are at least half of its calls. One match alone is not enough: a function that never returns itself can end with a call to an ordinary import (the eboot has one such call to `fffwELXNVFA`, fprintf).
+A call to a function that returns can't be the last instruction of a function, since the caller still has to return or jump somewhere afterwards. So when a direct call through a PLT stub is the last instruction of an FDE's range (followed at most by nop or `int3` padding), the import probably never returns. `tools/noreturn` counts, per import, the direct calls to its stub and how many of them end an FDE. It reports an import as non-returning when at least 2 calls end a function and they are at least half of its calls. A few matches alone are not enough: a function that never returns itself can end with a call to an ordinary import (the eboot has 2 such calls to `-QgqOT5u2Vk`, out of 3,215 calls).
 
 In the eboot this gives 8 imports (calls ending a function / all direct calls):
 
@@ -108,7 +108,7 @@ In the eboot this gives 8 imports (calls ending a function / all direct calls):
 | `uMei1W9uyNo#q#q` | `exit` | 12 / 18 |
 | `L1SBTkC+Cvw#q#q` | `abort` | 2 / 3 |
 
-Below the threshold are `9nf8joUTSaQ` (17 / 416), `f1zwJ3jAI2k` (12 / 30), `-QgqOT5u2Vk` (2 / 3,215), and three imports with a single call that ends a function (`3kg7rT0NQIs`, `FJrT5LuUBAU` pthread_exit, `fffwELXNVFA` fprintf). The call counts are byte pattern matches over the executable segment, not decoded instructions, so they can include a few false matches.
+Below the threshold are `9nf8joUTSaQ` (17 / 416), `f1zwJ3jAI2k` (12 / 30), `-QgqOT5u2Vk` (2 / 3,215), and two imports with a single call that ends a function (`3kg7rT0NQIs`, `FJrT5LuUBAU` pthread_exit). The call counts are byte pattern matches over the executable segment, not decoded instructions, so they can include a few false matches.
 
 The tool writes the stub addresses to `analysis/noreturn/<file>.txt`. `tools/noreturn/ghidra_scripts/MarkNoReturn.java` reads that list as a headless pre-script, creates a function at each stub and marks it and the matching external function as non-returning, before auto-analysis runs:
 
