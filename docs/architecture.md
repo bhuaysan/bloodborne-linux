@@ -44,6 +44,12 @@ GNM builds AMD GCN command buffers (PM4 packets). The plan:
 ### Function replacement
 Decompiled functions are compiled into the runtime. At startup, a table of `{original_address, replacement}` pairs is applied. Each original function entry is patched to jump to the replacement. Replacements call other game functions through their original addresses until those are replaced too.
 
+### Differential test harness
+Decompiled functions are verified before the game boots. A test process maps the original executable through the loader. It then calls the original function and the C++ replacement with the same inputs, in the same initial memory state, and compares return values and touched memory. Functions with side effects on the OS layer use recorded or stubbed imports.
+
+### Symbols
+Our analysis results (names, signatures, types, matched NIDs) live as text in `symbols/`. Scripts sync them with a local Ghidra project, so the project can be rebuilt at any time and the history is tracked in git.
+
 ## Non-goals
 - CPU emulation or instruction translation.
 - Byte-matching decompilation.

@@ -31,6 +31,7 @@ export BB_GAME_DIR=/path/to/your/CUSA03173
 
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
+- [Clean-room policy](docs/clean-room.md)
 - [References and credits](docs/references.md)
 
 ## Contributing
@@ -40,6 +41,10 @@ Before your first commit, enable the repository's git hooks:
 ```sh
 git config core.hooksPath tools/githooks
 ```
+
+## License
+
+The project's own code and documentation are MIT licensed (see [LICENSE](LICENSE)). The license does not cover the game.
 
 ## Legal
 

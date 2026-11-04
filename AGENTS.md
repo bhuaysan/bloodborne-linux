@@ -22,12 +22,14 @@ See `docs/architecture.md` and `docs/roadmap.md`.
 ## Hard rules
 
 ### Clean room / references
-- **Never** look at other Bloodborne or FromSoftware decomp, recomp or modding-reverse-engineering projects.
-- **Never** read the source code of PS4 emulators or PS4 recompilation tools.
-- **Never** use leaked Sony SDKs, headers, documentation or symbol dumps.
-- Allowed with credit: public format and hardware documentation (community wikis about PS4 file formats, AMD GCN ISA manuals, Vulkan / ELF / System V ABI specs, Linux man pages) and general programming resources.
-- Log every external source you consult in `docs/references.md`: source, what it was used for, and the date. Do this in the same change that uses it.
-- When unsure whether a source is allowed, don't open it. Ask the maintainer.
+**Read [`docs/clean-room.md`](docs/clean-room.md) before using any external source.** In short:
+- **Never** look at other Bloodborne or FromSoftware decomp, recomp or modding projects, the source of PS4 emulators, recomp tools or disassembler loader plugins, or leaked Sony SDK material.
+- Public format and hardware docs are allowed. Log every source in `docs/references.md` in the same change that uses it.
+- Import names are recovered only by matching hashes of candidate names we can justify ourselves (see the NID section in `docs/clean-room.md`).
+- If you're unsure whether a source is allowed, don't open it. Ask the maintainer.
+
+### Game version
+All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is listed in `docs/clean-room.md`. Tools must verify it.
 
 ### Game data
 - The game is provided by the user from their own dump. Its location comes from the environment variable `BB_GAME_DIR`, or from `local.env` (untracked) in the repo root.
@@ -46,7 +48,7 @@ See `docs/architecture.md` and `docs/roadmap.md`.
 
 - Work is tracked in GitHub issues on this repo, grouped by milestones M0–M6 (see `docs/roadmap.md`).
 - Labels: `loader`, `hle:kernel`, `hle:gnm`, `formats`, `decomp`, `tooling`, `research`.
-- One issue per task of about a day or more. Per-function progress goes in `docs/progress/functions.csv`, not in issues.
+- One issue per task of about a day or more. Per-function progress goes in `symbols/functions.csv`, not in issues.
 - Agents may create and comment on issues in this repository. Close issues through commits (`Fixes #N`).
 - Issue text follows the same privacy rules as commits.
 
@@ -57,10 +59,11 @@ AGENTS.md            this file
 README.md            project overview for humans
 docs/
   architecture.md    system design
-  roadmap.md         milestones
+  roadmap.md         milestones and tracks
+  clean-room.md      reference policy, NID naming, game version hash
   references.md      credit log for every external source
   formats/           our own notes on PS4 and game file formats
-  progress/          function tracker (functions.csv)
+symbols/             our analysis as text: functions.csv, nids.csv, types/
 tools/
   githooks/          privacy checks (enabled via core.hooksPath)
 .github/             issue templates
@@ -71,11 +74,11 @@ Source directories (`src/`, `tools/<name>/`) will be added as work begins.
 ## Workflow: decompiling one function
 
 1. Pick a function, preferably from an open issue or a leaf function that a replaced function calls.
-2. Analyze it in the disassembler. Record what you learn (name, signature, structs) in the analysis database, not in the repo.
+2. Analyze it in Ghidra. Record names, signatures and structs there, then export them to `symbols/`. The text files in `symbols/` are the source of truth, and the Ghidra project is a disposable local cache.
 3. Write the C++ version in the matching source file. Name it after what it does and add a comment with the original address: `// 0x00XXXXXX`.
-4. Register the replacement hook.
-5. Verify it. The game must behave the same, and where possible compare against the original with a test harness or trace.
-6. Update `docs/progress/functions.csv`.
+4. Write a differential test. The harness calls the original function (mapped from the executable) and the replacement with the same inputs and compares return values and touched memory.
+5. Register the replacement hook.
+6. Update `symbols/functions.csv` (status `decompiled` once tests pass, `replaced` once hooked in).
 
 ## Conventions
 

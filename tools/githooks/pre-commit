@@ -3,6 +3,7 @@
 . "$(dirname "$0")/privacy-lib.sh"
 FAILED=0
 MAX_BYTES=2097152
+SYMBOLS_MAX_BYTES=33554432   # symbols/*.csv may grow large
 
 # 1. identity
 email="$(git config user.email)"
@@ -23,7 +24,8 @@ git diff --cached --name-only --diff-filter=ACMR | while IFS= read -r f; do
             echo "game/OS file: $f" ;;
     esac
     size="$(git cat-file -s ":$f" 2>/dev/null || echo 0)"
-    [ "$size" -gt "$MAX_BYTES" ] && echo "file larger than 2 MB: $f"
+    limit=$MAX_BYTES; case "$f" in symbols/*.csv) limit=$SYMBOLS_MAX_BYTES ;; esac
+    [ "$size" -gt "$limit" ] && echo "file too large ($size bytes): $f"
 done > "${TMPDIR:-/tmp}/bbl-precommit.$$"
 if [ -s "${TMPDIR:-/tmp}/bbl-precommit.$$" ]; then
     while IFS= read -r msg; do fail "$msg"; done < "${TMPDIR:-/tmp}/bbl-precommit.$$"
