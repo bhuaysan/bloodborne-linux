@@ -41,7 +41,8 @@ std::byte pattern(std::size_t i) {
 }
 
 // A PS4 ELF with a code segment at link address 0, a data segment at data_link whose memory
-// extends past its file data (.bss), and the smallest dynamic table parse_dynamic accepts.
+// extends past its file data (.bss), the smallest dynamic table parse_dynamic accepts, and
+// PT_TLS and PT_SCE_PROCPARAM inside the data segment.
 // `edit` changes the program headers before they are written.
 Bytes build_elf(void (*edit)(std::vector<Phdr>&) = nullptr) {
     Bytes elf(dynlib_offset);
@@ -79,6 +80,8 @@ Bytes build_elf(void (*edit)(std::vector<Phdr>&) = nullptr) {
         {pt_load, pf_rw, 0x3000, data_link, data_file, data_mem, 0x4000},
         {pt_sce_dynlibdata, 4, dynlib_offset, 0, elf.size() - dynlib_offset, 0, 0x10},
         {pt_dynamic, 6, dyn, 0, elf.size() - dyn, elf.size() - dyn, 8},
+        {pt_tls, 4, 0x3040, data_link + 0x40, 0x10, 0x800, 0x20},
+        {pt_sce_procparam, 4, 0x3000, data_link, 0x40, 0x40, 8},
     };
     if (edit) {
         edit(phdrs);
@@ -220,6 +223,73 @@ TEST(MapElf, ReleasesTheRangeWhenTheDynamicDataIsBad) {
     EXPECT_EQ(protection(test_base), "unmapped");
     Image image = map_elf(build_elf(), test_base);  // the range is free again
     EXPECT_EQ(protection(test_base), "rw-p");
+}
+
+TEST(MapElf, ReadsTlsAndProcParam) {
+    Image image = map_elf(build_elf(), test_base);
+    ASSERT_TRUE(image.tls);
+    EXPECT_EQ(image.tls->link_addr, data_link + 0x40);
+    EXPECT_EQ(image.tls->file_size, 0x10U);
+    EXPECT_EQ(image.tls->mem_size, 0x800U);
+    EXPECT_EQ(image.tls->align, 0x20U);
+    EXPECT_EQ(image.proc_param, data_link);
+
+    Image none = map_elf(build_elf([](auto& p) { p.resize(4); }), test_base + 0x100000);
+    EXPECT_FALSE(none.tls);
+    EXPECT_FALSE(none.proc_param);
+}
+
+TEST(MapElf, RefusesBadTlsAndProcParam) {
+    expect_error<LoadError>(
+        [] { map_elf(build_elf([](auto& p) { p.push_back(p[4]); }), test_base); },
+        "more than one PT_TLS program header");
+    expect_error<LoadError>(
+        [] { map_elf(build_elf([](auto& p) { p.push_back(p[5]); }), test_base); },
+        "more than one PT_SCE_PROCPARAM program header");
+    expect_error<LoadError>(
+        [] { map_elf(build_elf([](auto& p) { p[4].filesz = 0x801; }), test_base); },
+        "PT_TLS: p_filesz 0x801 > p_memsz 0x800");
+    expect_error<LoadError>(
+        [] { map_elf(build_elf([](auto& p) { p[4].align = 0x18; }), test_base); },
+        "PT_TLS: p_align 0x18 is not a power of two");
+    EXPECT_EQ(protection(test_base), "unmapped");  // checked before the range is reserved
+}
+
+TEST(ReadTls, ReadsAlignZeroAsOne) {
+    std::vector<Phdr> phdrs = {{pt_load, pf_rw, 0, 0x4000, 0x100, 0x1000, 0x4000},
+                               {pt_tls, 4, 0, 0x4000, 0, 0x10, 0}};
+    auto tls = read_tls(phdrs);
+    ASSERT_TRUE(tls);
+    EXPECT_EQ(tls->align, 1U);
+    phdrs[1].align = 1;
+    EXPECT_EQ(read_tls(phdrs)->align, 1U);
+}
+
+// Only the initialization image has to lie inside a PT_LOAD, not the whole TLS block.
+TEST(ReadTls, NeedsTheImageInsideAPtLoad) {
+    std::vector<Phdr> phdrs = {{pt_load, pf_rw, 0, 0x4000, 0x100, 0x1000, 0x4000},
+                               {pt_tls, 4, 0, 0x4f00, 0x100, 0x2000, 0x10}};
+    EXPECT_TRUE(read_tls(phdrs));
+    phdrs[1].filesz = 0x101;
+    expect_error<LoadError>([&] { read_tls(phdrs); },
+                            "PT_TLS initialization image at 0x4f00 + 0x101 lies outside");
+    phdrs[1].vaddr = 0x3ff0;
+    phdrs[1].filesz = 0x20;
+    expect_error<LoadError>([&] { read_tls(phdrs); }, "lies outside the PT_LOAD segments");
+    phdrs[0].type = pt_dynamic;
+    phdrs[1].vaddr = 0x4000;
+    expect_error<LoadError>([&] { read_tls(phdrs); }, "lies outside the PT_LOAD segments");
+}
+
+TEST(ReadProcParam, NeedsItInsideAPtLoad) {
+    std::vector<Phdr> phdrs = {{pt_load, pf_rw, 0, 0x4000, 0x100, 0x1000, 0x4000},
+                               {pt_sce_procparam, 4, 0, 0x4fc0, 0x40, 0x40, 8}};
+    EXPECT_EQ(read_proc_param(phdrs), 0x4fc0U);
+    phdrs[1].memsz = 0x41;
+    expect_error<LoadError>([&] { read_proc_param(phdrs); },
+                            "PT_SCE_PROCPARAM at 0x4fc0 + 0x41 lies outside");
+    EXPECT_FALSE(read_proc_param(std::span(phdrs).first(1)));
+    EXPECT_FALSE(read_tls(phdrs));
 }
 
 TEST(Image, ChecksLinkAddresses) {

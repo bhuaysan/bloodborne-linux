@@ -82,6 +82,32 @@ std::vector<Segment> read_segments(std::span<const std::byte> elf, std::span<con
     return segments;
 }
 
+// The only program header of `type`, or nullptr. Throws LoadError when there are several.
+const Phdr* single(std::span<const Phdr> phdrs, std::uint32_t type, std::string_view what) {
+    const Phdr* found = nullptr;
+    for (const Phdr& ph : phdrs) {
+        if (ph.type == type) {
+            if (found) {
+                throw LoadError(std::format("more than one {} program header", what));
+            }
+            found = &ph;
+        }
+    }
+    return found;
+}
+
+// Throws LoadError unless [link, link + size) lies inside the memory of one PT_LOAD.
+void need_in_load(std::span<const Phdr> phdrs, std::uint64_t link, std::uint64_t size,
+                  std::string_view what) {
+    for (const Phdr& ph : phdrs) {
+        if (ph.type == pt_load && link >= ph.vaddr && in_bounds(link - ph.vaddr, size, ph.memsz)) {
+            return;
+        }
+    }
+    throw LoadError(std::format("{} at {:#x} + {:#x} lies outside the PT_LOAD segments", what,
+                                link, size));
+}
+
 // `err` is errno saved right after the failing call, before formatting `what` can change it.
 [[noreturn]] void throw_errno(int err, const std::string& what) {
     throw std::system_error(err, std::generic_category(), what);
@@ -124,6 +150,33 @@ std::uintptr_t Image::code(std::uint64_t link) const {
         std::format("link address {:#x} lies outside the executable segments", link));
 }
 
+std::optional<TlsTemplate> read_tls(std::span<const Phdr> phdrs) {
+    const Phdr* ph = single(phdrs, pt_tls, "PT_TLS");
+    if (!ph) {
+        return std::nullopt;
+    }
+    if (ph->filesz > ph->memsz) {
+        throw LoadError(std::format("PT_TLS: p_filesz {:#x} > p_memsz {:#x}", ph->filesz,
+                                    ph->memsz));
+    }
+    // As for any ELF segment, p_align 0 and 1 both mean no alignment constraint.
+    std::uint64_t align = ph->align == 0 ? 1 : ph->align;
+    if (align & (align - 1)) {
+        throw LoadError(std::format("PT_TLS: p_align {:#x} is not a power of two", align));
+    }
+    need_in_load(phdrs, ph->vaddr, ph->filesz, "PT_TLS initialization image");
+    return TlsTemplate{ph->vaddr, ph->filesz, ph->memsz, align};
+}
+
+std::optional<std::uint64_t> read_proc_param(std::span<const Phdr> phdrs) {
+    const Phdr* ph = single(phdrs, pt_sce_procparam, "PT_SCE_PROCPARAM");
+    if (!ph) {
+        return std::nullopt;
+    }
+    need_in_load(phdrs, ph->vaddr, ph->memsz, "PT_SCE_PROCPARAM");
+    return ph->vaddr;
+}
+
 Image map_elf(std::span<const std::byte> elf, std::uintptr_t base) {
     ElfHeader header = read_elf_header(elf);
     if (header.machine != em_x86_64 ||
@@ -134,6 +187,8 @@ Image map_elf(std::span<const std::byte> elf, std::uintptr_t base) {
     std::vector<Phdr> phdrs = read_phdrs(elf, header);
     std::uint64_t align = 0;
     std::vector<Segment> segments = read_segments(elf, phdrs, align);
+    std::optional<TlsTemplate> tls = read_tls(phdrs);
+    std::optional<std::uint64_t> proc_param = read_proc_param(phdrs);
     if (base % align != 0) {
         throw LoadError(std::format("base {:#x} is not aligned to {:#x}", base, align));
     }
@@ -159,7 +214,8 @@ Image map_elf(std::span<const std::byte> elf, std::uintptr_t base) {
         throw std::system_error(std::make_error_code(std::errc::address_in_use),
                                 std::format("cannot reserve {} for the image", range));
     }
-    Image image{base, std::move(segments), header.entry, {}, Reservation(base, span)};
+    Image image{base, std::move(segments), header.entry, tls, proc_param, {},
+                Reservation(base, span)};
 
     // Anonymous pages start out zero, so the memory after the file data needs no clearing.
     for (const Segment& s : image.segments) {

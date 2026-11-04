@@ -3,11 +3,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <type_traits>
 #include <vector>
 
 #include "loader/dynamic.hpp"
+#include "loader/elf.hpp"
 
 namespace bb::loader {
 
@@ -18,6 +20,13 @@ inline constexpr std::uintptr_t default_base = 0x10000000;
 struct Segment {
     std::uint64_t link_addr, mem_size, file_size;
     int prot;  // final PROT_* from p_flags
+};
+
+// The PT_TLS segment: the initialization image at link_addr (file_size bytes, the rest of the
+// block is zero), and the size and alignment of each thread's TLS block.
+struct TlsTemplate {
+    std::uint64_t link_addr, file_size, mem_size;
+    std::uint64_t align;  // a power of two, p_align 0 read as 1
 };
 
 // An address range this process reserved with mmap. Unmaps it on destruction. Move-only.
@@ -39,6 +48,8 @@ struct Image {
     std::uintptr_t base;
     std::vector<Segment> segments;  // PT_LOAD only, in program header order
     std::uint64_t entry;            // link address
+    std::optional<TlsTemplate> tls;
+    std::optional<std::uint64_t> proc_param;  // link address of PT_SCE_PROCPARAM, eboot only
     DynamicInfo dyn;
 
     // base + link. Throws std::out_of_range unless `link` lies inside a segment's memory.
@@ -58,11 +69,20 @@ private:
     std::uintptr_t code(std::uint64_t link) const;
 };
 
+// The PT_TLS program header, if any. Throws LoadError when there are several, when p_filesz
+// exceeds p_memsz, when p_align is not a power of two (0 counts as 1) or when the initialization
+// image [p_vaddr, p_vaddr + p_filesz) lies outside every PT_LOAD.
+std::optional<TlsTemplate> read_tls(std::span<const Phdr> phdrs);
+
+// The link address of the PT_SCE_PROCPARAM program header, if any. Throws LoadError when there
+// are several or when [p_vaddr, p_vaddr + p_memsz) lies outside every PT_LOAD.
+std::optional<std::uint64_t> read_proc_param(std::span<const Phdr> phdrs);
+
 // Maps the PS4 ELF `elf` with link address 0 at `base` and parses its dynamic data. Every
 // PT_LOAD is read-write until its final protection is set. `base` must be aligned to the largest
 // PT_LOAD p_align. The whole span is reserved in one piece and never moved: throws
 // std::system_error naming the range when it is taken, LoadError when the ELF is malformed.
-// Relocations are not applied.
+// Reads PT_TLS and PT_SCE_PROCPARAM. Relocations are not applied.
 Image map_elf(std::span<const std::byte> elf, std::uintptr_t base);
 
 }  // namespace bb::loader

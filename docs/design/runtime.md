@@ -110,6 +110,8 @@ struct Image {
 }
 ```
 
+`PT_TLS` and `PT_SCE_PROCPARAM` are optional, at most one of each. For `PT_TLS`, `p_filesz` must not exceed `p_memsz`, and `p_align` must be a power of two; `p_align` 0 counts as 1 (no constraint), as for any ELF segment, so `TlsTemplate::align` is never 0. Only the initialization image (`p_vaddr` + `p_filesz`) has to lie inside a `PT_LOAD`: the rest of the block is zero-filled per thread and needs no memory in the image. `PT_SCE_PROCPARAM` (`p_vaddr` + `p_memsz`) must lie inside a `PT_LOAD`. Both are checked before the range is reserved. In the eboot, the TLS template is at 0x50dc040 with `p_filesz` 0, `p_memsz` 0x750 and `p_align` 0x10, and the process parameters are at 0x50dc000, the start of the data segment.
+
 The image owns its mapping through `mapping` and unmaps it on destruction. It is move-only; a move keeps every runtime address valid. `DynamicInfo` holds the parsed tables from `PT_SCE_DYNLIBDATA` (`docs/formats/elf-dynamic.md`): the symbols, both relocation tables, the module and library records, the `Import` of each undefined `NID#library#module` symbol, and the values of `DT_SCE_PLTGOT`, `DT_INIT`, `DT_FINI`, the preinit, init and fini arrays (link address and size), `DT_NEEDED` (in order) and `DT_TEXTREL`. The records are checked as `tools/elfimports` checks them. Only the parsed data is kept, not the raw segment.
 
 ### Relocations
