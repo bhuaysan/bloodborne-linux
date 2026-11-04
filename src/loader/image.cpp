@@ -82,8 +82,9 @@ std::vector<Segment> read_segments(std::span<const std::byte> elf, std::span<con
     return segments;
 }
 
-[[noreturn]] void throw_errno(const std::string& what) {
-    throw std::system_error(errno, std::generic_category(), what);
+// `err` is errno saved right after the failing call, before formatting `what` can change it.
+[[noreturn]] void throw_errno(int err, const std::string& what) {
+    throw std::system_error(err, std::generic_category(), what);
 }
 
 }  // namespace
@@ -150,7 +151,8 @@ Image map_elf(std::span<const std::byte> elf, std::uintptr_t base) {
     void* got = mmap(want, span, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
                      -1, 0);
     if (got == MAP_FAILED) {
-        throw_errno(std::format("cannot reserve {} for the image", range));
+        int err = errno;
+        throw_errno(err, std::format("cannot reserve {} for the image", range));
     }
     if (got != want) {
         munmap(got, span);
@@ -164,7 +166,8 @@ Image map_elf(std::span<const std::byte> elf, std::uintptr_t base) {
         std::uint64_t start = page_down(s.link_addr), end = page_up(s.link_addr + s.mem_size);
         if (mprotect(reinterpret_cast<void*>(base + start), end - start,
                      PROT_READ | PROT_WRITE) != 0) {
-            throw_errno(std::format("mprotect of {:#x}..{:#x}", base + start, base + end));
+            int err = errno;
+            throw_errno(err, std::format("mprotect of {:#x}..{:#x}", base + start, base + end));
         }
     }
     for (const Phdr& ph : phdrs) {
