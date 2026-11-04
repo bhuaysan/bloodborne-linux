@@ -31,7 +31,8 @@ path_problem() {
         CLAUDE.md|CLAUDE.local.md|.claude/*|*/.claude/*|.mcp.json|.rea/*|.cursor/*|.codex/*|GEMINI.md)
             echo "agent file: $1" ;;
     esac
-    case "$(basename "$1")" in
+    # not basename: it would read a name like -eboot.bin as an option
+    case "${1##*/}" in
         *.bin|*.elf|*.prx|*.sprx|*.self|*.sfo|*.pkg|*.dds|*.at9|._*|.DS_Store)
             echo "game/OS file: $1" ;;
     esac
