@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "loader/dynamic.hpp"
@@ -63,10 +64,23 @@ struct Image {
         return reinterpret_cast<F*>(code(link));
     }
 
+    // Whether finalize_protection() has run.
+    bool finalized() const { return finalized_; }
+
+    // Sets each segment's pages to its final protection from p_flags (code r-x, data rw-). Until
+    // then every segment is read-write. Throws std::system_error when mprotect fails.
+    void finalize_protection();
+
     Reservation mapping;
 
 private:
+    friend Image map_elf(std::span<const std::byte> elf, std::uintptr_t base);
+    Image(std::uintptr_t base_addr, Reservation reserved)
+        : base(base_addr), entry(0), mapping(std::move(reserved)) {}
+
     std::uintptr_t code(std::uint64_t link) const;
+
+    bool finalized_ = false;
 };
 
 // The PT_TLS program header, if any. Throws LoadError when there are several, when p_filesz

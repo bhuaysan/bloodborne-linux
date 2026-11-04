@@ -113,6 +113,15 @@ void need_in_load(std::span<const Phdr> phdrs, std::uint64_t link, std::uint64_t
     throw std::system_error(err, std::generic_category(), what);
 }
 
+// mprotect over the pages of segment `s` of the image at `base`.
+void protect(std::uintptr_t base, const Segment& s, int prot) {
+    std::uint64_t start = page_down(s.link_addr), end = page_up(s.link_addr + s.mem_size);
+    if (mprotect(reinterpret_cast<void*>(base + start), end - start, prot) != 0) {
+        int err = errno;
+        throw_errno(err, std::format("mprotect of {:#x}..{:#x}", base + start, base + end));
+    }
+}
+
 }  // namespace
 
 Reservation::Reservation(Reservation&& other) noexcept
@@ -148,6 +157,13 @@ std::uintptr_t Image::code(std::uint64_t link) const {
     }
     throw std::out_of_range(
         std::format("link address {:#x} lies outside the executable segments", link));
+}
+
+void Image::finalize_protection() {
+    for (const Segment& s : segments) {
+        protect(base, s, s.prot);
+    }
+    finalized_ = true;
 }
 
 std::optional<TlsTemplate> read_tls(std::span<const Phdr> phdrs) {
@@ -214,17 +230,15 @@ Image map_elf(std::span<const std::byte> elf, std::uintptr_t base) {
         throw std::system_error(std::make_error_code(std::errc::address_in_use),
                                 std::format("cannot reserve {} for the image", range));
     }
-    Image image{base, std::move(segments), header.entry, tls, proc_param, {},
-                Reservation(base, span)};
+    Image image(base, Reservation(base, span));
+    image.segments = std::move(segments);
+    image.entry = header.entry;
+    image.tls = tls;
+    image.proc_param = proc_param;
 
     // Anonymous pages start out zero, so the memory after the file data needs no clearing.
     for (const Segment& s : image.segments) {
-        std::uint64_t start = page_down(s.link_addr), end = page_up(s.link_addr + s.mem_size);
-        if (mprotect(reinterpret_cast<void*>(base + start), end - start,
-                     PROT_READ | PROT_WRITE) != 0) {
-            int err = errno;
-            throw_errno(err, std::format("mprotect of {:#x}..{:#x}", base + start, base + end));
-        }
+        protect(base, s, PROT_READ | PROT_WRITE);
     }
     for (const Phdr& ph : phdrs) {
         if (ph.type == pt_load && ph.filesz != 0) {

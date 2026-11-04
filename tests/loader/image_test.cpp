@@ -162,6 +162,27 @@ TEST(MapElf, LeavesTheSegmentsWritable) {
     EXPECT_EQ(protection(test_base + data_link + data_mem), "unmapped");
 }
 
+TEST(Image, FinalizesProtections) {
+    Image image = map_elf(build_elf(), test_base);
+    EXPECT_FALSE(image.finalized());
+    image.finalize_protection();
+    EXPECT_TRUE(image.finalized());
+    EXPECT_EQ(protection(test_base), "r-xp");
+    EXPECT_EQ(protection(test_base + 0x1fff), "r-xp");  // the rest of the last code page
+    EXPECT_EQ(protection(test_base + 0x2000), "---p");
+    EXPECT_EQ(protection(test_base + data_link), "rw-p");
+    EXPECT_EQ(protection(test_base + data_link + data_mem - 1), "rw-p");
+    EXPECT_EQ(protection(test_base + data_link + data_mem), "unmapped");
+    image.finalize_protection();  // again, no change
+    EXPECT_EQ(protection(test_base), "r-xp");
+
+    Image moved = std::move(image);
+    EXPECT_TRUE(moved.finalized());
+    Image read_only = map_elf(build_elf([](auto& p) { p[1].flags = 4; }), test_base + 0x100000);
+    read_only.finalize_protection();
+    EXPECT_EQ(protection(test_base + 0x100000 + data_link), "r--p");
+}
+
 TEST(MapElf, UnmapsOnDestructionOnly) {
     {
         Image image = map_elf(build_elf(), test_base);
