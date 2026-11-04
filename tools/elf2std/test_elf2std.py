@@ -52,9 +52,9 @@ def build_dynlib(extra_tags=(), drop_tags=(), override=None):
     while len(strtab) % 8:
         strtab += b"\0"
     symtab = b"".join(p.SYM.pack(off, (1 << 4) | 2, 0, 0, 0, 0) for off in name_offs)
-    jmprel = (struct.pack("<QQq", DATA_VADDR + 0x18, (1 << 32) | 7, 0)
-              + struct.pack("<QQq", DATA_VADDR + 0x20, (2 << 32) | 7, 0))
-    rela = struct.pack("<QQq", DATA_VADDR + 0x40, 8, 0x100)
+    jmprel = (p.RELA.pack(DATA_VADDR + 0x18, (1 << 32) | 7, 0)
+              + p.RELA.pack(DATA_VADDR + 0x20, (2 << 32) | 7, 0))
+    rela = p.RELA.pack(DATA_VADDR + 0x40, 8, 0x100)
     sony_hash = bytes(0x10)  # contents are ignored by the converter
 
     blob = bytearray(bytes(0x10))  # leading padding, so offsets are non-zero
@@ -72,7 +72,7 @@ def build_dynlib(extra_tags=(), drop_tags=(), override=None):
         p.DT_SCE_HASH: hash_off, p.DT_SCE_HASHSZ: len(sony_hash),
         p.DT_SCE_PLTGOT: DATA_VADDR,
         p.DT_SCE_JMPREL: jmp_off, p.DT_SCE_PLTREL: p.DT_RELA, p.DT_SCE_PLTRELSZ: len(jmprel),
-        p.DT_SCE_RELA: rela_off, p.DT_SCE_RELASZ: len(rela), p.DT_SCE_RELAENT: p.RELA_SIZE,
+        p.DT_SCE_RELA: rela_off, p.DT_SCE_RELASZ: len(rela), p.DT_SCE_RELAENT: p.RELA.size,
         p.DT_SCE_STRTAB: str_off, p.DT_SCE_STRSZ: len(strtab),
         p.DT_SCE_SYMTAB: sym_off, p.DT_SCE_SYMENT: p.SYM.size, p.DT_SCE_SYMTABSZ: len(symtab),
     }
@@ -244,7 +244,7 @@ class SyntheticTests(unittest.TestCase):
         offsets = [struct.unpack_from("<Q", jmprel, i)[0] for i in range(0, len(jmprel), 24)]
         self.assertEqual(offsets, [DATA_VADDR + 0x18, DATA_VADDR + 0x20])
         rela = self.img.read(self.dyn[p.DT_RELA], self.dyn[p.DT_RELASZ])
-        self.assertEqual(struct.unpack("<QQq", rela), (DATA_VADDR + 0x40, 8, 0x100))
+        self.assertEqual(p.RELA.unpack(rela), (DATA_VADDR + 0x40, 8, 0x100))
 
     def test_hash_finds_every_symbol(self):
         for index, name in enumerate(NAMES[1:], start=1):

@@ -33,7 +33,7 @@ PINNED_ELFS_HINT = "expected a self2elf output of CUSA03173 patch 1.09, run tool
 
 DYN = struct.Struct("<QQ")  # 0x10 bytes
 SYM = struct.Struct("<IBBHQQ")  # 0x18 bytes
-RELA_SIZE = 0x18
+RELA = struct.Struct("<QQq")  # 0x18 bytes
 
 ET_EXEC = 2
 ET_SCE_DYNEXEC = 0xFE10  # eboot.bin
@@ -198,7 +198,7 @@ def parse(data: bytes) -> DynImage:
         need(tag in tables, f"missing dynamic tag {tag:#x}")
     need(tables[DT_SCE_PLTREL] == DT_RELA, "PLT relocations are not RELA")
     need(tables[DT_SCE_SYMENT] == SYM.size, "unexpected symbol entry size")
-    need(tables[DT_SCE_RELAENT] == RELA_SIZE, "unexpected relocation entry size")
+    need(tables[DT_SCE_RELAENT] == RELA.size, "unexpected relocation entry size")
 
     blob = data[dynlib.p_offset: dynlib.p_offset + dynlib.p_filesz]
     for offset_tag, size_tag, what in ((DT_SCE_STRTAB, DT_SCE_STRSZ, "string table"),
@@ -207,7 +207,7 @@ def parse(data: bytes) -> DynImage:
                                        (DT_SCE_RELA, DT_SCE_RELASZ, "relocations")):
         need(tables[offset_tag] + tables[size_tag] <= len(blob), f"{what} past end of dynlibdata")
     need(tables[DT_SCE_SYMTABSZ] % SYM.size == 0, "symbol table size not a multiple of the entry size")
-    need(tables[DT_SCE_PLTRELSZ] % RELA_SIZE == 0 and tables[DT_SCE_RELASZ] % RELA_SIZE == 0,
+    need(tables[DT_SCE_PLTRELSZ] % RELA.size == 0 and tables[DT_SCE_RELASZ] % RELA.size == 0,
          "relocation table size not a multiple of the entry size")
 
     image = DynImage(data, header, phdrs, dynamic, dynlib, entries, tables, blob)

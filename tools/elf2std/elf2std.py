@@ -44,7 +44,7 @@ from ps4elf import (  # noqa: E402
     DT_RELASZ, DT_SCE_FIRST, DT_SCE_JMPREL, DT_SCE_LAST, DT_SCE_PLTGOT, DT_SCE_PLTREL,
     DT_SCE_PLTRELSZ, DT_SCE_RELA, DT_SCE_RELAENT, DT_SCE_RELASZ, DT_SCE_STRSZ, DT_SCE_STRTAB,
     DT_SCE_SYMENT, DT_SCE_SYMTAB, DT_STRSZ, DT_STRTAB, DT_SYMENT, DT_SYMTAB, DYN, ELF_DIR, ET_EXEC,
-    PINNED_ELFS, PINNED_ELFS_HINT, PT_DYNAMIC, PT_LOAD, RELA_SIZE, ElfError, need, parse,
+    PINNED_ELFS, PINNED_ELFS_HINT, PT_DYNAMIC, PT_LOAD, RELA, ElfError, need, parse,
 )
 
 DEFAULT_OUT = analysis_dir() / "elf-std"
@@ -356,8 +356,8 @@ def convert(data: bytes) -> Result:
         out[e_phoff + i * ELF_PHDR.size: e_phoff + (i + 1) * ELF_PHDR.size] = ph.pack()
     out[phdrs_end:new_phdrs_end] = new_load.pack()
 
-    return Result(bytes(out), load_vaddr, len(names), sce[DT_SCE_PLTRELSZ] // RELA_SIZE,
-                  sce[DT_SCE_RELASZ] // RELA_SIZE, eh_range, fdes)
+    return Result(bytes(out), load_vaddr, len(names), sce[DT_SCE_PLTRELSZ] // RELA.size,
+                  sce[DT_SCE_RELASZ] // RELA.size, eh_range, fdes)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -64,7 +64,7 @@ class Builder:
         tables = {
             p.DT_SCE_PLTGOT: 0, p.DT_SCE_JMPREL: sym_off, p.DT_SCE_PLTREL: p.DT_RELA,
             p.DT_SCE_PLTRELSZ: 0, p.DT_SCE_RELA: sym_off, p.DT_SCE_RELASZ: 0,
-            p.DT_SCE_RELAENT: p.RELA_SIZE, p.DT_SCE_STRTAB: str_off,
+            p.DT_SCE_RELAENT: p.RELA.size, p.DT_SCE_STRTAB: str_off,
             p.DT_SCE_STRSZ: len(self.strtab), p.DT_SCE_SYMTAB: sym_off,
             p.DT_SCE_SYMENT: p.SYM.size, p.DT_SCE_SYMTABSZ: len(symtab),
         }

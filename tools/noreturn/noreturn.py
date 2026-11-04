@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "elf2std"))
 from cli import checked_out_dir, convert_each  # noqa: E402
 from toolenv import analysis_dir  # noqa: E402
 from ps4elf import (  # noqa: E402
-    DT_SCE_JMPREL, DT_SCE_PLTRELSZ, ELF_DIR, PINNED_ELFS, PINNED_ELFS_HINT, PT_LOAD, RELA_SIZE,
+    DT_SCE_JMPREL, DT_SCE_PLTRELSZ, ELF_DIR, PINNED_ELFS, PINNED_ELFS_HINT, PT_LOAD, RELA,
     ElfError, need, parse,
 )
 from elf2std import EH_PE_FORMATS, PF_X, PT_GNU_EH_FRAME, file_offset  # noqa: E402
@@ -176,8 +176,8 @@ def analyze(data: bytes) -> list[Import]:
 
     jmprel, size = image.tables[DT_SCE_JMPREL], image.tables[DT_SCE_PLTRELSZ]
     slots: dict[int, str] = {}
-    for off in range(jmprel, jmprel + size, RELA_SIZE):
-        r_offset, r_info, _ = struct.unpack_from("<QQq", image.blob, off)
+    for off in range(jmprel, jmprel + size, RELA.size):
+        r_offset, r_info, _ = RELA.unpack_from(image.blob, off)
         if r_info & 0xFFFFFFFF == R_X86_64_JUMP_SLOT:
             index = r_info >> 32
             need(index < len(image.symbols), f"bad symbol index in relocation at {r_offset:#x}")
