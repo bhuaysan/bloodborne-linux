@@ -80,6 +80,30 @@ Source directories (`src/`, `tools/<name>/`) will be added as work begins.
 5. Register the replacement hook.
 6. Update `symbols/functions.csv` (status `decompiled` once tests pass, `replaced` once hooked in).
 
+## Builds, branches and data
+
+There are no separate dev and prod environments. The differences live in build presets and data locations.
+
+### Build presets (from M2, `CMakePresets.json`)
+- `debug`: the everyday build. AddressSanitizer + UBSan, verbose logging of imported calls, extra checks in the test harness.
+- `relwithdebinfo`: optimized and debuggable. For playtesting and profiling.
+- `release`: optimized. What other people build.
+
+### Branches
+- `main` always builds and passes its tests.
+- Work happens on short-lived feature branches (`feat/…`, `fix/…`, `docs/…`) merged through PRs, so CI runs.
+- Each completed milestone gets a tag (`m1`, `m2`, …).
+- No long-lived `develop` branch.
+
+### CI (from M2)
+GitHub Actions builds every preset, runs the unit tests and the privacy checks. CI never has game files, so tests that need the game run locally only and must skip cleanly when `BB_GAME_DIR` is unset.
+
+### Data locations
+- Game dump: read-only, from `BB_GAME_DIR`.
+- Runtime output (save data, shader cache, logs, config) goes to XDG directories, e.g. `$XDG_DATA_HOME/bloodborne-linux/` and `$XDG_CACHE_HOME/bloodborne-linux/`. Never into the game or repo directory.
+- `--profile <name>` keeps separate save data per profile, so test saves stay apart from a real playthrough.
+- `analysis/` and the Ghidra project are disposable. `symbols/` is the source of truth.
+
 ## Conventions
 
 - Language: C++20 for the runtime and decomp, Python 3 for tools. Build with CMake + Ninja (added when coding starts).
