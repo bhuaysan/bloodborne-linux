@@ -53,15 +53,21 @@ def analysis_dir() -> Path:
     return main_checkout() / "analysis"
 
 
-def load_game_dir() -> Path | None:
-    """BB_GAME_DIR from the environment, else from local.env in the main checkout."""
-    value = os.environ.get("BB_GAME_DIR")
+def local_env(key: str) -> str | None:
+    """`key` from the environment, else from local.env in the main checkout."""
+    value = os.environ.get(key)
     env_file = main_checkout() / "local.env"
     if not value and env_file.is_file():
         for line in env_file.read_text().splitlines():
-            key, sep, rest = line.strip().partition("=")
-            if sep and key.removeprefix("export ").strip() == "BB_GAME_DIR":
+            name, sep, rest = line.strip().partition("=")
+            if sep and name.removeprefix("export ").strip() == key:
                 value = rest.strip().strip("\"'")
+    return value or None
+
+
+def load_game_dir() -> Path | None:
+    """BB_GAME_DIR from the environment, else from local.env in the main checkout."""
+    value = local_env("BB_GAME_DIR")
     return Path(value).expanduser().resolve() if value else None
 
 
