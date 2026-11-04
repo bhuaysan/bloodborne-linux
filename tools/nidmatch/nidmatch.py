@@ -36,8 +36,8 @@ import csv
 import re
 import sys
 from collections import defaultdict
-from dataclasses import dataclass, field
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))

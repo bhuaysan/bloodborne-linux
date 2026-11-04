@@ -368,6 +368,8 @@ def run_scripts(project: Path, target: list[str], scripts: list[list[str]]) -> N
 
 def sync(project: Path, symbols: Path, target: list[str], command: str) -> None:
     """Runs `command`, "import" or "export", in one headless session."""
+    if command not in ("import", "export"):
+        raise ValueError(f"unknown command {command!r}")
     csv_path = symbols / "functions.csv"
     rows = read_functions(csv_path)
     if command == "import":

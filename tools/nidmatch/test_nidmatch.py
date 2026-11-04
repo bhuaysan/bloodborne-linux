@@ -411,6 +411,9 @@ class DeriveTest(unittest.TestCase):
             path.write_text("nid,library,name,source\nx,libA,a\n")
             with self.assertRaisesRegex(m.MatchError, "wrong number of fields"):
                 derive.read_seed(path)
+            path.write_text("nid,lib,name,source\nx,libA,a,glibc\n")
+            with self.assertRaisesRegex(m.MatchError, "expected columns"):
+                derive.read_seed(path)
 
 
 class ManNamesTest(unittest.TestCase):
