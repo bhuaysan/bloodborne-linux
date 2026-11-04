@@ -25,6 +25,9 @@ PINNED_ELFS = {
     "12a7735255ae17a7c3765674be39e841ab7cdfb54854bbc5e37334bd049a8553": "libSceSmart.elf",
 }
 
+# Error hint for files that are not one of these. The usual cause is a stale or edited output.
+PINNED_ELFS_HINT = "expected a self2elf output of CUSA03173 patch 1.09, run tools/self2elf again"
+
 DYN = struct.Struct("<QQ")  # 0x10 bytes
 SYM = struct.Struct("<IBBHQQ")  # 0x18 bytes
 RELA_SIZE = 0x18

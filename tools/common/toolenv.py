@@ -73,16 +73,20 @@ class PinnedError(Exception):
     pass
 
 
-def read_pinned(path: Path, pinned: dict[str, str]) -> tuple[str, bytes]:
+GAME_BUILD_HINT = "only CUSA03173 patch 1.09 is supported"
+
+
+def read_pinned(path: Path, pinned: dict[str, str],
+                hint: str = GAME_BUILD_HINT) -> tuple[str, bytes]:
     """Pinned name and contents of a file. `pinned` maps SHA-256 hex digests to names.
 
     Every tool reads its game-derived inputs through this, so all of them refuse other builds in
-    the same way. Callers pass their own table at call time, which lets tests replace it.
+    the same way. Callers pass their own table at call time, which lets tests replace it. `hint`
+    ends the error message and says how to get a pinned file.
     """
     data = path.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     name = pinned.get(digest)
     if name is None:
-        raise PinnedError(f"not a pinned file (sha256 {digest}); "
-                          "only CUSA03173 patch 1.09 is supported")
+        raise PinnedError(f"not a pinned file (sha256 {digest}); {hint}")
     return name, data
