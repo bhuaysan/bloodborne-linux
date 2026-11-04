@@ -16,6 +16,10 @@ Never search for, open, fetch or read:
 - Hardware and specification documents: AMD GCN ISA manuals, Vulkan / SPIR-V, ELF, System V x86-64 ABI, FreeBSD and Linux man pages.
 - General programming resources.
 
+### Case by case
+
+- **OpenOrbis PS4 toolchain** (homebrew SDK): only the format pages of its wiki, such as the ELF and dynlib data specification. Its source code, headers, stub libraries and any symbol or NID name tables are off-limits. Check what the wiki says against our own files before relying on it, and record which facts came from it.
+
 Every source used is logged in [references.md](references.md) in the same change that uses it: source, what it was used for, and the date.
 
 If you're unsure whether a source is allowed, don't open it. Ask the maintainer.
