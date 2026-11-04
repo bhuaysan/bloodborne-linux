@@ -136,7 +136,7 @@ Program header types seen:
 | 0x3 | PT_INTERP | eboot only. `/libexec/ld-elf.so.1`, at the start of the code segment |
 | 0x7 | PT_TLS | |
 | 0x6474E550 | PT_GNU_EH_FRAME | |
-| 0x61000000 | PT_SCE_DYNLIBDATA | Not loaded (`p_memsz` = 0). Holds dynamic linking data. Imports and NIDs are in here (a later M1 task). |
+| 0x61000000 | PT_SCE_DYNLIBDATA | Not loaded (`p_memsz` = 0). Holds dynamic linking data. Imports, exports and relocations, see [elf-dynamic.md](elf-dynamic.md). |
 | 0x61000001 | PT_SCE_PROCPARAM | eboot only, at the start of the data segment |
 | 0x61000002 | PT_SCE_MODULEPARAM | PRX only, same place |
 | 0x6FFFFF00 | PT_SCE_COMMENT | Not loaded. eboot and libc only. |
