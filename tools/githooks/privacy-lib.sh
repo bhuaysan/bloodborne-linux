@@ -1,4 +1,5 @@
-# Shared privacy checks for the git hooks. POSIX sh.
+# Shared privacy checks for the git hooks and tools/privacy-check.sh.
+# POSIX sh.
 #
 # Generic patterns live here. Personal patterns (real names, email
 # addresses) belong in .git/info/privacy-patterns, one extended regex
@@ -6,9 +7,13 @@
 
 # Brackets keep these patterns from matching this file itself.
 GENERIC_PATTERNS='/hom[e]/[A-Za-z0-9_.-]+|/User[s]/[A-Za-z0-9_.-]+|[A-Za-z]:\\User[s]\\'
+AI_ATTRIBUTION_PATTERN='co-authored-by:.*(claude|anthropic|openai|copilot|gemini)|generated (with|by) .*(claude|ai)'
+MAX_BYTES=2097152
+SYMBOLS_MAX_BYTES=33554432   # symbols/*.csv may grow large
 
 privacy_pattern() {
-    local_file="$(git rev-parse --git-dir)/info/privacy-patterns"
+    # --git-path finds info/ in the common git dir, also from a worktree
+    local_file="$(git rev-parse --git-path info/privacy-patterns)"
     pat="$GENERIC_PATTERNS"
     if [ -f "$local_file" ]; then
         while IFS= read -r line || [ -n "$line" ]; do
@@ -17,6 +22,25 @@ privacy_pattern() {
         done < "$local_file"
     fi
     printf '%s' "$pat"
+}
+
+# Prints a message if the path must never be committed.
+path_problem() {
+    case "$1" in
+        CLAUDE.md|CLAUDE.local.md|.claude/*|*/.claude/*|.mcp.json|.rea/*|.cursor/*|.codex/*|GEMINI.md)
+            echo "agent file: $1" ;;
+    esac
+    case "$(basename "$1")" in
+        *.bin|*.elf|*.prx|*.sprx|*.self|*.sfo|*.pkg|*.dds|*.at9|._*|.DS_Store)
+            echo "game/OS file: $1" ;;
+    esac
+}
+
+size_limit() {
+    case "$1" in
+        symbols/*.csv) echo "$SYMBOLS_MAX_BYTES" ;;
+        *) echo "$MAX_BYTES" ;;
+    esac
 }
 
 fail() {

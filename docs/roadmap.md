@@ -18,4 +18,4 @@ The work runs on three tracks that overlap after M2:
 | **M5 Input & audio** | Playable basics | Controller input and audio output work |
 | **Decomp** (continuous from M2) | Replace game code | Functions are decompiled, pass differential tests and are hooked in. Progress tracked in `symbols/functions.csv` |
 
-Each completed milestone is tagged (`m1`, `m2`, …).
+The maintainer tags each completed milestone (`m1`, `m2`, …) after its review.

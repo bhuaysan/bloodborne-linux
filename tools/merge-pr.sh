@@ -3,12 +3,17 @@
 # identity. GitHub's merge button writes the account's display name into
 # the history, so it must not be used.
 #
-# Usage: tools/merge-pr.sh <pr-number>
+# Usage: tools/merge-pr.sh [--maintainer] <pr-number>
 #
 # Rebases the PR branch onto origin/main in a temporary worktree, checks
-# authorship, updates the PR branch, fast-forwards main and, once GitHub
-# shows the PR as merged, deletes the branch. The current checkout is
-# never touched.
+# authorship, runs tools/run-tests.sh and tools/privacy-check.sh on the
+# rebased commits, updates the PR branch, fast-forwards main and, once
+# GitHub shows the PR as merged, deletes the branch. The current
+# checkout is never touched.
+#
+# PRs that change the guardrails (see PROTECTED below) or exceed the size
+# limit in AGENTS.md are refused unless --maintainer is given. Only the
+# maintainer passes that flag.
 #
 # Exit status:
 #   0  merged and branch deleted
@@ -18,8 +23,14 @@
 #   any other non-zero status: main was not updated (2 for a usage error)
 set -eu
 
-[ $# -eq 1 ] || { echo "usage: $0 <pr-number>" >&2; exit 2; }
+maintainer=0
+if [ "${1:-}" = "--maintainer" ]; then maintainer=1; shift; fi
+[ $# -eq 1 ] || { echo "usage: $0 [--maintainer] <pr-number>" >&2; exit 2; }
 pr="$1"
+
+# Paths whose changes always go to the maintainer (pathspecs).
+PROTECTED="AGENTS.md docs/clean-room.md tools/githooks tools/merge-pr.sh tools/privacy-check.sh tools/run-tests.sh .github/workflows"
+MAX_CODE_LINES=500
 
 repo_root="$(git rev-parse --show-toplevel)"
 want_name="$(git -C "$repo_root" config user.name)"
@@ -59,6 +70,28 @@ fi
 
 count="$(git rev-list --count origin/main..HEAD)"
 [ "$count" -gt 0 ] || { echo "nothing to merge" >&2; exit 1; }
+
+# shellcheck disable=SC2086  # PROTECTED is a list of pathspecs
+touched="$(git diff --name-only origin/main HEAD -- $PROTECTED)"
+# changed lines of code: everything except docs, Markdown and symbols/
+lines="$(git diff --numstat origin/main HEAD -- . ':!docs' ':!*.md' ':!symbols' |
+    awk '$1 != "-" { n += $1 + $2 } END { print n + 0 }')"
+if [ "$maintainer" -eq 0 ]; then
+    [ -z "$touched" ] || {
+        echo "PR #$pr changes protected paths, the maintainer merges it:" >&2
+        printf '%s\n' "$touched" >&2
+        exit 1
+    }
+    [ "$lines" -le "$MAX_CODE_LINES" ] || {
+        echo "PR #$pr changes $lines lines of code (limit $MAX_CODE_LINES), the maintainer merges it" >&2
+        exit 1
+    }
+fi
+
+# check the commits exactly as they will land on main
+tools/run-tests.sh || { echo "tests fail on the rebased branch" >&2; exit 1; }
+tools/privacy-check.sh origin/main ||
+    { echo "privacy check fails on the rebased branch" >&2; exit 1; }
 echo "merging PR #$pr ($count commits from $head)"
 git log --oneline origin/main..HEAD
 

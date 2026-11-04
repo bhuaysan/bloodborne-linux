@@ -9,7 +9,7 @@ pat="$(privacy_pattern)"
 if printf '%s\n' "$body" | grep -qE -i -- "$pat"; then
     fail "commit message contains personal data or absolute paths"
 fi
-if printf '%s\n' "$body" | grep -qE -i 'co-authored-by:.*(claude|anthropic|openai|copilot|gemini)|generated (with|by) .*(claude|ai)'; then
+if printf '%s\n' "$body" | grep -qE -i -- "$AI_ATTRIBUTION_PATTERN"; then
     fail "commit message contains AI attribution"
 fi
 

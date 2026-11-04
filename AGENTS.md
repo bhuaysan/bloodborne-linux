@@ -49,7 +49,7 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 - Work is tracked in GitHub issues on this repo, grouped by milestones M0–M6 (see `docs/roadmap.md`).
 - Labels: `loader`, `hle:kernel`, `hle:gnm`, `formats`, `decomp`, `tooling`, `research`, `review`.
 - At the end of every work session, post a handoff comment on the issue: done, open, next step, gotchas.
-- If an issue can only start after another one is merged, add a line `Depends on #N` to its body. Automated runs order the work by these lines.
+- If an issue can only start after another one is merged, add a line `Depends on #N` to its body. An issue starts only once every issue it depends on is merged into `main`. If a dependency goes to the maintainer instead of merging, the issues that depend on it wait as well.
 - One issue per task of about a day or more. Per-function progress goes in `symbols/functions.csv`, not in issues.
 - Agents may create and comment on issues in this repository. Close issues through commits (`Fixes #N`).
 - Issue text follows the same privacy rules as commits.
@@ -88,9 +88,18 @@ Code is never reviewed only in the session that wrote it.
 
 1. **Automatic:** git hooks on every commit. From M2, CI (build with sanitizers, unit and differential tests, privacy check, and formatting and lint once there is code).
 2. **Per decompiled function:** a differential test, plus an independent review that compares the C++ against the original disassembly without seeing the author's reasoning.
-3. **Per PR:** every change goes through a PR. Before merging, an independent review runs on the PR diff in a fresh context. Use high effort for loader, ABI and graphics code. Fix review findings in the same PR unless they need their own design work. Keep PRs to about 500 changed lines of code, and put generated data in a PR of its own.
-   **Merging:** an agent may merge a PR once it passes the gate: tests pass (locally with the game where needed, and in CI once it exists), the independent review has no open findings, and the pre-push privacy check is clean. Anything that fails the gate, or touches the clean-room policy, goes to the maintainer.
-   **Never use GitHub's merge button or `gh pr merge`**: GitHub writes the account's display name into the commit. Merge with `tools/merge-pr.sh <N>` instead. It rebases locally, checks authorship and fast-forwards `main`.
+3. **Per PR:** every change goes through a PR. Before merging, an independent review runs on the PR diff in a fresh context. Use high effort for loader, ABI and graphics code. Fix review findings in the same PR unless they need their own design work. Keep PRs to at most 500 changed lines of code and tests (docs and `symbols/` don't count), and put generated data in a PR of its own.
+   **Merging:** an agent may merge a PR once it passes every part of the gate:
+   - `tools/run-tests.sh` passes, locally with the game where tests need it, and in CI once it exists. `tools/merge-pr.sh` runs it again on the rebased commits, so what lands on `main` is what was tested.
+   - `tools/privacy-check.sh` is clean. `tools/merge-pr.sh` runs it too.
+   - Every finding of the independent review is fixed, or moved to a linked issue because it needs its own design work, or withdrawn by the reviewer in a re-review. The PR's author can't dismiss a finding on its own. A finding it disagrees with goes to the maintainer.
+   - Every function the PR marks `replaced` in `symbols/functions.csv` passed its differential test and its disassembly review (item 2).
+   - The PR stays within the 500-line limit above.
+   - The PR doesn't change the guardrails: `AGENTS.md`, `docs/clean-room.md`, `tools/githooks/`, `tools/merge-pr.sh`, `tools/privacy-check.sh`, `tools/run-tests.sh` or `.github/workflows/`.
+   - Each new source in `docs/references.md` falls clearly into a category that `docs/clean-room.md` allows, as checked by the independent review.
+
+   Anything that fails the gate goes to the maintainer. `tools/merge-pr.sh` refuses guardrail changes and oversized PRs unless the maintainer runs it with `--maintainer`. Agents never pass that flag.
+   **Never use GitHub's merge button or `gh pr merge`**: GitHub writes the account's display name into the commit. Merge with `tools/merge-pr.sh <N>` instead. It rebases locally, checks authorship, runs the tests and the privacy check, and fast-forwards `main`.
 4. **Per milestone:** a dedicated review session over the milestone's range covers:
    - a walkthrough of the new code
    - code health and an architecture check
@@ -112,7 +121,7 @@ There are no separate dev and prod environments. The differences live in build p
 ### Branches
 - `main` always builds and passes its tests.
 - Work happens on short-lived feature branches (`feat/…`, `fix/…`, `docs/…`) merged through PRs, so CI runs.
-- Each completed milestone gets a tag (`m1`, `m2`, …).
+- The maintainer tags each completed milestone (`m1`, `m2`, …) after its review. Agents never create tags.
 - No long-lived `develop` branch.
 
 ### CI (from M2)
