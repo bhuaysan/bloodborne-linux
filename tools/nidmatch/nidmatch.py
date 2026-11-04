@@ -7,13 +7,14 @@ section of docs/clean-room.md. Every match records the candidate sources it came
 
 Input:
     analysis/imports/*.csv        NIDs per file, written by tools/elfimports
-    symbols/nids.csv              earlier matches, hashed again on every run
+    symbols/nids.csv              earlier matches, hashed again on every run (see read_nids_csv)
     symbols/candidates/*.txt      hand-picked names (committed), label = file stem
     analysis/nids/candidates/     generated lists (local, see syscandidates.py), label = file stem
     analysis/elf/*.elf            identifiers in the pinned ELFs, label = strings:<file stem>
     FILE ...                      extra candidate files, label = file stem
 
-Candidate files hold one name per line. '#' starts a comment.
+Candidate files hold one name per line. '#' starts a comment. A file's stem is its source label,
+so it may use only letters, digits and '_.+-'.
 
 Output:
     symbols/nids.csv              one row per matched (NID, library), committed
@@ -23,6 +24,7 @@ Output:
 Usage:
     nidmatch.py [FILE ...]
     nidmatch.py --no-write [FILE ...]   # report only, change nothing
+    nidmatch.py --withdraw LABEL        # drop a label from earlier matches (deleted source)
 """
 
 from __future__ import annotations
@@ -37,8 +39,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "elfimports"))
+import elfimports  # noqa: E402
 from nid import is_nid, nid  # noqa: E402
-from ps4elf import PINNED_ELFS  # noqa: E402
+from ps4elf import PINNED_ELFS, ElfError, parse  # noqa: E402
 from toolenv import REPO_ROOT, analysis_dir  # noqa: E402
 
 IMPORTS_DIR = analysis_dir() / "imports"
@@ -49,12 +53,14 @@ NIDS_CSV = REPO_ROOT / "symbols" / "nids.csv"
 CURATED_DIR = REPO_ROOT / "symbols" / "candidates"
 
 FILE_STEMS = sorted(Path(name).stem for name in PINNED_ELFS.values())
-# The code loaded at startup: the eboot and the two bundled PRXs it needs (docs/formats/imports.md).
-STATIC_LOAD_SET = ("eboot", "libc", "libSceFios2")
 
 NIDS_FIELDS = ["nid", "library", "name", "source"]
+IMPORT_FIELDS = {"direction", "nid", "library", "module", "type", "provided_by"}  # columns we read
 NAME_RE = re.compile(r"[!-~]+")  # printable ASCII, no spaces
 IDENT_RE = re.compile(rb"[A-Za-z_][A-Za-z0-9_]{2,}")
+# Labels are joined with ';' in nids.csv, and 'strings:' marks the labels of read_strings.
+LABEL_RE = re.compile(r"[A-Za-z0-9_.+-]+")
+STRINGS_PREFIX = "strings:"
 
 
 class MatchError(Exception):
@@ -65,7 +71,7 @@ class MatchError(Exception):
 class Use:
     """How one library's NID shows up across the pinned files."""
     module: str
-    type: str
+    types: set[str] = field(default_factory=set)
     importers: set[str] = field(default_factory=set)
     exporters: set[str] = field(default_factory=set)
     from_firmware: bool = False  # imported by some file and not provided by a bundled PRX
@@ -77,6 +83,12 @@ NidTable = dict[str, dict[str, Use]]
 Candidates = dict[str, set[str]]
 
 
+def check_fields(row: dict[str | None, str | None], where: str) -> None:
+    # DictReader fills a short row with None values and puts the rest of a long row under None.
+    if None in row or None in row.values():
+        raise MatchError(f"{where}: wrong number of fields")
+
+
 def load_nids(imports_dir: Path) -> NidTable:
     table: NidTable = defaultdict(dict)
     for stem in FILE_STEMS:
@@ -84,10 +96,21 @@ def load_nids(imports_dir: Path) -> NidTable:
         if not path.is_file():
             raise MatchError(f"{path} is missing (run tools/elfimports first)")
         with path.open(newline="") as f:
-            for row in csv.DictReader(f):
+            reader = csv.DictReader(f)
+            if not IMPORT_FIELDS <= set(reader.fieldnames or []):
+                raise MatchError(f"{path}: expected columns {','.join(sorted(IMPORT_FIELDS))}")
+            for lineno, row in enumerate(reader, 2):
+                where = f"{path}:{lineno}"
+                check_fields(row, where)
                 if not is_nid(row["nid"]):
-                    raise MatchError(f"{path}: bad NID {row['nid']!r}")
-                use = table[row["nid"]].setdefault(row["library"], Use(row["module"], row["type"]))
+                    raise MatchError(f"{where}: bad NID {row['nid']!r}")
+                # nids.csv has one row per (NID, library). That is enough only while each pair
+                # comes from one module, which holds for all pinned files.
+                use = table[row["nid"]].setdefault(row["library"], Use(row["module"]))
+                if use.module != row["module"]:
+                    raise MatchError(f"{where}: {row['nid']} of {row['library']} comes from "
+                                     f"modules {use.module} and {row['module']}")
+                use.types.add(row["type"])
                 if row["direction"] == "export":
                     use.exporters.add(stem)
                 else:
@@ -102,28 +125,53 @@ def add(candidates: Candidates, name: str, label: str, where: str) -> None:
     candidates.setdefault(name, set()).add(label)
 
 
-def read_candidate_file(path: Path, candidates: Candidates, label: str | None = None) -> None:
-    label = label or path.stem
+def read_candidate_file(path: Path, candidates: Candidates) -> None:
+    label = path.stem
+    if not LABEL_RE.fullmatch(label):
+        raise MatchError(f"{path}: the file name gives the source label {label!r}, "
+                         "use only letters, digits and _.+-")
     for lineno, line in enumerate(path.read_text(encoding="ascii").splitlines(), 1):
         name = line.split("#", 1)[0].strip()
         if name:
             add(candidates, name, label, f"{path}:{lineno}")
 
 
-def read_strings(elf_dir: Path, candidates: Candidates) -> None:
-    """Identifier-like runs of bytes in the pinned ELFs. Any of them may be a symbol name."""
+def read_pinned_elfs(elf_dir: Path) -> dict[str, bytes]:
+    """File name -> contents of each pinned ELF, checked against its pinned hash."""
+    elfs = {}
     for digest, file_name in sorted(PINNED_ELFS.items(), key=lambda kv: kv[1]):
         path = elf_dir / file_name
         data = path.read_bytes()
         if hashlib.sha256(data).hexdigest() != digest:
             raise MatchError(f"{path} is not the pinned self2elf output")
-        label = f"strings:{path.stem}"
+        elfs[file_name] = data
+    return elfs
+
+
+def read_strings(elfs: dict[str, bytes], candidates: Candidates) -> None:
+    """Identifier-like runs of bytes in the pinned ELFs. Any of them may be a symbol name."""
+    for file_name, data in elfs.items():
+        label = STRINGS_PREFIX + Path(file_name).stem
         for token in set(IDENT_RE.findall(data)):
             candidates.setdefault(token.decode("ascii"), set()).add(label)
 
 
-def read_nids_csv(path: Path, table: NidTable, candidates: Candidates) -> None:
-    """Earlier matches. Each must still hash to its NID and name a NID of the pinned files."""
+def static_load_set(elfs: dict[str, bytes]) -> set[str]:
+    """Stems of the files loaded at startup, from DT_NEEDED exactly as tools/elfimports does."""
+    infos = [elfimports.analyze(file_name, parse(data)) for file_name, data in elfs.items()]
+    return {Path(info.name).stem for info in elfimports.static_load_set(infos)}
+
+
+def read_nids_csv(path: Path, table: NidTable, candidates: Candidates, rederived: set[str]) -> None:
+    """Earlier matches. Each must still hash to its NID and name a NID of the pinned files.
+
+    A label is carried over from nids.csv only if this run cannot derive it again. The strings of
+    the pinned ELFs and the committed candidate files (labels in `rederived`) are read on every
+    run, so their labels are not carried over: a name taken out of a committed file loses that
+    label. Labels of local or extra files are carried over, so a run without them keeps their
+    names. `rederived` also holds the labels passed to --withdraw. A row left without a label is
+    dropped unless this run finds the name again.
+    """
     if not path.is_file():
         return
     with path.open(newline="") as f:
@@ -132,6 +180,7 @@ def read_nids_csv(path: Path, table: NidTable, candidates: Candidates) -> None:
             raise MatchError(f"{path}: expected columns {','.join(NIDS_FIELDS)}")
         for lineno, row in enumerate(reader, 2):
             where = f"{path}:{lineno}"
+            check_fields(row, where)
             if nid(row["name"]) != row["nid"]:
                 raise MatchError(f"{where}: {row['name']} does not hash to {row['nid']}")
             if row["library"] not in table.get(row["nid"], {}):
@@ -141,7 +190,8 @@ def read_nids_csv(path: Path, table: NidTable, candidates: Candidates) -> None:
             if not labels:
                 raise MatchError(f"{where}: no source")
             for label in labels:
-                add(candidates, row["name"], label, where)
+                if not label.startswith(STRINGS_PREFIX) and label not in rederived:
+                    add(candidates, row["name"], label, where)
 
 
 def match(table: NidTable, candidates: Candidates) -> dict[str, tuple[str, set[str]]]:
@@ -164,14 +214,14 @@ def nids_rows(table: NidTable, found: dict[str, tuple[str, set[str]]]) -> list[d
 
 
 def unmatched_rows(table: NidTable, found: dict[str, tuple[str, set[str]]]) -> list[dict[str, str]]:
-    rows = [{"nid": h, "library": lib, "module": use.module, "type": use.type,
+    rows = [{"nid": h, "library": lib, "module": use.module, "type": ";".join(sorted(use.types)),
              "importers": ";".join(sorted(use.importers)),
              "exporters": ";".join(sorted(use.exporters))}
             for h, libs in table.items() if h not in found for lib, use in libs.items()]
     return sorted(rows, key=lambda r: (r["library"].lower(), r["nid"]))
 
 
-def report(table: NidTable, found: dict[str, tuple[str, set[str]]]) -> str:
+def report(table: NidTable, found: dict[str, tuple[str, set[str]]], load_set: set[str]) -> str:
     # library -> [nids, matched], counted once per (nid, library)
     stats: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     exported: set[str] = set()
@@ -182,7 +232,7 @@ def report(table: NidTable, found: dict[str, tuple[str, set[str]]]) -> str:
             stats[lib][1] += h in found
             if use.exporters:
                 exported.add(lib)
-            if use.from_firmware and use.importers & set(STATIC_LOAD_SET):
+            if use.from_firmware and use.importers & load_set:
                 static_total += 1
                 static_matched += h in found
 
@@ -221,24 +271,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("files", nargs="*", type=Path, help="extra candidate files")
     parser.add_argument("--no-write", action="store_true",
                         help="print the report, write nothing")
+    parser.add_argument("--withdraw", action="append", default=[], metavar="LABEL",
+                        help="drop LABEL from the earlier matches in nids.csv, e.g. after "
+                             "deleting its candidate file (repeatable)")
     args = parser.parse_args(argv)
 
     try:
         table = load_nids(IMPORTS_DIR)
+        elfs = read_pinned_elfs(ELF_DIR)
+        curated = sorted(CURATED_DIR.glob("*.txt"))
         candidates: Candidates = {}
-        read_nids_csv(NIDS_CSV, table, candidates)
-        for directory in (CURATED_DIR, GENERATED_DIR):
-            for path in sorted(directory.glob("*.txt")):
-                read_candidate_file(path, candidates)
-        for path in args.files:
+        read_nids_csv(NIDS_CSV, table, candidates,
+                      {path.stem for path in curated} | set(args.withdraw))
+        for path in curated + sorted(GENERATED_DIR.glob("*.txt")) + args.files:
             read_candidate_file(path, candidates)
-        read_strings(ELF_DIR, candidates)
+        read_strings(elfs, candidates)
         found = match(table, candidates)
-    except (OSError, UnicodeDecodeError, MatchError) as exc:
+        load_set = static_load_set(elfs)
+    except (OSError, UnicodeDecodeError, MatchError, ElfError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    text = report(table, found)
+    text = report(table, found, load_set)
     if not args.no_write:
         write_csv(NIDS_CSV, NIDS_FIELDS, nids_rows(table, found))
         write_csv(OUT_DIR / "unmatched.csv",

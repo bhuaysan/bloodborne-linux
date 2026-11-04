@@ -35,12 +35,19 @@ Candidate sources and their labels in the `source` column:
 | Label | Candidates | Where they live |
 |---|---|---|
 | `strings:<file>` | identifier-like byte runs in one of the pinned ELFs | read from `analysis/elf/` on every run |
-| `man2`, `man3` | page names of the installed Linux manual pages | `analysis/nids/candidates/`, written by `syscandidates.py` |
+| `man2`, `man3` | page names of the installed Linux manual pages (every directory `manpath` lists) | `analysis/nids/candidates/`, written by `syscandidates.py` |
 | `glibc` | symbols defined by the system's `libc.so.6` and `libm.so.6` | same |
 | `libstdcxx` | symbols defined by the system's `libstdc++.so.6` (mangled C++ names) | same |
 | *file stem* | hand-picked names, each with a comment saying why | `symbols/candidates/*.txt`, committed |
 
-Rows already in `symbols/nids.csv` are hashed again on every run and kept, so a run with fewer candidate sources never drops a name.
+A label is a file stem, so candidate file names may use only letters, digits and `_.+-`. Labels are joined with `;` in the `source` column.
+
+Rows already in `symbols/nids.csv` are hashed again on every run. Their labels are handled like this:
+- `strings:*` labels and the labels of the committed files in `symbols/candidates/` are not carried over. Those sources are read on every run, so their labels are derived again. A name taken out of a committed file loses that label.
+- Labels of the local lists and of extra files are carried over, so a run on a machine without them keeps their names.
+- `--withdraw LABEL` drops a label that would be carried over, for example after deleting its candidate file.
+
+A row left without a label is dropped unless the run finds the name again.
 
 ### First results
 
