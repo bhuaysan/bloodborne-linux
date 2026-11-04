@@ -32,5 +32,6 @@ function(bb_add_test name)
 endfunction()
 
 add_subdirectory(common)
+add_subdirectory(loader)
 bb_add_test(support_test SOURCES support/game_test.cpp)
 target_compile_definitions(support_test PRIVATE BB_IN_GIT_CHECKOUT=${BB_IN_GIT_CHECKOUT})
