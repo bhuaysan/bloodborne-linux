@@ -47,7 +47,8 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 ## Task tracking
 
 - Work is tracked in GitHub issues on this repo, grouped by milestones M0–M6 (see `docs/roadmap.md`).
-- Labels: `loader`, `hle:kernel`, `hle:gnm`, `formats`, `decomp`, `tooling`, `research`.
+- Labels: `loader`, `hle:kernel`, `hle:gnm`, `formats`, `decomp`, `tooling`, `research`, `review`.
+- At the end of every work session, post a handoff comment on the issue: done, open, next step, gotchas.
 - One issue per task of about a day or more. Per-function progress goes in `symbols/functions.csv`, not in issues.
 - Agents may create and comment on issues in this repository. Close issues through commits (`Fixes #N`).
 - Issue text follows the same privacy rules as commits.
@@ -79,6 +80,22 @@ Source directories (`src/`, `tools/<name>/`) will be added as work begins.
 4. Write a differential test. The harness calls the original function (mapped from the executable) and the replacement with the same inputs and compares return values and touched memory.
 5. Register the replacement hook.
 6. Update `symbols/functions.csv` (status `decompiled` once tests pass, `replaced` once hooked in).
+
+## Reviews
+
+Code is never reviewed only in the session that wrote it.
+
+1. **Automatic:** git hooks on every commit. From M2, CI (build with sanitizers, unit and differential tests, privacy check, and formatting and lint once there is code).
+2. **Per decompiled function:** a differential test, plus an independent review that compares the C++ against the original disassembly without seeing the author's reasoning.
+3. **Per PR:** every change goes through a PR. Before merging, an independent review runs on the PR diff in a fresh context. Use high effort for loader, ABI and graphics code. **The maintainer merges.** For trivial PRs (docs, typos), an agent may merge after the maintainer's explicit OK.
+4. **Per milestone:** a dedicated review session over the milestone's range covers:
+   - a walkthrough of the new code
+   - code health and an architecture check
+   - a sample check of `symbols/` quality
+   - a clean-room audit (`docs/references.md` complete, no names of unclear origin)
+   - a privacy audit of the history
+   
+   Small fixes go into a follow-up PR. Bigger findings become issues labeled `review`. Then the milestone is tagged.
 
 ## Builds, branches and data
 
