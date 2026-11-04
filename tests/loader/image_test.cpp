@@ -41,7 +41,8 @@ std::byte pattern(std::size_t i) {
 }
 
 // A PS4 ELF with a code segment at link address 0, a data segment at data_link whose memory
-// extends past its file data (.bss), and the smallest dynamic table parse_dynamic accepts. `edit` changes the program headers before they are written.
+// extends past its file data (.bss), and the smallest dynamic table parse_dynamic accepts.
+// `edit` changes the program headers before they are written.
 Bytes build_elf(void (*edit)(std::vector<Phdr>&) = nullptr) {
     Bytes elf(dynlib_offset);
     std::memcpy(elf.data(), "\x7f" "ELF\x02\x01", 6);
@@ -203,8 +204,16 @@ TEST(MapElf, RefusesBadSegments) {
     expect_error<LoadError>(
         [] { map_elf(build_elf([](auto& p) { p[0].type = p[1].type = 0; }), test_base); },
         "no PT_LOAD");
-    // The reservation is released after each error.
+}
+
+TEST(MapElf, ReleasesTheRangeWhenTheDynamicDataIsBad) {
+    // parse_dynamic runs after the range is reserved and the segments are copied.
+    expect_error<LoadError>(
+        [] { map_elf(build_elf([](auto& p) { p[2].filesz = 0x10; }), test_base); },
+        "PT_DYNAMIC lies outside PT_SCE_DYNLIBDATA");
     EXPECT_EQ(protection(test_base), "unmapped");
+    Image image = map_elf(build_elf(), test_base);  // the range is free again
+    EXPECT_EQ(protection(test_base), "rw-p");
 }
 
 TEST(Image, ChecksLinkAddresses) {
