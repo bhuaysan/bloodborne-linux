@@ -18,8 +18,8 @@ for dir in $dirs; do
 done
 if [ -f CMakeLists.txt ]; then
     echo "== C++ (debug preset)"
-    if ! command -v cmake >/dev/null 2>&1; then
-        echo "cmake not found: the C++ tests can't run" >&2
+    if ! command -v cmake >/dev/null 2>&1 || ! command -v ctest >/dev/null 2>&1; then
+        echo "cmake or ctest not found: the C++ tests can't run" >&2
         status=1
     elif ! { cmake --preset debug >/dev/null &&
              cmake --build --preset debug &&
