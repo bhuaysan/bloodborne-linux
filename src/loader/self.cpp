@@ -113,11 +113,15 @@ std::vector<std::byte> self_to_elf(std::span<const std::byte> self) {
     if (file_size < self.size()) {
         auto trailer = self.subspan(file_size);
         auto is_libversion = [](const Phdr& ph) { return ph.type == pt_sce_libversion; };
+        auto count = std::count_if(phdrs.begin(), phdrs.end(), is_libversion);
+        if (count != 1) {
+            throw LoadError(std::format("{:#x} trailing bytes but {} PT_SCE_LIBVERSION segments",
+                                        trailer.size(), count));
+        }
         auto libversion = std::find_if(phdrs.begin(), phdrs.end(), is_libversion);
-        if (std::count_if(phdrs.begin(), phdrs.end(), is_libversion) != 1 ||
-            libversion->filesz != trailer.size()) {
-            throw LoadError(std::format(
-                "{:#x} trailing bytes don't match a PT_SCE_LIBVERSION segment", trailer.size()));
+        if (libversion->filesz != trailer.size()) {
+            throw LoadError(std::format("{:#x} trailing bytes but PT_SCE_LIBVERSION p_filesz {:#x}",
+                                        trailer.size(), libversion->filesz));
         }
         place(*libversion, trailer);
     }
