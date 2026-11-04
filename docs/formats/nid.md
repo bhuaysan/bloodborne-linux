@@ -54,7 +54,12 @@ A row left without a label is dropped unless the run finds the name again.
 Matched 1508 of 3000 (NID, library) pairs:
 - **Bundled PRXs:** libc.prx 1251 of its 2140 exports and libSceFios2.prx 133 of 165. The other five bundled PRXs have no matches yet.
 - **Firmware imports of the static load set:** 86 of 539.
-- **Best covered firmware libraries**, counted over all 8 files: libScePosix 31 of 32, libSceLibcInternal 52 of 70, libSceNet 20 of 35 (all from log strings in the eboot) and libkernel 20 of 140 (only its POSIX names).
+- **Best covered firmware libraries**, counted over all 8 files:
+  - libScePosix 31 of 32, all from glibc and the manual pages. 10 of them also appear as strings in the eboot.
+  - libSceLibcInternal 52 of 70: 41 from glibc and the manual pages, 9 mangled C++ names from libstdc++, and 2 only as strings in libc.prx.
+  - libSceNet 20 of 35, all from strings in the eboot.
+  - libkernel 20 of 140: 19 POSIX names from glibc and the manual pages, and `scePthreadAttrSetstacksize` from a string in the eboot.
+  - libSceMsgDialog 1 (`sceMsgDialogOpen`, a string in the eboot).
 - **No matches yet:** all `sce*` libraries whose function names don't appear as strings, for example GNM, pad, audio, save data and the PSN libraries.
 
 The libc.prx matches are C names (from glibc and the manual pages) and C++ standard library names in mangled form (from libstdc++, e.g. `std::moneypunct` members). So libc.prx also contains the C++ standard library, and its mangled names agree with those of libstdc++ for more than 700 symbols.
