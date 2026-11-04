@@ -32,6 +32,10 @@ struct Rela {
     std::int64_t addend;
 };
 
+// The symbols and relocations. The module and library records, the imports built from them
+// and the other tags of docs/design/runtime.md (DT_SCE_PLTGOT, DT_INIT, DT_FINI, the
+// init/fini arrays, DT_NEEDED, DT_TEXTREL) are not kept yet: they follow in the next part of
+// issue #43, which parses the records.
 struct DynamicInfo {
     std::vector<Symbol> symbols;   // in table order, so relocations index it
     std::vector<Rela> plt_relocs;  // DT_SCE_JMPREL
