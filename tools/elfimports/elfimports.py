@@ -27,7 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
-from toolenv import PinnedError, analysis_dir, is_inside, load_game_dir, read_pinned  # noqa: E402
+from cli import checked_out_dir, default_elf_paths, pinned_elf_paths  # noqa: E402
+from toolenv import PinnedError, analysis_dir, read_pinned  # noqa: E402
 from nid import NID_ALPHABET, is_nid  # noqa: E402
 from ps4elf import (  # noqa: E402
     DT_NEEDED, DT_SCE_EXPORT_LIB, DT_SCE_EXPORT_LIB_ATTR, DT_SCE_IMPORT_LIB,
@@ -189,8 +190,7 @@ class LoadError(Exception):
 
 
 def pinned_paths(elf_dir: Path) -> list[Path]:
-    """The pinned file names in `elf_dir`. Other files there are ignored."""
-    return [elf_dir / name for name in sorted(set(PINNED_ELFS.values()))]
+    return pinned_elf_paths(elf_dir, PINNED_ELFS)
 
 
 def load(paths: list[Path]) -> list[tuple[ElfInfo, bytes]]:
@@ -396,22 +396,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="output directory (default: analysis/imports/ in the main checkout)")
     args = parser.parse_args(argv)
 
-    files = args.files
-    if not files:
-        if not ELF_DIR.is_dir():
-            parser.error(f"no files given and {ELF_DIR} does not exist (run self2elf first)")
-        files = pinned_paths(ELF_DIR)
-
-    out_dir = args.out_dir.expanduser().resolve()
-    forbidden = {p.resolve().parent for p in files} | {ELF_DIR.resolve()}
-    game_dir = load_game_dir()
-    if game_dir is not None:
-        forbidden.add(game_dir)
-    for parent in sorted(forbidden):
-        if is_inside(out_dir, parent):
-            print(f"error: refusing to write into the game, input or self2elf directory ({parent})",
-                  file=sys.stderr)
-            return 2
+    files = args.files or default_elf_paths(parser, ELF_DIR, PINNED_ELFS)
+    out_dir = checked_out_dir(args.out_dir, files, ELF_DIR)
+    if out_dir is None:
+        return 2
 
     try:
         infos = [info for info, _ in load(files)]

@@ -36,7 +36,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "elf2std"))
-from toolenv import PinnedError, analysis_dir, is_inside, load_game_dir, read_pinned  # noqa: E402
+from cli import checked_out_dir, convert_each  # noqa: E402
+from toolenv import analysis_dir  # noqa: E402
 from ps4elf import (  # noqa: E402
     DT_SCE_JMPREL, DT_SCE_PLTRELSZ, ELF_DIR, PINNED_ELFS, PINNED_ELFS_HINT, PT_LOAD, RELA_SIZE,
     ElfError, need, parse,
@@ -229,26 +230,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     files = args.files or [ELF_DIR / "eboot.elf"]
 
-    out_dir = args.out_dir.expanduser().resolve()
-    forbidden = {p.resolve().parent for p in files} | {ELF_DIR.resolve()}
-    game_dir = load_game_dir()
-    if game_dir is not None:
-        forbidden.add(game_dir)
-    for parent in sorted(forbidden):
-        if is_inside(out_dir, parent):
-            print(f"error: refusing to write into the game, input or self2elf directory ({parent})",
-                  file=sys.stderr)
-            return 2
+    out_dir = checked_out_dir(args.out_dir, files, ELF_DIR)
+    if out_dir is None:
+        return 2
 
-    failed = 0
-    for path in files:
-        try:
-            known, data = read_pinned(path, PINNED_ELFS, PINNED_ELFS_HINT)
-            imports = analyze(data)
-        except (OSError, PinnedError, ElfError) as exc:
-            print(f"{path}: error: {exc}", file=sys.stderr)
-            failed += 1
-            continue
+    def write(known: str, imports: list[Import]) -> None:
         found = [imp for imp in imports if imp.noreturn]
         print(f"{known}: {len(found)} non-returning of {len(imports)} imports with a PLT stub")
         for imp in sorted(imports, key=lambda imp: -imp.ending):
@@ -260,7 +246,8 @@ def main(argv: list[str] | None = None) -> int:
         out_path.write_text("".join(f"{stub:x} {imp.symbol}\n"
                                     for imp in found for stub in imp.stubs))
         print(f"  -> {out_path}")
-    return 1 if failed else 0
+
+    return convert_each(files, PINNED_ELFS, analyze, write, (ElfError,), PINNED_ELFS_HINT)
 
 
 if __name__ == "__main__":

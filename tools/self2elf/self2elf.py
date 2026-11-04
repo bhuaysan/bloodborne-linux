@@ -21,9 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
-from toolenv import (  # noqa: E402
-    ELF_HEADER, ELF_PHDR, Phdr, PinnedError, is_inside, load_game_dir, read_pinned,
-)
+from cli import checked_out_dir, convert_each  # noqa: E402
+from toolenv import ELF_HEADER, ELF_PHDR, Phdr, load_game_dir  # noqa: E402
 from ps4elf import ELF_DIR  # noqa: E402
 
 # CUSA03173 patch 1.09. docs/clean-room.md lists the same hashes.
@@ -170,33 +169,19 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("no files given and BB_GAME_DIR is not set (env or local.env)")
         files = default_inputs(game_dir)
 
-    out_dir = args.out_dir.expanduser().resolve()
-    forbidden = [p.resolve().parent for p in files]
-    if game_dir is not None:
-        forbidden.append(game_dir)
-    for parent in forbidden:
-        if is_inside(out_dir, parent):
-            print(f"error: refusing to write into the game or input directory ({parent})",
-                  file=sys.stderr)
-            return 2
+    out_dir = checked_out_dir(args.out_dir, files)
+    if out_dir is None:
+        return 2
 
-    failed = 0
-    for path in files:
-        try:
-            known, data = read_pinned(path, KNOWN_FILES)
-            image = self_to_elf(data)
-        except (OSError, PinnedError, SelfError) as exc:
-            print(f"{path.name}: error: {exc}", file=sys.stderr)
-            failed += 1
-            continue
-
+    def write(known: str, image: ElfImage) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / (Path(known).stem + ".elf")
         out_path.write_bytes(image.data)
         print(f"{known}: e_type={image.e_type:#06x} entry={image.e_entry:#x} "
               f"phdrs={len(image.phdrs)} size={len(image.data):#x} digest ok -> {out_path}")
 
-    return 1 if failed else 0
+    return convert_each(files, KNOWN_FILES, self_to_elf, write, (SelfError,),
+                        label=lambda path: path.name)
 
 
 if __name__ == "__main__":

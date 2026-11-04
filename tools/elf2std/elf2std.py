@@ -37,9 +37,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
-from toolenv import (  # noqa: E402
-    ELF_HEADER, ELF_PHDR, Phdr, PinnedError, analysis_dir, is_inside, load_game_dir, read_pinned,
-)
+from cli import checked_out_dir, convert_each, default_elf_paths  # noqa: E402
+from toolenv import ELF_HEADER, ELF_PHDR, Phdr, analysis_dir  # noqa: E402
 from ps4elf import (  # noqa: E402,F401  (re-exported for the tests)
     DT_HASH, DT_JMPREL, DT_LOOS, DT_NULL, DT_PLTGOT, DT_PLTREL, DT_PLTRELSZ, DT_RELA, DT_RELAENT,
     DT_RELASZ, DT_SCE_FIRST, DT_SCE_HASH, DT_SCE_HASHSZ, DT_SCE_JMPREL, DT_SCE_LAST, DT_SCE_PLTGOT,
@@ -370,35 +369,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="output directory (default: analysis/elf-std/ in the main checkout)")
     args = parser.parse_args(argv)
 
-    files = args.files
-    if not files:
-        if not ELF_DIR.is_dir():
-            parser.error(f"no files given and {ELF_DIR} does not exist (run self2elf first)")
-        # Only the pinned names, so stray files in analysis/elf/ don't fail the run.
-        files = [ELF_DIR / name for name in sorted(set(PINNED_ELFS.values()))]
+    # Only the pinned names, so stray files in analysis/elf/ don't fail the run.
+    files = args.files or default_elf_paths(parser, ELF_DIR, PINNED_ELFS)
+    out_dir = checked_out_dir(args.out_dir, files, ELF_DIR)
+    if out_dir is None:
+        return 2
 
-    # Checked before anything is written. analysis/elf/ holds the self2elf outputs this tool
-    # verifies against, so writing there would break later runs.
-    out_dir = args.out_dir.expanduser().resolve()
-    forbidden = {p.resolve().parent for p in files} | {ELF_DIR.resolve()}
-    game_dir = load_game_dir()
-    if game_dir is not None:
-        forbidden.add(game_dir)
-    for parent in sorted(forbidden):
-        if is_inside(out_dir, parent):
-            print(f"error: refusing to write into the game, input or self2elf directory ({parent})",
-                  file=sys.stderr)
-            return 2
-
-    failed = 0
-    for path in files:
-        try:
-            known, data = read_pinned(path, PINNED_ELFS, PINNED_ELFS_HINT)
-            result = convert(data)
-        except (OSError, PinnedError, ElfError) as exc:
-            print(f"{path}: error: {exc}", file=sys.stderr)
-            failed += 1
-            continue
+    def write(known: str, result: Result) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / known
         out_path.write_bytes(result.data)
@@ -406,7 +383,8 @@ def main(argv: list[str] | None = None) -> int:
               if result.eh_frame else "")
         print(f"{known}: symbols={result.symbols} plt_relocs={result.plt_relocs} "
               f"relocs={result.relocs} dynlibdata@{result.load_vaddr:#x}{eh} -> {out_path}")
-    return 1 if failed else 0
+
+    return convert_each(files, PINNED_ELFS, convert, write, (ElfError,), PINNED_ELFS_HINT)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ sys.path.insert(0, str(TOOLS / "common"))
 import elfimports as ei  # noqa: E402
 import ps4elf as p  # noqa: E402
 import self2elf  # noqa: E402
+from toolenv import load_game_dir  # noqa: E402
 from elfbuilder import FUNC, GLOBAL, LOCAL, NOTYPE, OBJECT, SECTION, WEAK, Builder  # noqa: E402
 
 NID_A = "AAAAAAAAAAA"
@@ -303,7 +304,7 @@ class MainTests(unittest.TestCase):
         self.assertFalse((self.elf_dir / "sub").exists())
 
 
-GAME_DIR = ei.load_game_dir()
+GAME_DIR = load_game_dir()
 
 
 @unittest.skipUnless(GAME_DIR, "BB_GAME_DIR not set (environment or local.env)")

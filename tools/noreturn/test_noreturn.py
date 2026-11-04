@@ -22,8 +22,10 @@ sys.path.insert(0, str(TOOLS / "noreturn"))
 sys.path.insert(0, str(TOOLS / "elf2std"))
 sys.path.insert(0, str(TOOLS / "self2elf"))
 import noreturn as nr  # noqa: E402
+import cli  # noqa: E402  (on the path through noreturn)
 import self2elf  # noqa: E402
 import test_elf2std as t  # noqa: E402  (synthetic ELF builders)
+from toolenv import load_game_dir  # noqa: E402
 
 STUB_A, STUB_B = 0x1E0, 0x1F0  # PLT stubs of the two imports of the synthetic ELF
 SLOT_A, SLOT_B = t.DATA_VADDR + 0x18, t.DATA_VADDR + 0x20  # their JUMP_SLOT relocations
@@ -113,7 +115,7 @@ class MainTests(unittest.TestCase):
         (self.tmp / "in").mkdir()
         self.input = self.tmp / "in" / "eboot.elf"
         self.input.write_bytes(self.data)
-        game = mock.patch.object(nr, "load_game_dir", return_value=None)
+        game = mock.patch.object(cli, "load_game_dir", return_value=None)
         game.start()
         self.addCleanup(game.stop)
 
@@ -142,7 +144,7 @@ class MainTests(unittest.TestCase):
         self.assertIn("refusing", output)
 
 
-GAME_DIR = nr.load_game_dir()
+GAME_DIR = load_game_dir()
 
 
 @unittest.skipUnless(GAME_DIR, "BB_GAME_DIR not set (environment or local.env)")

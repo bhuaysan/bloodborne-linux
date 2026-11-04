@@ -25,6 +25,7 @@ sys.path.insert(0, str(TOOLS / "elf2std"))
 sys.path.insert(0, str(TOOLS / "self2elf"))
 import elf2std as e  # noqa: E402
 import self2elf  # noqa: E402
+from toolenv import load_game_dir  # noqa: E402
 
 PHDR_OFF = 0x40
 TEXT_OFF, TEXT_VADDR, TEXT_SIZE = 0x1000, 0x0, 0x200
@@ -503,7 +504,7 @@ class MainTests(unittest.TestCase):
         self.assertIn("synthetic.elf", err)
 
 
-GAME_DIR = e.load_game_dir()
+GAME_DIR = load_game_dir()
 
 
 @unittest.skipUnless(GAME_DIR, "BB_GAME_DIR not set (environment or local.env)")
