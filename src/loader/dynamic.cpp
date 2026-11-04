@@ -10,6 +10,7 @@
 namespace bb::loader {
 namespace {
 
+constexpr std::uint64_t dt_needed = 1;
 constexpr std::uint64_t dt_rela = 7;
 
 // A dynamic tag with its name for error messages.
@@ -18,7 +19,16 @@ struct Tag {
     std::string_view name;
 };
 
+constexpr Tag dt_soname{0x0E, "DT_SONAME"};
+constexpr Tag dt_textrel{0x16, "DT_TEXTREL"};
+
 // Sony tags, our names (docs/formats/elf-dynamic.md).
+constexpr Tag dt_sce_module_info{0x6100000D, "DT_SCE_MODULE_INFO"};
+constexpr std::uint64_t dt_sce_needed_module = 0x6100000F;
+constexpr std::uint64_t dt_sce_export_lib = 0x61000013;
+constexpr std::uint64_t dt_sce_import_lib = 0x61000015;
+constexpr std::uint64_t dt_sce_export_lib_attr = 0x61000017;
+constexpr std::uint64_t dt_sce_import_lib_attr = 0x61000019;
 constexpr Tag dt_sce_pltgot{0x61000027, "DT_SCE_PLTGOT"};
 constexpr Tag dt_sce_jmprel{0x61000029, "DT_SCE_JMPREL"};
 constexpr Tag dt_sce_pltrel{0x6100002B, "DT_SCE_PLTREL"};
@@ -69,6 +79,76 @@ std::string read_string(std::span<const std::byte> strtab, std::uint64_t offset,
     return out;
 }
 
+// The fields of a module, library or attribute record.
+struct Record {
+    std::uint16_t id, version;
+    std::uint32_t low;  // string table offset, or the attribute word
+};
+
+Record split_record(std::uint64_t value) {
+    return {static_cast<std::uint16_t>(value >> 48), static_cast<std::uint16_t>(value >> 32),
+            static_cast<std::uint32_t>(value)};
+}
+
+Library* find_library(std::vector<Library>& libraries, bool exported, std::uint16_t id) {
+    auto it = std::find_if(libraries.begin(), libraries.end(), [&](const Library& lib) {
+        return lib.exported == exported && lib.id == id;
+    });
+    return it == libraries.end() ? nullptr : &*it;
+}
+
+// Reads the module and library records into `info`.
+void read_records(DynamicInfo& info,
+                  std::span<const std::pair<std::uint64_t, std::uint64_t>> entries,
+                  const auto& str) {
+    std::vector<std::string> needed_files;
+    std::vector<std::pair<bool, Record>> attrs;
+    for (auto [tag, value] : entries) {
+        Record rec = split_record(value);
+        if (tag == dt_needed) {
+            needed_files.push_back(str(value, "DT_NEEDED"));
+        } else if (tag == dt_sce_needed_module) {
+            auto same = [&](const Module& m) { return m.id == rec.id; };
+            if (rec.id == 0 || std::any_of(info.needed.begin(), info.needed.end(), same)) {
+                throw LoadError(
+                    std::format("needed module record with id {}: 0 or a duplicate", rec.id));
+            }
+            info.needed.push_back(Module{rec.id, str(rec.low, "module record"), rec.version, {}});
+        } else if (tag == dt_sce_export_lib || tag == dt_sce_import_lib) {
+            bool exported = tag == dt_sce_export_lib;
+            if (find_library(info.libraries, exported, rec.id) != nullptr) {
+                throw LoadError(std::format("duplicate library id {}", rec.id));
+            }
+            info.libraries.push_back(Library{rec.id, str(rec.low, "library record"), rec.version,
+                                             exported, std::nullopt});
+        } else if (tag == dt_sce_export_lib_attr || tag == dt_sce_import_lib_attr) {
+            if (rec.version != 0) {
+                throw LoadError(
+                    std::format("library attribute record {:#x} has bits 47..32 set", value));
+            }
+            attrs.emplace_back(tag == dt_sce_export_lib_attr, rec);
+        }
+    }
+    for (auto [exported, rec] : attrs) {
+        Library* lib = find_library(info.libraries, exported, rec.id);
+        if (lib == nullptr || lib->attr) {
+            throw LoadError(std::format("unpaired attribute record for library {}", rec.id));
+        }
+        lib->attr = rec.low;
+    }
+    // Needed module k is the file of the k-th DT_NEEDED. Module names can differ from the file
+    // names, so without that numbering there is no safe pairing.
+    std::sort(info.needed.begin(), info.needed.end(),
+              [](const Module& a, const Module& b) { return a.id < b.id; });
+    if (info.needed.size() != needed_files.size() ||
+        (!info.needed.empty() && info.needed.back().id != info.needed.size())) {
+        throw LoadError("needed module records are not numbered 1..n in DT_NEEDED order");
+    }
+    for (std::size_t i = 0; i < info.needed.size(); ++i) {
+        info.needed[i].file = needed_files[i];
+    }
+}
+
 std::vector<Rela> read_relas(std::span<const std::byte> table, std::size_t symbol_count,
                              std::string_view what) {
     std::vector<Rela> out;
@@ -115,15 +195,22 @@ DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> 
         entries.emplace_back(tag, read_le<std::uint64_t>(table_bytes, at + 8, "dynamic table"));
     }
 
+    // The value of a tag that may appear at most once.
+    auto optional_tag = [&](const Tag& tag) -> std::optional<std::uint64_t> {
+        auto same = [&](const auto& entry) { return entry.first == tag.value; };
+        if (std::count_if(entries.begin(), entries.end(), same) > 1) {
+            throw LoadError(std::format("duplicate {} in the dynamic table", tag.name));
+        }
+        auto it = std::find_if(entries.begin(), entries.end(), same);
+        return it == entries.end() ? std::nullopt : std::optional(it->second);
+    };
     // The value of a tag that must appear exactly once.
     auto required = [&](const Tag& tag) {
-        auto same = [&](const auto& entry) { return entry.first == tag.value; };
-        auto count = std::count_if(entries.begin(), entries.end(), same);
-        if (count != 1) {
-            throw LoadError(std::format("{} {} in the dynamic table",
-                                        count == 0 ? "missing" : "duplicate", tag.name));
+        auto value = optional_tag(tag);
+        if (!value) {
+            throw LoadError(std::format("missing {} in the dynamic table", tag.name));
         }
-        return std::find_if(entries.begin(), entries.end(), same)->second;
+        return *value;
     };
     auto expect = [&](const Tag& tag, std::uint64_t want) {
         std::uint64_t value = required(tag);
@@ -134,7 +221,6 @@ DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> 
     expect(dt_sce_pltrel, dt_rela);
     expect(dt_sce_syment, sym_size);
     expect(dt_sce_relaent, rela_size);
-    required(dt_sce_pltgot);
     auto table = [&](const Tag& offset_tag, const Tag& size_tag, std::size_t entry_size,
                      std::string_view what) {
         std::uint64_t offset = required(offset_tag), size = required(size_tag);
@@ -153,7 +239,21 @@ DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> 
     auto jmprel = table(dt_sce_jmprel, dt_sce_pltrelsz, rela_size, "PLT relocations");
     auto relatab = table(dt_sce_rela, dt_sce_relasz, rela_size, "relocations");
 
+    auto str = [&](std::uint64_t offset, std::string_view what) {
+        return read_string(strtab, offset, what);
+    };
+
     DynamicInfo info;
+    Record self = split_record(required(dt_sce_module_info));
+    if (self.id != 0) {
+        throw LoadError(std::format("module info record has id {}, expected 0", self.id));
+    }
+    info.self = Module{0, str(self.low, "module info record"), self.version, {}};
+    if (auto soname = optional_tag(dt_soname)) {
+        info.soname = str(*soname, "DT_SONAME");
+    }
+    read_records(info, entries, str);
+
     for (std::uint64_t i = 0; i < symtab.size() / sym_size; ++i) {
         std::uint64_t at = i * sym_size;
         auto name = read_le<std::uint32_t>(symtab, at, "symbol");
@@ -166,6 +266,8 @@ DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> 
     }
     info.plt_relocs = read_relas(jmprel, info.symbols.size(), "PLT relocations");
     info.relocs = read_relas(relatab, info.symbols.size(), "relocations");
+    info.pltgot = required(dt_sce_pltgot);
+    info.textrel = optional_tag(dt_textrel).has_value();
     return info;
 }
 
