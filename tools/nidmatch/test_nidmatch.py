@@ -26,7 +26,7 @@ import elfimports  # noqa: E402
 import nidmatch as m  # noqa: E402
 import syscandidates  # noqa: E402
 from elfbuilder import Builder  # noqa: E402
-from nid import NID_ALPHABET, is_nid, nid  # noqa: E402
+from nid import NID_ALPHABET, NID_SUFFIX, is_nid, nid, nid_digest  # noqa: E402
 from toolenv import load_game_dir  # noqa: E402
 
 # Exports of the pinned libc.prx, named by matching. strlen (0x2f970) and strcmp (0x30160) were
@@ -197,6 +197,21 @@ class MatchTest(unittest.TestCase):
         self.assertEqual(self.fx.run()[0], 0)
         self.assertEqual([r["name"] for r in self.fx.nids()], ["alpha_func"])
 
+    def test_generated_labels_are_rederived(self):
+        generated = self.fx.out / "candidates"
+        generated.mkdir(parents=True)
+        (generated / "derive-words.txt").write_text("gamma\n")
+        self.fx.nids_csv.write_text("nid,library,name,source\n"
+                                    f"{nid('unknown_one')},libA,unknown_one,derive-words\n")
+        self.assertEqual(self.fx.run()[0], 0)
+        # The list no longer holds unknown_one, so its earlier match is dropped.
+        self.assertEqual({r["name"]: r["source"] for r in self.fx.nids()},
+                         {"alpha_func": "strings:main", "gamma": "derive-words"})
+        # Without the list, its names are kept.
+        (generated / "derive-words.txt").unlink()
+        self.assertEqual(self.fx.run()[0], 0)
+        self.assertIn("gamma", [r["name"] for r in self.fx.nids()])
+
     def test_withdraw(self):
         extra = self.fx.root / "extra.txt"
         extra.write_text("unknown_one\nalpha_func\n")
@@ -318,10 +333,10 @@ def table_of(names_by_lib: dict[str, list[str]]) -> m.NidTable:
 
 
 class DeriveTest(unittest.TestCase):
-    def test_nid_key(self):
+    def test_nid_digest(self):
         for name in ["strlen", "sceFoo"]:
-            digest = hashlib.sha1(name.encode() + derive.NID_SUFFIX).digest()
-            self.assertEqual(derive.nid_key(nid(name)), digest[:8])
+            digest = hashlib.sha1(name.encode() + NID_SUFFIX).digest()
+            self.assertEqual(nid_digest(nid(name)), digest[:8])
 
     def test_words(self):
         self.assertEqual(derive.words("FiosFHOpenSync"), ["Fios", "FH", "Open", "Sync"])
@@ -334,7 +349,7 @@ class DeriveTest(unittest.TestCase):
         self.assertEqual(derive.prefixes("libSceNpMatching2"),
                          {"sceNp", "sceNpMatching", "sceNpMatching2"})
         self.assertEqual(derive.prefixes("libSceFios2"), {"sceFios", "sceFios2"})
-        self.assertEqual(derive.prefixes("libkernel"), {"sce", "sceKernel"})
+        self.assertEqual(derive.prefixes("libkernel"), {"sce"})
         self.assertEqual(derive.prefixes("libSceNet"), {"sceNet"})
         self.assertEqual(derive.prefixes("libc"), set())
         for lib in m.NO_DERIVE_LIBRARIES:
@@ -351,7 +366,8 @@ class DeriveTest(unittest.TestCase):
 
     def test_derive(self):
         table = table_of({
-            "libkernel": ["sceKernelOpen", "scePthreadSelf"],
+            "libkernel": ["sceKernelOpen",            # no match motivates a sceKernel prefix
+                          "scePthreadSelf", "sceExit"],
             "libSceFoo": ["sceFooBarOpen",          # sce words: Bar from the seed, Open
                           "sceFooQuuxZap",          # all words: Quux, Zap from identifiers
                           "sceFooBarOpenQuuxZap",   # 4 words: out of reach
@@ -359,12 +375,15 @@ class DeriveTest(unittest.TestCase):
             "libSceRtc": ["sceRtcOpen"],            # blocked
         })
         seed = {"sceFooBarClose"}
-        c_names = {"open", "pthread_self", "Not_C"}
+        c_names = {"open", "pthread_self", "_exit", "Not_C"}
         idents = {"QuuxZap", "useQuux", "anotherZap", "lonelyWord"}
         result = derive.derive(derive.targets(table), seed, c_names, idents)
-        self.assertEqual(result[derive.POSIX_LABEL], {"sceKernelOpen", "scePthreadSelf"})
+        self.assertEqual(result[derive.POSIX_LABEL], {"scePthreadSelf", "sceExit"})
         self.assertEqual(result[derive.WORDS_LABEL],
-                         {"sceKernelOpen", "scePthreadSelf", "sceFooBarOpen", "sceFooQuuxZap"})
+                         {"scePthreadSelf", "sceExit", "sceFooBarOpen", "sceFooQuuxZap"})
+        # A pool of workers finds the same names.
+        self.assertEqual(derive.derive(derive.targets(table), seed, c_names, idents, jobs=2),
+                         result)
 
     def test_blocked_prefix_from_other_library(self):
         # The bare 'sce' of libkernel could spell a libSceRtc name. Such names are dropped.
@@ -372,13 +391,21 @@ class DeriveTest(unittest.TestCase):
         result = derive.derive(derive.targets(table), {"sceRtcClose"}, {"open"}, set())
         self.assertEqual(result, {derive.POSIX_LABEL: set(), derive.WORDS_LABEL: set()})
 
+    def test_nid_shared_with_blocked_library(self):
+        # Not a target, so nidmatch.check_derived can never refuse a derived name for it.
+        table = table_of({"libSceFoo": ["sceFooOpen"]})
+        table[nid("sceFooOpen")]["libSceRtc"] = m.Use("libSceRtc")
+        self.assertEqual(derive.targets(table), {})
+
     def test_read_seed(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "nids.csv"
             path.write_text("nid,library,name,source\n"
                             "x,libA,a,derive-words\n"
                             "x,libA,b,derive-posix;glibc\n"
-                            "x,libA,c,strings:eboot\n")
+                            "x,libA,c,strings:eboot\n"
+                            "x,libSceRtc,d,hand\n"
+                            "x,libA,d,hand\n")
             self.assertEqual(derive.read_seed(path), {"b", "c"})
 
 

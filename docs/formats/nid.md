@@ -44,8 +44,8 @@ Candidate sources and their labels in the `source` column:
 A label is a file stem, so candidate file names may use only letters, digits and `_.+-`. Labels are joined with `;` in the `source` column.
 
 Rows already in `symbols/nids.csv` are hashed again on every run. Their labels are handled like this:
-- `strings:*` labels and the labels of the committed files in `symbols/candidates/` are not carried over. Those sources are read on every run, so their labels are derived again. A name taken out of a committed file loses that label.
-- Labels of the local lists and of extra files are carried over, so a run on a machine without them keeps their names.
+- `strings:*` labels and the labels of every candidate file the run reads (committed, local or extra) are not carried over. Those sources are read again, so their labels are derived again. A name taken out of such a file loses that label, for example when a rule in `derive.py` is tightened and the list is written again.
+- Labels of files the run doesn't have are carried over, so a run on a machine without the local lists keeps their names.
 - `--withdraw LABEL` drops a label that would be carried over, for example after deleting its candidate file.
 
 A row left without a label is dropped unless the run finds the name again.
@@ -54,11 +54,11 @@ A row left without a label is dropped unless the run finds the name again.
 
 Most `sce*` function names don't appear as strings anywhere in the dump. `tools/nidmatch/derive.py` builds them from names we already have, under the rules for derived candidates in [clean-room.md](../clean-room.md#derived-candidates). It needs the lists of `syscandidates.py` and takes several minutes on all cores. It writes only names whose NID matched, so `nidmatch` then records them like any other local list. Run `derive.py`, then `nidmatch.py`.
 
-**Prefixes.** A library's function names start with a prefix taken from the library's name. Our string matches show this: `libSceNet` → `sceNetSocket`, `libSceMsgDialog` → `sceMsgDialogOpen`, `libSceFios2` → `sceFiosFHOpen`. They also show that the prefix can be shorter than the library name: the `2` is dropped in Fios, and the libkernel import `scePthreadAttrSetstacksize` has only `sce`. So a library gets `sce` followed by every leading run of the words in its name, with and without trailing digits. For example, `libSceNpMatching2` gets `sceNp`, `sceNpMatching` and `sceNpMatching2`. libkernel gets `sceKernel` and the bare `sce`. Only `libSce*` libraries and libkernel get prefixes.
+**Prefixes.** A library's function names start with a prefix taken from the library's name. Our string matches show this: `libSceNet` → `sceNetSocket`, `libSceMsgDialog` → `sceMsgDialogOpen`, `libSceFios2` → `sceFiosFHOpen`. They also show that the prefix can be shorter than the library name: the `2` is dropped in Fios, and the libkernel import `scePthreadAttrSetstacksize` has only `sce`. So a library gets `sce` followed by every leading run of the words in its name, with and without trailing digits. For example, `libSceNpMatching2` gets `sceNp`, `sceNpMatching` and `sceNpMatching2`. libkernel gets only the bare `sce`: no match shows a prefix made from the name `libkernel` itself, so the rules don't make one up. Only `libSce*` libraries and libkernel get prefixes.
 
 | Label | Rule | Motivating matches |
 |---|---|---|
-| `derive-posix` | prefix + a C name from glibc or the manual pages, CamelCased at its underscores | `socket`, `bind`, `listen`, `accept`, `connect`, `getsockname`, `setsockopt`, `shutdown` → `sceNet…`; `pthread_attr_setstacksize` → `scePthreadAttrSetstacksize` |
+| `derive-posix` | prefix + a C name from glibc or the manual pages, CamelCased at its underscores (leading underscores dropped) | `socket`, `bind`, `listen`, `accept`, `connect`, `getsockname`, `setsockopt`, `shutdown` → `sceNet…`; `pthread_attr_setstacksize` → `scePthreadAttrSetstacksize` |
 | `derive-words` | prefix + 1 to 3 words from the matched `sce*` names, or prefix + 1 or 2 words from a larger vocabulary (below) | Our `sce*` matches are made of a small set of words: `sceFiosFHOpen`, `sceFiosFHOpenSync`, `sceFiosDHOpen`, `sceNetEpollCreate`, `sceNetPoolCreate`, `sceNetResolverCreate`, … |
 
 The larger vocabulary adds two sources to the words of the matched `sce*` names:
@@ -69,7 +69,7 @@ The game's identifiers use the same words as the API. Leaving out the `sce*` nam
 
 `derive-words` repeats until nothing new turns up. Every new match adds its words to the vocabulary, and the next round tries only combinations that contain a new word. A name is kept only if its NID belongs to a library that its prefix came from. Names from earlier runs that came only from these rules are not used as input, so a rerun gives the same lists.
 
-**Excluded libraries.** The four libraries in the exposure log of [clean-room.md](../clean-room.md#exposure-log) get no prefixes. The same goes for libSceSaveDataDialog, whose names start with the libSceSaveData prefix. No derived name may start with one of their prefixes. As a second check, `nidmatch` refuses a name for these libraries whose only sources are `derive-*` labels. The list is `NO_DERIVE_LIBRARIES` in `nidmatch.py`.
+**Excluded libraries.** The four libraries in the exposure log of [clean-room.md](../clean-room.md#exposure-log) get no prefixes. The same goes for libSceSaveDataDialog, whose names start with the libSceSaveData prefix. No derived name may start with one of their prefixes. Their NIDs are never targets, not even when another library shares them, and the words of their names are not part of the vocabulary. As a second check, `nidmatch` refuses a name for these libraries whose only sources are `derive-*` labels. The list is `NO_DERIVE_LIBRARIES` in `nidmatch.py`.
 
 ### First results
 
@@ -88,15 +88,16 @@ The libc.prx matches are C names (from glibc and the manual pages) and C++ stand
 
 ### With derivation rules
 
-Matched 1790 of 3000 (NID, library) pairs. **Firmware imports of the static load set: 330 of 539**, up from 86.
-- **282 new rows:**
-  - 187 come only from `derive-words`.
-  - 95 come from both rules.
+Matched 1784 of 3000 (NID, library) pairs. **Firmware imports of the static load set: 328 of 539**, up from 86.
+- **276 new rows:**
+  - 204 come only from `derive-words`.
+  - 72 come from both rules.
   - No new row comes only from `derive-posix`. A C name in CamelCase is also a word combination, so `derive-words` finds those names as well.
+  - The `sceKernel*` names come only from `derive-words`, as the bare `sce` + 2 words. `Kernel` is a word of the C name `get_kernel_syms`, so `sceKernelOpen` is `sce` + `Kernel` + `Open`. Names with 3 words after `sceKernel`, such as `sceKernelClockGettime`, are out of reach.
 - **Cross-check:** the rules also find 126 names that we already had from strings, for example most `sceNet*` names and many `sceFios*` names.
 - **Coverage by library:**
-  - libkernel rose from 20 to 98 of 140, libSceNet from 20 to 34 of 35, and libSceAvPlayer to 14 of 16.
-  - Several smaller libraries are complete: AudioOut, AudioIn, Mouse, MsgDialog, ImeDialog, NpSignaling, NpCommerce, NpProfileDialog, Ssl, Sysmodule and CommonDialog.
+  - libkernel rose from 20 to 91 of 140, libSceNet from 20 to 35 of 35, and libSceAvPlayer to 14 of 16.
+  - Net and several smaller libraries are complete: AudioOut, AudioIn, Mouse, MsgDialog, ImeDialog, NpSignaling, NpCommerce, NpProfileDialog, Ssl, Sysmodule and CommonDialog.
 - **Bundled PRXs:** the first names in four of the five extra PRXs, for example `sceFaceDetection`, `sceHandDetection` and `sceHeadTrackerInitialize`.
 - **Still weak:**
   - libSceGnmDriver has 2 of 50. Its names need more or rarer words than the vocabulary has. They are left to the GNM work, where the game's use of each function will suggest names.

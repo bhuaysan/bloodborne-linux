@@ -161,10 +161,11 @@ def read_strings(elfs: dict[str, bytes], candidates: Candidates) -> None:
 def read_nids_csv(path: Path, table: NidTable, candidates: Candidates, rederived: set[str]) -> None:
     """Earlier matches. Each must still hash to its NID and name a NID of the pinned files.
 
-    A label is carried over from nids.csv only if this run cannot derive it again. The strings of
-    the pinned ELFs and the committed candidate files (labels in `rederived`) are read on every
-    run, so their labels are not carried over: a name taken out of a committed file loses that
-    label. Labels of local or extra files are carried over, so a run without them keeps their
+    A label is carried over from nids.csv only if this run does not read its source. The strings
+    of the pinned ELFs are read on every run, and `rederived` holds the labels of the candidate
+    files this run reads (committed, generated and extra), so their labels are not carried over:
+    a name taken out of such a file, e.g. by a tightened rule in derive.py, loses that label.
+    Labels of files missing from this run are carried over, so a run without them keeps their
     names. `rederived` also holds the labels passed to --withdraw. A row left without a label is
     dropped unless this run finds the name again.
     """
@@ -288,12 +289,11 @@ def main(argv: list[str] | None = None) -> int:
         infos = [info for info, _ in loaded]
         elfs = {info.name: data for info, data in loaded}
         table = load_nids(infos)
-        curated = sorted(CURATED_DIR.glob("*.txt"))
-        files = curated + sorted(GENERATED_DIR.glob("*.txt")) + args.files
+        files = sorted(CURATED_DIR.glob("*.txt")) + sorted(GENERATED_DIR.glob("*.txt")) + args.files
         check_unique_labels(files)
         candidates: Candidates = {}
         read_nids_csv(NIDS_CSV, table, candidates,
-                      {path.stem for path in curated} | set(args.withdraw))
+                      {path.stem for path in files} | set(args.withdraw))
         for path in files:
             read_candidate_file(path, candidates)
         read_strings(elfs, candidates)

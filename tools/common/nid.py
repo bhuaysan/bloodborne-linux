@@ -24,5 +24,10 @@ def nid(name: str | bytes) -> str:
     return text.rstrip("=").replace("/", "-")
 
 
+def nid_digest(text: str) -> bytes:
+    """The inverse of nid(): the first 8 bytes of the SHA-1 digest that give this NID."""
+    return base64.b64decode(text.replace("-", "/") + "=")[::-1]
+
+
 def is_nid(text: str) -> bool:
     return len(text) == NID_LENGTH and all(c in NID_ALPHABET for c in text)
