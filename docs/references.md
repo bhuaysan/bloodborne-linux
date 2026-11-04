@@ -12,7 +12,7 @@ Every external source consulted for this project is listed here. Off-limits sour
 | GNU binutils (`objdump`, `readelf`) | GPL-3.0 | Quick inspection of ELF files |
 | libelf (elfutils) | LGPL-3.0+ / GPL-2.0+ | Cross-check of the SysV hash function used by `tools/elf2std` (test vectors) |
 | [Linux man-pages](https://www.kernel.org/doc/man-pages/) 6.13 (installed) | Various free licenses | Page names of sections 2 and 3 as NID candidate names and as input to the derivation rules (`tools/nidmatch/syscandidates.py`, `derive.py`); `mmap(2)` (`MAP_FIXED_NOREPLACE`, `MAP_FIXED`) and `mprotect(2)` semantics for the loader (`docs/design/runtime.md`) |
-| AddressSanitizer runtime of LLVM compiler-rt 22 (`libclang_rt.asan.so`, installed), its memory layout printed with `ASAN_OPTIONS=verbosity=1` | Apache-2.0 with LLVM exception | Which address ranges ASan reserves on x86-64 Linux, for the default load base (`docs/design/runtime.md`) |
+| AddressSanitizer runtime of LLVM compiler-rt 22 (`libclang_rt.asan.so`, installed), its memory layout printed with `ASAN_OPTIONS=verbosity=1` and its flag defaults with `ASAN_OPTIONS=help=1` | Apache-2.0 with LLVM exception | Which address ranges ASan reserves on x86-64 Linux, for the default load base, and that `detect_stack_use_after_return` is on by default (`docs/design/runtime.md`) |
 | GNU C Library 2.43 and libstdc++ 16.2 (installed `libc.so.6`, `libm.so.6`, `libstdc++.so.6`) | LGPL-2.1+ / GPL-3.0+ with runtime exception | Their defined symbol names as NID candidate names and as input to the derivation rules (`tools/nidmatch/syscandidates.py`, `derive.py`) |
 
 ## Documentation
