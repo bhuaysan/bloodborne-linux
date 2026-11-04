@@ -26,7 +26,9 @@
 #      be deleted. The message says what to do next. Do not re-run the
 #      script before checking origin/main.
 #   any other non-zero status: main was not updated (for example 2 for
-#      a usage error)
+#      a usage error, 129/130/143 for a hangup, Ctrl-C or kill). Only
+#      SIGKILL can't be handled: after a kill -9, check origin/main and
+#      the PR branch before re-running.
 set -eu
 
 usage() { echo "usage: $0 [--maintainer] [--sha <commit>] <pr-number>" >&2; exit 2; }
@@ -79,14 +81,12 @@ fetched="$(git -C "$repo_root" rev-parse "origin/$head")"
 main_base="$(git -C "$repo_root" rev-parse origin/main)"
 [ "$fetched" = "$head_oid" ] ||
     { echo "origin/$head is $fetched, but GitHub shows $head_oid; try again" >&2; exit 1; }
-if [ -n "$want_sha" ]; then
-    reviewed="$(git -C "$repo_root" rev-parse -q --verify "$want_sha^{commit}")" ||
-        { echo "unknown commit: $want_sha" >&2; exit 1; }
-    [ "$reviewed" = "$fetched" ] || {
-        echo "PR #$pr head is $fetched, not the reviewed $reviewed; review the new commits first" >&2
-        exit 1
-    }
-fi
+# compared as a prefix: rev-parse would prefer a ref with a hex name
+case "$fetched" in
+    "$want_sha"*) ;;
+    *) echo "PR #$pr head is $fetched, not the reviewed $want_sha; review the new commits first" >&2
+       exit 1 ;;
+esac
 
 wt="$(mktemp -d)"
 gh_err="$(mktemp)"
@@ -97,6 +97,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 git -C "$repo_root" worktree add -q --detach "$wt" "$fetched"
 cd "$wt"
@@ -134,42 +135,59 @@ git log --oneline "$main_base..HEAD"
 
 new="$(git rev-parse HEAD)"
 short="$(git rev-parse --short "$new")"
+# $1: what went wrong, $2: next step, $3: state of main if not $short
 unconfirmed() {
     echo "error: $1" >&2
-    echo "main is now $short; branch $head kept" >&2
+    echo "${3:-main is now $short}; branch $head kept" >&2
     echo "$2" >&2
     exit 3
 }
 delete_hint="once PR #$pr shows as merged, run: git push origin --delete $head"
 
-# The push of main failed or was interrupted. The remote may have taken it
-# before the connection broke, so look before saying anything.
-# $1: exit status if main was not updated, $2: what happened.
-main_push_failed() {
-    if ! remote="$(git ls-remote origin refs/heads/main)"; then
-        unconfirmed "$2, and origin/main could not be checked" \
-            "check origin/main: if it is $short, $delete_hint; otherwise reset branch $head to $fetched and re-run"
-    fi
-    if [ "${remote%%[[:space:]]*}" = "$new" ]; then
-        [ "$1" -eq 1 ] || unconfirmed "$2 after main was pushed" "$delete_hint"
-        echo "warning: $2, but origin/main is $short" >&2
-        return 0
-    fi
-    # put the PR branch back, so the reviewed --sha still matches on a retry
-    git push -q --force-with-lease="refs/heads/$head:$new" origin "$fetched:refs/heads/$head" ||
-        echo "warning: could not reset branch $head to $fetched" >&2
-    echo "$2; main was not updated" >&2
-    exit "$1"
+# Put the PR branch back to the reviewed commit, so a retry with the same
+# --sha still matches. The lease makes this a no-op unless the branch is
+# at the rebased commit.
+restore_branch() {
+    git push -q --force-with-lease="refs/heads/$head:$new" origin "$fetched:refs/heads/$head" 2>/dev/null ||
+        [ "$(git ls-remote origin "refs/heads/$head" 2>/dev/null | cut -f1)" = "$fetched" ] ||
+        echo "warning: branch $head is not at $fetched; check it before re-running" >&2
 }
 
-# the lease is the pinned commit, not origin/$head, which may have moved
-git push -q --force-with-lease="refs/heads/$head:$fetched" origin "$new:refs/heads/$head"
+# The push of main failed or was interrupted. The remote may have taken it
+# before the connection broke, and another merge may have landed on top
+# since, so check whether origin's main contains the new commit.
+# $1: exit status if main was not updated, $2: what happened.
+main_push_failed() {
+    unknown_hint="check origin/main: if it contains $short, $delete_hint; otherwise reset branch $head to $fetched and re-run"
+    remote="$(git ls-remote origin refs/heads/main)" ||
+        unconfirmed "$2, and origin/main could not be checked" "$unknown_hint" "origin/main is unknown"
+    remote="${remote%%[[:space:]]*}"
+    if [ "$remote" != "$new" ]; then
+        git fetch -q origin "$remote" 2>/dev/null ||
+            unconfirmed "$2, and origin/main could not be checked" "$unknown_hint" "origin/main is unknown"
+        if ! git merge-base --is-ancestor "$new" "$remote"; then
+            restore_branch
+            echo "$2; main was not updated" >&2
+            exit "$1"
+        fi
+    fi
+    [ "$1" -eq 1 ] || unconfirmed "$2 after main was pushed" "$delete_hint"
+    echo "warning: $2, but origin/main contains $short" >&2
+}
+
+# The lease is the pinned commit, not origin/$head, which may have moved.
+trap 'restore_branch; exit 130' INT
+trap 'restore_branch; exit 143' TERM
+trap 'restore_branch; exit 129' HUP
+git push -q --force-with-lease="refs/heads/$head:$fetched" origin "$new:refs/heads/$head" ||
+    { restore_branch; echo "pushing branch $head failed; main was not updated" >&2; exit 1; }
 trap 'main_push_failed 130 "interrupted while pushing main"' INT
 trap 'main_push_failed 143 "terminated while pushing main"' TERM
+trap 'main_push_failed 129 "hangup while pushing main"' HUP
 git push -q origin "$new:refs/heads/main" || main_push_failed 1 "pushing main failed"
 
 # From here on main is updated, so every failure exits 3.
-trap 'unconfirmed "interrupted after pushing main" "$delete_hint"' INT TERM
+trap 'unconfirmed "interrupted after pushing main" "$delete_hint"' INT TERM HUP
 git -C "$repo_root" fetch -q origin main ||
     echo "warning: could not fetch origin/main" >&2
 
