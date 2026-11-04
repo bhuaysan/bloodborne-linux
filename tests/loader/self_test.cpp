@@ -119,6 +119,7 @@ struct Defect {
 
 const Defect defects[] = {
     {"wrong magic", nullptr, [](Bytes& s) { s[0] = std::byte{0}; }},
+    {"header bytes 4..7", nullptr, [](Bytes& s) { s[7] = std::byte{0}; }},
     {"encrypted", nullptr, [](Bytes& s) { put(s, 0x40, data_entry | 2); }},
     {"encrypted", nullptr, [](Bytes& s) { put(s, 0x40, data_entry | 8); }},
     {"points at program header 2", nullptr, [](Bytes& s) { put(s, 0x40, data_entry | 2 << 20); }},
@@ -135,6 +136,7 @@ const Defect defects[] = {
     {"header layout", [](Bytes& e) { put<std::uint16_t>(e, 0x34, 0x48); }, nullptr},
     {"section headers", [](Bytes& e) { put<std::uint64_t>(e, 0x28, 0x2000); }, nullptr},
     {"section headers", [](Bytes& e) { put<std::uint16_t>(e, 0x3C, 1); }, nullptr},
+    {"lies beyond", [](Bytes& e) { put<std::uint64_t>(e, 0x48, std::uint64_t{1} << 30); }, nullptr},
     {"0 PT_SCE_LIBVERSION", [](Bytes& e) { put(e, 0x78, bb::loader::pt_load); }, nullptr},
     {"2 PT_SCE_LIBVERSION", [](Bytes& e) { put(e, 0x40, bb::loader::pt_sce_libversion); },
      nullptr},
