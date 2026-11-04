@@ -2,15 +2,13 @@
 """Sync our Ghidra annotations with symbols/functions.csv and symbols/types/.
 
 export  reads the function names and signatures we set in a Ghidra project and merges them into
-        functions.csv. The status and file columns are ours and stay as they are. It also writes
-        the data types in our categories /bb/<subsystem> to types/<subsystem>.h.
-import  applies functions.csv and types/*.h to a project, e.g. a fresh one rebuilt from your own
-        eboot.
+        functions.csv. The status and file columns are ours and stay as they are.
+        Data types in /bb/<subsystem> go to types/<subsystem>.h.
+import  applies functions.csv and types/ to a project, e.g. a fresh one rebuilt from your eboot.
 
 Only user-defined names and signatures go out: Ghidra's own names (FUN_..., thunks, symbols from
-the ELF) are left in the project, and so are types outside /bb. Ghidra runs headless through
-PyGhidra, which ships with Ghidra and needs a one-time setup. See symbols/README.md, section
-"Sync".
+the ELF) are left in the project. Ghidra runs headless through PyGhidra, which ships with Ghidra
+and needs a one-time setup. See symbols/README.md, section "Sync".
 
 Usage:
     ghidrasync.py export PROJECT.gpr [--program NAME] [--symbols DIR]
@@ -148,9 +146,9 @@ def type_refs(ref: dict, by_value: bool = True) -> list[tuple[str, str, bool]]:
 
 
 def uses(item: dict) -> list[tuple[str, str, bool]]:
-    refs = [item["type"]] if item["kind"] == "typedef" else \
-        [f["type"] for f in item.get("fields", [])]
-    return [use for ref in refs for use in type_refs(ref)]
+    if item["kind"] == "typedef":  # naming a struct or union does not need its body
+        return type_refs(item["type"], "subsystem" not in item["type"])
+    return [use for f in item.get("fields", []) for use in type_refs(f["type"])]
 
 
 def format_fields(item: dict) -> list[str]:
@@ -165,6 +163,8 @@ def format_fields(item: dict) -> list[str]:
         lines.append(f"    /* 0x{field['offset']:04x} */ "
                      f"{declare(field['type'], field['name'])};")
         end = max(end, field["offset"] + field["size"])
+    if item["kind"] == "union" and item["size"] > end:
+        raise SyncError(f"{item['name']}: no member covers all {item['size']} union bytes")
     if item["kind"] == "struct" and item["size"] > end:
         lines.append(f"    /* 0x{end:04x} */ undefined1 _pad_0x{end:04x}[{item['size'] - end}];")
     return lines
@@ -185,11 +185,18 @@ def format_type(item: dict) -> list[str]:
 
 def format_header(subsystem: str, items: list[dict]) -> str:
     """types/<subsystem>.h: includes, forward declarations, then the types in dependency order.
-
-    Every gap is spelled out and packing is 1, so the layout does not depend on alignment.
-    """
+    Every gap is spelled out and packing is 1, so the layout does not depend on alignment."""
     by_name = {item["name"]: item for item in items}
-    deps = {name: {n for s, n, by_value in uses(item) if by_value and s == subsystem} - {name}
+
+    def needs(s: str, n: str, by_value: bool) -> set[str]:
+        """Types here that must precede a use of n; pointed-to structs are forward declared."""
+        item = by_name.get(n) if s == subsystem else None
+        if item is None or not by_value and item["kind"] in ("struct", "union"):
+            return set()
+        chain = type_refs(item["type"]) if by_value and item["kind"] == "typedef" else []
+        return {n}.union(*(needs(*use) for use in chain))
+
+    deps = {name: set().union(*(needs(*use) for use in uses(item))) - {name}
             for name, item in by_name.items()}
     others = sorted({s for item in items for s, _, _ in uses(item)} - {subsystem})
     lines = [HEADER_NOTE.format(subsystem), *(f'#include "{s}.h"' for s in others), "",
@@ -202,20 +209,21 @@ def format_header(subsystem: str, items: list[dict]) -> str:
 
 
 def write_types(types_dir: Path, exported: dict[str, list[dict]]) -> None:
-    """Write one header per subsystem, only when it changed. Other headers stay as they are."""
-    for subsystem, items in sorted(exported.items()):
+    """Write each header that changed, or none if one fails. Other headers stay as they are."""
+    for subsystem in exported:
         if not SUBSYSTEM.fullmatch(subsystem):
             raise SyncError(f"/bb/{subsystem}: use letters, digits and _ for subsystem names")
-        write_if_changed(types_dir / f"{subsystem}.h", format_header(subsystem, items))
+    texts = {s: format_header(s, items) for s, items in exported.items()}
+    topo_order({s: set(INCLUDE.findall(text)) & set(texts) for s, text in texts.items()},
+               "subsystems in /bb (pointers count)")
+    for subsystem, text in sorted(texts.items()):
+        write_if_changed(types_dir / f"{subsystem}.h", text)
 
 
 def read_headers(types_dir: Path) -> list[dict]:
-    """The headers in include order, as TypesImport.py takes them.
-
-    The parser does not know #include, so includes become empty lines. Ghidra's C parser makes
-    every enum 4 bytes with 32-bit values and does not check _Static_assert, so the sizes and
-    the enum values are read here.
-    """
+    """The headers in include order, as TypesImport.py takes them. Its parser does not know
+    #include (they become empty lines), makes every enum 4 bytes with 32-bit values and does not
+    check _Static_assert, so the sizes and the enum values are read here."""
     texts = {path.stem: path.read_text() for path in sorted(types_dir.glob("*.h"))}
     deps = {name: set(INCLUDE.findall(text)) - {name} for name, text in texts.items()}
     for name, includes in deps.items():
@@ -298,10 +306,8 @@ def run_headless(project: Path, target: list[str], scripts: list[list[str]]) -> 
 
 def run_scripts(project: Path, target: list[str], tmp: Path,
                 to_ghidra: dict | None, export: bool) -> dict | None:
-    """Run import and/or export in one headless session. Returns what the export scripts wrote.
-
-    to_ghidra has the keys "headers" and "functions". Types go first: signatures may use them.
-    """
+    """Run import (to_ghidra: "headers", "functions") and/or export in one headless session.
+    Types go first: signatures may use them. Returns what the export scripts wrote."""
     scripts, results = [], []
     if to_ghidra is not None:
         for script, key in (("TypesImport.py", "headers"), ("SymbolsImport.py", "functions")):
@@ -339,8 +345,7 @@ def sync(project: Path, symbols: Path, target: list[str], do_import: bool,
         print(f"exported {len(exported['functions'])} functions to {csv_path} and "
               f"{len(exported['types'])} headers to {symbols / 'types'}")
     if do_import:
-        print(f"imported {len(import_rows(rows))} functions and {len(headers)} headers "
-              f"into {project}")
+        print(f"imported {len(import_rows(rows))} functions, {len(headers)} headers into {project}")
 
 
 def main(argv: list[str] | None = None) -> int:

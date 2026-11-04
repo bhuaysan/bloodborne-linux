@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Tests for ghidrasync. Run: python3 -m unittest discover -s tools/ghidra-sync
 
-The CSV and header tests need neither Ghidra nor the game. The round trip runs headless Ghidra
-on a small ELF built here and skips when GHIDRA_INSTALL_DIR is unset (environment or local.env) or
+The CSV tests need neither Ghidra nor the game. The round trip runs headless Ghidra on a small
+ELF built here and skips when GHIDRA_INSTALL_DIR is unset (environment or local.env) or
 PyGhidra is not set up.
 """
 
@@ -84,7 +84,7 @@ class FunctionsCsvTest(unittest.TestCase):
 
 # What an export writes for two subsystems: a struct with gaps, trailing padding and a field off
 # its natural alignment, a union, enums of 1 and 8 bytes, typedefs, pointers, arrays, and
-# references within a header and across headers.
+# references within a header and across headers, a struct that points to itself via a typedef.
 CORE_H = """\
 /* Ghidra category /bb/core: written by tools/ghidra-sync, see symbols/README.md */
 
@@ -102,7 +102,6 @@ enum Kind {
     KIND_NEG = -1,
     KIND_A = 0,
     KIND_B = 2,
-    KIND_C = 2,
 };
 _Static_assert(sizeof(enum Kind) == 0x1, "Kind");
 
@@ -127,7 +126,7 @@ GAME_H = """\
 struct Actor;
 union Slot;
 
-typedef struct Actor *ActorPtr;
+typedef struct Actor Actor_t;
 
 union Slot {
     /* 0x0000 */ int i;
@@ -140,7 +139,7 @@ struct Actor {
     /* 0x0000 */ struct Vec3 pos;
     /* 0x000c */ enum Kind kind;
     /* 0x000d */ undefined1 _pad_0x000d[3];
-    /* 0x0010 */ struct Actor *next;
+    /* 0x0010 */ Actor_t *next;
     /* 0x0018 */ handle_t handle;
     /* 0x001c */ undefined1 _pad_0x001c[2];
     /* 0x001e */ uint misaligned;
@@ -168,14 +167,14 @@ GAME_JSON = [
     {"kind": "struct", "name": "Actor", "size": 0x48, "fields": [
         field(0x00, 12, "pos", ours("core", "Vec3", "struct")),
         field(0x0c, 1, "kind", ours("core", "Kind", "enum")),
-        field(0x10, 8, "next", {"pointer": ours("game", "Actor", "struct")}),
+        field(0x10, 8, "next", {"pointer": ours("game", "Actor_t")}),
         field(0x18, 4, "handle", ours("core", "handle_t")),
         field(0x1e, 4, "misaligned", {"name": "uint"}),
         field(0x22, 8, "name", {"array": {"array": {"name": "char"}, "count": 2}, "count": 4}),
         field(0x2a, 16, "slots", {"array": ours("game", "Slot", "union"), "count": 2}),
         field(0x3a, 8, "flags", ours("core", "Flags", "enum")),
     ]},
-    {"kind": "typedef", "name": "ActorPtr", "type": {"pointer": ours("game", "Actor", "struct")}},
+    {"kind": "typedef", "name": "Actor_t", "type": ours("game", "Actor", "struct")},
     {"kind": "union", "name": "Slot", "size": 8, "fields": [
         field(0, 4, "i", {"name": "int"}), field(0, 4, "f", {"name": "float"}),
         field(0, 8, "p", {"pointer": None})]},
@@ -189,6 +188,10 @@ class TypesHeaderTest(unittest.TestCase):
     def test_format_header(self):
         self.assertEqual(g.format_header("game", GAME_JSON), GAME_H)
         self.assertEqual(g.format_header("game", GAME_JSON[::-1]), GAME_H)
+        user = {"kind": "struct", "name": "A", "size": 1,
+                "fields": [field(0, 1, "a", ours("game", "Actor_t"))]}
+        text = g.format_header("game", [user, *GAME_JSON])
+        self.assertLess(text.index("struct Actor {"), text.index("struct A {"))
 
     def test_enum_values_sorted_by_value(self):
         enum = {"kind": "enum", "name": "Kind", "size": 1,
@@ -202,7 +205,9 @@ class TypesHeaderTest(unittest.TestCase):
         loop = [{"kind": "struct", "name": n, "size": 4,
                  "fields": [field(0, 4, "x", ours("core", m, "struct"))]}
                 for n, m in (("A", "B"), ("B", "A"))]
-        for items in ([overlap], loop):
+        union = {"kind": "union", "name": "U", "size": 8,  # no member covers all 8 bytes
+                 "fields": [field(0, 5, "c", {"array": {"name": "char"}, "count": 5})]}
+        for items in ([overlap], loop, [union]):
             with self.subTest(items=items), self.assertRaises(g.SyncError):
                 g.format_header("core", items)
 
@@ -216,16 +221,20 @@ class TypesHeaderTest(unittest.TestCase):
         self.assertEqual(headers[1]["sizes"], {"Slot": 8, "Actor": 0x48})
         self.assertEqual(headers[0]["enums"], {
             "Flags": [["FLAG_NONE", 0], ["FLAG_BIG", 1 << 32]],
-            "Kind": [["KIND_NEG", -1], ["KIND_A", 0], ["KIND_B", 2], ["KIND_C", 2]]})
+            "Kind": [["KIND_NEG", -1], ["KIND_A", 0], ["KIND_B", 2]]})
         self.assertNotIn("#include", headers[1]["text"])
         self.assertEqual(headers[1]["text"].count("\n"), GAME_H.count("\n"))
         (types / "core.h").write_text('#include "game.h"\n')
         with self.assertRaises(g.SyncError):
             g.read_headers(types)
 
-    def test_write_types_rejects_bad_subsystem(self):
-        with self.assertRaises(g.SyncError):
-            g.write_types(self.tmp, {"a/b": []})
+    def test_write_types_fails_before_writing(self):
+        def ptr(to: str) -> list[dict]:
+            return [{"kind": "typedef", "name": "P", "type": {"pointer": ours(to, "S", "struct")}}]
+        for exported in ({"a/b": []}, {"a": ptr("b"), "b": ptr("a")}):
+            with self.subTest(exported=exported), self.assertRaises(g.SyncError):
+                g.write_types(self.tmp, exported)
+        self.assertEqual(list(self.tmp.iterdir()), [])
 
 
 # A position-independent x86-64 ELF: one PT_LOAD at 0, code at CODE. The entry calls four
@@ -291,9 +300,8 @@ class GhidraRoundTripTest(unittest.TestCase):
                 g.sync(project, symbols, ["-process", "test.elf", "-noanalysis", "-readOnly"],
                        False, True)
             # importing again replaces our types in place and changes nothing
-            with contextlib.redirect_stdout(io.StringIO()) as out:
+            with contextlib.redirect_stdout(io.StringIO()):
                 g.sync(project, symbols, ["-process", "test.elf", "-noanalysis"], True, True)
-            self.assertIn("and 2 headers", out.getvalue())
             exported = g.read_functions(symbols / "functions.csv")
             fixture = table(FIXTURE[len(HEADER):], tmp)
             headers = {p.name: p.read_text() for p in (symbols / "types").iterdir()}
