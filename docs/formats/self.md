@@ -123,7 +123,7 @@ The ELF header and program headers are copied verbatim. Things that differ from 
   | 0xFE10 | ET_SCE_DYNEXEC | executable with ASLR: the eboot |
   | 0xFE18 | ET_SCE_DYNAMIC | dynamic library: the PRXs |
 
-- No section headers (`e_shoff` = 0, `e_shnum` = 0). readelf shows only the program headers.
+- No section headers (`e_shoff` = 0, `e_shnum` = 0). readelf shows only the program headers. `tools/elf2std` adds some (see [eh-frame.md](eh-frame.md)).
 - The eboot's virtual addresses start at 0, so the executable is position-independent and the loader picks the base. That fits "with ASLR".
 - The eboot's entry point is 0xA0.
 

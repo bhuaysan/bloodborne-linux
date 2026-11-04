@@ -133,6 +133,7 @@ The PLT is a standard lazy-binding PLT: `PLT0` pushes `GOT[1]` and jumps through
    - a new dynamic table with standard tags.
 3. **`PT_DYNAMIC`** points at the new dynamic table and becomes read-only, like the segment it now lies in.
 4. **The new program header** goes into the zero-filled gap after the existing ones. There is room up to file offset 0x4000.
+5. **Section headers** for `.eh_frame` and `.eh_frame_hdr` (found through `PT_GNU_EH_FRAME`), so Ghidra creates a function for every FDE. They need a few more sections (`.text`, `.data`, `.bss`, `.dynstr`, `.dynamic`, `.shstrtab`). The table and the section names go after the new segment and are not loaded. See [eh-frame.md](eh-frame.md).
 
 The new dynamic table contains the standard tags of the original table unchanged, plus `DT_HASH`, `DT_STRTAB`, `DT_SYMTAB`, `DT_JMPREL`, `DT_RELA` (virtual addresses in the new segment), and `DT_PLTGOT`, `DT_PLTREL`, `DT_PLTRELSZ`, `DT_RELASZ`, `DT_RELAENT`, `DT_STRSZ`, `DT_SYMENT` (values copied). The other Sony tags (`0x61xxxxxx`) are dropped from it. They stay readable in the copied original table. Any other tag at or above `DT_LOOS` (an OS- or processor-specific tag such as `DT_FLAGS_1`) makes `elf2std` stop, because we can't tell whether its value would need translating. None of the 8 pinned files has one.
 
@@ -143,6 +144,7 @@ The new dynamic table contains the standard tags of the original table unchanged
 - Exported functions are labeled at their definitions. `DT_INIT` and `DT_FINI` are labeled.
 - The import log shows warnings only for `R_X86_64_64` relocations against external data plus an offset. These can't be resolved without the target library and are expected.
 - The non-loaded Sony segments still show up as separate overlay blocks. They are harmless.
+- Memory blocks are named after the sections (`.text`, `.eh_frame`, `.eh_frame_hdr`, `.data`, `.bss`, …), and every FDE start in the search table has a function. See [eh-frame.md](eh-frame.md).
 
 ## Open questions
 
