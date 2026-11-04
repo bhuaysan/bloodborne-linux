@@ -11,8 +11,11 @@
 
 #include <gtest/gtest.h>
 
+#include "common/file.hpp"
 #include "loader/bytes.hpp"
 #include "loader/elf.hpp"
+#include "loader/self.hpp"
+#include "support/game.hpp"
 
 namespace {
 
@@ -237,6 +240,33 @@ TEST(ParseDynamic, SurvivesCorruptBytes) {
             }
         }
     }
+}
+
+TEST(ParseDynamicGame, ReadsTheEboot) {
+    BB_REQUIRE_GAME(game);
+    auto elf = self_to_elf(bb::common::read_file(game / "eboot.bin"));
+    auto phdrs = read_phdrs(elf, read_elf_header(elf));
+    DynamicInfo info = parse_dynamic(elf, phdrs);
+
+    // Counts as tools/elfimports and tools/common/ps4elf.py report them for eboot.elf.
+    EXPECT_EQ(info.symbols.size(), 703U);
+    auto undefined = [&](std::uint8_t type) {
+        return std::count_if(info.symbols.begin(), info.symbols.end(), [&](const Symbol& s) {
+            return s.shndx == 0 && s.type == type && s.name.find('#') != std::string::npos;
+        });
+    };
+    EXPECT_EQ(undefined(2), 681);  // STT_FUNC imports
+    EXPECT_EQ(undefined(1), 20);   // STT_OBJECT imports
+    auto count = [](const std::vector<Rela>& relas, std::uint32_t type) {
+        return std::count_if(relas.begin(), relas.end(),
+                             [&](const Rela& r) { return r.type == type; });
+    };
+    EXPECT_EQ(info.plt_relocs.size(), 661U);
+    EXPECT_EQ(count(info.plt_relocs, r_x86_64_jump_slot), 661);
+    EXPECT_EQ(info.relocs.size(), 234339U);
+    EXPECT_EQ(count(info.relocs, r_x86_64_relative), 231478);
+    EXPECT_EQ(count(info.relocs, r_x86_64_64), 2838);
+    EXPECT_EQ(count(info.relocs, r_x86_64_glob_dat), 23);
 }
 
 }  // namespace
