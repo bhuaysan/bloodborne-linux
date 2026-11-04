@@ -35,6 +35,14 @@ PS4 executables import functions by NID, a short hash derived from the symbol na
 
 Commit a NID only together with what we know about it: a matched name in `symbols/nids.csv`, or a placeholder name and an implementation or stub in the runtime. The complete import and export lists are tool output from the game files (`tools/elfimports` writes them to `analysis/imports/`) and are never committed.
 
+## Exposure log
+
+Off-limits material that was seen by accident, and how it is handled. Seeing it is recorded here, not hidden.
+
+| Date | What was seen | Handling |
+|---|---|---|
+| 2026-11-04 | Screenshots of psdevwiki tables pairing NIDs with function names for libSceRemoteplay, libSceSaveData, libSceRegMgr and libSceRtc | Not copied or used, not even as test vectors. A name for a NID of these four libraries is accepted only together with an independent, recorded candidate source (a string in the dump, how the game uses the function, or public documentation that isn't a NID list). |
+
 ## Game version
 
 All addresses refer to one exact build:
