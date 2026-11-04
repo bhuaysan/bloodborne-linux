@@ -82,7 +82,45 @@ def build_dynlib(extra_tags=(), drop_tags=(), override=None):
     return bytes(blob), dyn_off
 
 
-def build_elf(e_type=e.ET_SCE_DYNEXEC, **kwargs) -> bytes:
+def build_eh_frame(vaddr: int, fdes: int = 2, terminator: bool = True,
+                   extended: bool = False) -> tuple[bytes, list[tuple[int, int]]]:
+    """.eh_frame at vaddr: one CIE, then FDEs (pointer encoding pcrel|sdata4) for the functions
+    at 0x10, 0x20, ... (16 bytes each). Returns the bytes and (function, FDE vaddr) pairs."""
+    def record(body: bytes) -> bytes:
+        body += bytes(-(len(body) + 4) % 4)  # DW_CFA_nop padding
+        if extended:
+            return struct.pack("<IQ", 0xFFFFFFFF, len(body)) + body
+        return struct.pack("<I", len(body)) + body
+    # id 0, version 1, "zR", code align 1, data align -8, return address r16, R = 0x1b
+    out = bytearray(record(struct.pack("<I", 0) + b"\x01zR\x00\x01\x78\x10\x01\x1b"))
+    table = []
+    id_field = 12 if extended else 4  # offset of the CIE id / CIE pointer in a record
+    for i in range(fdes):
+        func, here = 0x10 * (i + 1), vaddr + len(out)
+        table.append((func, here))
+        pc_field = here + id_field + 4
+        out += record(struct.pack("<Iii", len(out) + id_field, func - pc_field, 0x10) + b"\x00")
+    if terminator:
+        out += bytes(4)
+    return bytes(out), table
+
+
+def build_eh_frame_hdr(vaddr: int, eh_frame: int, table: list[tuple[int, int]],
+                       ptr_enc: int = 0x1B) -> bytes:
+    """.eh_frame_hdr at vaddr pointing at eh_frame, with a datarel|sdata4 search table."""
+    if ptr_enc == 0x1B:
+        ptr = struct.pack("<i", eh_frame - (vaddr + 4))
+    elif ptr_enc == 0x3B:
+        ptr = struct.pack("<i", eh_frame - vaddr)
+    else:
+        ptr = struct.pack("<Q", eh_frame)
+    return (bytes([1, ptr_enc, 0x03, 0x3B]) + ptr + struct.pack("<I", len(table))
+            + b"".join(struct.pack("<ii", func - vaddr, fde - vaddr) for func, fde in table))
+
+
+def build_elf(e_type=e.ET_SCE_DYNEXEC, eh=None, **kwargs) -> bytes:
+    """eh: (eh_frame vaddr, eh_frame bytes, eh_frame_hdr vaddr, eh_frame_hdr bytes) in the text
+    segment, described by PT_GNU_EH_FRAME."""
     blob, dyn_off = build_dynlib(**kwargs)
     phdrs = [
         e.Phdr(e.PT_LOAD, 5, TEXT_OFF, TEXT_VADDR, TEXT_VADDR, TEXT_SIZE, TEXT_SIZE, 0x4000),
@@ -91,6 +129,10 @@ def build_elf(e_type=e.ET_SCE_DYNEXEC, **kwargs) -> bytes:
                len(blob) - dyn_off, 8),
         e.Phdr(e.PT_SCE_DYNLIBDATA, 4, DYNLIB_OFF, 0, 0, len(blob), 0, 0x10),
     ]
+    if eh:
+        hdr_vaddr, hdr = eh[2], eh[3]
+        phdrs.append(e.Phdr(e.PT_GNU_EH_FRAME, 4, TEXT_OFF + hdr_vaddr - TEXT_VADDR, hdr_vaddr,
+                            hdr_vaddr, len(hdr), len(hdr), 4))
     ident = b"\x7fELF\x02\x01\x01\x09" + bytes(8)
     out = bytearray(DYNLIB_OFF + len(blob))
     out[:0x40] = e.ELF_HEADER.pack(ident, e_type, e.EM_X86_64, 1, 0x10, PHDR_OFF, 0, 0, 0x40,
@@ -98,6 +140,8 @@ def build_elf(e_type=e.ET_SCE_DYNEXEC, **kwargs) -> bytes:
     for i, ph in enumerate(phdrs):
         out[PHDR_OFF + i * e.ELF_PHDR.size: PHDR_OFF + (i + 1) * e.ELF_PHDR.size] = ph.pack()
     out[TEXT_OFF: TEXT_OFF + TEXT_SIZE] = bytes([0xCC]) * TEXT_SIZE
+    for vaddr, chunk in zip(eh[::2], eh[1::2]) if eh else ():
+        out[TEXT_OFF + vaddr - TEXT_VADDR: TEXT_OFF + vaddr - TEXT_VADDR + len(chunk)] = chunk
     out[DATA_OFF: DATA_OFF + DATA_SIZE] = bytes(range(DATA_SIZE))
     out[DYNLIB_OFF:] = blob
     return bytes(out)
@@ -119,6 +163,16 @@ class Image:
                 off = ph.p_offset + vaddr - ph.p_vaddr
                 return self.data[off: off + size]
         raise AssertionError(f"{vaddr:#x} not mapped")
+
+    def sections(self) -> list[tuple]:
+        """(name, type, flags, addr, offset, size, link, info, align, entsize) per section."""
+        header = e.ELF_HEADER.unpack_from(self.data)
+        shoff, shentsize, shnum, shstrndx = header[6], header[11], header[12], header[13]
+        raw = [e.ELF_SHDR.unpack_from(self.data, shoff + i * shentsize) for i in range(shnum)]
+        strtab = raw[shstrndx][4] if raw else 0
+        def name(off):
+            return self.data[strtab + off: self.data.index(b"\0", strtab + off)]
+        return [(name(sh[0]), *sh[1:]) for sh in raw]
 
     def dynamic(self) -> list[tuple[int, int]]:
         (dyn,) = [ph for ph in self.phdrs if ph.p_type == e.PT_DYNAMIC]
@@ -207,6 +261,133 @@ class SyntheticTests(unittest.TestCase):
         self.assertEqual(e.sysv_hash(b""), 0)
         self.assertEqual(e.sysv_hash(b"printf"), 0x077905A6)
         self.assertEqual(e.sysv_hash(b"module_start"), 0x0E2F14B4)
+
+
+EH_FRAME = 0x100  # vaddr of .eh_frame in the text segment
+
+
+def eh_layout(fdes=2, terminator=True, extended=False, ptr_enc=0x1B):
+    """.eh_frame at EH_FRAME, .eh_frame_hdr right after it."""
+    frame, table = build_eh_frame(EH_FRAME, fdes, terminator, extended)
+    hdr_vaddr = EH_FRAME + len(frame)
+    return EH_FRAME, frame, hdr_vaddr, build_eh_frame_hdr(hdr_vaddr, EH_FRAME, table, ptr_enc)
+
+
+class EhFrameTests(unittest.TestCase):
+    def convert(self, eh):
+        result = e.convert(build_elf(eh=eh))
+        img = Image(result.data)
+        return result, {sec[0]: sec for sec in img.sections()}, img
+
+    def test_sections(self):
+        eh = eh_layout()
+        result, secs, img = self.convert(eh)
+        self.assertEqual(result.eh_frame, (EH_FRAME, len(eh[1])))
+        self.assertEqual(result.fdes, 2)
+        self.assertEqual(img.sections()[0], (b"", 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        self.assertEqual(img.sections()[-1][0], b".shstrtab")
+        for name, vaddr, data in ((b".eh_frame", eh[0], eh[1]), (b".eh_frame_hdr", eh[2], eh[3])):
+            _, sh_type, flags, addr, offset, size, _, _, align, _ = secs[name]
+            self.assertEqual((sh_type, flags, addr, size, align),
+                             (e.SHT_PROGBITS, e.SHF_ALLOC, vaddr, len(data), 4))
+            self.assertEqual(result.data[offset: offset + size], data)
+
+    def test_every_loaded_byte_has_a_section(self):
+        eh = eh_layout()
+        _, secs, img = self.convert(eh)
+        new = img.phdrs[-1]
+        by_addr = sorted((sec for sec in img.sections() if sec[2] & e.SHF_ALLOC),
+                         key=lambda sec: sec[3])
+        expected = [
+            (b".text", e.SHT_PROGBITS, e.SHF_ALLOC | e.SHF_EXECINSTR, TEXT_VADDR, EH_FRAME),
+            (b".eh_frame", e.SHT_PROGBITS, e.SHF_ALLOC, EH_FRAME, len(eh[1])),
+            (b".eh_frame_hdr", e.SHT_PROGBITS, e.SHF_ALLOC, eh[2], len(eh[3])),
+            (b".text", e.SHT_PROGBITS, e.SHF_ALLOC | e.SHF_EXECINSTR, eh[2] + len(eh[3]),
+             TEXT_SIZE - (eh[2] + len(eh[3]))),
+            (b".data", e.SHT_PROGBITS, e.SHF_ALLOC | e.SHF_WRITE, DATA_VADDR, DATA_SIZE),
+            (b".bss", e.SHT_NOBITS, e.SHF_ALLOC | e.SHF_WRITE, DATA_VADDR + DATA_SIZE,
+             DATA_MEMSZ - DATA_SIZE),
+        ]
+        self.assertEqual([sec[:4] + (sec[5],) for sec in by_addr[:6]], expected)
+        # The new segment only gets .dynstr and .dynamic (see fill_segments).
+        self.assertEqual([sec[0] for sec in by_addr[6:]], [b".dynstr", b".dynamic"])
+        dyn = dict(img.dynamic())
+        dynstr, dynamic = secs[b".dynstr"], secs[b".dynamic"]
+        self.assertEqual((dynstr[1], dynstr[3], dynstr[5]),
+                         (e.SHT_STRTAB, dyn[e.DT_STRTAB], dyn[e.DT_STRSZ]))
+        (pt_dyn,) = [ph for ph in img.phdrs if ph.p_type == e.PT_DYNAMIC]
+        self.assertEqual((dynamic[1], dynamic[3], dynamic[5], dynamic[9]),
+                         (e.SHT_DYNAMIC, pt_dyn.p_vaddr, pt_dyn.p_filesz, e.DYN.size))
+        self.assertEqual(img.sections()[dynamic[6]][0], b".dynstr")
+        self.assertTrue(new.p_vaddr <= dynstr[3] and dynamic[3] + dynamic[5] <= new.p_vaddr
+                        + new.p_filesz)
+
+    def test_missing_terminator_before_hdr(self):
+        eh = eh_layout(terminator=False)
+        result, _, _ = self.convert(eh)
+        self.assertEqual(result.eh_frame, (EH_FRAME, len(eh[1])))
+        self.assertEqual(result.fdes, 2)
+
+    def test_missing_terminator_at_segment_end(self):
+        hdr_vaddr = 0x80
+        start = TEXT_VADDR + TEXT_SIZE - len(build_eh_frame(0, 3, terminator=False)[0])
+        frame, table = build_eh_frame(start, 3, terminator=False)
+        eh = (start, frame, hdr_vaddr, build_eh_frame_hdr(hdr_vaddr, start, table))
+        result, secs, _ = self.convert(eh)
+        self.assertEqual(result.eh_frame, (start, TEXT_SIZE - start))
+        self.assertEqual(result.fdes, 3)
+        self.assertLess(secs[b".eh_frame_hdr"][3], secs[b".eh_frame"][3])
+
+    def test_extended_length_and_other_encodings(self):
+        for ptr_enc in (0x1B, 0x3B, 0x04):
+            with self.subTest(ptr_enc=hex(ptr_enc)):
+                eh = eh_layout(extended=True, ptr_enc=ptr_enc)
+                result, _, _ = self.convert(eh)
+                self.assertEqual((result.eh_frame, result.fdes), ((EH_FRAME, len(eh[1])), 2))
+
+    def test_terminator_only(self):
+        result, _, _ = self.convert(eh_layout(fdes=0))
+        self.assertEqual(result.fdes, 0)
+
+    def test_no_eh_frame_no_sections(self):
+        result = e.convert(build_elf())
+        self.assertIsNone(result.eh_frame)
+        self.assertEqual(Image(result.data).sections(), [])
+
+    def test_readelf_accepts_output(self):
+        readelf = shutil.which("readelf")
+        if not readelf:
+            self.skipTest("readelf not installed")
+        with tempfile.NamedTemporaryFile(suffix=".elf") as tmp:
+            tmp.write(e.convert(build_elf(eh=eh_layout())).data)
+            tmp.flush()
+            run = subprocess.run([readelf, "-S", "-l", "-d", "--debug-dump=frames", "-W",
+                                  tmp.name], capture_output=True, text=True)
+        self.assertEqual((run.returncode, run.stderr), (0, ""))
+        self.assertEqual(run.stdout.count("FDE cie="), 2)
+
+    def assertRejects(self, eh, message):
+        with self.assertRaisesRegex(e.ElfError, message):
+            e.convert(build_elf(eh=eh))
+
+    def test_bad_version(self):
+        eh = eh_layout()
+        self.assertRejects((*eh[:3], b"\x02" + eh[3][1:]), "unsupported .eh_frame_hdr version")
+
+    def test_indirect_encoding(self):
+        eh = eh_layout()
+        self.assertRejects((*eh[:3], b"\x01\x9b" + eh[3][2:]), "unsupported eh_frame_ptr")
+
+    def test_record_crosses_end(self):
+        eh = eh_layout(terminator=False)
+        frame = bytearray(eh[1])
+        frame[0] += 4  # the CIE now overlaps the next record, and the last one the header
+        self.assertRejects((eh[0], bytes(frame), *eh[2:]), "bad length")
+
+    def test_pointer_outside_segments(self):
+        eh = eh_layout()
+        hdr = eh[3][:4] + struct.pack("<i", 0x100000) + eh[3][8:]
+        self.assertRejects((*eh[:3], hdr), "not in the file data")
 
 
 def build_elf_phdrs(data: bytes) -> list[e.Phdr]:
@@ -334,12 +515,18 @@ class GameTests(unittest.TestCase):
                     # Names are not unique (e.g. a weak and a global entry), so only check
                     # that the lookup returns a symbol with this name.
                     self.assertNotEqual(img.lookup(dyn, name), 0, name)
+                # In every pinned file .eh_frame ends with a terminator right before
+                # .eh_frame_hdr.
+                (eh_hdr,) = [ph for ph in img.phdrs if ph.p_type == e.PT_GNU_EH_FRAME]
+                self.assertEqual(sum(result.eh_frame), eh_hdr.p_vaddr)
+                self.assertEqual(img.read(eh_hdr.p_vaddr - 4, 4), bytes(4))
+                self.assertGreater(result.fdes, 0)
                 if readelf:
                     with tempfile.NamedTemporaryFile(suffix=".elf") as tmp:
                         tmp.write(result.data)
                         tmp.flush()
-                        run = subprocess.run([readelf, "-h", "-l", "-d", "-r", "--dyn-syms", "-W",
-                                              tmp.name], capture_output=True, text=True)
+                        run = subprocess.run([readelf, "-h", "-l", "-S", "-d", "-r", "--dyn-syms",
+                                              "-W", tmp.name], capture_output=True, text=True)
                     self.assertEqual(run.returncode, 0)
                     self.assertEqual(run.stderr, "")
         self.assertEqual(converted, set(e.KNOWN_FILES.values()))

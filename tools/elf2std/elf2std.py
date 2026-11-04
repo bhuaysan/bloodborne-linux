@@ -10,7 +10,11 @@ use the standard layouts. This tool:
   REA cannot pass Ghidra's image base option),
 - appends a new read-only PT_LOAD segment above the image holding a copy of the dynlibdata
   segment, a SysV hash table and a standard dynamic table pointing into that copy,
-- repoints PT_DYNAMIC at the new dynamic table.
+- repoints PT_DYNAMIC at the new dynamic table,
+- adds section headers for .eh_frame_hdr and .eh_frame (found through PT_GNU_EH_FRAME), so
+  Ghidra finds the unwind tables and creates a function for every FDE. With them come the null
+  section, .shstrtab, .dynamic and .dynstr (for readelf) and sections covering the rest of the
+  original segments (for Ghidra's memory blocks, see fill_segments).
 
 All original bytes stay where they are, so addresses in the image are unchanged. Imported symbols
 keep their encoded names (NID#library#module). The format is described in
@@ -50,8 +54,20 @@ DEFAULT_OUT = analysis_dir() / "elf-std"
 
 KNOWN_FILES = PINNED_ELFS
 
-PF_R = 4
+PF_X, PF_W, PF_R = 1, 2, 4
 SEGMENT_ALIGN = 0x4000
+PT_GNU_EH_FRAME = 0x6474E550
+
+ELF_SHDR = struct.Struct("<IIQQQQIIQQ")  # 0x40 bytes
+SHT_PROGBITS = 1
+SHT_STRTAB = 3
+SHT_DYNAMIC = 6
+SHT_NOBITS = 8
+SHF_WRITE, SHF_ALLOC, SHF_EXECINSTR = 1, 2, 4
+
+# DWARF pointer encodings (DW_EH_PE_*) accepted for eh_frame_ptr in .eh_frame_hdr.
+EH_PE_FORMATS = {0x00: "<Q", 0x03: "<I", 0x04: "<Q", 0x0B: "<i", 0x0C: "<q"}
+EH_PE_ABSPTR, EH_PE_PCREL, EH_PE_DATAREL = 0x00, 0x10, 0x30
 
 # Sony tag -> standard tag. Offsets are relative to the dynlibdata segment.
 OFFSET_TAGS = {
@@ -79,6 +95,8 @@ class Result:
     symbols: int
     plt_relocs: int
     relocs: int
+    eh_frame: tuple[int, int] | None = None  # (vaddr, size) of .eh_frame, if found
+    fdes: int = 0  # FDEs in .eh_frame, including ones left out of the .eh_frame_hdr table
 
 
 def align_up(value: int, alignment: int) -> int:
@@ -109,6 +127,135 @@ def build_hash_table(names: list[bytes]) -> bytes:
         chains[index] = buckets[slot]
         buckets[slot] = index
     return struct.pack(f"<II{nbucket}I{nchain}I", nbucket, nchain, *buckets, *chains)
+
+
+def file_offset(data: bytes, loads: list[Phdr], vaddr: int, size: int = 1) -> tuple[int, Phdr]:
+    """File offset of vaddr..vaddr+size, which must lie in the file data of one PT_LOAD."""
+    for ph in loads:
+        if ph.p_vaddr <= vaddr and vaddr + size <= ph.p_vaddr + ph.p_filesz:
+            offset = ph.p_offset + vaddr - ph.p_vaddr
+            need(offset + size <= len(data), f"{vaddr:#x} lies past the end of the file")
+            return offset, ph
+    raise ElfError(f"{vaddr:#x}+{size:#x} is not in the file data of a PT_LOAD segment")
+
+
+def walk_eh_frame(data: bytes, loads: list[Phdr], start: int, limit: int) -> tuple[int, int]:
+    """Walks the CIE/FDE records of .eh_frame from start (vaddr).
+
+    Stops after the zero terminator, or at limit (the end of the containing segment, or the start
+    of .eh_frame_hdr when it follows). Returns (size of .eh_frame, number of FDEs)."""
+    base, _ = file_offset(data, loads, start)
+    pos, fdes = 0, 0
+    while start + pos < limit:
+        need(start + pos + 4 <= limit, f".eh_frame record at {start + pos:#x} crosses {limit:#x}")
+        (length,) = struct.unpack_from("<I", data, base + pos)
+        if length == 0:
+            return pos + 4, fdes  # the terminator belongs to the section
+        header = 4
+        if length == 0xFFFFFFFF:  # 64-bit DWARF: the real length follows
+            need(start + pos + 12 <= limit,
+                 f".eh_frame record at {start + pos:#x} crosses {limit:#x}")
+            (length,) = struct.unpack_from("<Q", data, base + pos + 4)
+            header = 12
+        end = pos + header + length
+        need(length >= 4 and start + end <= limit,
+             f".eh_frame record at {start + pos:#x} has a bad length {length:#x}")
+        (cie_id,) = struct.unpack_from("<I", data, base + pos + header)
+        fdes += cie_id != 0  # CIEs have id 0 in .eh_frame, FDEs a CIE pointer
+        pos = end
+    return pos, fdes
+
+
+def find_eh_frame(data: bytes, phdrs: list[Phdr],
+                  loads: list[Phdr]) -> tuple[Phdr, int, int, int] | None:
+    """Locates .eh_frame through PT_GNU_EH_FRAME (.eh_frame_hdr).
+
+    Returns (the PT_GNU_EH_FRAME header, .eh_frame vaddr, size, FDE count), or None."""
+    hdrs = [ph for ph in phdrs if ph.p_type == PT_GNU_EH_FRAME]
+    if not hdrs:
+        return None
+    need(len(hdrs) == 1, "more than one PT_GNU_EH_FRAME")
+    (eh_hdr,) = hdrs
+    need(eh_hdr.p_filesz >= 4, "PT_GNU_EH_FRAME is too small")
+    hdr_off, hdr_load = file_offset(data, loads, eh_hdr.p_vaddr, eh_hdr.p_filesz)
+    version, ptr_enc = data[hdr_off], data[hdr_off + 1]
+    need(version == 1, f"unsupported .eh_frame_hdr version {version}")
+    fmt = EH_PE_FORMATS.get(ptr_enc & 0x0F)
+    app = ptr_enc & 0xF0
+    need(fmt is not None and app in (EH_PE_ABSPTR, EH_PE_PCREL, EH_PE_DATAREL),
+         f"unsupported eh_frame_ptr encoding {ptr_enc:#x}")
+    need(4 + struct.calcsize(fmt) <= eh_hdr.p_filesz, "PT_GNU_EH_FRAME is too small")
+    (value,) = struct.unpack_from(fmt, data, hdr_off + 4)
+    # pcrel: relative to the field itself, datarel: relative to the start of .eh_frame_hdr.
+    base = {EH_PE_ABSPTR: 0, EH_PE_PCREL: eh_hdr.p_vaddr + 4, EH_PE_DATAREL: eh_hdr.p_vaddr}[app]
+    start = (base + value) & 0xFFFFFFFFFFFFFFFF
+    _, load = file_offset(data, loads, start)
+    limit = load.p_vaddr + load.p_filesz
+    if load is hdr_load and start < eh_hdr.p_vaddr:
+        limit = min(limit, eh_hdr.p_vaddr)
+    size, fdes = walk_eh_frame(data, loads, start, limit)
+    return eh_hdr, start, size, fdes
+
+
+@dataclass
+class Section:
+    name: bytes
+    sh_type: int
+    vaddr: int
+    offset: int
+    size: int
+    align: int
+    entsize: int = 0
+    link: bytes = b""  # name of the linked section
+    flags: int = SHF_ALLOC
+
+
+def fill_segments(loads: list[Phdr], sections: list[Section]) -> list[Section]:
+    """Sections for the parts of each PT_LOAD that the given sections don't cover.
+
+    With section headers present, Ghidra builds its memory blocks from the sections and loads
+    only the file data of uncovered segment parts, without their execute permission or the
+    zero-filled tail. So every loaded byte gets a section: .text (executable), .data (writable),
+    .rodata (other) and .bss for the part past p_filesz."""
+    fillers = []
+    for ph in loads:
+        flags = (SHF_ALLOC | (SHF_EXECINSTR if ph.p_flags & PF_X else 0)
+                 | (SHF_WRITE if ph.p_flags & PF_W else 0))
+        name = b".text" if ph.p_flags & PF_X else b".data" if ph.p_flags & PF_W else b".rodata"
+        end = ph.p_vaddr + ph.p_filesz
+        pos = ph.p_vaddr
+        inside = sorted((sec for sec in sections if ph.p_vaddr <= sec.vaddr < end),
+                        key=lambda sec: sec.vaddr)
+        for start, stop in [(sec.vaddr, sec.vaddr + sec.size) for sec in inside] + [(end, end)]:
+            if start > pos:
+                fillers.append(Section(name, SHT_PROGBITS, pos, ph.p_offset + pos - ph.p_vaddr,
+                                       start - pos, 1, flags=flags))
+            pos = max(pos, stop)
+        if ph.p_memsz > ph.p_filesz:
+            fillers.append(Section(b".bss", SHT_NOBITS, end, ph.p_offset + ph.p_filesz,
+                                   ph.p_memsz - ph.p_filesz, 1, flags=flags))
+    return fillers
+
+
+def section_headers(sections: list[Section], strtab_off: int) -> tuple[bytes, bytes]:
+    """Returns (.shstrtab contents, section header table) for loaded sections.
+
+    The table gets the null section first, then the sections sorted by address, then .shstrtab."""
+    sections = sorted(sections, key=lambda sec: sec.vaddr)
+    for prev, sec in zip(sections, sections[1:]):
+        need(prev.vaddr + prev.size <= sec.vaddr,
+             f"sections {prev.name.decode()} and {sec.name.decode()} overlap")
+    index = {sec.name: i for i, sec in enumerate(sections, start=1)}
+    names = bytearray(b"\0")
+    table = bytearray(ELF_SHDR.size)  # index 0: the null section
+    for sec in sections:
+        table += ELF_SHDR.pack(len(names), sec.sh_type, sec.flags, sec.vaddr, sec.offset, sec.size,
+                               index[sec.link] if sec.link else 0, 0, sec.align, sec.entsize)
+        names += sec.name + b"\0"
+    name = len(names)
+    names += b".shstrtab\0"
+    table += ELF_SHDR.pack(name, SHT_STRTAB, 0, 0, strtab_off, len(names), 0, 0, 1, 0)
+    return bytes(names), bytes(table)
 
 
 def convert(data: bytes) -> Result:
@@ -166,6 +313,42 @@ def convert(data: bytes) -> Result:
     out += bytes(load_offset - len(out))
     out += blob
 
+    new_load = Phdr(PT_LOAD, PF_R, load_offset, load_vaddr, load_vaddr, len(blob), len(blob),
+                    SEGMENT_ALIGN)
+    out_loads = loads + [new_load]
+
+    # Section headers for the unwind tables, after everything else. They are not loaded.
+    eh_frame = find_eh_frame(data, phdrs, loads)
+    eh_range, fdes = None, 0
+    if eh_frame is not None:
+        eh_hdr, eh_start, eh_size, fdes = eh_frame
+        eh_range = (eh_start, eh_size)
+
+        def section(name: bytes, sh_type: int, vaddr: int, size: int, align: int,
+                    **kwargs) -> Section:
+            offset, _ = file_offset(out, out_loads, vaddr, size)
+            return Section(name, sh_type, vaddr, offset, size, align, **kwargs)
+
+        # .dynamic and .dynstr are needed too: with section headers present, readelf looks up
+        # the dynamic table through its section, and the string table through its sh_link.
+        sections = [
+            section(b".eh_frame", SHT_PROGBITS, eh_start, eh_size, 4),
+            section(b".eh_frame_hdr", SHT_PROGBITS, eh_hdr.p_vaddr, eh_hdr.p_filesz, 4),
+            section(b".dynstr", SHT_STRTAB, load_vaddr + sce[DT_SCE_STRTAB], sce[DT_SCE_STRSZ], 1),
+            section(b".dynamic", SHT_DYNAMIC, load_vaddr + dyn_off, dyn_size, 8,
+                    entsize=DYN.size, link=b".dynstr"),
+        ]
+        # Not for the new segment: it is read-only and fully backed by the file, so Ghidra loads
+        # its uncovered parts correctly, and a section over the symbol and relocation tables
+        # there makes Ghidra stop turning the PLT stubs into thunks of the imports.
+        sections += fill_segments(loads, sections)
+        shstrtab, table = section_headers(sections, len(out))
+        out += shstrtab
+        out += bytes(align_up(len(out), 8) - len(out))
+        e_shoff, e_shentsize = len(out), ELF_SHDR.size
+        e_shnum, e_shstrndx = len(table) // ELF_SHDR.size, len(table) // ELF_SHDR.size - 1
+        out += table
+
     header = ELF_HEADER.pack(ident, ET_EXEC, e_machine, e_version, e_entry, e_phoff, e_shoff,
                              e_flags, e_ehsize, e_phentsize, e_phnum + 1, e_shentsize, e_shnum,
                              e_shstrndx)
@@ -176,12 +359,10 @@ def convert(data: bytes) -> Result:
             ph = Phdr(PT_DYNAMIC, PF_R, load_offset + dyn_off, load_vaddr + dyn_off,
                       load_vaddr + dyn_off, dyn_size, dyn_size, ph.p_align)
         out[e_phoff + i * ELF_PHDR.size: e_phoff + (i + 1) * ELF_PHDR.size] = ph.pack()
-    new_load = Phdr(PT_LOAD, PF_R, load_offset, load_vaddr, load_vaddr, len(blob), len(blob),
-                    SEGMENT_ALIGN)
     out[phdrs_end:new_phdrs_end] = new_load.pack()
 
     return Result(bytes(out), load_vaddr, len(names), sce[DT_SCE_PLTRELSZ] // RELA_SIZE,
-                  sce[DT_SCE_RELASZ] // RELA_SIZE)
+                  sce[DT_SCE_RELASZ] // RELA_SIZE, eh_range, fdes)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -224,8 +405,10 @@ def main(argv: list[str] | None = None) -> int:
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / known
         out_path.write_bytes(result.data)
+        eh = (f" eh_frame@{result.eh_frame[0]:#x}+{result.eh_frame[1]:#x} fdes={result.fdes}"
+              if result.eh_frame else "")
         print(f"{known}: symbols={result.symbols} plt_relocs={result.plt_relocs} "
-              f"relocs={result.relocs} dynlibdata@{result.load_vaddr:#x} -> {out_path}")
+              f"relocs={result.relocs} dynlibdata@{result.load_vaddr:#x}{eh} -> {out_path}")
     return 1 if failed else 0
 
 
