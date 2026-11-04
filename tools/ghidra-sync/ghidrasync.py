@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import heapq
 import importlib.util
 import io
 import json
@@ -122,14 +123,28 @@ def import_rows(rows: dict[int, dict[str, str]]) -> list[dict]:
 # {"name", "tag", "subsystem"} for one of ours, {"pointer": ref or None} or {"array", "count"}.
 
 def topo_order(deps: dict[str, set[str]], what: str) -> list[str]:
-    """Names with their dependencies first, otherwise sorted by name."""
+    """Names with their dependencies first, otherwise sorted by name.
+
+    Kahn's algorithm with a heap, so the smallest name whose dependencies are all placed goes
+    next. A dependency that is not a key of `deps` is never placed and blocks its user."""
+    waiting = {name: len(needed) for name, needed in deps.items()}
+    users: dict[str, list[str]] = {}
+    for name, needed in deps.items():
+        for dep in needed:
+            users.setdefault(dep, []).append(name)
+    ready = [name for name, count in waiting.items() if count == 0]
+    heapq.heapify(ready)
     done: list[str] = []
-    while len(done) < len(deps):
-        ready = [n for n in sorted(deps) if n not in done and deps[n] <= set(done)]
-        if not ready:
-            raise SyncError(f"{what} depend on each other: "
-                            + ", ".join(sorted(set(deps) - set(done))))
-        done.append(ready[0])
+    while ready:
+        name = heapq.heappop(ready)
+        done.append(name)
+        for user in users.get(name, []):
+            waiting[user] -= 1
+            if waiting[user] == 0:
+                heapq.heappush(ready, user)
+    if len(done) < len(deps):
+        raise SyncError(f"{what} depend on each other: "
+                        + ", ".join(sorted(set(deps) - set(done))))
     return done
 
 
