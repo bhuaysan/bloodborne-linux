@@ -27,6 +27,8 @@ constexpr std::uint64_t dt_sce_pltrel = 0x6100002B, dt_sce_pltrelsz = 0x6100002D
                         dt_sce_relaent = 0x61000033, dt_sce_strtab = 0x61000035,
                         dt_sce_strsz = 0x61000037, dt_sce_symtab = 0x61000039,
                         dt_sce_syment = 0x6100003B, dt_sce_symtabsz = 0x6100003F;
+constexpr std::uint64_t dt_init = 0x0C, dt_init_array = 0x19, dt_init_arraysz = 0x1B,
+                        dt_preinit_array = 0x20, dt_preinit_arraysz = 0x21;
 constexpr std::uint64_t dt_needed = 1, dt_soname = 0x0E, dt_sce_module_info = 0x6100000D,
                         dt_sce_needed_module = 0x6100000F, dt_sce_export_lib = 0x61000013,
                         dt_sce_import_lib = 0x61000015, dt_sce_export_lib_attr = 0x61000017,
@@ -54,7 +56,8 @@ struct Elf {
 // A minimal PS4 ELF: a PT_LOAD and a PT_SCE_DYNLIBDATA segment at the end of the file with the
 // tables and the dynamic table. It needs modules libFoo (id 1) and libBar (id 2), imports
 // library libFoo (id 0) from libFoo, declares library libBar (id 1) without importing from it,
-// and exports library libSelf (id 0).
+// and exports library libSelf (id 0). It has DT_INIT and the preinit and init arrays, but no
+// DT_FINI and no fini array.
 struct Synthetic {
     Bytes strtab{std::byte{0}};
     Bytes symtab, jmprel, rela;
@@ -81,7 +84,12 @@ struct Synthetic {
                    {dt_sce_import_lib_attr, record(1, 0, 9)},
                    {dt_sce_export_lib_attr, record(0, 0, 1)},
                    {dt_soname, str("self.prx")},
-                   {0x16, 0}};  // DT_TEXTREL
+                   {0x16, 0},  // DT_TEXTREL
+                   {dt_init, 0x4200},
+                   {dt_init_array, 0x4300},
+                   {dt_init_arraysz, 0x10},
+                   {dt_preinit_array, 0x4310},
+                   {dt_preinit_arraysz, 0}};
     }
 
     std::uint32_t str(std::string_view s) {
@@ -227,6 +235,15 @@ TEST(ParseDynamic, ReadsTheTables) {
     EXPECT_EQ(info.symbols[5].decoded.type, stt_object);
     EXPECT_EQ(info.pltgot, 0x4000U);
     EXPECT_TRUE(info.textrel);
+    EXPECT_EQ(info.init, 0x4200U);
+    EXPECT_FALSE(info.fini);
+    ASSERT_TRUE(info.init_array);
+    EXPECT_EQ(info.init_array->addr, 0x4300U);
+    EXPECT_EQ(info.init_array->size, 0x10U);
+    ASSERT_TRUE(info.preinit_array);
+    EXPECT_EQ(info.preinit_array->addr, 0x4310U);
+    EXPECT_EQ(info.preinit_array->size, 0U);
+    EXPECT_FALSE(info.fini_array);
 
     ASSERT_EQ(info.plt_relocs.size(), 1U);
     EXPECT_EQ(info.plt_relocs[0].offset, 0x4008U);
@@ -257,6 +274,9 @@ TEST(ParseDynamic, RejectsBadTags) {
         {"symbol table size 0x47", dt_sce_symtabsz, 71},
         {"PLT relocations size 0x17", dt_sce_pltrelsz, 23},
         {"DT_SONAME: unterminated string", dt_sce_strsz, cut_last_nul},
+        {"DT_INIT_ARRAYSZ 0xc is not a multiple of 8", dt_init_arraysz, 12},
+        {"DT_PREINIT_ARRAY without DT_PREINIT_ARRAYSZ", dt_preinit_arraysz, std::nullopt},
+        {"DT_INIT_ARRAYSZ without DT_INIT_ARRAY", dt_init_array, std::nullopt},
     };
     for (const Case& c : cases) {
         expect_load_error(Synthetic{}.build([&](std::vector<Dyn>& dyn) {
@@ -272,6 +292,8 @@ TEST(ParseDynamic, RejectsBadTags) {
     }
     expect_load_error(Synthetic{}.build([](auto& dyn) { dyn.emplace_back(dt_sce_strtab, 0); }),
                       "duplicate DT_SCE_STRTAB");
+    expect_load_error(Synthetic{}.build([](auto& dyn) { dyn.emplace_back(dt_init, 0); }),
+                      "duplicate DT_INIT");
 }
 
 TEST(ParseDynamic, RejectsBadEntries) {
@@ -418,6 +440,13 @@ TEST(ParseDynamicGame, ReadsTheEboot) {
     EXPECT_EQ(info.self.id, 0);
     EXPECT_FALSE(info.soname);
     EXPECT_TRUE(info.textrel);
+    EXPECT_EQ(info.init, 0x20U);
+    EXPECT_EQ(info.fini, 0x2ba8220U);
+    for (const auto& array : {info.preinit_array, info.init_array, info.fini_array}) {
+        ASSERT_TRUE(array);
+        EXPECT_EQ(array->addr, 0x53e5b38U);  // all three empty, at the same address
+        EXPECT_EQ(array->size, 0U);
+    }
     EXPECT_EQ(info.needed.size(), 42U);
     auto exported = [](const Library& lib) { return lib.exported; };
     EXPECT_EQ(std::count_if(info.libraries.begin(), info.libraries.end(), exported), 0);

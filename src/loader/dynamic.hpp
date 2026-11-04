@@ -72,6 +72,12 @@ struct Rela {
     std::int64_t addend;
 };
 
+// An array of function pointers, from an address tag and its size tag.
+struct FuncArray {
+    std::uint64_t addr;  // link address, checked against the mapping by the loader
+    std::uint64_t size;  // in bytes, a multiple of 8, often 0
+};
+
 struct DynamicInfo {
     Module self;                        // DT_SCE_MODULE_INFO
     std::optional<std::string> soname;  // PRX only
@@ -82,7 +88,9 @@ struct DynamicInfo {
     std::vector<Rela> relocs;           // DT_SCE_RELA
     std::uint64_t pltgot = 0;           // DT_SCE_PLTGOT, link address
     bool textrel = false;               // DT_TEXTREL
-    // DT_INIT, DT_FINI and the init and fini arrays follow in the next part of issue #43.
+    // Link addresses, checked against the mapping by the loader. 0 is a valid DT_INIT in PRXs.
+    std::optional<std::uint64_t> init, fini;  // DT_INIT, DT_FINI
+    std::optional<FuncArray> preinit_array, init_array, fini_array;
 };
 
 // The dynamic data of the PS4 ELF `elf` with program headers `phdrs`. Every offset, size, count,

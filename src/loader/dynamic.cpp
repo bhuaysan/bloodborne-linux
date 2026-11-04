@@ -19,8 +19,16 @@ struct Tag {
     std::string_view name;
 };
 
+constexpr Tag dt_init{0x0C, "DT_INIT"};
+constexpr Tag dt_fini{0x0D, "DT_FINI"};
 constexpr Tag dt_soname{0x0E, "DT_SONAME"};
 constexpr Tag dt_textrel{0x16, "DT_TEXTREL"};
+constexpr Tag dt_init_array{0x19, "DT_INIT_ARRAY"};
+constexpr Tag dt_fini_array{0x1A, "DT_FINI_ARRAY"};
+constexpr Tag dt_init_arraysz{0x1B, "DT_INIT_ARRAYSZ"};
+constexpr Tag dt_fini_arraysz{0x1C, "DT_FINI_ARRAYSZ"};
+constexpr Tag dt_preinit_array{0x20, "DT_PREINIT_ARRAY"};
+constexpr Tag dt_preinit_arraysz{0x21, "DT_PREINIT_ARRAYSZ"};
 
 // Sony tags, our names (docs/formats/elf-dynamic.md).
 constexpr Tag dt_sce_module_info{0x6100000D, "DT_SCE_MODULE_INFO"};
@@ -349,6 +357,26 @@ DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> 
     info.relocs = read_relas(relatab, info.symbols.size(), "relocations");
     info.pltgot = required(dt_sce_pltgot);
     info.textrel = optional_tag(dt_textrel).has_value();
+    info.init = optional_tag(dt_init);
+    info.fini = optional_tag(dt_fini);
+    // A function pointer array has both tags or neither.
+    auto func_array = [&](const Tag& addr_tag, const Tag& size_tag) -> std::optional<FuncArray> {
+        auto addr = optional_tag(addr_tag), size = optional_tag(size_tag);
+        if (addr.has_value() != size.has_value()) {
+            throw LoadError(std::format("{} without {}", addr ? addr_tag.name : size_tag.name,
+                                        addr ? size_tag.name : addr_tag.name));
+        }
+        if (!addr) {
+            return std::nullopt;
+        }
+        if (*size % 8 != 0) {
+            throw LoadError(std::format("{} {:#x} is not a multiple of 8", size_tag.name, *size));
+        }
+        return FuncArray{*addr, *size};
+    };
+    info.preinit_array = func_array(dt_preinit_array, dt_preinit_arraysz);
+    info.init_array = func_array(dt_init_array, dt_init_arraysz);
+    info.fini_array = func_array(dt_fini_array, dt_fini_arraysz);
     return info;
 }
 
