@@ -16,7 +16,9 @@ std::optional<std::string> read_env_file(const std::filesystem::path& file, std:
 // `key` from the environment, else from `env_file`. An empty value counts as unset.
 std::optional<std::string> env_or_file(std::string_view key, const std::filesystem::path& env_file);
 
-// The game directory: BB_GAME_DIR from the environment, else from `env_file`.
+// The game directory: BB_GAME_DIR from the environment, else from `env_file`. A leading "~/"
+// expands to $HOME, and the result is absolute with symlinks resolved where the path exists, like
+// load_game_dir() in tools/common/toolenv.py.
 std::optional<std::filesystem::path> game_dir(const std::filesystem::path& env_file);
 
 }  // namespace bb::common

@@ -6,6 +6,7 @@
 namespace bb::common {
 namespace {
 
+// Python's str.strip() also strips \v, \f and Unicode spaces. They don't occur in local.env.
 std::string_view trim(std::string_view s) {
     constexpr std::string_view space = " \t\r";
     auto first = s.find_first_not_of(space);
@@ -65,7 +66,14 @@ std::optional<std::filesystem::path> game_dir(const std::filesystem::path& env_f
     if (!value) {
         return std::nullopt;
     }
-    return std::filesystem::path(*value);
+    std::filesystem::path path(*value);
+    const char* home = std::getenv("HOME");
+    if (home && *home && (*value == "~" || value->starts_with("~/"))) {
+        path = std::filesystem::path(home) / value->substr(value->size() > 1 ? 2 : 1);
+    }
+    std::error_code ec;
+    auto resolved = std::filesystem::weakly_canonical(std::filesystem::absolute(path), ec);
+    return ec ? std::filesystem::absolute(path) : resolved;
 }
 
 }  // namespace bb::common
