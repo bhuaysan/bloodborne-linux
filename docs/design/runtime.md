@@ -10,7 +10,7 @@ src/
   loader/    bbloader   SELF → ELF, ELF parsing, mapping, relocation, eh_frame lookup
   hle/       bbhle      HLE module registry, import stubs, NID name table
   hook/      bbhook     function-entry patches
-  game/      bbgame     decompiled functions, their replacement table, the image accessor
+  game/      bbgame     decompiled functions (registered into bbhook), the image accessor
   harness/   bbharness  differential test harness (tests only)
   tools/                small command-line programs (bb-load)
 tests/<target>/         GoogleTest unit tests, one directory per library
@@ -28,7 +28,7 @@ All code is in namespace `bb` with a nested namespace per library (`bb::loader`,
 
 ### Static registration
 
-HLE implementations (`bbhle` and later modules) and replacements (`bbgame`) register themselves through static objects in their source files. A static archive would drop object files that nothing references, and their registrations with them. Targets that contain registrations are therefore CMake `OBJECT` libraries. Every registry is a function-local static (construct on first use), so the order of static initialization across files doesn't matter.
+HLE implementations (`bbhle` and later modules) and replacements (`bbgame`) register themselves into registries owned by `bbhle` and `bbhook`, through static objects in their source files. A static archive would drop object files that nothing references, and their registrations with them. Targets that contain registrations are therefore CMake `OBJECT` libraries. Every registry is a function-local static (construct on first use), so the order of static initialization across files doesn't matter.
 
 ## Addresses
 
@@ -97,7 +97,7 @@ struct Image {
     std::vector<Segment> segments;            // PT_LOAD only
     uint64_t entry;                           // link address
     std::optional<TlsTemplate> tls;           // PT_TLS: link addr, file size, mem size, align
-    uint64_t proc_param;                      // link address of PT_SCE_PROCPARAM
+    std::optional<uint64_t> proc_param;       // link address of PT_SCE_PROCPARAM, eboot only
     DynamicInfo dyn;                          // init/fini arrays, symbols, relocations, records
     uintptr_t runtime(uint64_t link) const;   // base + link, checked against the segments
     template <class F> F* fn(uint64_t link) const;
@@ -113,6 +113,8 @@ The image owns its mapping and unmaps it on destruction. `DynamicInfo` holds the
 ### Relocations
 
 Supported: `R_X86_64_RELATIVE` (base + addend), `R_X86_64_64` (symbol + addend), `R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` (symbol). Any other type is an error that names the type and the offset. `DTPMOD64` and the TLS types wait for M3 (they don't occur in the eboot).
+
+A relocation against a defined symbol of the same file (`st_shndx != 0`) resolves to base + `st_value` without calling the resolver. The eboot has none, but the PRXs (M3) and synthetic test ELFs do. Only undefined symbols are imports and go to the resolver.
 
 Every import must resolve to a non-zero address. The game runtime, `bb-load` and the harness pass `bb::hle::resolve`.
 
@@ -180,13 +182,17 @@ bb::game::image().fn<void(Foo*)>(0x123450)(foo);
 auto* flags = reinterpret_cast<uint32_t*>(bb::game::image().runtime(0x5100000));
 ```
 
-The game code and our code use the same System V ABI, so no glue is needed.
+The game code and our code use the same System V calling convention, so a call needs no glue as long as no TLS is involved. From M3 the game uses `%fs` for its own TLS while our code uses glibc's, so transitions between the two will need glue. That is open until M3 sets up TLS.
+
+**Calling imports.** A replacement calls an imported function through the address that `bb::hle::resolve` returns for that import (the same address the loader wrote into the image's GOT slot), never an HLE C++ function directly. Then the original and the replacement reach the same stub or implementation, and the stub logs compare.
 
 ## Differential test harness
 
 ### Process setup
 
 One GoogleTest environment per test binary loads the eboot once: the default base, `relocate` with `bb::hle::resolve`, `finalize_protection`, and `bb::game::set_image`. Imports with a registered HLE implementation call it; all others go to stubs, and the harness installs a stub observer that records those calls. **Hooks are never applied in the harness.** It calls the original at its runtime address and the replacement as a C++ function.
+
+No game initialization code runs: not `DT_INIT`, `DT_PREINIT_ARRAY`, `DT_INIT_ARRAY` nor the entry point. The baseline is the static image right after relocation. A function that depends on state set up by init code needs that state built by its test's input builder.
 
 After loading, the harness takes a **baseline snapshot** of all writable memory it owns:
 - the image's writable segments (data and `.bss`, about 6 MiB),
@@ -217,6 +223,7 @@ Not compared: the stack below the call, registers other than the return register
 - No heap: an import such as `malloc` is a stub that returns 0. Functions that allocate wait for the HLE allocator (M3), which will draw from the arena so its memory is compared too.
 - A crash in the original or the replacement kills the test binary. Isolating each call in a forked child can come later if it is needed.
 - The original code isn't instrumented by AddressSanitizer. Only the replacement and the harness are.
+- AddressSanitizer's stack-use-after-return detection, on by default, moves an instrumented function's locals into fake stack frames on the heap. Pointers to the replacement's locals would then not look like stack pointers and would compare unequal. The harness turns it off with `__asan_default_options()` returning `detect_stack_use_after_return=0`, defined in the harness's GoogleTest main so the linker keeps it.
 
 ## Tools
 
