@@ -29,7 +29,7 @@ All code is in namespace `bb` with a nested namespace per library (`bb::loader`,
 
 ### Static registration
 
-HLE implementations (`bbhle` and later modules) and replacements (`bbgame`) register themselves into registries owned by `bbhle` and `bbhook`, through static objects in their source files. A static archive would drop object files that nothing references, and their registrations with them. Targets that contain registrations are therefore CMake `OBJECT` libraries, and only executables link them, directly. A `STATIC` library that links an `OBJECT` library puts its objects into the archive again, where the final link would drop them silently. Every registry is a function-local static (construct on first use), so the order of static initialization across files doesn't matter.
+HLE implementations (`bbhle` and later modules) and replacements (`bbgame`) register themselves into registries owned by `bbhle` and `bbhook`, through static objects in their source files. A static archive would drop object files that nothing references, and their registrations with them. Targets that contain registrations are therefore CMake `OBJECT` libraries, and only executables link them, directly. `bbharness` is a `STATIC` library that takes only `bbgame`'s include directories; each test executable links `bbgame` (and `bbhle`) itself. A `STATIC` library that links an `OBJECT` library puts its objects into the archive again, where the final link would drop them silently. Every registry is a function-local static (construct on first use), so the order of static initialization across files doesn't matter.
 
 ## Addresses
 
@@ -185,7 +185,7 @@ auto* flags = reinterpret_cast<uint32_t*>(bb::game::image().runtime(0x5100000));
 
 The game code and our code use the same System V calling convention, so a call needs no glue as long as no TLS is involved. From M3 the game uses `%fs` for its own TLS while our code uses glibc's, so transitions between the two will need glue. That is open until M3 sets up TLS.
 
-**Calling imports.** A replacement calls an imported function through the address that `bb::hle::resolve` returns for that import (the same address the loader wrote into the image's GOT slot), never an HLE C++ function directly. Then the original and the replacement reach the same stub or implementation, and the stub logs compare.
+**Calling imports.** A replacement calls an imported function through `bb::hle::import_address(library, nid)`, which returns the cached address that `resolve` handed out for that import (the same address the loader wrote into the image's GOT slot) and aborts if the import was never resolved. It never calls an HLE C++ function directly. Then the original and the replacement reach the same stub or implementation, and the stub logs compare.
 
 ## Differential test harness
 
@@ -212,9 +212,9 @@ EXPECT_TRUE(r) << r.report();
 1. Restore the baseline, build the inputs (the builder runs before each call, so both calls see the same arena layout), clear the stub log, call the **original**, capture its return value, all snapshot regions and the stub log.
 2. Restore the baseline, build the same inputs, call the **replacement**, capture the same.
 3. Compare:
-   - the return value as the typed `R` object: integers and pointers bit for bit, floating point bit for bit (two NaNs with different payloads differ), structs member by member through `operator==` (defaulted or written by the test), never as raw bytes, because padding is indeterminate,
+   - the return value as the typed `R` object: integers and pointers bit for bit, floating point bit for bit (two NaNs with different payloads differ), structs through `operator==`, never as raw bytes, because padding is indeterminate. A defaulted `operator==` compares float members by value (NaN ≠ NaN, +0 = −0); a test that needs bitwise floats writes its own,
    - every byte of the snapshot regions. The report lists the first differing ranges, as link addresses for the image and arena offsets for the arena,
-   - the stub log: same imports in the same order with the same integer arguments. Calls to registered HLE implementations are not logged or compared. Pointer arguments are normalized before comparing: a pointer into a snapshot region compares by region and offset, a pointer into the calling thread's stack compares only as "a stack pointer" (the original and the replacement lay out their frames differently), any other value compares as is.
+   - the stub log: same imports in the same order. Arguments are compared only up to the arity the test declares for an import (`harness.declare_arity(library, nid, n)`), default none, because the arity of an unnamed import is unknown and unused argument registers hold leftovers that differ between the two compiled versions. All six are recorded and shown in the report. Calls to registered HLE implementations are not logged or compared. Compared pointer arguments are normalized first: a pointer into a snapshot region compares by region and offset, a pointer into the calling thread's stack compares only as "a stack pointer" (the original and the replacement lay out their frames differently), any other value compares as is.
 
 Not compared: the stack below the call, registers other than the return registers, the code segment.
 
@@ -222,7 +222,7 @@ Not compared: the stack below the call, registers other than the return register
 
 - No TLS: functions that use `%fs` must not be called until M3 sets up TLS. The harness doesn't set `%fs`, so such a function would read and possibly overwrite glibc's own TLS block and thread control block, which can crash or corrupt the test process.
 - HLE implementations called from a diff test must be stateless, or keep their state in a snapshot region. Other state isn't restored between the two calls, and calls to implementations aren't compared.
-- No heap: an import such as `malloc` is a stub that returns 0. Functions that allocate wait for the HLE allocator (M3), which will draw from the arena so its memory is compared too.
+- No heap: an import such as `malloc` is a stub that returns 0. Functions that allocate wait for M3, where `malloc` comes either from an HLE allocator or from the loaded `libc.prx`. Either way its memory must come from the arena so it is compared too.
 - A crash in the original or the replacement kills the test binary. Isolating each call in a forked child can come later if it is needed.
 - The original code isn't instrumented by AddressSanitizer. Only the replacement and the harness are.
 - AddressSanitizer's stack-use-after-return detection, on by default, moves an instrumented function's locals into fake stack frames on the heap. Pointers to the replacement's locals would then not look like stack pointers and would compare unequal. The harness turns it off with `__asan_default_options()` returning `detect_stack_use_after_return=0`, defined in the harness's GoogleTest main so the linker keeps it.
