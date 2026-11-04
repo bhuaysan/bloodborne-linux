@@ -1,0 +1,17 @@
+#!/bin/sh
+# Checks the commit message for personal data and AI attribution.
+. "$(dirname "$0")/privacy-lib.sh"
+FAILED=0
+msg_file="$1"
+body="$(grep -v '^#' "$msg_file")"
+
+pat="$(privacy_pattern)"
+if printf '%s\n' "$body" | grep -qE -i -- "$pat"; then
+    fail "commit message contains personal data or absolute paths"
+fi
+if printf '%s\n' "$body" | grep -qE -i 'co-authored-by:.*(claude|anthropic|openai|copilot|gemini)|generated (with|by) .*(claude|ai)'; then
+    fail "commit message contains AI attribution"
+fi
+
+[ "$FAILED" -eq 0 ] || exit 1
+exit 0

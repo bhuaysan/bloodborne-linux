@@ -1,0 +1,31 @@
+# build output
+build/
+out/
+cmake-build-*/
+
+# local configuration
+local.env
+
+# analysis state (disassembler projects, extracted binaries)
+analysis/
+ghidra/
+*.gpr
+*.rep/
+*.lock
+*.lock~
+
+# game files - never commit
+*.bin
+*.elf
+*.prx
+*.sprx
+*.self
+*.sfo
+*.pkg
+*.dds
+*.at9
+
+# OS junk
+._*
+.DS_Store
+Thumbs.db

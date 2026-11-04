@@ -1,0 +1,42 @@
+#!/bin/sh
+# Blocks commits that would leak personal data, agent files or game data.
+. "$(dirname "$0")/privacy-lib.sh"
+FAILED=0
+MAX_BYTES=2097152
+
+# 1. identity
+email="$(git config user.email)"
+case "$email" in
+    *@users.noreply.github.com) ;;
+    *) fail "user.email must be a GitHub noreply address (got a different address)" ;;
+esac
+
+# 2. forbidden file names
+git diff --cached --name-only --diff-filter=ACMR | while IFS= read -r f; do
+    base="$(basename "$f")"
+    case "$f" in
+        CLAUDE.md|CLAUDE.local.md|.claude/*|*/.claude/*|.mcp.json|.rea/*|.cursor/*|.codex/*|GEMINI.md)
+            echo "agent file: $f" ;;
+    esac
+    case "$base" in
+        *.bin|*.elf|*.prx|*.sprx|*.self|*.sfo|*.pkg|*.dds|*.at9|._*|.DS_Store)
+            echo "game/OS file: $f" ;;
+    esac
+    size="$(git cat-file -s ":$f" 2>/dev/null || echo 0)"
+    [ "$size" -gt "$MAX_BYTES" ] && echo "file larger than 2 MB: $f"
+done > "${TMPDIR:-/tmp}/bbl-precommit.$$"
+if [ -s "${TMPDIR:-/tmp}/bbl-precommit.$$" ]; then
+    while IFS= read -r msg; do fail "$msg"; done < "${TMPDIR:-/tmp}/bbl-precommit.$$"
+fi
+rm -f "${TMPDIR:-/tmp}/bbl-precommit.$$"
+
+# 3. content of added lines
+pat="$(privacy_pattern)"
+hits="$(git diff --cached -U0 --no-color | grep -E '^\+[^+]' | grep -nE -i -- "$pat")"
+if [ -n "$hits" ]; then
+    fail "staged changes contain personal data or absolute paths:"
+    printf '%s\n' "$hits" | head -20 >&2
+fi
+
+[ "$FAILED" -eq 0 ] || { echo "commit blocked. Fix the issues above (do not use --no-verify)." >&2; exit 1; }
+exit 0
