@@ -3,7 +3,11 @@
 # identity. GitHub's merge button writes the account's display name into
 # the history, so it must not be used.
 #
-# Usage: tools/merge-pr.sh [--maintainer] <pr-number>
+# Usage: tools/merge-pr.sh [--maintainer] [--sha <commit>] <pr-number>
+#
+# --sha is the PR head commit the independent review saw. The merge is
+# refused if the PR branch points anywhere else, e.g. after a late push.
+# It is required unless --maintainer is given.
 #
 # Rebases the PR branch onto origin/main in a temporary worktree, runs
 # tools/run-tests.sh and tools/privacy-check.sh (which also checks
@@ -20,16 +24,28 @@
 #   3  main was pushed, but the merge was not confirmed or the branch
 #      could not be deleted. The message says what to do next. Do not
 #      re-run the script: main already has the commits.
-#   any other non-zero status: main was not updated (2 for a usage error)
+#   any other non-zero status: main was not updated (for example 2 for
+#      a usage error)
 set -eu
 
+usage() { echo "usage: $0 [--maintainer] [--sha <commit>] <pr-number>" >&2; exit 2; }
 maintainer=0
-if [ "${1:-}" = "--maintainer" ]; then maintainer=1; shift; fi
-[ $# -eq 1 ] || { echo "usage: $0 [--maintainer] <pr-number>" >&2; exit 2; }
+want_sha=
+while [ $# -gt 1 ]; do
+    case "$1" in
+        --maintainer) maintainer=1; shift ;;
+        --sha) [ $# -gt 2 ] || usage; want_sha="$2"; shift 2 ;;
+        *) usage ;;
+    esac
+done
+[ $# -eq 1 ] || usage
 pr="$1"
+[ -n "$want_sha" ] || [ "$maintainer" -eq 1 ] ||
+    { echo "--sha <commit> is required: the PR head the review saw" >&2; exit 2; }
 
 # Paths whose changes always go to the maintainer (pathspecs).
-PROTECTED="AGENTS.md docs/clean-room.md .gitignore .github tools/githooks tools/merge-pr.sh tools/privacy-check.sh tools/run-tests.sh tools/common/toolenv.py"
+# A .gitattributes can hide files from diffs, so any of them is protected.
+PROTECTED="AGENTS.md docs/clean-room.md .gitignore :(glob)**/.gitattributes .github tools/githooks tools/merge-pr.sh tools/privacy-check.sh tools/run-tests.sh tools/common/toolenv.py"
 MAX_CODE_LINES=500
 
 repo_root="$(git rev-parse --show-toplevel)"
@@ -42,10 +58,25 @@ esac
 state="$(gh pr view "$pr" --json state --jq .state)"
 base="$(gh pr view "$pr" --json baseRefName --jq .baseRefName)"
 head="$(gh pr view "$pr" --json headRefName --jq .headRefName)"
+head_oid="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
+fork="$(gh pr view "$pr" --json isCrossRepository --jq .isCrossRepository)"
 [ "$state" = "OPEN" ] || { echo "PR #$pr is $state" >&2; exit 1; }
 [ "$base" = "main" ] || { echo "PR #$pr targets $base, expected main" >&2; exit 1; }
+# for a fork, headRefName names the fork's branch, not one in origin
+[ "$fork" = "false" ] || { echo "PR #$pr comes from a fork, the maintainer merges it" >&2; exit 1; }
 
 git -C "$repo_root" fetch -q origin main "$head"
+fetched="$(git -C "$repo_root" rev-parse "origin/$head")"
+[ "$fetched" = "$head_oid" ] ||
+    { echo "origin/$head is $fetched, but GitHub shows $head_oid; try again" >&2; exit 1; }
+if [ -n "$want_sha" ]; then
+    reviewed="$(git -C "$repo_root" rev-parse -q --verify "$want_sha^{commit}")" ||
+        { echo "unknown commit: $want_sha" >&2; exit 1; }
+    [ "$reviewed" = "$fetched" ] || {
+        echo "PR #$pr head is $fetched, not the reviewed $reviewed; review the new commits first" >&2
+        exit 1
+    }
+fi
 
 wt="$(mktemp -d)"
 gh_err="$(mktemp)"
@@ -54,6 +85,8 @@ cleanup() {
     rm -rf "$wt" "$gh_err"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 git -C "$repo_root" worktree add -q --detach "$wt" "origin/$head"
 cd "$wt"
@@ -65,8 +98,11 @@ count="$(git rev-list --count origin/main..HEAD)"
 # shellcheck disable=SC2086  # PROTECTED is a list of pathspecs
 touched="$(git diff --name-only origin/main HEAD -- $PROTECTED)"
 # changed lines of code: everything except docs/ and symbols/
-lines="$(git diff --numstat origin/main HEAD -- . ':!docs' ':!symbols' |
-    awk '$1 != "-" { n += $1 + $2 } END { print n + 0 }')"
+# Counted from the patch with --text: --numstat shows a file marked -diff
+# in a .gitattributes as "-" and so would not count it. Real binaries
+# count by their line breaks, which sends large ones to the maintainer.
+lines="$(git diff -U0 --text --no-textconv --no-ext-diff --no-color origin/main HEAD -- . ':!docs' ':!symbols' |
+    awk '/^diff --git / { h = 0; next } /^@@/ { h = 1; next } h && /^[-+]/ { n++ } END { print n + 0 }')"
 if [ "$maintainer" -eq 0 ]; then
     [ -z "$touched" ] || {
         echo "PR #$pr changes protected paths, the maintainer merges it:" >&2
@@ -88,10 +124,6 @@ git log --oneline origin/main..HEAD
 
 new="$(git rev-parse HEAD)"
 short="$(git rev-parse --short "$new")"
-git push -q --force-with-lease="$head:origin/$head" origin "$new:refs/heads/$head"
-git push -q origin "$new:refs/heads/main"
-
-# From here on main is updated, so every failure exits 3.
 unconfirmed() {
     echo "error: $1" >&2
     echo "main is now $short; branch $head kept" >&2
@@ -99,6 +131,18 @@ unconfirmed() {
     exit 3
 }
 delete_hint="once PR #$pr shows as merged, run: git push origin --delete $head"
+
+git push -q --force-with-lease="$head:origin/$head" origin "$new:refs/heads/$head"
+if ! git push -q origin "$new:refs/heads/main"; then
+    # the remote may have taken the push before the connection failed
+    remote_main="$(git ls-remote origin refs/heads/main | cut -f1)" || remote_main=
+    [ "$remote_main" = "$new" ] ||
+        { echo "pushing main failed; main was not updated" >&2; exit 1; }
+    echo "warning: git push reported an error, but origin/main is $short" >&2
+fi
+
+# From here on main is updated, so every failure exits 3.
+trap 'unconfirmed "interrupted after pushing main" "$delete_hint"' INT TERM
 git -C "$repo_root" fetch -q origin main ||
     echo "warning: could not fetch origin/main" >&2
 
