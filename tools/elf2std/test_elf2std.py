@@ -525,10 +525,17 @@ class GameTests(unittest.TestCase):
                     with tempfile.NamedTemporaryFile(suffix=".elf") as tmp:
                         tmp.write(result.data)
                         tmp.flush()
-                        run = subprocess.run([readelf, "-h", "-l", "-S", "-d", "-r", "--dyn-syms",
-                                              "-W", tmp.name], capture_output=True, text=True)
-                    self.assertEqual(run.returncode, 0)
-                    self.assertEqual(run.stderr, "")
+                        # With section headers, readelf finds relocations and dynamic symbols
+                        # only with --use-dynamic, and combining that with -r and --dyn-syms in
+                        # one run makes it report bad symbol indexes (also without sections).
+                        for args in (["-h", "-l", "-S", "-d"], ["-r", "--use-dynamic"],
+                                     ["--dyn-syms", "--use-dynamic"]):
+                            run = subprocess.run([readelf, *args, "-W", tmp.name],
+                                                 capture_output=True, text=True)
+                            self.assertEqual((run.returncode, run.stderr), (0, ""), args)
+                            if args[0] == "-r":
+                                self.assertEqual(run.stdout.count(" R_X86_64_"),
+                                                 result.plt_relocs + result.relocs)
         self.assertEqual(converted, set(e.KNOWN_FILES.values()))
 
 
