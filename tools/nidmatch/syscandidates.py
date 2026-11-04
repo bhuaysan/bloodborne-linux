@@ -29,7 +29,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 from toolenv import analysis_dir  # noqa: E402
 
 OUT_DIR = analysis_dir() / "nids" / "candidates"
-IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Page files are named <name>.<section>[<suffix>][.<compression>], e.g. pthread_create.3.gz or
+# BIO_read.3ssl.gz. Anything else in a man directory (README, index files) is not a page.
+PAGE_RE = r"([A-Za-z_][A-Za-z0-9_]*)\.{section}[a-z0-9]*(?:\.(?:gz|bz2|xz|zst|lzma|Z))?"
 LIBS = {"glibc": ["libc.so.6", "libm.so.6"], "libstdcxx": ["libstdc++.so.6"]}
 
 
@@ -43,16 +45,15 @@ def man_dirs() -> list[Path]:
 
 
 def man_names(man_dirs: list[Path], section: str) -> set[str]:
-    # Page files are named <name>.<section>[<suffix>][.gz], e.g. pthread_create.3.gz, BIO_read.3ssl.gz
+    page_re = re.compile(PAGE_RE.format(section=re.escape(section)))
     names = set()
     for man_dir in man_dirs:
         section_dir = man_dir / f"man{section}"
         if not section_dir.is_dir():
             continue
         for path in section_dir.iterdir():
-            name = path.name.split(f".{section}", 1)[0]
-            if IDENT_RE.fullmatch(name):
-                names.add(name)
+            if m := page_re.fullmatch(path.name):
+                names.add(m.group(1))
     return names
 
 
@@ -95,8 +96,8 @@ def main(argv: list[str] | None = None) -> int:
                              "finds them)")
     args = parser.parse_args(argv)
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
     try:
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
         dirs = args.man_dir or man_dirs()
         for section in ("2", "3"):
             write_list(OUT_DIR / f"man{section}.txt",
@@ -108,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
                 names |= defined_symbols(args.lib_dir / lib if args.lib_dir else find_library(lib))
             write_list(OUT_DIR / f"{label}.txt",
                        [f"Symbols defined by the system's {', '.join(libs)}"], names)
-    except (OSError, subprocess.CalledProcessError, UnicodeEncodeError) as exc:
+    except (OSError, subprocess.CalledProcessError, UnicodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0

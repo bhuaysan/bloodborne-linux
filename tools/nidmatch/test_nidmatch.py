@@ -21,6 +21,7 @@ TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS / "nidmatch"))
 sys.path.insert(0, str(TOOLS / "common"))
 import nidmatch as m  # noqa: E402
+import syscandidates  # noqa: E402
 from nid import NID_ALPHABET, is_nid, nid  # noqa: E402
 from toolenv import load_game_dir  # noqa: E402
 
@@ -186,6 +187,7 @@ class MatchTest(unittest.TestCase):
             (f"{nid('alpha_func')},libA,alpha_func,\n", "no source"),
             (f"{nid('alpha_func')},libA\n", "wrong number of fields"),
             (f"{nid('alpha_func')},libA,alpha_func,x,y\n", "wrong number of fields"),
+            (f"{nid('alpha_func')},libA,stré,x\n", "not a symbol name"),
         ]
         for line, message in bad:
             self.fx.nids_csv.write_text("nid,library,name,source\n" + line)
@@ -204,6 +206,23 @@ class MatchTest(unittest.TestCase):
         code, _, err = self.fx.run()
         self.assertEqual(code, 1)
         self.assertIn("source label", err)
+
+    def test_duplicate_label(self):
+        (self.fx.curated / "hand.txt").write_text("gamma\n")
+        extra = self.fx.root / "hand.txt"
+        extra.write_text("unknown_one\n")
+        code, _, err = self.fx.run(str(extra))
+        self.assertEqual(code, 1)
+        self.assertIn("both give the source label 'hand'", err)
+
+    def test_firmware_count_is_per_importer(self):
+        # main gets delta from lib.elf. lib, outside the load set, gets it from firmware. So delta is
+        # not a firmware import of the load set.
+        (self.fx.row("main", "import", "delta", "libC", provided_by="lib.elf")
+                .row("lib", "import", "delta", "libC"))
+        code, out, err = self.fx.run()
+        self.assertEqual(code, 0, err)
+        self.assertIn("static load set: 1 of 2", out)
 
     def test_one_module_per_nid_and_library(self):
         self.fx.row("lib", "import", "alpha_func", "libA", module="otherModule")
@@ -237,6 +256,18 @@ class MatchTest(unittest.TestCase):
         with mock.patch.object(m, "FILE_STEMS", ["absent"]):
             with self.assertRaisesRegex(m.MatchError, "is missing"):
                 m.load_nids(self.fx.imports)
+
+
+class ManNamesTest(unittest.TestCase):
+    def test_page_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            man3 = Path(tmp) / "man3"
+            man3.mkdir()
+            for name in ["pthread_create.3.gz", "BIO_read.3ssl.gz", "qsort.3", "README",
+                         "index.db", "foo.3bar.3.gz", "printf.1.gz"]:
+                (man3 / name).touch()
+            self.assertEqual(syscandidates.man_names([Path(tmp), Path(tmp) / "absent"], "3"),
+                             {"pthread_create", "BIO_read", "qsort"})
 
 
 @unittest.skipUnless(load_game_dir()

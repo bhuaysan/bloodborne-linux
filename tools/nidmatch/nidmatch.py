@@ -74,7 +74,9 @@ class Use:
     types: set[str] = field(default_factory=set)
     importers: set[str] = field(default_factory=set)
     exporters: set[str] = field(default_factory=set)
-    from_firmware: bool = False  # imported by some file and not provided by a bundled PRX
+    # Importers that get the NID from the firmware, i.e. from no PRX they load. Kept per file: one
+    # file may get a NID from a bundled PRX while another file without that PRX gets it from firmware.
+    firmware_importers: set[str] = field(default_factory=set)
 
 
 # nid -> library -> Use
@@ -115,7 +117,8 @@ def load_nids(imports_dir: Path) -> NidTable:
                     use.exporters.add(stem)
                 else:
                     use.importers.add(stem)
-                    use.from_firmware |= row["provided_by"] == "firmware"
+                    if row["provided_by"] == "firmware":
+                        use.firmware_importers.add(stem)
     return dict(table)
 
 
@@ -134,6 +137,16 @@ def read_candidate_file(path: Path, candidates: Candidates) -> None:
         name = line.split("#", 1)[0].strip()
         if name:
             add(candidates, name, label, f"{path}:{lineno}")
+
+
+def check_unique_labels(files: list[Path]) -> None:
+    """Each candidate file must give its own label. Two files with one stem would share it, and
+    read_nids_csv could not tell their names apart."""
+    seen: dict[str, Path] = {}
+    for path in files:
+        first = seen.setdefault(path.stem, path)
+        if first != path:
+            raise MatchError(f"{first} and {path} both give the source label {path.stem!r}")
 
 
 def read_pinned_elfs(elf_dir: Path) -> dict[str, bytes]:
@@ -181,6 +194,8 @@ def read_nids_csv(path: Path, table: NidTable, candidates: Candidates, rederived
         for lineno, row in enumerate(reader, 2):
             where = f"{path}:{lineno}"
             check_fields(row, where)
+            if not NAME_RE.fullmatch(row["name"]):
+                raise MatchError(f"{where}: not a symbol name: {row['name']!r}")
             if nid(row["name"]) != row["nid"]:
                 raise MatchError(f"{where}: {row['name']} does not hash to {row['nid']}")
             if row["library"] not in table.get(row["nid"], {}):
@@ -232,7 +247,7 @@ def report(table: NidTable, found: dict[str, tuple[str, set[str]]], load_set: se
             stats[lib][1] += h in found
             if use.exporters:
                 exported.add(lib)
-            if use.from_firmware and use.importers & load_set:
+            if use.firmware_importers & load_set:
                 static_total += 1
                 static_matched += h in found
 
@@ -280,15 +295,17 @@ def main(argv: list[str] | None = None) -> int:
         table = load_nids(IMPORTS_DIR)
         elfs = read_pinned_elfs(ELF_DIR)
         curated = sorted(CURATED_DIR.glob("*.txt"))
+        files = curated + sorted(GENERATED_DIR.glob("*.txt")) + args.files
+        check_unique_labels(files)
         candidates: Candidates = {}
         read_nids_csv(NIDS_CSV, table, candidates,
                       {path.stem for path in curated} | set(args.withdraw))
-        for path in curated + sorted(GENERATED_DIR.glob("*.txt")) + args.files:
+        for path in files:
             read_candidate_file(path, candidates)
         read_strings(elfs, candidates)
         found = match(table, candidates)
         load_set = static_load_set(elfs)
-    except (OSError, UnicodeDecodeError, MatchError, ElfError) as exc:
+    except (OSError, UnicodeError, MatchError, ElfError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
