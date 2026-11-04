@@ -11,7 +11,8 @@ Input:
                                   label = strings:<file stem>
     symbols/nids.csv              earlier matches, hashed again on every run (see read_nids_csv)
     symbols/candidates/*.txt      hand-picked names (committed), label = file stem
-    analysis/nids/candidates/     generated lists (local, see syscandidates.py), label = file stem
+    analysis/nids/candidates/     generated lists (local, see syscandidates.py and derive.py),
+                                  label = file stem
     FILE ...                      extra candidate files, label = file stem
 
 Candidate files hold one name per line. '#' starts a comment. A file's stem is its source label,
@@ -58,6 +59,13 @@ IDENT_RE = re.compile(rb"[A-Za-z_][A-Za-z0-9_]{2,}")
 # Labels are joined with ';' in nids.csv, and 'strings:' marks the labels of read_strings.
 LABEL_RE = re.compile(r"[A-Za-z0-9_.+-]+")
 STRINGS_PREFIX = "strings:"
+# Labels of the lists written by derive.py.
+DERIVED_PREFIX = "derive-"
+# Libraries whose NID tables were seen by accident (exposure log in docs/clean-room.md), plus
+# libSceSaveDataDialog, whose names start with the libSceSaveData prefix. Derivation rules skip
+# them, and a name for one of them needs a source other than a derivation rule.
+NO_DERIVE_LIBRARIES = frozenset({"libSceRemoteplay", "libSceSaveData", "libSceRegMgr", "libSceRtc",
+                                 "libSceSaveDataDialog"})
 
 
 class MatchError(Exception):
@@ -197,6 +205,15 @@ def match(table: NidTable, candidates: Candidates) -> dict[str, tuple[str, set[s
     return found
 
 
+def check_derived(table: NidTable, found: dict[str, tuple[str, set[str]]]) -> None:
+    """A derivation rule alone may not name a NID of the libraries in NO_DERIVE_LIBRARIES."""
+    for h, (name, labels) in found.items():
+        blocked = sorted(NO_DERIVE_LIBRARIES & table[h].keys())
+        if blocked and all(label.startswith(DERIVED_PREFIX) for label in labels):
+            raise MatchError(f"{name} names a NID of {', '.join(blocked)} but comes only from "
+                             f"derivation rules ({';'.join(sorted(labels))})")
+
+
 def nids_rows(table: NidTable, found: dict[str, tuple[str, set[str]]]) -> list[dict[str, str]]:
     rows = [{"nid": h, "library": lib, "name": name, "source": ";".join(sorted(labels))}
             for h, (name, labels) in found.items() for lib in table[h]]
@@ -281,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
             read_candidate_file(path, candidates)
         read_strings(elfs, candidates)
         found = match(table, candidates)
+        check_derived(table, found)
         load_set = {Path(info.name).stem for info in elfimports.static_load_set(infos)}
     except LoadError as exc:
         print(exc, file=sys.stderr)

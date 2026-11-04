@@ -21,6 +21,7 @@ TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS / "nidmatch"))
 sys.path.insert(0, str(TOOLS / "common"))
 sys.path.insert(0, str(TOOLS / "elfimports"))
+import derive  # noqa: E402
 import elfimports  # noqa: E402
 import nidmatch as m  # noqa: E402
 import syscandidates  # noqa: E402
@@ -296,6 +297,89 @@ class MatchTest(unittest.TestCase):
         self.fx.imp("other", "x", "libC", module="lib")
         with self.assertRaises(ValueError):
             self.fx.imp("other", "delta", "libC", module="lib", needed="lib.sprx")
+
+    def test_derived_name_of_blocked_library(self):
+        self.fx.imp("main", "sceRtcThing", "libSceRtc")
+        derived = self.fx.root / "derive-words.txt"
+        derived.write_text("sceRtcThing\n")
+        code, _, err = self.fx.run(str(derived))
+        self.assertEqual(code, 1)
+        self.assertIn("sceRtcThing names a NID of libSceRtc but comes only from derivation", err)
+        # With an independent source as well, the name is accepted.
+        (self.fx.curated / "hand.txt").write_text("sceRtcThing  # seen in use\n")
+        code, _, err = self.fx.run(str(derived))
+        self.assertEqual(code, 0, err)
+        row = next(r for r in self.fx.nids() if r["name"] == "sceRtcThing")
+        self.assertEqual(row["source"], "derive-words;hand")
+
+
+def table_of(names_by_lib: dict[str, list[str]]) -> m.NidTable:
+    return {nid(n): {lib: m.Use(lib)} for lib, names in names_by_lib.items() for n in names}
+
+
+class DeriveTest(unittest.TestCase):
+    def test_nid_key(self):
+        for name in ["strlen", "sceFoo"]:
+            digest = hashlib.sha1(name.encode() + derive.NID_SUFFIX).digest()
+            self.assertEqual(derive.nid_key(nid(name)), digest[:8])
+
+    def test_words(self):
+        self.assertEqual(derive.words("FiosFHOpenSync"), ["Fios", "FH", "Open", "Sync"])
+        self.assertEqual(derive.words("pthread_attr_setstacksize"),
+                         ["Pthread", "Attr", "Setstacksize"])
+        self.assertEqual(derive.camel("pthread_attr_setstacksize"), "PthreadAttrSetstacksize")
+        self.assertEqual(derive.camel("_exit"), "Exit")
+
+    def test_prefixes(self):
+        self.assertEqual(derive.prefixes("libSceNpMatching2"),
+                         {"sceNp", "sceNpMatching", "sceNpMatching2"})
+        self.assertEqual(derive.prefixes("libSceFios2"), {"sceFios", "sceFios2"})
+        self.assertEqual(derive.prefixes("libkernel"), {"sce", "sceKernel"})
+        self.assertEqual(derive.prefixes("libSceNet"), {"sceNet"})
+        self.assertEqual(derive.prefixes("libc"), set())
+        for lib in m.NO_DERIVE_LIBRARIES:
+            self.assertEqual(derive.prefixes(lib), set(), lib)
+
+    def test_new_combos_partition(self):
+        old, new = [b"a", b"b"], [b"c", b"d", b"e"]
+        for k in (1, 2, 3):
+            combos = list(derive.new_combos(old, new, k))
+            self.assertEqual(len(combos), len(set(combos)))
+            self.assertEqual(len(combos), 5 ** k - 2 ** k)
+            self.assertTrue(all(any(w in new for w in c) for c in combos))
+        self.assertEqual(list(derive.new_combos([], [b"x"], 2)), [(b"x", b"x")])
+
+    def test_derive(self):
+        table = table_of({
+            "libkernel": ["sceKernelOpen", "scePthreadSelf"],
+            "libSceFoo": ["sceFooBarOpen",          # sce words: Bar from the seed, Open
+                          "sceFooQuuxZap",          # all words: Quux, Zap from identifiers
+                          "sceFooBarOpenQuuxZap",   # 4 words: out of reach
+                          "sceKernelOpenThing"],    # wrong prefix for libSceFoo
+            "libSceRtc": ["sceRtcOpen"],            # blocked
+        })
+        seed = {"sceFooBarClose"}
+        c_names = {"open", "pthread_self", "Not_C"}
+        idents = {"QuuxZap", "useQuux", "anotherZap", "lonelyWord"}
+        result = derive.derive(derive.targets(table), seed, c_names, idents)
+        self.assertEqual(result[derive.POSIX_LABEL], {"sceKernelOpen", "scePthreadSelf"})
+        self.assertEqual(result[derive.WORDS_LABEL],
+                         {"sceKernelOpen", "scePthreadSelf", "sceFooBarOpen", "sceFooQuuxZap"})
+
+    def test_blocked_prefix_from_other_library(self):
+        # The bare 'sce' of libkernel could spell a libSceRtc name. Such names are dropped.
+        table = table_of({"libkernel": ["sceRtcOpen"]})
+        result = derive.derive(derive.targets(table), {"sceRtcClose"}, {"open"}, set())
+        self.assertEqual(result, {derive.POSIX_LABEL: set(), derive.WORDS_LABEL: set()})
+
+    def test_read_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "nids.csv"
+            path.write_text("nid,library,name,source\n"
+                            "x,libA,a,derive-words\n"
+                            "x,libA,b,derive-posix;glibc\n"
+                            "x,libA,c,strings:eboot\n")
+            self.assertEqual(derive.read_seed(path), {"b", "c"})
 
 
 class ManNamesTest(unittest.TestCase):
