@@ -210,16 +210,11 @@ def format_header(subsystem: str, items: list[dict]) -> str:
 
 def write_types(types_dir: Path, exported: dict[str, list[dict]]) -> None:
     """Write each header that changed, or none if one fails. Other headers stay as they are."""
-    for subsystem in exported:
-        if not SUBSYSTEM.fullmatch(subsystem):
-            raise SyncError(f"/bb/{subsystem}: use letters, digits and _ for subsystem names")
-    homes: dict[str, list[str]] = {}
-    for subsystem, items in sorted(exported.items()):
-        for item in items:
-            homes.setdefault(item["name"], []).append(subsystem)
-    clashes = [f"{n} (/bb/{', /bb/'.join(s)})" for n, s in sorted(homes.items()) if len(s) > 1]
-    if clashes:  # C has one namespace for all headers
-        raise SyncError("type names used in more than one subsystem: " + ", ".join(clashes))
+    if bad := [s for s in exported if not SUBSYSTEM.fullmatch(s)]:
+        raise SyncError(f"/bb/{bad[0]}: use letters, digits and _ for subsystem names")
+    names = [item["name"] for items in exported.values() for item in items]
+    if clashes := sorted({n for n in names if names.count(n) > 1}):  # C has one namespace
+        raise SyncError("type names in more than one /bb subsystem: " + ", ".join(clashes))
     texts = {s: format_header(s, items) for s, items in exported.items()}
     topo_order({s: set(INCLUDE.findall(text)) & set(texts) for s, text in texts.items()},
                "subsystems in /bb (pointers count)")
@@ -233,10 +228,8 @@ def read_headers(types_dir: Path) -> list[dict]:
     check _Static_assert, so the sizes and the enum values are read here."""
     texts = {path.stem: path.read_text() for path in sorted(types_dir.glob("*.h"))}
     deps = {name: set(INCLUDE.findall(text)) - {name} for name, text in texts.items()}
-    for name, includes in deps.items():
-        if includes - set(texts):
-            raise SyncError(f"types/{name}.h includes a missing header: "
-                            + ", ".join(sorted(includes - set(texts))))
+    if missing := sorted(set().union(*deps.values()) - set(texts)):
+        raise SyncError("types/ includes missing headers: " + ", ".join(missing))
     return [{"subsystem": name, "text": INCLUDE.sub("", texts[name]),
              "sizes": {t: int(size, 0) for t, size in SIZE_ASSERT.findall(texts[name])},
              "enums": {e: [[n, int(v)] for n, v in ENUM_VALUE.findall(body)]
@@ -332,10 +325,8 @@ def run_scripts(project: Path, target: list[str], tmp: Path,
     for script, path in results:
         if not path.is_file():
             raise SyncError(f"{script} did not finish:\n{tail}")
-    if not export:
-        return None
     return {key: value for _, path in results[-2:]
-            for key, value in json.loads(path.read_text()).items()}
+            for key, value in json.loads(path.read_text()).items()} if export else None
 
 
 def sync(project: Path, symbols: Path, target: list[str], do_import: bool,
