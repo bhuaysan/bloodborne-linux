@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import re
 import sys
 from collections import defaultdict
@@ -43,7 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "elfimports"))
 import elfimports  # noqa: E402
 from nid import is_nid, nid  # noqa: E402
 from ps4elf import PINNED_ELFS, ElfError, parse  # noqa: E402
-from toolenv import REPO_ROOT, analysis_dir  # noqa: E402
+from toolenv import REPO_ROOT, PinnedError, analysis_dir, read_pinned  # noqa: E402
 
 IMPORTS_DIR = analysis_dir() / "imports"
 ELF_DIR = analysis_dir() / "elf"
@@ -152,11 +151,11 @@ def check_unique_labels(files: list[Path]) -> None:
 def read_pinned_elfs(elf_dir: Path) -> dict[str, bytes]:
     """File name -> contents of each pinned ELF, checked against its pinned hash."""
     elfs = {}
-    for digest, file_name in sorted(PINNED_ELFS.items(), key=lambda kv: kv[1]):
+    for file_name in sorted(PINNED_ELFS.values()):
         path = elf_dir / file_name
-        data = path.read_bytes()
-        if hashlib.sha256(data).hexdigest() != digest:
-            raise MatchError(f"{path} is not the pinned self2elf output")
+        name, data = read_pinned(path, PINNED_ELFS)
+        if name != file_name:
+            raise MatchError(f"{path} holds the pinned {name}")
         elfs[file_name] = data
     return elfs
 
@@ -305,7 +304,7 @@ def main(argv: list[str] | None = None) -> int:
         read_strings(elfs, candidates)
         found = match(table, candidates)
         load_set = static_load_set(elfs)
-    except (OSError, UnicodeError, MatchError, ElfError) as exc:
+    except (OSError, UnicodeError, MatchError, PinnedError, ElfError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

@@ -1,4 +1,5 @@
-"""Shared helpers for the Python tools: repository paths, local.env and ELF header layouts.
+"""Shared helpers for the Python tools: repository paths, local.env, pinned files and ELF
+header layouts.
 
 local.env and analysis/ are untracked, so they exist only in the main checkout. A linked git
 worktree (`git worktree add`) has neither. main_checkout() finds the main checkout so that tools
@@ -7,6 +8,7 @@ and tests behave the same in both.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import struct
 import subprocess
@@ -65,3 +67,22 @@ def load_game_dir() -> Path | None:
 
 def is_inside(path: Path, parent: Path) -> bool:
     return path == parent or parent in path.parents
+
+
+class PinnedError(Exception):
+    pass
+
+
+def read_pinned(path: Path, pinned: dict[str, str]) -> tuple[str, bytes]:
+    """Pinned name and contents of a file. `pinned` maps SHA-256 hex digests to names.
+
+    Every tool reads its game-derived inputs through this, so all of them refuse other builds in
+    the same way. Callers pass their own table at call time, which lets tests replace it.
+    """
+    data = path.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    name = pinned.get(digest)
+    if name is None:
+        raise PinnedError(f"not a pinned file (sha256 {digest}); "
+                          "only CUSA03173 patch 1.09 is supported")
+    return name, data

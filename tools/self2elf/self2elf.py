@@ -21,7 +21,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
-from toolenv import ELF_HEADER, ELF_PHDR, Phdr, analysis_dir, is_inside, load_game_dir  # noqa: E402
+from toolenv import (  # noqa: E402
+    ELF_HEADER, ELF_PHDR, Phdr, PinnedError, analysis_dir, is_inside, load_game_dir, read_pinned,
+)
 
 DEFAULT_OUT = analysis_dir() / "elf"
 
@@ -182,13 +184,9 @@ def main(argv: list[str] | None = None) -> int:
     failed = 0
     for path in files:
         try:
-            data = path.read_bytes()
-            digest = hashlib.sha256(data).hexdigest()
-            known = KNOWN_FILES.get(digest)
-            if known is None:
-                raise SelfError(f"unknown build (sha256 {digest}); only CUSA03173 patch 1.09 is supported")
+            known, data = read_pinned(path, KNOWN_FILES)
             image = self_to_elf(data)
-        except (OSError, SelfError) as exc:
+        except (OSError, PinnedError, SelfError) as exc:
             print(f"{path.name}: error: {exc}", file=sys.stderr)
             failed += 1
             continue

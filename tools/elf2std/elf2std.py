@@ -27,14 +27,15 @@ analysis/ is the one in the main checkout, also when run from a linked git workt
 from __future__ import annotations
 
 import argparse
-import hashlib
 import struct
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
-from toolenv import ELF_HEADER, ELF_PHDR, Phdr, analysis_dir, is_inside, load_game_dir  # noqa: E402
+from toolenv import (  # noqa: E402
+    ELF_HEADER, ELF_PHDR, Phdr, PinnedError, analysis_dir, is_inside, load_game_dir, read_pinned,
+)
 from ps4elf import (  # noqa: E402,F401  (re-exported for the tests)
     DT_HASH, DT_JMPREL, DT_LOOS, DT_NULL, DT_PLTGOT, DT_PLTREL, DT_PLTRELSZ, DT_RELA, DT_RELAENT,
     DT_RELASZ, DT_SCE_FIRST, DT_SCE_HASH, DT_SCE_HASHSZ, DT_SCE_JMPREL, DT_SCE_LAST, DT_SCE_PLTGOT,
@@ -214,13 +215,9 @@ def main(argv: list[str] | None = None) -> int:
     failed = 0
     for path in files:
         try:
-            data = path.read_bytes()
-            digest = hashlib.sha256(data).hexdigest()
-            known = KNOWN_FILES.get(digest)
-            if known is None:
-                raise ElfError(f"not a pinned self2elf output (sha256 {digest})")
+            known, data = read_pinned(path, KNOWN_FILES)
             result = convert(data)
-        except (OSError, ElfError) as exc:
+        except (OSError, PinnedError, ElfError) as exc:
             print(f"{path}: error: {exc}", file=sys.stderr)
             failed += 1
             continue

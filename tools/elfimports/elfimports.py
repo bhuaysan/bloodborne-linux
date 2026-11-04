@@ -21,14 +21,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
-from toolenv import analysis_dir, is_inside, load_game_dir  # noqa: E402
+from toolenv import PinnedError, analysis_dir, is_inside, load_game_dir, read_pinned  # noqa: E402
 from nid import NID_ALPHABET, is_nid  # noqa: E402
 from ps4elf import (  # noqa: E402
     DT_NEEDED, DT_SCE_EXPORT_LIB, DT_SCE_EXPORT_LIB_ATTR, DT_SCE_IMPORT_LIB,
@@ -381,13 +380,9 @@ def main(argv: list[str] | None = None) -> int:
     failed = 0
     for path in files:
         try:
-            data = path.read_bytes()
-            digest = hashlib.sha256(data).hexdigest()
-            known = KNOWN_FILES.get(digest)
-            if known is None:
-                raise ElfError(f"not a pinned self2elf output (sha256 {digest})")
+            known, data = read_pinned(path, KNOWN_FILES)
             infos.append(analyze(known, parse(data)))
-        except (OSError, ElfError, UnicodeDecodeError) as exc:
+        except (OSError, PinnedError, ElfError, UnicodeDecodeError) as exc:
             print(f"{path}: error: {exc}", file=sys.stderr)
             failed += 1
     if failed:

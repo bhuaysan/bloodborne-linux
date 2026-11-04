@@ -23,7 +23,7 @@ sys.path.insert(0, str(TOOLS / "common"))
 import nidmatch as m  # noqa: E402
 import syscandidates  # noqa: E402
 from nid import NID_ALPHABET, is_nid, nid  # noqa: E402
-from toolenv import load_game_dir  # noqa: E402
+from toolenv import PinnedError, load_game_dir  # noqa: E402
 
 # Exports of the pinned libc.prx, named by matching. strlen (0x2f970) and strcmp (0x30160) were
 # also checked against their disassembly. Derived by us, see docs/formats/nid.md.
@@ -249,7 +249,17 @@ class MatchTest(unittest.TestCase):
         (self.fx.elf / "lib.elf").write_bytes(b"changed")
         pinned = {hashlib.sha256(b"original").hexdigest(): "lib.elf"}
         with mock.patch.object(m, "PINNED_ELFS", pinned):
-            with self.assertRaisesRegex(m.MatchError, "not the pinned"):
+            with self.assertRaisesRegex(PinnedError, "not a pinned file"):
+                m.read_pinned_elfs(self.fx.elf)
+
+    def test_elf_must_have_its_pinned_name(self):
+        # Pinned contents under the name of another pinned file.
+        for name, data in [("main.elf", b"one"), ("lib.elf", b"one")]:
+            (self.fx.elf / name).write_bytes(data)
+        pinned = {hashlib.sha256(b"one").hexdigest(): "main.elf",
+                  hashlib.sha256(b"two").hexdigest(): "lib.elf"}
+        with mock.patch.object(m, "PINNED_ELFS", pinned):
+            with self.assertRaisesRegex(m.MatchError, "lib.elf holds the pinned main.elf"):
                 m.read_pinned_elfs(self.fx.elf)
 
     def test_missing_imports(self):
