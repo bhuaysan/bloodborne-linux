@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import shutil
 import struct
 import sys
@@ -297,6 +298,22 @@ FIXTURE = HEADER + "".join([
 ])
 
 
+# Run before TypesExport.py: adds /bb/odd/Odd, whose first field is an undefined3. Ghidra's C
+# parser would give that field 4 bytes, so export must refuse it.
+ADD_UNALIGNED_FIELD = """\
+# @runtime PyGhidra
+from ghidra.program.model.data import (CategoryPath, IntegerDataType, StructureDataType,
+                                       Undefined3DataType)
+dtm = currentProgram.getDataTypeManager()
+odd = StructureDataType(CategoryPath("/bb/odd"), "Odd", 0)
+odd.add(Undefined3DataType.dataType, "three", None)
+odd.add(IntegerDataType.dataType, "after", None)
+tx = dtm.startTransaction("add Odd")
+dtm.addDataType(odd, None)
+dtm.endTransaction(tx, True)
+"""
+
+
 def pyghidra_missing() -> str:
     """Why the round trip cannot run here, or an empty string."""
     try:
@@ -338,6 +355,38 @@ class GhidraRoundTripTest(unittest.TestCase):
                          {a: (r["name"], r["signature"]) for a, r in fixture.items()})
         merged = g.merge_functions(fixture, g.import_rows(exported))
         self.assertEqual(g.format_functions(merged), FIXTURE)
+
+    def test_failures_change_nothing(self):
+        """A header the parser rejects stops the import before the functions and nothing is
+        saved. Export refuses a field the parser would move."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "test.elf").write_bytes(build_elf())
+            symbols = tmp / "symbols"
+            (symbols / "types").mkdir(parents=True)
+            (symbols / "functions.csv").write_text(FIXTURE)
+            (symbols / "types" / "core.h").write_text(CORE_H)
+            project = tmp / "proj" / "sync.gpr"
+            with contextlib.redirect_stdout(io.StringIO()):
+                g.sync(project, symbols, ["-import", str(tmp / "test.elf")], True, False)
+            # a field named with a C keyword, and a renamed function that must not be applied
+            (symbols / "functions.csv").write_text(FIXTURE.replace("add_two,", "renamed,"))
+            (symbols / "types" / "bad.h").write_text(
+                "struct Bad {\n    int default;\n};\n")
+            with self.assertRaisesRegex(g.SyncError, "TypesImport.py did not finish"):
+                g.sync(project, symbols, ["-process", "test.elf", "-noanalysis"], True, False)
+            script = tmp / "AddUnalignedField.py"
+            script.write_text(ADD_UNALIGNED_FIELD)
+            functions_out, types_out = tmp / "functions-out.json", tmp / "types-out.json"
+            tail = g.run_headless(project, ["-process", "test.elf", "-noanalysis", "-readOnly"],
+                                  [["SymbolsExport.py", str(functions_out)], [str(script)],
+                                   ["TypesExport.py", str(types_out)]])
+            names = {f["name"] for f in json.loads(functions_out.read_text())["functions"]}
+            types_written = types_out.exists()
+        self.assertIn("add_two", names)
+        self.assertNotIn("renamed", names)
+        self.assertFalse(types_written)
+        self.assertIn("/bb/odd/Odd: field three at 0x0: undefined3 has 3 bytes", tail)
 
 
 if __name__ == "__main__":

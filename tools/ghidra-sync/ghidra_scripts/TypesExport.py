@@ -36,6 +36,17 @@ def ref(dt, user):
     return {"name": str(dt.getName()), "tag": tag, "subsystem": str(path.getName())}
 
 
+def unaligned_builtin(dt):
+    """The builtin a field of type dt holds, through typedefs and arrays, if its aligned length
+    differs from its length (undefined3, int3, uint5, float10, ...). Ghidra's C parser gives
+    such a field its aligned length even under pack(1), which moves it and every later field."""
+    while isinstance(dt, (TypeDef, Array)):
+        dt = dt.getBaseDataType() if isinstance(dt, TypeDef) else dt.getDataType()
+    if isinstance(dt, BuiltInDataType) and dt.getAlignedLength() != dt.getLength():
+        return dt
+    return None
+
+
 def describe(dt):
     if isinstance(dt, (Pointer, Array)):
         return None  # derived types, written where they are used
@@ -52,6 +63,12 @@ def describe(dt):
                 fail(dt.getPathName(), f"field at {comp.getOffset():#x}: bit fields and fields "
                      "of variable or zero length are not supported")
             name = str(comp.getFieldName() or comp.getDefaultFieldName())
+            builtin = unaligned_builtin(comp.getDataType())
+            if builtin is not None:
+                fail(dt.getPathName(), f"field {name} at {comp.getOffset():#x}: "
+                     f"{builtin.getName()} has {builtin.getLength()} bytes but an aligned length "
+                     f"of {builtin.getAlignedLength()}, which the C parser would give it; use "
+                     "a byte array instead")
             if name.startswith("_pad_"):
                 fail(dt.getPathName(), f"field name {name}: the prefix _pad_ is reserved for gaps")
             fields.append({"offset": comp.getOffset(), "size": comp.getLength(), "name": name,
