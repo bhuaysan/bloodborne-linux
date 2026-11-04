@@ -447,8 +447,8 @@ class MainTests(unittest.TestCase):
         self.elf_dir = self.tmp / "elf"
         self.elf_dir.mkdir()
         known = {hashlib.sha256(self.src).hexdigest(): "synthetic.elf"}
-        for patch in (mock.patch.object(e, "KNOWN_FILES", known),
-                      mock.patch.object(e, "DEFAULT_IN", self.elf_dir)):
+        for patch in (mock.patch.object(e, "PINNED_ELFS", known),
+                      mock.patch.object(e, "ELF_DIR", self.elf_dir)):
             patch.start()
             self.addCleanup(patch.stop)
 
@@ -514,7 +514,7 @@ class GameTests(unittest.TestCase):
         for path in self2elf.default_inputs(GAME_DIR):
             with self.subTest(path.name):
                 data = self2elf.self_to_elf(path.read_bytes()).data
-                known = e.KNOWN_FILES.get(hashlib.sha256(data).hexdigest())
+                known = e.PINNED_ELFS.get(hashlib.sha256(data).hexdigest())
                 self.assertIsNotNone(known, "rebuilt ELF is not pinned in elf2std")
                 converted.add(known)
                 result = e.convert(data)
@@ -548,7 +548,7 @@ class GameTests(unittest.TestCase):
                             if args[0] == "-r":
                                 self.assertEqual(run.stdout.count(" R_X86_64_"),
                                                  result.plt_relocs + result.relocs)
-        self.assertEqual(converted, set(e.KNOWN_FILES.values()))
+        self.assertEqual(converted, set(e.PINNED_ELFS.values()))
 
 
 if __name__ == "__main__":

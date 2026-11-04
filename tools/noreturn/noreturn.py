@@ -38,12 +38,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "elf2std"))
 from toolenv import PinnedError, analysis_dir, is_inside, load_game_dir, read_pinned  # noqa: E402
 from ps4elf import (  # noqa: E402
-    DT_SCE_JMPREL, DT_SCE_PLTRELSZ, PINNED_ELFS, PINNED_ELFS_HINT, PT_LOAD, RELA_SIZE, ElfError,
-    need, parse,
+    DT_SCE_JMPREL, DT_SCE_PLTRELSZ, ELF_DIR, PINNED_ELFS, PINNED_ELFS_HINT, PT_LOAD, RELA_SIZE,
+    ElfError, need, parse,
 )
 from elf2std import EH_PE_FORMATS, PF_X, PT_GNU_EH_FRAME, file_offset  # noqa: E402
 
-DEFAULT_IN = analysis_dir() / "elf"
 DEFAULT_OUT = analysis_dir() / "noreturn"
 
 R_X86_64_JUMP_SLOT = 7
@@ -228,10 +227,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-o", "--out-dir", type=Path, default=DEFAULT_OUT,
                         help="output directory (default: analysis/noreturn/ in the main checkout)")
     args = parser.parse_args(argv)
-    files = args.files or [DEFAULT_IN / "eboot.elf"]
+    files = args.files or [ELF_DIR / "eboot.elf"]
 
     out_dir = args.out_dir.expanduser().resolve()
-    forbidden = {p.resolve().parent for p in files} | {DEFAULT_IN.resolve()}
+    forbidden = {p.resolve().parent for p in files} | {ELF_DIR.resolve()}
     game_dir = load_game_dir()
     if game_dir is not None:
         forbidden.add(game_dir)

@@ -31,16 +31,11 @@ from toolenv import PinnedError, analysis_dir, is_inside, load_game_dir, read_pi
 from nid import NID_ALPHABET, is_nid  # noqa: E402
 from ps4elf import (  # noqa: E402
     DT_NEEDED, DT_SCE_EXPORT_LIB, DT_SCE_EXPORT_LIB_ATTR, DT_SCE_IMPORT_LIB,
-    DT_SCE_IMPORT_LIB_ATTR, DT_SCE_MODULE_INFO, DT_SCE_NEEDED_MODULE, DT_SONAME, ET_SCE_DYNAMIC,
-    PINNED_ELFS, PINNED_ELFS_HINT, DynImage, ElfError, need, parse,
+    DT_SCE_IMPORT_LIB_ATTR, DT_SCE_MODULE_INFO, DT_SCE_NEEDED_MODULE, DT_SONAME, ELF_DIR,
+    ET_SCE_DYNAMIC, PINNED_ELFS, PINNED_ELFS_HINT, DynImage, ElfError, need, parse,
 )
 
-DEFAULT_IN = analysis_dir() / "elf"
 DEFAULT_OUT = analysis_dir() / "imports"
-KNOWN_FILES = PINNED_ELFS
-
-# Library and module ids in symbol names use the same base64 digits as NIDs.
-ID_ALPHABET = NID_ALPHABET
 
 STT_NAMES = {0: "notype", 1: "object", 2: "func", 6: "tls"}
 STB_NAMES = {0: "local", 1: "global", 2: "weak"}
@@ -92,10 +87,11 @@ class ElfInfo:
 
 
 def decode_id(text: str) -> int:
-    # Every id in the pinned files is a single digit (at most 42). How larger ids are written
-    # is unknown, so refuse them instead of guessing.
-    need(len(text) == 1 and text in ID_ALPHABET, f"unsupported id {text!r} in a symbol name")
-    return ID_ALPHABET.index(text)
+    # Library and module ids use the same base64 digits as NIDs. Every id in the pinned files is
+    # a single digit (at most 42). How larger ids are written is unknown, so refuse them instead
+    # of guessing.
+    need(len(text) == 1 and text in NID_ALPHABET, f"unsupported id {text!r} in a symbol name")
+    return NID_ALPHABET.index(text)
 
 
 def _record(value: int) -> tuple[int, int, int]:
@@ -194,7 +190,7 @@ class LoadError(Exception):
 
 def pinned_paths(elf_dir: Path) -> list[Path]:
     """The pinned file names in `elf_dir`. Other files there are ignored."""
-    return [elf_dir / name for name in sorted(set(KNOWN_FILES.values()))]
+    return [elf_dir / name for name in sorted(set(PINNED_ELFS.values()))]
 
 
 def load(paths: list[Path]) -> list[tuple[ElfInfo, bytes]]:
@@ -208,8 +204,8 @@ def load(paths: list[Path]) -> list[tuple[ElfInfo, bytes]]:
     loaded: list[tuple[ElfInfo, bytes]] = []
     for path in paths:
         try:
-            known, data = read_pinned(path, KNOWN_FILES, PINNED_ELFS_HINT)
-            if path.name in KNOWN_FILES.values() and path.name != known:
+            known, data = read_pinned(path, PINNED_ELFS, PINNED_ELFS_HINT)
+            if path.name in PINNED_ELFS.values() and path.name != known:
                 raise ElfError(f"holds the pinned {known}")
             loaded.append((analyze(known, parse(data)), data))
         except (OSError, PinnedError, ElfError, UnicodeDecodeError) as exc:
@@ -402,12 +398,12 @@ def main(argv: list[str] | None = None) -> int:
 
     files = args.files
     if not files:
-        if not DEFAULT_IN.is_dir():
-            parser.error(f"no files given and {DEFAULT_IN} does not exist (run self2elf first)")
-        files = pinned_paths(DEFAULT_IN)
+        if not ELF_DIR.is_dir():
+            parser.error(f"no files given and {ELF_DIR} does not exist (run self2elf first)")
+        files = pinned_paths(ELF_DIR)
 
     out_dir = args.out_dir.expanduser().resolve()
-    forbidden = {p.resolve().parent for p in files} | {DEFAULT_IN.resolve()}
+    forbidden = {p.resolve().parent for p in files} | {ELF_DIR.resolve()}
     game_dir = load_game_dir()
     if game_dir is not None:
         forbidden.add(game_dir)
@@ -433,7 +429,7 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     # Drop outputs of earlier runs, which may cover other files. Only our own file names.
-    for stale in [Path(n).stem + ".csv" for n in KNOWN_FILES.values()] + ["summary.md"]:
+    for stale in [Path(n).stem + ".csv" for n in PINNED_ELFS.values()] + ["summary.md"]:
         (out_dir / stale).unlink(missing_ok=True)
     for info in infos:
         write_csv(out_dir / (Path(info.name).stem + ".csv"), info, resolved[info.name])

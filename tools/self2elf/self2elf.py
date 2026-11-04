@@ -22,10 +22,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 from toolenv import (  # noqa: E402
-    ELF_HEADER, ELF_PHDR, Phdr, PinnedError, analysis_dir, is_inside, load_game_dir, read_pinned,
+    ELF_HEADER, ELF_PHDR, Phdr, PinnedError, is_inside, load_game_dir, read_pinned,
 )
-
-DEFAULT_OUT = analysis_dir() / "elf"
+from ps4elf import ELF_DIR  # noqa: E402
 
 # CUSA03173 patch 1.09. docs/clean-room.md lists the same hashes.
 KNOWN_FILES = {
@@ -160,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Rebuild the ELF embedded in a PS4 SELF.")
     parser.add_argument("files", nargs="*", type=Path,
                         help="SELF files (default: eboot.bin and sce_module/*.prx from BB_GAME_DIR)")
-    parser.add_argument("-o", "--out-dir", type=Path, default=DEFAULT_OUT,
+    parser.add_argument("-o", "--out-dir", type=Path, default=ELF_DIR,
                         help="output directory (default: analysis/elf/ in the main checkout)")
     args = parser.parse_args(argv)
 

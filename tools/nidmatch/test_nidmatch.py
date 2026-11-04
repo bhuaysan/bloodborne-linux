@@ -137,7 +137,7 @@ class Fixture:
                                 ("GENERATED_DIR", self.out / "candidates"),
                                 ("NIDS_CSV", self.nids_csv), ("CURATED_DIR", self.curated)]:
                 stack.enter_context(mock.patch.object(m, attr, value))
-            stack.enter_context(mock.patch.object(elfimports, "KNOWN_FILES", pinned))
+            stack.enter_context(mock.patch.object(elfimports, "PINNED_ELFS", pinned))
             stack.enter_context(contextlib.redirect_stdout(out))
             stack.enter_context(contextlib.redirect_stderr(err))
             code = m.main(list(args))
@@ -303,7 +303,7 @@ class MatchTest(unittest.TestCase):
             (self.fx.elf / name).write_bytes(data)
         pinned = {hashlib.sha256(b"one").hexdigest(): "main.elf",
                   hashlib.sha256(b"two").hexdigest(): "lib.elf"}
-        with mock.patch.object(elfimports, "KNOWN_FILES", pinned):
+        with mock.patch.object(elfimports, "PINNED_ELFS", pinned):
             with self.assertRaisesRegex(elfimports.LoadError, "lib.elf: error: holds the pinned "
                                                               "main.elf"):
                 elfimports.load(elfimports.pinned_paths(self.fx.elf))

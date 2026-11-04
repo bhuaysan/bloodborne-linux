@@ -44,10 +44,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "elfimports"))
 import elfimports  # noqa: E402
 from elfimports import ElfInfo, Entry, LoadError  # noqa: E402
 from nid import nid  # noqa: E402
-from ps4elf import ElfError  # noqa: E402
+from ps4elf import ELF_DIR, ElfError  # noqa: E402
 from toolenv import REPO_ROOT, analysis_dir  # noqa: E402
 
-ELF_DIR = analysis_dir() / "elf"
 OUT_DIR = analysis_dir() / "nids"
 GENERATED_DIR = OUT_DIR / "candidates"
 NIDS_CSV = REPO_ROOT / "symbols" / "nids.csv"

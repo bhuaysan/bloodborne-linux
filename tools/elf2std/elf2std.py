@@ -45,14 +45,11 @@ from ps4elf import (  # noqa: E402,F401  (re-exported for the tests)
     DT_RELASZ, DT_SCE_FIRST, DT_SCE_HASH, DT_SCE_HASHSZ, DT_SCE_JMPREL, DT_SCE_LAST, DT_SCE_PLTGOT,
     DT_SCE_PLTREL, DT_SCE_PLTRELSZ, DT_SCE_RELA, DT_SCE_RELAENT, DT_SCE_RELASZ, DT_SCE_STRSZ,
     DT_SCE_STRTAB, DT_SCE_SYMENT, DT_SCE_SYMTAB, DT_SCE_SYMTABSZ, DT_STRSZ, DT_STRTAB, DT_SYMENT,
-    DT_SYMTAB, DYN, EM_X86_64, ET_EXEC, ET_SCE_DYNAMIC, ET_SCE_DYNEXEC, PINNED_ELFS,
+    DT_SYMTAB, DYN, ELF_DIR, EM_X86_64, ET_EXEC, ET_SCE_DYNAMIC, ET_SCE_DYNEXEC, PINNED_ELFS,
     PINNED_ELFS_HINT, PT_DYNAMIC, PT_LOAD, PT_SCE_DYNLIBDATA, RELA_SIZE, SYM, ElfError, need, parse,
 )
 
-DEFAULT_IN = analysis_dir() / "elf"
 DEFAULT_OUT = analysis_dir() / "elf-std"
-
-KNOWN_FILES = PINNED_ELFS
 
 PF_X, PF_W, PF_R = 1, 2, 4
 SEGMENT_ALIGN = 0x4000
@@ -375,15 +372,15 @@ def main(argv: list[str] | None = None) -> int:
 
     files = args.files
     if not files:
-        if not DEFAULT_IN.is_dir():
-            parser.error(f"no files given and {DEFAULT_IN} does not exist (run self2elf first)")
+        if not ELF_DIR.is_dir():
+            parser.error(f"no files given and {ELF_DIR} does not exist (run self2elf first)")
         # Only the pinned names, so stray files in analysis/elf/ don't fail the run.
-        files = [DEFAULT_IN / name for name in sorted(set(KNOWN_FILES.values()))]
+        files = [ELF_DIR / name for name in sorted(set(PINNED_ELFS.values()))]
 
     # Checked before anything is written. analysis/elf/ holds the self2elf outputs this tool
     # verifies against, so writing there would break later runs.
     out_dir = args.out_dir.expanduser().resolve()
-    forbidden = {p.resolve().parent for p in files} | {DEFAULT_IN.resolve()}
+    forbidden = {p.resolve().parent for p in files} | {ELF_DIR.resolve()}
     game_dir = load_game_dir()
     if game_dir is not None:
         forbidden.add(game_dir)
@@ -396,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
     failed = 0
     for path in files:
         try:
-            known, data = read_pinned(path, KNOWN_FILES, PINNED_ELFS_HINT)
+            known, data = read_pinned(path, PINNED_ELFS, PINNED_ELFS_HINT)
             result = convert(data)
         except (OSError, PinnedError, ElfError) as exc:
             print(f"{path}: error: {exc}", file=sys.stderr)

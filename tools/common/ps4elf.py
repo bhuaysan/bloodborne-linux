@@ -11,7 +11,10 @@ import struct
 from dataclasses import dataclass
 from functools import cached_property
 
-from toolenv import ELF_HEADER, ELF_PHDR, Phdr
+from toolenv import ELF_HEADER, ELF_PHDR, Phdr, analysis_dir
+
+# Where self2elf writes the ELFs it rebuilds, in the main checkout.
+ELF_DIR = analysis_dir() / "elf"
 
 # ELFs rebuilt by self2elf from CUSA03173 patch 1.09 (eboot.bin and sce_module/*.prx).
 PINNED_ELFS = {

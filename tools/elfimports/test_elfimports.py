@@ -249,8 +249,8 @@ class MainTests(unittest.TestCase):
             path.write_bytes(data)
             self.files.append(path)
             known[hashlib.sha256(data).hexdigest()] = name
-        for patch in (mock.patch.object(ei, "KNOWN_FILES", known),
-                      mock.patch.object(ei, "DEFAULT_IN", self.elf_dir)):
+        for patch in (mock.patch.object(ei, "PINNED_ELFS", known),
+                      mock.patch.object(ei, "ELF_DIR", self.elf_dir)):
             patch.start()
             self.addCleanup(patch.stop)
 
@@ -312,10 +312,10 @@ class GameTests(unittest.TestCase):
         infos = []
         for path in self2elf.default_inputs(GAME_DIR):
             data = self2elf.self_to_elf(path.read_bytes()).data
-            known = ei.KNOWN_FILES.get(hashlib.sha256(data).hexdigest())
+            known = ei.PINNED_ELFS.get(hashlib.sha256(data).hexdigest())
             self.assertIsNotNone(known, path.name)
             infos.append(ei.analyze(known, p.parse(data)))
-        self.assertEqual({i.name for i in infos}, set(ei.KNOWN_FILES.values()))
+        self.assertEqual({i.name for i in infos}, set(ei.PINNED_ELFS.values()))
         text = ei.summary(infos)
         self.assertIn("## Unresolved imports from bundled libraries\n\nNone.", text)
         self.assertEqual([i.name for i in ei.static_load_set(infos)],
