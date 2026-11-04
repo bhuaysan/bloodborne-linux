@@ -58,7 +58,9 @@ if [ -n "$hits" ]; then
 fi
 
 # 4. commit messages
-check_message "$(git log --format=%B "$range")" "a commit message"
+# an assignment, so set -e stops the check if git log can't walk the range
+msgs="$(git log --format=%B "$range")"
+check_message "$msgs" "a commit message"
 
 [ "$FAILED" -eq 0 ] || exit 1
 echo "privacy check clean: $range"
