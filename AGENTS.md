@@ -99,7 +99,7 @@ Code is never reviewed only in the session that wrote it.
    - Each new source in `docs/references.md` falls clearly into a category that `docs/clean-room.md` allows, as checked by the independent review.
 
    Anything that fails the gate goes to the maintainer. `tools/merge-pr.sh` refuses guardrail changes and oversized PRs unless the maintainer runs it with `--maintainer`. Agents never pass that flag. Agents always pass `--sha <commit>`, the PR head the independent review saw; the script refuses the merge if the branch has moved since.
-   **Never use GitHub's merge button or `gh pr merge`**: GitHub writes the account's display name into the commit. Merge with `tools/merge-pr.sh <N>` instead. It rebases locally, runs the tests and the privacy check (which includes authorship) on the rebased commits, and fast-forwards `main`.
+   **Never use GitHub's merge button or `gh pr merge`**: GitHub writes the account's display name into the commit. Merge with `tools/merge-pr.sh --sha <reviewed head> <N>` instead. It rebases locally, runs the tests and the privacy check (which includes authorship) on the rebased commits, and fast-forwards `main`.
 4. **Per milestone:** a dedicated review session over the milestone's range covers:
    - a walkthrough of the new code
    - code health and an architecture check

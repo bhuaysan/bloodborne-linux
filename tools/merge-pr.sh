@@ -21,9 +21,10 @@
 #
 # Exit status:
 #   0  merged and branch deleted
-#   3  main was pushed, but the merge was not confirmed or the branch
-#      could not be deleted. The message says what to do next. Do not
-#      re-run the script: main already has the commits.
+#   3  main was pushed (or may have been, if origin could not be
+#      checked), but the merge was not confirmed or the branch could not
+#      be deleted. The message says what to do next. Do not re-run the
+#      script before checking origin/main.
 #   any other non-zero status: main was not updated (for example 2 for
 #      a usage error)
 set -eu
@@ -42,6 +43,12 @@ done
 pr="$1"
 [ -n "$want_sha" ] || [ "$maintainer" -eq 1 ] ||
     { echo "--sha <commit> is required: the PR head the review saw" >&2; exit 2; }
+# a commit id, not a ref name: "--sha origin/<branch>" would always match
+case "$want_sha" in
+    *[!0-9a-f]*) echo "--sha takes a commit id in hex" >&2; exit 2 ;;
+esac
+[ -z "$want_sha" ] || [ "${#want_sha}" -ge 7 ] ||
+    { echo "--sha needs at least 7 hex digits" >&2; exit 2; }
 
 # Paths whose changes always go to the maintainer (pathspecs).
 # A .gitattributes can hide files from diffs, so any of them is protected.
@@ -66,7 +73,10 @@ fork="$(gh pr view "$pr" --json isCrossRepository --jq .isCrossRepository)"
 [ "$fork" = "false" ] || { echo "PR #$pr comes from a fork, the maintainer merges it" >&2; exit 1; }
 
 git -C "$repo_root" fetch -q origin main "$head"
+# Pin both commits now. Other sessions share the remote-tracking refs, and
+# a fetch of theirs could move origin/* while the tests run.
 fetched="$(git -C "$repo_root" rev-parse "origin/$head")"
+main_base="$(git -C "$repo_root" rev-parse origin/main)"
 [ "$fetched" = "$head_oid" ] ||
     { echo "origin/$head is $fetched, but GitHub shows $head_oid; try again" >&2; exit 1; }
 if [ -n "$want_sha" ]; then
@@ -88,20 +98,20 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-git -C "$repo_root" worktree add -q --detach "$wt" "origin/$head"
+git -C "$repo_root" worktree add -q --detach "$wt" "$fetched"
 cd "$wt"
-git rebase -q origin/main
+git rebase -q "$main_base"
 
-count="$(git rev-list --count origin/main..HEAD)"
+count="$(git rev-list --count "$main_base..HEAD")"
 [ "$count" -gt 0 ] || { echo "nothing to merge" >&2; exit 1; }
 
 # shellcheck disable=SC2086  # PROTECTED is a list of pathspecs
-touched="$(git diff --name-only origin/main HEAD -- $PROTECTED)"
+touched="$(git diff --name-only "$main_base" HEAD -- $PROTECTED)"
 # changed lines of code: everything except docs/ and symbols/
 # Counted from the patch with --text: --numstat shows a file marked -diff
 # in a .gitattributes as "-" and so would not count it. Real binaries
 # count by their line breaks, which sends large ones to the maintainer.
-lines="$(git diff -U0 --text --no-textconv --no-ext-diff --no-color origin/main HEAD -- . ':!docs' ':!symbols' |
+lines="$(git diff -U0 --text --no-textconv --no-ext-diff --no-color "$main_base" HEAD -- . ':!docs' ':!symbols' |
     awk '/^diff --git / { h = 0; next } /^@@/ { h = 1; next } h && /^[-+]/ { n++ } END { print n + 0 }')"
 if [ "$maintainer" -eq 0 ]; then
     [ -z "$touched" ] || {
@@ -117,10 +127,10 @@ fi
 
 # check the commits exactly as they will land on main
 tools/run-tests.sh || { echo "tests fail on the rebased branch" >&2; exit 1; }
-tools/privacy-check.sh origin/main ||
+tools/privacy-check.sh "$main_base" ||
     { echo "privacy check fails on the rebased branch" >&2; exit 1; }
 echo "merging PR #$pr ($count commits from $head)"
-git log --oneline origin/main..HEAD
+git log --oneline "$main_base..HEAD"
 
 new="$(git rev-parse HEAD)"
 short="$(git rev-parse --short "$new")"
@@ -132,14 +142,31 @@ unconfirmed() {
 }
 delete_hint="once PR #$pr shows as merged, run: git push origin --delete $head"
 
-git push -q --force-with-lease="$head:origin/$head" origin "$new:refs/heads/$head"
-if ! git push -q origin "$new:refs/heads/main"; then
-    # the remote may have taken the push before the connection failed
-    remote_main="$(git ls-remote origin refs/heads/main | cut -f1)" || remote_main=
-    [ "$remote_main" = "$new" ] ||
-        { echo "pushing main failed; main was not updated" >&2; exit 1; }
-    echo "warning: git push reported an error, but origin/main is $short" >&2
-fi
+# The push of main failed or was interrupted. The remote may have taken it
+# before the connection broke, so look before saying anything.
+# $1: exit status if main was not updated, $2: what happened.
+main_push_failed() {
+    if ! remote="$(git ls-remote origin refs/heads/main)"; then
+        unconfirmed "$2, and origin/main could not be checked" \
+            "check origin/main: if it is $short, $delete_hint; otherwise reset branch $head to $fetched and re-run"
+    fi
+    if [ "${remote%%[[:space:]]*}" = "$new" ]; then
+        [ "$1" -eq 1 ] || unconfirmed "$2 after main was pushed" "$delete_hint"
+        echo "warning: $2, but origin/main is $short" >&2
+        return 0
+    fi
+    # put the PR branch back, so the reviewed --sha still matches on a retry
+    git push -q --force-with-lease="refs/heads/$head:$new" origin "$fetched:refs/heads/$head" ||
+        echo "warning: could not reset branch $head to $fetched" >&2
+    echo "$2; main was not updated" >&2
+    exit "$1"
+}
+
+# the lease is the pinned commit, not origin/$head, which may have moved
+git push -q --force-with-lease="refs/heads/$head:$fetched" origin "$new:refs/heads/$head"
+trap 'main_push_failed 130 "interrupted while pushing main"' INT
+trap 'main_push_failed 143 "terminated while pushing main"' TERM
+git push -q origin "$new:refs/heads/main" || main_push_failed 1 "pushing main failed"
 
 # From here on main is updated, so every failure exits 3.
 trap 'unconfirmed "interrupted after pushing main" "$delete_hint"' INT TERM
