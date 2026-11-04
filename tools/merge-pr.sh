@@ -10,9 +10,12 @@
 # shows the PR as merged, deletes the branch. The current checkout is
 # never touched.
 #
-# Exit status: 0 merged and branch deleted, 1 main not updated (2 for a usage
-# error), 3 main was pushed but GitHub did not confirm the merge; the
-# branch is kept and the message says what to do next.
+# Exit status:
+#   0  merged and branch deleted
+#   3  main was pushed, but the merge was not confirmed or the branch
+#      could not be deleted. The message says what to do next. Do not
+#      re-run the script: main already has the commits.
+#   any other non-zero status: main was not updated (2 for a usage error)
 set -eu
 
 [ $# -eq 1 ] || { echo "usage: $0 <pr-number>" >&2; exit 2; }
@@ -35,7 +38,11 @@ head="$(gh pr view "$pr" --json headRefName --jq .headRefName)"
 git -C "$repo_root" fetch -q origin main "$head"
 
 wt="$(mktemp -d)"
-cleanup() { git -C "$repo_root" worktree remove --force "$wt" 2>/dev/null || true; rm -rf "$wt"; }
+gh_err="$(mktemp)"
+cleanup() {
+    git -C "$repo_root" worktree remove --force "$wt" 2>/dev/null || true
+    rm -rf "$wt" "$gh_err"
+}
 trap cleanup EXIT
 
 git -C "$repo_root" worktree add -q --detach "$wt" "origin/$head"
@@ -56,34 +63,46 @@ echo "merging PR #$pr ($count commits from $head)"
 git log --oneline origin/main..HEAD
 
 new="$(git rev-parse HEAD)"
+short="$(git rev-parse --short "$new")"
 git push -q --force-with-lease="$head:origin/$head" origin "$new:refs/heads/$head"
 git push -q origin "$new:refs/heads/main"
 
-# GitHub marks the PR as merged only after it sees the head on main.
-# Deleting the branch before that can leave the PR closed instead.
-short="$(git rev-parse --short "$new")"
+# From here on main is updated, so every failure exits 3.
 unconfirmed() {
     echo "error: $1" >&2
     echo "main is now $short; branch $head kept" >&2
     echo "$2" >&2
     exit 3
 }
-retry_hint="once PR #$pr shows as merged, run: git push origin --delete $head"
-tries=0
-while :; do
-    now="$(gh pr view "$pr" --json state --jq .state)" ||
-        unconfirmed "gh pr view $pr failed (see above)" "$retry_hint"
-    case "$now" in
-        MERGED) break ;;
-        OPEN) ;;
-        *) unconfirmed "PR #$pr is $now after pushing main" "this needs the maintainer" ;;
-    esac
-    tries=$((tries + 1))
-    [ "$tries" -lt 30 ] ||
-        unconfirmed "PR #$pr is still not shown as merged after 60 s" "$retry_hint"
-    sleep 2
-done
-git push -q origin --delete "$head"
+delete_hint="once PR #$pr shows as merged, run: git push origin --delete $head"
+git -C "$repo_root" fetch -q origin main ||
+    echo "warning: could not fetch origin/main" >&2
 
-git -C "$repo_root" fetch -q --prune origin
+# GitHub marks the PR as merged only after it sees the head on main.
+# Deleting the branch before that can leave the PR closed instead.
+# gh errors are retried until the timeout, since they may be transient.
+timeout=60
+interval=2
+waited=0
+while :; do
+    if now="$(gh pr view "$pr" --json state --jq .state 2>"$gh_err")"; then
+        case "$now" in
+            MERGED) break ;;
+            OPEN) ;;
+            *) unconfirmed "PR #$pr is $now after pushing main" "this needs the maintainer" ;;
+        esac
+    fi
+    if [ "$waited" -ge "$timeout" ]; then
+        [ ! -s "$gh_err" ] || { echo "last gh error:" >&2; cat "$gh_err" >&2; }
+        unconfirmed "PR #$pr is still not shown as merged after $timeout s" "$delete_hint"
+    fi
+    sleep "$interval"
+    waited=$((waited + interval))
+done
+git push -q origin --delete "$head" ||
+    unconfirmed "PR #$pr is merged, but deleting branch $head failed" \
+        "run: git push origin --delete $head"
+
+git -C "$repo_root" fetch -q --prune origin ||
+    echo "warning: could not fetch origin; run git fetch --prune" >&2
 echo "done: PR #$pr merged, main is now $short"
