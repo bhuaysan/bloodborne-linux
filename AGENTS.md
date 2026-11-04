@@ -67,11 +67,21 @@ docs/
   formats/           our own notes on PS4 and game file formats
 symbols/             our analysis as text: functions.csv, nids.csv, types/
 tools/
+  self2elf/          rebuilds the ELFs from eboot.bin and the bundled .prx files
+  elf2std/           rewrites a PS4 ELF into a standard ELF for stock tools
+  elfimports/        lists modules, libraries, imports and exports of the ELFs
+  nidmatch/          recovers NID names by hashing candidate names
+  noreturn/          finds imports that never return, for Ghidra's analysis
+  ghidra-sync/       syncs Ghidra annotations with symbols/
+  common/            shared Python helpers (paths, pinned files, PS4 ELF reader)
   githooks/          privacy checks (enabled via core.hooksPath)
+  merge-pr.sh        merges a PR locally after the gate (see Reviews)
+  privacy-check.sh   privacy checks over a branch's commits
+  run-tests.sh       runs every unit test
 .github/             issue templates
 ```
 
-Source directories (`src/`, `tools/<name>/`) will be added as work begins.
+`src/` (the runtime) will be added as work begins.
 
 ## Workflow: decompiling one function
 
