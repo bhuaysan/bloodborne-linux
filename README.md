@@ -14,7 +14,7 @@ This is also a learning project. Everything here is worked out independently.
 
 ## Status
 
-Early setup. Nothing runs yet. See [docs/roadmap.md](docs/roadmap.md).
+Executable analysis (M1) is done: tools under `tools/` extract the executable, make it importable in Ghidra and name its imports. Nothing runs yet; the loader comes next (M2). See [docs/roadmap.md](docs/roadmap.md).
 
 ## Requirements
 
