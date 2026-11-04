@@ -14,6 +14,7 @@ src/
   harness/   bbharness  differential test harness (tests only)
   tools/                small command-line programs (bb-load)
 tests/<target>/         GoogleTest unit tests, one directory per library
+tests/support/          bbtestsupport: shared test helpers (game directory lookup, BB_REQUIRE_GAME)
 ```
 
 Dependencies point one way:
@@ -28,7 +29,7 @@ All code is in namespace `bb` with a nested namespace per library (`bb::loader`,
 
 ### Static registration
 
-HLE implementations (`bbhle` and later modules) and replacements (`bbgame`) register themselves into registries owned by `bbhle` and `bbhook`, through static objects in their source files. A static archive would drop object files that nothing references, and their registrations with them. Targets that contain registrations are therefore CMake `OBJECT` libraries. Every registry is a function-local static (construct on first use), so the order of static initialization across files doesn't matter.
+HLE implementations (`bbhle` and later modules) and replacements (`bbgame`) register themselves into registries owned by `bbhle` and `bbhook`, through static objects in their source files. A static archive would drop object files that nothing references, and their registrations with them. Targets that contain registrations are therefore CMake `OBJECT` libraries, and only executables link them, directly. A `STATIC` library that links an `OBJECT` library puts its objects into the archive again, where the final link would drop them silently. Every registry is a function-local static (construct on first use), so the order of static initialization across files doesn't matter.
 
 ## Addresses
 
@@ -66,7 +67,7 @@ void relocate(Image& image, const Resolver& resolve);
 ```
 
 1. `map_eboot` / `map_elf`: reserve the span, make each `PT_LOAD` read-write and copy its file bytes. The rest up to `p_memsz` stays zero. Parse the dynamic data.
-2. `relocate`: apply every relocation. The eboot has `DT_TEXTREL`, so the code segment must still be writable here.
+2. `relocate`: apply every relocation. The eboot sets `DT_TEXTREL`. None of its relocations actually target the code segment, but the flag allows it, so the code segment stays writable until step 4.
 3. `bb::hook::apply`: game runtime only, never in the harness.
 4. `Image::finalize_protection()`: set the final protections from `p_flags`: code `r-x`, data `rw-`.
 
@@ -74,7 +75,7 @@ Who runs which steps:
 
 | Caller | Steps |
 |---|---|
-| `bb-load` (M2) | 1, 2 with `bb::hle::resolve`, 4 |
+| `bb-load` (M2) | 1 (#43); 2 with `bb::hle::resolve` and 4 added by #44 |
 | differential harness (M2) | 1, 2 with `bb::hle::resolve`, 4 |
 | game runtime (M3) | 1, 2 with `bb::hle::resolve`, 3 with all registered replacements, 4, then TLS setup and the entry point |
 | loader unit tests | 1, 2 with a fake resolver, 4 |
@@ -114,7 +115,7 @@ The image owns its mapping and unmaps it on destruction. `DynamicInfo` holds the
 
 Supported: `R_X86_64_RELATIVE` (base + addend), `R_X86_64_64` (symbol + addend), `R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` (symbol). Any other type is an error that names the type and the offset. `DTPMOD64` and the TLS types wait for M3 (they don't occur in the eboot).
 
-A relocation against a defined symbol of the same file (`st_shndx != 0`) resolves to base + `st_value` without calling the resolver. The eboot has none, but the PRXs (M3) and synthetic test ELFs do. Only undefined symbols are imports and go to the resolver.
+A relocation against a defined symbol of the same file (`st_shndx != 0`) resolves to base + `st_value` without calling the resolver. The eboot has none, but the PRXs (M3) and synthetic test ELFs do. Undefined symbols with a `NID#library#module` name are imports and go to the resolver. The weak, untyped, undefined `module_start` and `module_stop` of the PRXs (`docs/formats/elf-dynamic.md`) are not imports: relocations against them resolve to 0, as for any unresolved weak symbol. Any other plain-named undefined symbol is an error.
 
 Every import must resolve to a non-zero address. The game runtime, `bb-load` and the harness pass `bb::hle::resolve`.
 
@@ -211,7 +212,7 @@ EXPECT_TRUE(r) << r.report();
 1. Restore the baseline, build the inputs (the builder runs before each call, so both calls see the same arena layout), clear the stub log, call the **original**, capture its return value, all snapshot regions and the stub log.
 2. Restore the baseline, build the same inputs, call the **replacement**, capture the same.
 3. Compare:
-   - the return value: integers and pointers bit for bit, floating point bit for bit (two NaNs with different payloads differ), structs returned in registers as `rax:rdx` / `xmm0:xmm1`,
+   - the return value as the typed `R` object: integers and pointers bit for bit, floating point bit for bit (two NaNs with different payloads differ), structs member by member through `operator==` (defaulted or written by the test), never as raw bytes, because padding is indeterminate,
    - every byte of the snapshot regions. The report lists the first differing ranges, as link addresses for the image and arena offsets for the arena,
    - the stub log: same imports in the same order with the same integer arguments. Calls to registered HLE implementations are not logged or compared. Pointer arguments are normalized before comparing: a pointer into a snapshot region compares by region and offset, a pointer into the calling thread's stack compares only as "a stack pointer" (the original and the replacement lay out their frames differently), any other value compares as is.
 
@@ -219,11 +220,13 @@ Not compared: the stack below the call, registers other than the return register
 
 ### Limits for M2
 
-- No TLS: functions that read `%fs` are out of scope until M3 sets up TLS. The harness doesn't set `%fs`, so such a function reads Linux's TLS block and the comparison is meaningless.
+- No TLS: functions that use `%fs` must not be called until M3 sets up TLS. The harness doesn't set `%fs`, so such a function would read and possibly overwrite glibc's own TLS block and thread control block, which can crash or corrupt the test process.
+- HLE implementations called from a diff test must be stateless, or keep their state in a snapshot region. Other state isn't restored between the two calls, and calls to implementations aren't compared.
 - No heap: an import such as `malloc` is a stub that returns 0. Functions that allocate wait for the HLE allocator (M3), which will draw from the arena so its memory is compared too.
 - A crash in the original or the replacement kills the test binary. Isolating each call in a forked child can come later if it is needed.
 - The original code isn't instrumented by AddressSanitizer. Only the replacement and the harness are.
 - AddressSanitizer's stack-use-after-return detection, on by default, moves an instrumented function's locals into fake stack frames on the heap. Pointers to the replacement's locals would then not look like stack pointers and would compare unequal. The harness turns it off with `__asan_default_options()` returning `detect_stack_use_after_return=0`, defined in the harness's GoogleTest main so the linker keeps it.
+- With clang, `-fsanitize=undefined` includes `-fsanitize=function`, which reads a signature word next to the target of every indirect call. Game code and stub thunks have none, so clang builds add `-fno-sanitize=function`. GCC has no such check.
 
 ## Tools
 
