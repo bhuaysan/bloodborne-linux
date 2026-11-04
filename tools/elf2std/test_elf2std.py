@@ -24,6 +24,7 @@ TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS / "elf2std"))
 sys.path.insert(0, str(TOOLS / "self2elf"))
 import elf2std as e  # noqa: E402
+import ps4elf as p  # noqa: E402
 import self2elf  # noqa: E402
 from toolenv import load_game_dir  # noqa: E402
 
@@ -50,7 +51,7 @@ def build_dynlib(extra_tags=(), drop_tags=(), override=None):
         strtab += name + b"\0"
     while len(strtab) % 8:
         strtab += b"\0"
-    symtab = b"".join(e.SYM.pack(off, (1 << 4) | 2, 0, 0, 0, 0) for off in name_offs)
+    symtab = b"".join(p.SYM.pack(off, (1 << 4) | 2, 0, 0, 0, 0) for off in name_offs)
     jmprel = (struct.pack("<QQq", DATA_VADDR + 0x18, (1 << 32) | 7, 0)
               + struct.pack("<QQq", DATA_VADDR + 0x20, (2 << 32) | 7, 0))
     rela = struct.pack("<QQq", DATA_VADDR + 0x40, 8, 0x100)
@@ -68,18 +69,18 @@ def build_dynlib(extra_tags=(), drop_tags=(), override=None):
     rela_off = put(rela)
 
     tags = {
-        e.DT_SCE_HASH: hash_off, e.DT_SCE_HASHSZ: len(sony_hash),
-        e.DT_SCE_PLTGOT: DATA_VADDR,
-        e.DT_SCE_JMPREL: jmp_off, e.DT_SCE_PLTREL: e.DT_RELA, e.DT_SCE_PLTRELSZ: len(jmprel),
-        e.DT_SCE_RELA: rela_off, e.DT_SCE_RELASZ: len(rela), e.DT_SCE_RELAENT: e.RELA_SIZE,
-        e.DT_SCE_STRTAB: str_off, e.DT_SCE_STRSZ: len(strtab),
-        e.DT_SCE_SYMTAB: sym_off, e.DT_SCE_SYMENT: e.SYM.size, e.DT_SCE_SYMTABSZ: len(symtab),
+        p.DT_SCE_HASH: hash_off, p.DT_SCE_HASHSZ: len(sony_hash),
+        p.DT_SCE_PLTGOT: DATA_VADDR,
+        p.DT_SCE_JMPREL: jmp_off, p.DT_SCE_PLTREL: p.DT_RELA, p.DT_SCE_PLTRELSZ: len(jmprel),
+        p.DT_SCE_RELA: rela_off, p.DT_SCE_RELASZ: len(rela), p.DT_SCE_RELAENT: p.RELA_SIZE,
+        p.DT_SCE_STRTAB: str_off, p.DT_SCE_STRSZ: len(strtab),
+        p.DT_SCE_SYMTAB: sym_off, p.DT_SCE_SYMENT: p.SYM.size, p.DT_SCE_SYMTABSZ: len(symtab),
     }
     tags.update(override or {})
     entries = [(1, needed), (0xD, 0x80)]  # DT_NEEDED, DT_FINI
     entries += [(t, v) for t, v in tags.items() if t not in drop_tags]
     entries += [(0x6100000D, 0x1234), *extra_tags, (0, 0)]  # a Sony module tag
-    dyn_off = put(b"".join(e.DYN.pack(t, v) for t, v in entries))
+    dyn_off = put(b"".join(p.DYN.pack(t, v) for t, v in entries))
     return bytes(blob), dyn_off
 
 
@@ -119,16 +120,16 @@ def build_eh_frame_hdr(vaddr: int, eh_frame: int, table: list[tuple[int, int]],
             + b"".join(struct.pack("<ii", func - vaddr, fde - vaddr) for func, fde in table))
 
 
-def build_elf(e_type=e.ET_SCE_DYNEXEC, eh=None, **kwargs) -> bytes:
+def build_elf(e_type=p.ET_SCE_DYNEXEC, eh=None, **kwargs) -> bytes:
     """eh: (eh_frame vaddr, eh_frame bytes, eh_frame_hdr vaddr, eh_frame_hdr bytes) in the text
     segment, described by PT_GNU_EH_FRAME."""
     blob, dyn_off = build_dynlib(**kwargs)
     phdrs = [
-        e.Phdr(e.PT_LOAD, 5, TEXT_OFF, TEXT_VADDR, TEXT_VADDR, TEXT_SIZE, TEXT_SIZE, 0x4000),
-        e.Phdr(e.PT_LOAD, 6, DATA_OFF, DATA_VADDR, DATA_VADDR, DATA_SIZE, DATA_MEMSZ, 0x4000),
-        e.Phdr(e.PT_DYNAMIC, 6, DYNLIB_OFF + dyn_off, 0, 0, len(blob) - dyn_off,
+        e.Phdr(p.PT_LOAD, 5, TEXT_OFF, TEXT_VADDR, TEXT_VADDR, TEXT_SIZE, TEXT_SIZE, 0x4000),
+        e.Phdr(p.PT_LOAD, 6, DATA_OFF, DATA_VADDR, DATA_VADDR, DATA_SIZE, DATA_MEMSZ, 0x4000),
+        e.Phdr(p.PT_DYNAMIC, 6, DYNLIB_OFF + dyn_off, 0, 0, len(blob) - dyn_off,
                len(blob) - dyn_off, 8),
-        e.Phdr(e.PT_SCE_DYNLIBDATA, 4, DYNLIB_OFF, 0, 0, len(blob), 0, 0x10),
+        e.Phdr(p.PT_SCE_DYNLIBDATA, 4, DYNLIB_OFF, 0, 0, len(blob), 0, 0x10),
     ]
     if eh:
         hdr_vaddr, hdr = eh[2], eh[3]
@@ -136,7 +137,7 @@ def build_elf(e_type=e.ET_SCE_DYNEXEC, eh=None, **kwargs) -> bytes:
                             hdr_vaddr, len(hdr), len(hdr), 4))
     ident = b"\x7fELF\x02\x01\x01\x09" + bytes(8)
     out = bytearray(DYNLIB_OFF + len(blob))
-    out[:0x40] = e.ELF_HEADER.pack(ident, e_type, e.EM_X86_64, 1, 0x10, PHDR_OFF, 0, 0, 0x40,
+    out[:0x40] = e.ELF_HEADER.pack(ident, e_type, p.EM_X86_64, 1, 0x10, PHDR_OFF, 0, 0, 0x40,
                                    e.ELF_PHDR.size, len(phdrs), 0x40, 0, 0)
     for i, ph in enumerate(phdrs):
         out[PHDR_OFF + i * e.ELF_PHDR.size: PHDR_OFF + (i + 1) * e.ELF_PHDR.size] = ph.pack()
@@ -160,7 +161,7 @@ class Image:
 
     def read(self, vaddr: int, size: int) -> bytes:
         for ph in self.phdrs:
-            if ph.p_type == e.PT_LOAD and ph.p_vaddr <= vaddr and vaddr + size <= ph.p_vaddr + ph.p_filesz:
+            if ph.p_type == p.PT_LOAD and ph.p_vaddr <= vaddr and vaddr + size <= ph.p_vaddr + ph.p_filesz:
                 off = ph.p_offset + vaddr - ph.p_vaddr
                 return self.data[off: off + size]
         raise AssertionError(f"{vaddr:#x} not mapped")
@@ -176,9 +177,9 @@ class Image:
         return [(name(sh[0]), *sh[1:]) for sh in raw]
 
     def dynamic(self) -> list[tuple[int, int]]:
-        (dyn,) = [ph for ph in self.phdrs if ph.p_type == e.PT_DYNAMIC]
+        (dyn,) = [ph for ph in self.phdrs if ph.p_type == p.PT_DYNAMIC]
         raw = self.read(dyn.p_vaddr, dyn.p_filesz)
-        return [e.DYN.unpack_from(raw, i) for i in range(0, len(raw), e.DYN.size)]
+        return [p.DYN.unpack_from(raw, i) for i in range(0, len(raw), p.DYN.size)]
 
     def cstr(self, vaddr: int) -> bytes:
         out = bytearray()
@@ -188,13 +189,13 @@ class Image:
 
     def lookup(self, dyn: dict[int, int], name: bytes) -> int:
         """Look up a symbol index through DT_HASH, like a dynamic linker would."""
-        nbucket, nchain = struct.unpack("<II", self.read(dyn[e.DT_HASH], 8))
+        nbucket, nchain = struct.unpack("<II", self.read(dyn[p.DT_HASH], 8))
         table = struct.unpack(f"<{nbucket + nchain}I",
-                              self.read(dyn[e.DT_HASH] + 8, 4 * (nbucket + nchain)))
+                              self.read(dyn[p.DT_HASH] + 8, 4 * (nbucket + nchain)))
         index = table[e.sysv_hash(name) % nbucket]
         while index:
-            sym = e.SYM.unpack(self.read(dyn[e.DT_SYMTAB] + index * e.SYM.size, e.SYM.size))
-            if self.cstr(dyn[e.DT_STRTAB] + sym[0]) == name:
+            sym = p.SYM.unpack(self.read(dyn[p.DT_SYMTAB] + index * p.SYM.size, p.SYM.size))
+            if self.cstr(dyn[p.DT_STRTAB] + sym[0]) == name:
                 return index
             index = table[nbucket + index]
         return 0
@@ -208,14 +209,14 @@ class SyntheticTests(unittest.TestCase):
         self.dyn = dict(self.img.dynamic())
 
     def test_header(self):
-        self.assertEqual(self.img.e_type, e.ET_EXEC)
+        self.assertEqual(self.img.e_type, p.ET_EXEC)
         self.assertEqual(len(self.img.phdrs), 5)
         self.assertEqual(self.result.symbols, len(NAMES))
         self.assertEqual((self.result.plt_relocs, self.result.relocs), (2, 1))
 
     def test_new_load_segment(self):
         new = self.img.phdrs[-1]
-        self.assertEqual(new.p_type, e.PT_LOAD)
+        self.assertEqual(new.p_type, p.PT_LOAD)
         # First free page above the highest loaded byte (data memsz, not filesz).
         self.assertEqual(new.p_vaddr, e.align_up(DATA_VADDR + DATA_MEMSZ, e.SEGMENT_ALIGN))
         self.assertEqual(new.p_offset % e.SEGMENT_ALIGN, 0)
@@ -226,23 +227,23 @@ class SyntheticTests(unittest.TestCase):
         start = PHDR_OFF + 5 * e.ELF_PHDR.size
         self.assertEqual(self.result.data[start: len(self.src)], self.src[start:])
         for i, (old, new) in enumerate(zip(build_elf_phdrs(self.src), self.img.phdrs)):
-            if old.p_type != e.PT_DYNAMIC:
+            if old.p_type != p.PT_DYNAMIC:
                 self.assertEqual(old, new, f"phdr {i}")
 
     def test_dynamic_tags(self):
         tags = [t for t, _ in self.img.dynamic()]
-        self.assertEqual(tags[-1], e.DT_NULL)
-        self.assertFalse([t for t in tags if t >= e.DT_LOOS], "Sony tags left in the table")
-        self.assertEqual(self.dyn[e.DT_PLTGOT], DATA_VADDR)
-        self.assertEqual(self.dyn[e.DT_PLTREL], e.DT_RELA)
+        self.assertEqual(tags[-1], p.DT_NULL)
+        self.assertFalse([t for t in tags if t >= p.DT_LOOS], "Sony tags left in the table")
+        self.assertEqual(self.dyn[p.DT_PLTGOT], DATA_VADDR)
+        self.assertEqual(self.dyn[p.DT_PLTREL], p.DT_RELA)
         self.assertEqual(self.dyn[0xD], 0x80)  # DT_FINI kept
-        self.assertEqual(self.img.cstr(self.dyn[e.DT_STRTAB] + self.dyn[1]), b"libkernel.prx")
+        self.assertEqual(self.img.cstr(self.dyn[p.DT_STRTAB] + self.dyn[1]), b"libkernel.prx")
 
     def test_relocations_readable(self):
-        jmprel = self.img.read(self.dyn[e.DT_JMPREL], self.dyn[e.DT_PLTRELSZ])
+        jmprel = self.img.read(self.dyn[p.DT_JMPREL], self.dyn[p.DT_PLTRELSZ])
         offsets = [struct.unpack_from("<Q", jmprel, i)[0] for i in range(0, len(jmprel), 24)]
         self.assertEqual(offsets, [DATA_VADDR + 0x18, DATA_VADDR + 0x20])
-        rela = self.img.read(self.dyn[e.DT_RELA], self.dyn[e.DT_RELASZ])
+        rela = self.img.read(self.dyn[p.DT_RELA], self.dyn[p.DT_RELASZ])
         self.assertEqual(struct.unpack("<QQq", rela), (DATA_VADDR + 0x40, 8, 0x100))
 
     def test_hash_finds_every_symbol(self):
@@ -251,11 +252,11 @@ class SyntheticTests(unittest.TestCase):
         self.assertEqual(self.img.lookup(self.dyn, b"missing"), 0)
 
     def test_dynamic_segment_read_only(self):
-        (dyn,) = [ph for ph in self.img.phdrs if ph.p_type == e.PT_DYNAMIC]
+        (dyn,) = [ph for ph in self.img.phdrs if ph.p_type == p.PT_DYNAMIC]
         self.assertEqual(dyn.p_flags, e.PF_R)
 
     def test_prx_type(self):
-        self.assertEqual(Image(e.convert(build_elf(e.ET_SCE_DYNAMIC)).data).e_type, e.ET_EXEC)
+        self.assertEqual(Image(e.convert(build_elf(p.ET_SCE_DYNAMIC)).data).e_type, p.ET_EXEC)
 
     def test_sysv_hash_vectors(self):
         # Values from the System V ABI hash function (cross-checked against libelf's elf_hash).
@@ -315,17 +316,17 @@ class EhFrameTests(unittest.TestCase):
         dyn = dict(img.dynamic())
         dynstr, dynamic = secs[b".dynstr"], secs[b".dynamic"]
         self.assertEqual((dynstr[1], dynstr[3], dynstr[5]),
-                         (e.SHT_STRTAB, dyn[e.DT_STRTAB], dyn[e.DT_STRSZ]))
-        (pt_dyn,) = [ph for ph in img.phdrs if ph.p_type == e.PT_DYNAMIC]
+                         (e.SHT_STRTAB, dyn[p.DT_STRTAB], dyn[p.DT_STRSZ]))
+        (pt_dyn,) = [ph for ph in img.phdrs if ph.p_type == p.PT_DYNAMIC]
         self.assertEqual((dynamic[1], dynamic[3], dynamic[5], dynamic[9]),
-                         (e.SHT_DYNAMIC, pt_dyn.p_vaddr, pt_dyn.p_filesz, e.DYN.size))
+                         (e.SHT_DYNAMIC, pt_dyn.p_vaddr, pt_dyn.p_filesz, p.DYN.size))
         self.assertEqual(img.sections()[dynamic[6]][0], b".dynstr")
         self.assertTrue(new.p_vaddr <= dynstr[3] and dynamic[3] + dynamic[5] <= new.p_vaddr
                         + new.p_filesz)
 
     def test_read_only_segment_gets_rodata(self):
         # None of the pinned files has one, but a read-only PT_LOAD must still be covered.
-        ro = e.Phdr(e.PT_LOAD, e.PF_R, 0x1000, 0x4000, 0x4000, 0x100, 0x180, 0x4000)
+        ro = e.Phdr(p.PT_LOAD, e.PF_R, 0x1000, 0x4000, 0x4000, 0x100, 0x180, 0x4000)
         inner = e.Section(b".x", e.SHT_PROGBITS, 0x4040, 0x1040, 0x20, 4)
         got = [(sec.name, sec.sh_type, sec.flags, sec.vaddr, sec.offset, sec.size)
                for sec in e.fill_segments([ro], [inner])]
@@ -380,7 +381,7 @@ class EhFrameTests(unittest.TestCase):
         self.assertEqual(run.stdout.count("FDE cie="), 2)
 
     def assertRejects(self, eh, message):
-        with self.assertRaisesRegex(e.ElfError, message):
+        with self.assertRaisesRegex(p.ElfError, message):
             e.convert(build_elf(eh=eh))
 
     def test_bad_version(self):
@@ -409,26 +410,26 @@ def build_elf_phdrs(data: bytes) -> list[e.Phdr]:
 
 class RejectTests(unittest.TestCase):
     def assertRejects(self, data: bytes, message: str):
-        with self.assertRaisesRegex(e.ElfError, message):
+        with self.assertRaisesRegex(p.ElfError, message):
             e.convert(data)
 
     def test_plain_elf(self):
-        self.assertRejects(build_elf(e_type=e.ET_EXEC), "unexpected e_type")
+        self.assertRejects(build_elf(e_type=p.ET_EXEC), "unexpected e_type")
 
     def test_not_elf(self):
         self.assertRejects(b"\0" * 0x100, "not an ELF")
 
     def test_missing_tag(self):
-        self.assertRejects(build_elf(drop_tags={e.DT_SCE_SYMTAB}), "missing dynamic tag")
+        self.assertRejects(build_elf(drop_tags={p.DT_SCE_SYMTAB}), "missing dynamic tag")
 
     def test_table_out_of_range(self):
-        self.assertRejects(build_elf(override={e.DT_SCE_STRSZ: 0x10000}), "past end of dynlibdata")
+        self.assertRejects(build_elf(override={p.DT_SCE_STRSZ: 0x10000}), "past end of dynlibdata")
 
     def test_rel_instead_of_rela(self):
-        self.assertRejects(build_elf(override={e.DT_SCE_PLTREL: 17}), "not RELA")
+        self.assertRejects(build_elf(override={p.DT_SCE_PLTREL: 17}), "not RELA")
 
     def test_standard_tag_clash(self):
-        self.assertRejects(build_elf(extra_tags=[(e.DT_STRTAB, 0)]), "unexpected standard tag")
+        self.assertRejects(build_elf(extra_tags=[(p.DT_STRTAB, 0)]), "unexpected standard tag")
 
     def test_other_os_tag_refused(self):
         self.assertRejects(build_elf(extra_tags=[(0x6FFFFFFB, 1)]), "unsupported dynamic tag")
@@ -462,7 +463,7 @@ class MainTests(unittest.TestCase):
     def test_unknown_file_refused(self):
         path = self.tmp / "in" / "x.elf"
         path.parent.mkdir()
-        path.write_bytes(build_elf(e_type=e.ET_SCE_DYNAMIC))
+        path.write_bytes(build_elf(e_type=p.ET_SCE_DYNAMIC))
         self.assertEqual(self.run_main(str(path), "-o", str(self.tmp / "out"))[0], 1)
         self.assertFalse((self.tmp / "out").exists())
 
@@ -496,7 +497,7 @@ class MainTests(unittest.TestCase):
         (self.elf_dir / "patched-copy.elf").write_bytes(b"not pinned")
         out = self.tmp / "out"
         self.assertEqual(self.run_main("-o", str(out)), (0, ""))
-        self.assertEqual([p.name for p in out.iterdir()], ["synthetic.elf"])
+        self.assertEqual([f.name for f in out.iterdir()], ["synthetic.elf"])
 
     def test_default_run_reports_missing_pinned_file(self):
         status, err = self.run_main("-o", str(self.tmp / "out"))
@@ -515,15 +516,15 @@ class GameTests(unittest.TestCase):
         for path in self2elf.default_inputs(GAME_DIR):
             with self.subTest(path.name):
                 data = self2elf.self_to_elf(path.read_bytes()).data
-                known = e.PINNED_ELFS.get(hashlib.sha256(data).hexdigest())
+                known = p.PINNED_ELFS.get(hashlib.sha256(data).hexdigest())
                 self.assertIsNotNone(known, "rebuilt ELF is not pinned in elf2std")
                 converted.add(known)
                 result = e.convert(data)
                 img = Image(result.data)
                 dyn = dict(img.dynamic())
-                strtab = dyn[e.DT_STRTAB]
+                strtab = dyn[p.DT_STRTAB]
                 for index in range(1, result.symbols):
-                    sym = e.SYM.unpack(img.read(dyn[e.DT_SYMTAB] + index * e.SYM.size, e.SYM.size))
+                    sym = p.SYM.unpack(img.read(dyn[p.DT_SYMTAB] + index * p.SYM.size, p.SYM.size))
                     name = img.cstr(strtab + sym[0])
                     # Names are not unique (e.g. a weak and a global entry), so only check
                     # that the lookup returns a symbol with this name.
@@ -549,7 +550,7 @@ class GameTests(unittest.TestCase):
                             if args[0] == "-r":
                                 self.assertEqual(run.stdout.count(" R_X86_64_"),
                                                  result.plt_relocs + result.relocs)
-        self.assertEqual(converted, set(e.PINNED_ELFS.values()))
+        self.assertEqual(converted, set(p.PINNED_ELFS.values()))
 
 
 if __name__ == "__main__":
