@@ -1,0 +1,91 @@
+# Builds every CMake preset, runs the unit tests and checks the commits of
+# a PR (or a push to main) with tools/privacy-check.sh.
+#
+# CI never has the game: BB_GAME_DIR is unset and the checkout has no
+# local.env, so tests that need the game skip.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.preset }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [debug, relwithdebinfo, release]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libgtest-dev
+
+      - name: Configure
+        run: cmake --preset "${{ matrix.preset }}" -DBB_WERROR=ON
+
+      - name: Build
+        run: cmake --build --preset "${{ matrix.preset }}"
+
+      # The runner kernels use 32 bits of mmap randomisation. The
+      # AddressSanitizer of Ubuntu 24.04's GCC can't cope with that: its
+      # shadow memory collides with randomly placed mappings and the tests
+      # die at startup. 28 bits is the older kernel default.
+      - name: Lower mmap randomisation for AddressSanitizer
+        if: matrix.preset == 'debug'
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      # run-tests.sh runs the Python tests too and builds the debug preset
+      # itself (already built above, so that step is a no-op).
+      - name: Test (Python and C++)
+        if: matrix.preset == 'debug'
+        run: tools/run-tests.sh
+
+      - name: Test (C++)
+        if: matrix.preset != 'debug'
+        run: ctest --preset "${{ matrix.preset }}" --no-tests=error
+
+  privacy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # the whole history, so the range base is present
+          fetch-depth: 0
+          # the PR's own head, not the merge commit GitHub makes for it
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check the commits
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -n "$PR_BASE" ]; then
+              base="$PR_BASE"
+          elif [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != 0000000000000000000000000000000000000000 ] &&
+               git rev-parse -q --verify "$PUSH_BEFORE^{commit}" >/dev/null; then
+              base="$PUSH_BEFORE"
+          else
+              # a push without a usable previous tip: check the last commit
+              base=HEAD^
+          fi
+          # privacy-check.sh wants every commit by the configured identity,
+          # a GitHub noreply address. The runner has none configured, so
+          # take the head commit's author; the check then fails if any
+          # commit in the range differs or the address isn't noreply.
+          # The personal patterns in .git/info/privacy-patterns are local
+          # only; CI checks the generic ones.
+          git config user.name "$(git log -1 --format=%an HEAD)"
+          git config user.email "$(git log -1 --format=%ae HEAD)"
+          tools/privacy-check.sh "$base"
