@@ -322,6 +322,18 @@ class EhFrameTests(unittest.TestCase):
         self.assertTrue(new.p_vaddr <= dynstr[3] and dynamic[3] + dynamic[5] <= new.p_vaddr
                         + new.p_filesz)
 
+    def test_read_only_segment_gets_rodata(self):
+        # None of the pinned files has one, but a read-only PT_LOAD must still be covered.
+        ro = e.Phdr(e.PT_LOAD, e.PF_R, 0x1000, 0x4000, 0x4000, 0x100, 0x180, 0x4000)
+        inner = e.Section(b".x", e.SHT_PROGBITS, 0x4040, 0x1040, 0x20, 4)
+        got = [(sec.name, sec.sh_type, sec.flags, sec.vaddr, sec.offset, sec.size)
+               for sec in e.fill_segments([ro], [inner])]
+        self.assertEqual(got, [
+            (b".rodata", e.SHT_PROGBITS, e.SHF_ALLOC, 0x4000, 0x1000, 0x40),
+            (b".rodata", e.SHT_PROGBITS, e.SHF_ALLOC, 0x4060, 0x1060, 0xA0),
+            (b".bss", e.SHT_NOBITS, e.SHF_ALLOC, 0x4100, 0x1100, 0x80),
+        ])
+
     def test_missing_terminator_before_hdr(self):
         eh = eh_layout(terminator=False)
         result, _, _ = self.convert(eh)

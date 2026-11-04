@@ -52,7 +52,8 @@ Observed in all 8 files (**confirmed** by walking every record):
 | `.eh_frame` | PROGBITS | A | from `eh_frame_ptr` to the terminator, inclusive |
 | `.eh_frame_hdr` | PROGBITS | A | `PT_GNU_EH_FRAME` |
 | `.data` | PROGBITS | WA | the file data of the writable segment |
-| `.bss` | NOBITS | WA | its zero-filled tail (`p_memsz` > `p_filesz`) |
+| `.rodata` | PROGBITS | A | the file data of an original segment that is neither executable nor writable (none of the pinned files has one) |
+| `.bss` | NOBITS | WA | the zero-filled tail (`p_memsz` > `p_filesz`) of an original segment; flags follow that segment (WA in all pinned files) |
 | `.dynstr` | STRTAB | A | the string table in the new segment |
 | `.dynamic` | DYNAMIC | A | the new dynamic table, `sh_link` → `.dynstr` |
 | `.shstrtab` | STRTAB | | section names |
@@ -61,10 +62,10 @@ The sections are sorted by address. Files without `PT_GNU_EH_FRAME` get no secti
 
 Why the extra sections:
 - **`.dynamic`, `.dynstr`**: once section headers exist, readelf looks up the dynamic table through its section and reports an error without one, and the dynamic section's `sh_link` has to name a string table.
-- **`.text`, `.data`, `.bss`**: once section headers exist, Ghidra builds its memory blocks from them. Segment parts not covered by a section still get loaded, but without the execute permission and without the zero-filled tail. Covering every loaded byte keeps the blocks as they were. The names are generic: `.text` also holds the PLT and read-only data, and `.data` the GOT.
+- **`.text`, `.data`, `.rodata`, `.bss`**: once section headers exist, Ghidra builds its memory blocks from them. Segment parts not covered by a section still get loaded, but without the execute permission and without the zero-filled tail. Covering every loaded byte keeps the blocks as they were. The names are generic: `.text` also holds the PLT and read-only data, and `.data` the GOT.
 - **Nothing else in the new segment**: it is read-only and fully backed by the file, so its uncovered parts load correctly. A section over the symbol and relocation tables there (tried as `.rodata`) made Ghidra stop turning PLT stubs into thunks of the imports.
 
-The names `.text`, `.data`, `.bss` and `.rodata` are not used for anything else. No `.dynsym`, `.rela.*` or `.hash` sections are written. Ghidra finds those tables through the dynamic table, as before. readelf, once section headers exist, lists relocations and dynamic symbols only from sections, so `readelf -r` and `readelf --dyn-syms` now need `--use-dynamic`.
+The names `.text`, `.data`, `.rodata` and `.bss` are used only for these filler sections. No `.dynsym`, `.rela.*` or `.hash` sections are written. Ghidra finds those tables through the dynamic table, as before. readelf, once section headers exist, lists relocations and dynamic symbols only from sections, so `readelf -r` and `readelf --dyn-syms` now need `--use-dynamic`.
 
 ## Result in Ghidra 12.1.4
 
