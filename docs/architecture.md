@@ -51,22 +51,24 @@ Decompiled functions are verified before the game boots. A test process maps the
 Our analysis results (names, signatures, types, matched NIDs) live as text in `symbols/`. Scripts sync them with a local Ghidra project, so the project can be rebuilt at any time and the history is tracked in git.
 
 ### Analysis tooling
-Python tools under `tools/` turn the dump into something Ghidra and `symbols/` can use. All of them check the pinned hashes and write only to `analysis/`.
+Python tools under `tools/` turn the dump into something Ghidra and `symbols/` can use. The tools that read game files or files derived from them check the pinned hashes. Generated output goes to `analysis/`. Only `nidmatch` and `ghidra-sync` update `symbols/`.
 
 ```
 eboot.bin, sce_module/*.prx
    │ self2elf      SELF → ELF
    ▼
 analysis/elf/*.elf ──elfimports──► module, library and import lists (analysis/imports/)
-   │                    │
-   │ elf2std            └─nidmatch (+ syscandidates, derive) ──► symbols/nids.csv
-   ▼
-standard ELF ──noreturn──► Ghidra project ◄──ghidra-sync──► symbols/functions.csv, symbols/types/
+   │  │                 │
+   │  │                 └─nidmatch (+ syscandidates, derive) ──► symbols/nids.csv
+   │  └─noreturn──► non-returning imports (analysis/noreturn/)
+   │ elf2std                         │ pre-script during the import
+   ▼                                 ▼
+standard ELF ──Ghidra import──► Ghidra project ◄──ghidra-sync──► symbols/functions.csv, symbols/types/
 ```
 
 - `elf2std` rewrites the PS4 dynamic tables into standard ones and adds section headers for the unwind tables, so stock tools import the file.
-- `noreturn` marks imports that never return before Ghidra's auto-analysis.
-- `tools/common/` holds the shared readers: the PS4 dynamic table, the NID hash and the game and analysis paths.
+- `noreturn` lists the imports that never return. A Ghidra pre-script marks them before auto-analysis (see `docs/formats/eh-frame.md`).
+- `tools/common/` holds the shared code: the PS4 dynamic-table reader, the NID hash, the game and analysis paths, and the command-line helpers (output-directory guard, per-file loop).
 
 ## Non-goals
 - CPU emulation or instruction translation.
