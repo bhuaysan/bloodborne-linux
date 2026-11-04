@@ -6,8 +6,8 @@
 # Usage: tools/merge-pr.sh <pr-number>
 #
 # Rebases the PR branch onto origin/main in a temporary worktree, checks
-# authorship, updates the PR branch, fast-forwards main and deletes the
-# branch. GitHub then marks the PR as merged. The current checkout is
+# authorship, updates the PR branch, fast-forwards main and, once GitHub
+# shows the PR as merged, deletes the branch. The current checkout is
 # never touched.
 set -eu
 
@@ -54,7 +54,22 @@ git log --oneline origin/main..HEAD
 new="$(git rev-parse HEAD)"
 git push -q --force-with-lease="$head:origin/$head" origin "$new:refs/heads/$head"
 git push -q origin "$new:refs/heads/main"
-git push -q origin --delete "$head"
+
+# GitHub marks the PR as merged only after it sees the head on main.
+# Deleting the branch before that can leave the PR closed instead.
+merged=no
+for _ in $(seq 30); do
+    if [ "$(gh pr view "$pr" --json state --jq .state)" = "MERGED" ]; then
+        merged=yes
+        break
+    fi
+    sleep 2
+done
+if [ "$merged" = yes ]; then
+    git push -q origin --delete "$head"
+else
+    echo "warning: PR #$pr is not shown as merged yet; keeping branch $head" >&2
+fi
 
 git -C "$repo_root" fetch -q --prune origin
 echo "done: main is now $(git rev-parse --short "$new")"
