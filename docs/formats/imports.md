@@ -29,7 +29,7 @@ The other 5 bundled PRXs (libSceFace, libSceHand, libSceHeadTracker, libSceS3DCo
 
 ## Modules loaded at runtime
 
-Besides `DT_NEEDED`, the eboot loads system modules by numeric id with `sceSysmoduleLoadModule` (names from [nid.md](nid.md)). It calls the function from 21 places, all with a constant id (`mov edi, imm32` right before the call), 16 distinct ids in all. Each id goes with an imported library, found from the calls right after the load. The table lists our own findings; there is no published table of the ids.
+Besides `DT_NEEDED`, the eboot loads system modules by numeric id with `sceSysmoduleLoadModule` (names from [nid.md](nid.md)). It calls the function from 22 places, all with a constant id (`mov edi, imm32` right before the call), 16 distinct ids in all. Each id goes with an imported library, found from the calls right after the load. The table lists our own findings; there is no published table of the ids.
 
 | Id | Load sites | Library used right after | How clear |
 |---|---|---|---|
