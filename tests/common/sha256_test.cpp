@@ -15,7 +15,8 @@ std::span<const std::byte> bytes(std::string_view s) {
     return std::as_bytes(std::span(s.data(), s.size()));
 }
 
-// Test vectors of FIPS 180-2, appendix B (docs/references.md).
+// Expected digests from GNU coreutils sha256sum (docs/references.md): a one-block message,
+// a 448-bit message that needs a second block for the padding, and a long message.
 TEST(Sha256, OneBlockMessage) {
     EXPECT_EQ(to_hex(sha256(bytes("abc"))),
               "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
