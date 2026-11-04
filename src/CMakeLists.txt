@@ -1,0 +1,2 @@
+# Libraries and their dependencies are described in docs/design/runtime.md.
+add_subdirectory(common)
