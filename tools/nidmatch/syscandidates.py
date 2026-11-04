@@ -25,10 +25,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
-from toolenv import analysis_dir  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import nidmatch as nm  # noqa: E402
 
-OUT_DIR = analysis_dir() / "nids" / "candidates"
 # Page files are named <name>.<section>[<suffix>][.<compression>], e.g. pthread_create.3.gz or
 # BIO_read.3ssl.gz. Anything else in a man directory (README, index files) is not a page.
 PAGE_RE = r"([A-Za-z_][A-Za-z0-9_]*)\.{section}[a-z0-9]*(?:\.(?:gz|bz2|xz|zst|lzma|Z))?"
@@ -81,12 +80,6 @@ def defined_symbols(lib: Path) -> set[str]:
     return names
 
 
-def write_list(path: Path, header: list[str], names: set[str]) -> None:
-    lines = [f"# {h}" for h in header] + sorted(names)
-    path.write_text("\n".join(lines) + "\n", encoding="ascii")
-    print(f"{path.name}: {len(names)} names")
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--man-dir", type=Path, action="append",
@@ -97,18 +90,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        nm.GENERATED_DIR.mkdir(parents=True, exist_ok=True)
         dirs = args.man_dir or man_dirs()
         for section in ("2", "3"):
-            write_list(OUT_DIR / f"man{section}.txt",
-                       [f"Names of the installed manual pages, section {section}"],
-                       man_names(dirs, section))
+            nm.write_list(nm.GENERATED_DIR / f"man{section}.txt",
+                          [f"Names of the installed manual pages, section {section}"],
+                          man_names(dirs, section))
         for label, libs in LIBS.items():
             names: set[str] = set()
             for lib in libs:
                 names |= defined_symbols(args.lib_dir / lib if args.lib_dir else find_library(lib))
-            write_list(OUT_DIR / f"{label}.txt",
-                       [f"Symbols defined by the system's {', '.join(libs)}"], names)
+            nm.write_list(nm.GENERATED_DIR / f"{label}.txt",
+                          [f"Symbols defined by the system's {', '.join(libs)}"], names)
     except (OSError, subprocess.CalledProcessError, UnicodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

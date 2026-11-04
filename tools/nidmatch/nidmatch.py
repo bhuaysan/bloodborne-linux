@@ -279,6 +279,13 @@ def report(table: NidTable, found: dict[str, tuple[str, set[str]]], load_set: se
     return "\n".join(lines) + "\n"
 
 
+def write_list(path: Path, header: list[str], names: set[str]) -> None:
+    """A candidate list: the header as comment lines, then the names sorted."""
+    lines = [f"# {h}" for h in header] + sorted(names)
+    path.write_text("\n".join(lines) + "\n", encoding="ascii")
+    print(f"{path.name}: {len(names)} names")
+
+
 def write_csv(path: Path, fields: list[str], rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as f:

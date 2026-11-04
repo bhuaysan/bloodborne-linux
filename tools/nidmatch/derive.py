@@ -239,13 +239,6 @@ def read_identifiers(elfs: dict[str, bytes]) -> set[str]:
     return {t.decode("ascii") for data in elfs.values() for t in nm.IDENT_RE.findall(data)}
 
 
-def write_list(path: Path, rule: str, names: set[str]) -> None:
-    header = [f"# {path.stem}: {rule}",
-              "# Written by tools/nidmatch/derive.py. Only names whose NID matched."]
-    path.write_text("\n".join(header + sorted(names)) + "\n", encoding="ascii")
-    print(f"{path.name}: {len(names)} names")
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1,
@@ -261,10 +254,12 @@ def main(argv: list[str] | None = None) -> int:
         seed = read_seed(nm.NIDS_CSV)
         result = derive(targets(table), seed, c_names, idents, max(1, args.jobs),
                         log=lambda msg: print(f"[{time.monotonic() - start:4.0f}s] {msg}"))
-        write_list(nm.GENERATED_DIR / f"{POSIX_LABEL}.txt",
-                   "<prefix><C name in CamelCase>", result[POSIX_LABEL])
-        write_list(nm.GENERATED_DIR / f"{WORDS_LABEL}.txt",
-                   "<prefix><1 to 3 words>", result[WORDS_LABEL])
+        for label, rule in ((POSIX_LABEL, "<prefix><C name in CamelCase>"),
+                            (WORDS_LABEL, "<prefix><1 to 3 words>")):
+            nm.write_list(nm.GENERATED_DIR / f"{label}.txt",
+                          [f"{label}: {rule}",
+                           "Written by tools/nidmatch/derive.py. Only names whose NID matched."],
+                          result[label])
     except nm.ERRORS as exc:
         return nm.print_error(exc)
     return 0
