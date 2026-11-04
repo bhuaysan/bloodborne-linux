@@ -1,0 +1,30 @@
+#include "common/file.hpp"
+
+#include <cerrno>
+#include <cstdio>
+#include <memory>
+#include <system_error>
+
+namespace bb::common {
+
+std::vector<std::byte> read_file(const std::filesystem::path& path) {
+    auto fail = [&](int err) {
+        return std::system_error(err, std::generic_category(), "cannot read " + path.string());
+    };
+    using File = std::unique_ptr<std::FILE, int (*)(std::FILE*)>;
+    File file(std::fopen(path.c_str(), "rb"), std::fclose);
+    if (!file) {
+        throw fail(errno);
+    }
+    std::vector<std::byte> data;
+    std::byte chunk[1 << 16];
+    while (std::size_t n = std::fread(chunk, 1, sizeof chunk, file.get())) {
+        data.insert(data.end(), chunk, chunk + n);
+    }
+    if (std::ferror(file.get())) {
+        throw fail(errno ? errno : EIO);
+    }
+    return data;
+}
+
+}  // namespace bb::common
