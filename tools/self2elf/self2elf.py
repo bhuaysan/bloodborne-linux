@@ -15,14 +15,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 import struct
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUT = REPO_ROOT / "analysis" / "elf"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+from toolenv import ELF_HEADER, ELF_PHDR, Phdr, analysis_dir, is_inside, load_game_dir  # noqa: E402
+
+DEFAULT_OUT = analysis_dir() / "elf"
 
 # CUSA03173 patch 1.09. docs/clean-room.md lists the same hashes.
 KNOWN_FILES = {
@@ -40,8 +41,6 @@ SELF_MAGIC = b"\x4f\x15\x3d\x1d"
 SELF_HEADER = struct.Struct("<4s4sIHHIIHHI")  # 0x20 bytes
 SELF_CONSTANT = b"\x00\x01\x01\x12"  # header bytes 4..7, same in every known SELF
 SELF_ENTRY = struct.Struct("<QQQQ")  # 0x20 bytes
-ELF_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")  # 0x40 bytes
-ELF_PHDR = struct.Struct("<IIQQQQQQ")  # 0x38 bytes
 EXT_INFO = struct.Struct("<QQQQ32s")  # program identification header, 0x40 bytes
 
 # Segment entry property bits
@@ -54,18 +53,6 @@ PT_SCE_LIBVERSION = 0x6FFFFF01
 
 class SelfError(Exception):
     pass
-
-
-@dataclass
-class Phdr:
-    p_type: int
-    p_flags: int
-    p_offset: int
-    p_vaddr: int
-    p_paddr: int
-    p_filesz: int
-    p_memsz: int
-    p_align: int
 
 
 @dataclass
@@ -161,22 +148,6 @@ def self_to_elf(data: bytes) -> ElfImage:
     return ElfImage(bytes(out), e_type, e_entry, phdrs, program_auth_id, program_type)
 
 
-def load_game_dir() -> Path | None:
-    value = os.environ.get("BB_GAME_DIR")
-    if not value:
-        env_file = REPO_ROOT / "local.env"
-        if env_file.is_file():
-            for line in env_file.read_text().splitlines():
-                key, sep, val = line.strip().partition("=")
-                if sep and key.removeprefix("export ").strip() == "BB_GAME_DIR":
-                    value = val.strip().strip("'\"")
-    return Path(value).expanduser().resolve() if value else None
-
-
-def is_inside(path: Path, parent: Path) -> bool:
-    return path == parent or parent in path.parents
-
-
 def default_inputs(game_dir: Path) -> list[Path]:
     eboot = game_dir / "eboot.bin"
     prx = sorted(p for p in (game_dir / "sce_module").glob("*.prx") if not p.name.startswith("._"))
@@ -188,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("files", nargs="*", type=Path,
                         help="SELF files (default: eboot.bin and sce_module/*.prx from BB_GAME_DIR)")
     parser.add_argument("-o", "--out-dir", type=Path, default=DEFAULT_OUT,
-                        help="output directory (default: analysis/elf/ in the repo)")
+                        help="output directory (default: analysis/elf/ in the main checkout)")
     args = parser.parse_args(argv)
 
     game_dir = load_game_dir()

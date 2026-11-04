@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Tests for elf2std. Run: python3 -m unittest discover tools/elf2std"""
+"""Tests for elf2std. Run: python3 -m unittest discover -s tools/elf2std
+
+The synthetic tests need no game files. The game test runs only when BB_GAME_DIR is set
+(environment or local.env). It rebuilds the ELFs from the SELFs in memory, so it does not
+need analysis/elf/.
+"""
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
-import os
+import io
 import shutil
 import struct
 import subprocess
@@ -12,9 +18,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+TOOLS = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(TOOLS / "elf2std"))
+sys.path.insert(0, str(TOOLS / "self2elf"))
 import elf2std as e  # noqa: E402
+import self2elf  # noqa: E402
 
 PHDR_OFF = 0x40
 TEXT_OFF, TEXT_VADDR, TEXT_SIZE = 0x1000, 0x0, 0x200
@@ -185,6 +195,10 @@ class SyntheticTests(unittest.TestCase):
             self.assertEqual(self.img.lookup(self.dyn, name), index)
         self.assertEqual(self.img.lookup(self.dyn, b"missing"), 0)
 
+    def test_dynamic_segment_read_only(self):
+        (dyn,) = [ph for ph in self.img.phdrs if ph.p_type == e.PT_DYNAMIC]
+        self.assertEqual(dyn.p_flags, e.PF_R)
+
     def test_prx_type(self):
         self.assertEqual(Image(e.convert(build_elf(e.ET_SCE_DYNAMIC)).data).e_type, e.ET_EXEC)
 
@@ -222,6 +236,9 @@ class RejectTests(unittest.TestCase):
     def test_standard_tag_clash(self):
         self.assertRejects(build_elf(extra_tags=[(e.DT_STRTAB, 0)]), "unexpected standard tag")
 
+    def test_other_os_tag_refused(self):
+        self.assertRejects(build_elf(extra_tags=[(0x6FFFFFFB, 1)]), "unsupported dynamic tag")
+
     def test_no_room_for_phdr(self):
         data = bytearray(build_elf())
         data[PHDR_OFF + 4 * e.ELF_PHDR.size + 8] = 1
@@ -232,30 +249,81 @@ class MainTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp)
+        self.src = build_elf()
+        # Pin the synthetic ELF and point the default input directory into the temp dir.
+        self.elf_dir = self.tmp / "elf"
+        self.elf_dir.mkdir()
+        known = {hashlib.sha256(self.src).hexdigest(): "synthetic.elf"}
+        for patch in (mock.patch.object(e, "KNOWN_FILES", known),
+                      mock.patch.object(e, "DEFAULT_IN", self.elf_dir)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def run_main(self, *argv: str) -> tuple[int, str]:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+            status = e.main(list(argv))
+        return status, stderr.getvalue()
 
     def test_unknown_file_refused(self):
         path = self.tmp / "in" / "x.elf"
         path.parent.mkdir()
-        path.write_bytes(build_elf())
-        self.assertEqual(e.main([str(path), "-o", str(self.tmp / "out")]), 1)
+        path.write_bytes(build_elf(e_type=e.ET_SCE_DYNAMIC))
+        self.assertEqual(self.run_main(str(path), "-o", str(self.tmp / "out"))[0], 1)
         self.assertFalse((self.tmp / "out").exists())
 
+    def test_unreadable_input_does_not_stop_the_batch(self):
+        inputs = self.tmp / "in"
+        (inputs / "a-directory").mkdir(parents=True)
+        good = inputs / "synthetic.elf"
+        good.write_bytes(self.src)
+        out = self.tmp / "out"
+        status, err = self.run_main(str(inputs / "missing.elf"), str(inputs / "a-directory"),
+                                    str(good), "-o", str(out))
+        self.assertEqual(status, 1)
+        self.assertEqual(err.count("error:"), 2)
+        self.assertTrue((out / "synthetic.elf").is_file())
 
-GAME_ELF_DIR = e.DEFAULT_IN
+    def test_output_into_self2elf_dir_refused(self):
+        other = self.tmp / "copy" / "synthetic.elf"
+        other.parent.mkdir()
+        other.write_bytes(self.src)
+        self.assertEqual(self.run_main(str(other), "-o", str(self.elf_dir))[0], 2)
+        self.assertEqual(list(self.elf_dir.iterdir()), [])
+
+    def test_output_next_to_input_refused(self):
+        path = self.tmp / "in" / "synthetic.elf"
+        path.parent.mkdir()
+        path.write_bytes(self.src)
+        self.assertEqual(self.run_main(str(path), "-o", str(path.parent / "sub"))[0], 2)
+
+    def test_default_run_ignores_stray_files(self):
+        (self.elf_dir / "synthetic.elf").write_bytes(self.src)
+        (self.elf_dir / "patched-copy.elf").write_bytes(b"not pinned")
+        out = self.tmp / "out"
+        self.assertEqual(self.run_main("-o", str(out)), (0, ""))
+        self.assertEqual([p.name for p in out.iterdir()], ["synthetic.elf"])
+
+    def test_default_run_reports_missing_pinned_file(self):
+        status, err = self.run_main("-o", str(self.tmp / "out"))
+        self.assertEqual(status, 1)
+        self.assertIn("synthetic.elf", err)
 
 
-@unittest.skipUnless(os.environ.get("BB_GAME_DIR") and GAME_ELF_DIR.is_dir(),
-                     "BB_GAME_DIR not set or analysis/elf/ missing (run self2elf)")
+GAME_DIR = e.load_game_dir()
+
+
+@unittest.skipUnless(GAME_DIR, "BB_GAME_DIR not set (environment or local.env)")
 class GameTests(unittest.TestCase):
-    def test_all_rebuilt_elfs(self):
+    def test_all_pinned_elfs(self):
         readelf = shutil.which("readelf")
-        found = 0
-        for path in sorted(GAME_ELF_DIR.glob("*.elf")):
-            data = path.read_bytes()
-            if hashlib.sha256(data).hexdigest() not in e.KNOWN_FILES:
-                continue
-            found += 1
+        converted = set()
+        for path in self2elf.default_inputs(GAME_DIR):
             with self.subTest(path.name):
+                data = self2elf.self_to_elf(path.read_bytes()).data
+                known = e.KNOWN_FILES.get(hashlib.sha256(data).hexdigest())
+                self.assertIsNotNone(known, "rebuilt ELF is not pinned in elf2std")
+                converted.add(known)
                 result = e.convert(data)
                 img = Image(result.data)
                 dyn = dict(img.dynamic())
@@ -265,8 +333,7 @@ class GameTests(unittest.TestCase):
                     name = img.cstr(strtab + sym[0])
                     # Names are not unique (e.g. a weak and a global entry), so only check
                     # that the lookup returns a symbol with this name.
-                    found_index = img.lookup(dyn, name)
-                    self.assertNotEqual(found_index, 0, name)
+                    self.assertNotEqual(img.lookup(dyn, name), 0, name)
                 if readelf:
                     with tempfile.NamedTemporaryFile(suffix=".elf") as tmp:
                         tmp.write(result.data)
@@ -275,7 +342,7 @@ class GameTests(unittest.TestCase):
                                               tmp.name], capture_output=True, text=True)
                     self.assertEqual(run.returncode, 0)
                     self.assertEqual(run.stderr, "")
-        self.assertEqual(found, len(e.KNOWN_FILES))
+        self.assertEqual(converted, set(e.KNOWN_FILES.values()))
 
 
 if __name__ == "__main__":

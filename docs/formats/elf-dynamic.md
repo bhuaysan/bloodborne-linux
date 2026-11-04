@@ -96,15 +96,15 @@ The PLT is a standard lazy-binding PLT: `PLT0` pushes `GOT[1]` and jumps through
 
 `elf2std` makes these changes and keeps every other byte:
 
-1. **`e_type` becomes `ET_EXEC` (2).** The image is position-independent and `ET_DYN` would be the honest type, but Ghidra rebases `ET_DYN` images to 0x100000. `ET_EXEC` keeps the link addresses, which `symbols/` uses.
+1. **`e_type` becomes `ET_EXEC` (2).** The image is position-independent and `ET_DYN` would be the honest type, but Ghidra rebases `ET_DYN` images to 0x100000. `ET_EXEC` keeps the link addresses, which `symbols/` uses. Ghidra's ELF loader has an image base option (`-loader-imagebase` in headless mode) that would also keep them, but REA's `open_binary` can't pass loader options, so the file itself has to carry the choice. The side effect: `readelf` and `objdump` call the PRX modules executables.
 2. **A new `PT_LOAD` segment** (read-only) at the first 0x4000-aligned address above the image. Its file data is appended to the end of the file. It holds:
    - a copy of the dynlibdata segment, so `vaddr = new base + offset` works for every Sony offset,
    - a new SysV hash table over the same symbols (a copy of the Sony table would make standard lookups fail),
    - a new dynamic table with standard tags.
-3. **`PT_DYNAMIC`** points at the new dynamic table.
+3. **`PT_DYNAMIC`** points at the new dynamic table and becomes read-only, like the segment it now lies in.
 4. **The new program header** goes into the zero-filled gap after the existing ones. There is room up to file offset 0x4000.
 
-The new dynamic table contains the standard tags of the original table unchanged, plus `DT_HASH`, `DT_STRTAB`, `DT_SYMTAB`, `DT_JMPREL`, `DT_RELA` (virtual addresses in the new segment), and `DT_PLTGOT`, `DT_PLTREL`, `DT_PLTRELSZ`, `DT_RELASZ`, `DT_RELAENT`, `DT_STRSZ`, `DT_SYMENT` (values copied). The other Sony tags are dropped from it. They stay readable in the copied original table.
+The new dynamic table contains the standard tags of the original table unchanged, plus `DT_HASH`, `DT_STRTAB`, `DT_SYMTAB`, `DT_JMPREL`, `DT_RELA` (virtual addresses in the new segment), and `DT_PLTGOT`, `DT_PLTREL`, `DT_PLTRELSZ`, `DT_RELASZ`, `DT_RELAENT`, `DT_STRSZ`, `DT_SYMENT` (values copied). The other Sony tags (`0x61xxxxxx`) are dropped from it. They stay readable in the copied original table. Any other tag at or above `DT_LOOS` (an OS- or processor-specific tag such as `DT_FLAGS_1`) makes `elf2std` stop, because we can't tell whether its value would need translating. None of the 8 pinned files has one.
 
 ### Result in Ghidra 12.1.4
 

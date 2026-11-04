@@ -1,10 +1,10 @@
 """Tests for self2elf. Run: python3 -m unittest discover -s tools/self2elf
 
-The synthetic tests need no game files. The game test runs only when BB_GAME_DIR is set.
+The synthetic tests need no game files. The game test runs only when BB_GAME_DIR is set
+(environment or local.env).
 """
 
 import hashlib
-import os
 import struct
 import tempfile
 import unittest
@@ -94,10 +94,13 @@ class SyntheticTests(unittest.TestCase):
             self.assertEqual(s2e.main([str(src), "-o", str(Path(tmp, "sub"))]), 2)
 
 
-@unittest.skipUnless(os.environ.get("BB_GAME_DIR"), "BB_GAME_DIR not set")
+GAME_DIR = s2e.load_game_dir()
+
+
+@unittest.skipUnless(GAME_DIR, "BB_GAME_DIR not set (environment or local.env)")
 class GameTests(unittest.TestCase):
     def test_all_bundled_selfs(self):
-        game_dir = Path(os.environ["BB_GAME_DIR"])
+        game_dir = GAME_DIR
         files = s2e.default_inputs(game_dir)
         self.assertEqual(len(files), len(s2e.KNOWN_FILES))
         for path in files:

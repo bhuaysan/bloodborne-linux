@@ -6,7 +6,8 @@ PT_SCE_DYNLIBDATA segment, which is not loaded, and describe it with Sony dynami
 values are offsets into that segment. The tables themselves (string table, Elf64_Sym, Elf64_Rela)
 use the standard layouts. This tool:
 
-- sets e_type to ET_EXEC, so tools keep the link addresses (Ghidra rebases ET_DYN images),
+- sets e_type to ET_EXEC, so tools keep the link addresses (Ghidra rebases ET_DYN images, and
+  REA cannot pass Ghidra's image base option),
 - appends a new read-only PT_LOAD segment above the image holding a copy of the dynlibdata
   segment, a SysV hash table and a standard dynamic table pointing into that copy,
 - repoints PT_DYNAMIC at the new dynamic table.
@@ -16,24 +17,27 @@ keep their encoded names (NID#library#module). The format is described in
 docs/formats/elf-dynamic.md.
 
 Usage:
-    elf2std.py                    # every pinned ELF in analysis/elf/
+    elf2std.py                    # the 8 pinned ELFs in analysis/elf/
     elf2std.py FILE [FILE ...]    # specific files
     elf2std.py -o DIR ...         # output directory (default: analysis/elf-std/)
+
+analysis/ is the one in the main checkout, also when run from a linked git worktree.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 import struct
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_IN = REPO_ROOT / "analysis" / "elf"
-DEFAULT_OUT = REPO_ROOT / "analysis" / "elf-std"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+from toolenv import ELF_HEADER, ELF_PHDR, Phdr, analysis_dir, is_inside, load_game_dir  # noqa: E402
+
+DEFAULT_IN = analysis_dir() / "elf"
+DEFAULT_OUT = analysis_dir() / "elf-std"
 
 # ELFs rebuilt by self2elf from CUSA03173 patch 1.09 (eboot.bin and sce_module/*.prx).
 KNOWN_FILES = {
@@ -47,8 +51,6 @@ KNOWN_FILES = {
     "12a7735255ae17a7c3765674be39e841ab7cdfb54854bbc5e37334bd049a8553": "libSceSmart.elf",
 }
 
-ELF_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")  # 0x40 bytes
-ELF_PHDR = struct.Struct("<IIQQQQQQ")  # 0x38 bytes
 DYN = struct.Struct("<QQ")  # 0x10 bytes
 SYM = struct.Struct("<IBBHQQ")  # 0x18 bytes
 RELA_SIZE = 0x18
@@ -80,6 +82,9 @@ DT_JMPREL = 23
 DT_LOOS = 0x6000000D
 
 # Sony dynamic tags (our names; the values were matched against the table layouts in the files).
+# Every Sony tag seen so far is 0x610000xx. We treat 0x61xxxxxx as the Sony range.
+DT_SCE_FIRST = 0x61000000
+DT_SCE_LAST = 0x61FFFFFF
 DT_SCE_HASH = 0x61000025
 DT_SCE_PLTGOT = 0x61000027
 DT_SCE_JMPREL = 0x61000029
@@ -111,27 +116,13 @@ VALUE_TAGS = {
     DT_SCE_STRSZ: DT_STRSZ,
     DT_SCE_SYMENT: DT_SYMENT,
 }
-REQUIRED_TAGS = list(OFFSET_TAGS) + list(VALUE_TAGS) + [DT_SCE_SYMTABSZ]
+REQUIRED_TAGS = frozenset(OFFSET_TAGS) | frozenset(VALUE_TAGS) | {DT_SCE_SYMTABSZ}
+USED_TAGS = REQUIRED_TAGS | {DT_SCE_HASH, DT_SCE_HASHSZ}  # read by convert()
+REPLACED_TAGS = frozenset(OFFSET_TAGS.values()) | frozenset(VALUE_TAGS.values()) | {DT_HASH}
 
 
 class ElfError(Exception):
     pass
-
-
-@dataclass
-class Phdr:
-    p_type: int
-    p_flags: int
-    p_offset: int
-    p_vaddr: int
-    p_paddr: int
-    p_filesz: int
-    p_memsz: int
-    p_align: int
-
-    def pack(self) -> bytes:
-        return ELF_PHDR.pack(self.p_type, self.p_flags, self.p_offset, self.p_vaddr,
-                             self.p_paddr, self.p_filesz, self.p_memsz, self.p_align)
 
 
 @dataclass
@@ -223,10 +214,10 @@ def convert(data: bytes) -> Result:
 
     sce: dict[int, int] = {}
     for tag, value in entries:
-        if tag in REQUIRED_TAGS + [DT_SCE_HASH, DT_SCE_HASHSZ]:
+        if tag in USED_TAGS:
             _need(tag not in sce, f"duplicate dynamic tag {tag:#x}")
             sce[tag] = value
-    for tag in REQUIRED_TAGS:
+    for tag in sorted(REQUIRED_TAGS):
         _need(tag in sce, f"missing dynamic tag {tag:#x}")
     _need(sce[DT_SCE_PLTREL] == DT_RELA, "PLT relocations are not RELA")
     _need(sce[DT_SCE_SYMENT] == SYM.size, "unexpected symbol entry size")
@@ -234,15 +225,13 @@ def convert(data: bytes) -> Result:
 
     blob = bytearray(data[dynlib.p_offset: dynlib.p_offset + dynlib.p_filesz])
 
-    def table(offset_tag: int, size: int, what: str) -> tuple[int, int]:
-        start = sce[offset_tag]
-        _need(start + size <= len(blob), f"{what} past end of dynlibdata")
-        return start, size
-
-    str_off, str_size = table(DT_SCE_STRTAB, sce[DT_SCE_STRSZ], "string table")
-    sym_off, sym_size = table(DT_SCE_SYMTAB, sce[DT_SCE_SYMTABSZ], "symbol table")
-    table(DT_SCE_JMPREL, sce[DT_SCE_PLTRELSZ], "PLT relocations")
-    table(DT_SCE_RELA, sce[DT_SCE_RELASZ], "relocations")
+    for offset_tag, size_tag, what in ((DT_SCE_STRTAB, DT_SCE_STRSZ, "string table"),
+                                       (DT_SCE_SYMTAB, DT_SCE_SYMTABSZ, "symbol table"),
+                                       (DT_SCE_JMPREL, DT_SCE_PLTRELSZ, "PLT relocations"),
+                                       (DT_SCE_RELA, DT_SCE_RELASZ, "relocations")):
+        _need(sce[offset_tag] + sce[size_tag] <= len(blob), f"{what} past end of dynlibdata")
+    str_off, str_size = sce[DT_SCE_STRTAB], sce[DT_SCE_STRSZ]
+    sym_off, sym_size = sce[DT_SCE_SYMTAB], sce[DT_SCE_SYMTABSZ]
     _need(sym_size % SYM.size == 0, "symbol table size not a multiple of the entry size")
     _need(sce[DT_SCE_PLTRELSZ] % RELA_SIZE == 0 and sce[DT_SCE_RELASZ] % RELA_SIZE == 0,
           "relocation table size not a multiple of the entry size")
@@ -267,12 +256,15 @@ def convert(data: bytes) -> Result:
     new_entries = []
     for tag, value in entries:
         # Standard tags (DT_NEEDED, DT_SONAME, DT_INIT, DT_INIT_ARRAY, ...) already hold string
-        # offsets or virtual addresses and are kept. The other Sony tags describe modules and
-        # libraries; they remain readable in the dynlibdata copy.
+        # offsets or virtual addresses and are kept. Sony tags are dropped: the ones above are
+        # replaced by standard tags, the others describe modules and libraries and remain
+        # readable in the dynlibdata copy. Any other OS or processor tag is refused, because we
+        # can't tell whether its value would need translating. None of the pinned files has one.
         if tag < DT_LOOS:
-            _need(tag not in OFFSET_TAGS.values() and tag not in VALUE_TAGS.values()
-                  and tag != DT_HASH, f"unexpected standard tag {tag:#x}")
+            _need(tag not in REPLACED_TAGS, f"unexpected standard tag {tag:#x}")
             new_entries.append((tag, value))
+        else:
+            _need(DT_SCE_FIRST <= tag <= DT_SCE_LAST, f"unsupported dynamic tag {tag:#x}")
     new_entries.append((DT_HASH, load_vaddr + hash_off))
     for sce_tag, std_tag in OFFSET_TAGS.items():
         new_entries.append((std_tag, load_vaddr + sce[sce_tag]))
@@ -293,7 +285,8 @@ def convert(data: bytes) -> Result:
     out[:ELF_HEADER.size] = header
     for i, ph in enumerate(phdrs):
         if ph is dynamic:
-            ph = Phdr(PT_DYNAMIC, ph.p_flags, load_offset + dyn_off, load_vaddr + dyn_off,
+            # Read-only, like the PT_LOAD it now lies in.
+            ph = Phdr(PT_DYNAMIC, PF_R, load_offset + dyn_off, load_vaddr + dyn_off,
                       load_vaddr + dyn_off, dyn_size, dyn_size, ph.p_align)
         out[e_phoff + i * ELF_PHDR.size: e_phoff + (i + 1) * ELF_PHDR.size] = ph.pack()
     new_load = Phdr(PT_LOAD, PF_R, load_offset, load_vaddr, load_vaddr, len(blob), len(blob),
@@ -304,58 +297,53 @@ def convert(data: bytes) -> Result:
                   sce[DT_SCE_RELASZ] // RELA_SIZE)
 
 
-def load_game_dir() -> Path | None:
-    """BB_GAME_DIR from the environment or local.env in the repo root."""
-    value = os.environ.get("BB_GAME_DIR")
-    env_file = REPO_ROOT / "local.env"
-    if not value and env_file.is_file():
-        for line in env_file.read_text().splitlines():
-            key, sep, rest = line.partition("=")
-            if sep and key.removeprefix("export ").strip() == "BB_GAME_DIR":
-                value = rest.strip().strip("\"'")
-    return Path(value).expanduser().resolve() if value else None
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("files", nargs="*", type=Path,
-                        help="ELF files from self2elf (default: every pinned ELF in analysis/elf/)")
+                        help="ELF files from self2elf (default: the pinned ELFs in analysis/elf/)")
     parser.add_argument("-o", "--out-dir", type=Path, default=DEFAULT_OUT,
-                        help="output directory (default: analysis/elf-std/ in the repo)")
+                        help="output directory (default: analysis/elf-std/ in the main checkout)")
     args = parser.parse_args(argv)
 
-    files = args.files or sorted(p for p in DEFAULT_IN.glob("*.elf"))
+    files = args.files
     if not files:
-        parser.error(f"no files given and none found in {DEFAULT_IN} (run self2elf first)")
-    out_dir = args.out_dir.expanduser().resolve()
-    game_dir = load_game_dir()
-    if game_dir is not None and out_dir.is_relative_to(game_dir):
-        parser.error("refusing to write into the game directory")
+        if not DEFAULT_IN.is_dir():
+            parser.error(f"no files given and {DEFAULT_IN} does not exist (run self2elf first)")
+        # Only the pinned names, so stray files in analysis/elf/ don't fail the run.
+        files = [DEFAULT_IN / name for name in sorted(set(KNOWN_FILES.values()))]
 
-    status = 0
+    # Checked before anything is written. analysis/elf/ holds the self2elf outputs this tool
+    # verifies against, so writing there would break later runs.
+    out_dir = args.out_dir.expanduser().resolve()
+    forbidden = {p.resolve().parent for p in files} | {DEFAULT_IN.resolve()}
+    game_dir = load_game_dir()
+    if game_dir is not None:
+        forbidden.add(game_dir)
+    for parent in sorted(forbidden):
+        if is_inside(out_dir, parent):
+            print(f"error: refusing to write into the game, input or self2elf directory ({parent})",
+                  file=sys.stderr)
+            return 2
+
+    failed = 0
     for path in files:
-        data = path.read_bytes()
-        known = KNOWN_FILES.get(hashlib.sha256(data).hexdigest())
-        if known is None:
-            print(f"{path}: SHA-256 is not a pinned self2elf output, skipped", file=sys.stderr)
-            status = 1
-            continue
-        if path.resolve().parent == out_dir:
-            print(f"{path}: refusing to write next to the input", file=sys.stderr)
-            status = 1
-            continue
         try:
+            data = path.read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            known = KNOWN_FILES.get(digest)
+            if known is None:
+                raise ElfError(f"not a pinned self2elf output (sha256 {digest})")
             result = convert(data)
-        except ElfError as exc:
-            print(f"{path}: {exc}", file=sys.stderr)
-            status = 1
+        except (OSError, ElfError) as exc:
+            print(f"{path}: error: {exc}", file=sys.stderr)
+            failed += 1
             continue
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / known
         out_path.write_bytes(result.data)
         print(f"{known}: symbols={result.symbols} plt_relocs={result.plt_relocs} "
               f"relocs={result.relocs} dynlibdata@{result.load_vaddr:#x} -> {out_path}")
-    return status
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
