@@ -14,4 +14,4 @@ Every external source consulted for this project is listed here. Off-limits sour
 
 | Source | Used for | Date |
 |---|---|---|
-| | | |
+| [SELF - SPRX, PS4 Developer wiki](https://www.psdevwiki.com/ps4/SELF_-_SPRX) (revision 296988, GFDL 1.2) | SELF header and segment flag names, program identification header, `e_type` names (`docs/formats/self.md`) | 2026-11-04 |

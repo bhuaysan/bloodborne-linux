@@ -45,8 +45,8 @@ def build_self(trailer_bytes: bool = True, props_extra: int = 0, corrupt: bool =
         s2e.SELF_ENTRY.pack((1 << 20) | s2e.PROP_BLOCK_TABLE | 4, table_off, 0x20, 0x20),
         s2e.SELF_ENTRY.pack((0 << 20) | 0x2804 | props_extra, data_off, len(code), len(code)),
     ]
-    out = bytearray(s2e.SELF_HEADER.pack(s2e.SELF_MAGIC, 0, 1, 1, 0x12, 0x101, header_size,
-                                         meta_size, file_size, num_entries, 0x22, 0))
+    out = bytearray(s2e.SELF_HEADER.pack(s2e.SELF_MAGIC, s2e.SELF_CONSTANT, 0x101, header_size,
+                                         meta_size, file_size, 0, num_entries, 0x22, 0))
     out += b"".join(entries) + elf_head
     out += bytes(head - len(out)) + ext + bytes(meta_size) + bytes(0x20) + code
     if corrupt:

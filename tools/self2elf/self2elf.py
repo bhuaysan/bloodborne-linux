@@ -37,16 +37,17 @@ KNOWN_FILES = {
 }
 
 SELF_MAGIC = b"\x4f\x15\x3d\x1d"
-SELF_HEADER = struct.Struct("<4sBBBBIHHQHHI")  # 0x20 bytes
+SELF_HEADER = struct.Struct("<4s4sIHHIIHHI")  # 0x20 bytes
+SELF_CONSTANT = b"\x00\x01\x01\x12"  # header bytes 4..7, same in every known SELF
 SELF_ENTRY = struct.Struct("<QQQQ")  # 0x20 bytes
 ELF_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")  # 0x40 bytes
 ELF_PHDR = struct.Struct("<IIQQQQQQ")  # 0x38 bytes
-EXT_INFO = struct.Struct("<QQQQ32s")  # 0x40 bytes
+EXT_INFO = struct.Struct("<QQQQ32s")  # program identification header, 0x40 bytes
 
 # Segment entry property bits
 PROP_ENCRYPTED = 1 << 1
-PROP_COMPRESSED = 1 << 3
-PROP_BLOCK_TABLE = 1 << 16  # entry holds a per-block digest table, not ELF data
+PROP_COMPRESSED = 1 << 3  # deflated
+PROP_BLOCK_TABLE = 1 << 16  # entry holds a per-block digest table, not ELF data (our finding)
 
 PT_SCE_LIBVERSION = 0x6FFFFF01
 
@@ -85,12 +86,12 @@ def _need(data: bytes, end: int, what: str) -> None:
 def self_to_elf(data: bytes) -> ElfImage:
     """Rebuild the embedded ELF. Raises SelfError on anything unexpected."""
     _need(data, SELF_HEADER.size, "SELF header")
-    (magic, version, _mode, endian, _attrs, _key_type, header_size, meta_size,
-     file_size, num_entries, _flags, _pad) = SELF_HEADER.unpack_from(data, 0)
+    (magic, constant, _program_type, header_size, meta_size, file_size, _pad,
+     num_entries, _unknown, _pad2) = SELF_HEADER.unpack_from(data, 0)
     if magic != SELF_MAGIC:
         raise SelfError(f"not a SELF (magic {magic.hex()})")
-    if version != 0 or endian != 1:
-        raise SelfError(f"unsupported SELF version {version} / endian {endian}")
+    if constant != SELF_CONSTANT:
+        raise SelfError(f"unexpected SELF header bytes {constant.hex()}")
 
     entries_off = SELF_HEADER.size
     elf_off = entries_off + num_entries * SELF_ENTRY.size
