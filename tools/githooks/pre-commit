@@ -12,16 +12,18 @@ esac
 
 # 2. forbidden file names
 # -z: git quotes unusual names otherwise, so patterns like *.bin miss them
-git diff --cached -z --name-only --diff-filter=ACMR | tr '\0' '\n' | while IFS= read -r f; do
-    path_problem "$f"
-    size="$(git cat-file -s ":$f" 2>/dev/null || echo 0)"
-    limit="$(size_limit "$f")"
-    [ "$size" -gt "$limit" ] && echo "file too large ($size bytes): $f"
-done > "${TMPDIR:-/tmp}/bbl-precommit.$$"
-if [ -s "${TMPDIR:-/tmp}/bbl-precommit.$$" ]; then
-    while IFS= read -r msg; do fail "$msg"; done < "${TMPDIR:-/tmp}/bbl-precommit.$$"
+problems="$(git diff --cached -z --name-only --diff-filter=ACMR | tr '\0' '\n' |
+    while IFS= read -r f; do
+        path_problem "$f"
+        size="$(git cat-file -s ":$f" 2>/dev/null || echo 0)"
+        limit="$(size_limit "$f")"
+        [ "$size" -gt "$limit" ] && echo "file too large ($size bytes): $f"
+    done)"
+if [ -n "$problems" ]; then
+    while IFS= read -r msg; do fail "$msg"; done <<EOF
+$problems
+EOF
 fi
-rm -f "${TMPDIR:-/tmp}/bbl-precommit.$$"
 
 # 3. content of added lines
 pat="$(privacy_pattern)"
