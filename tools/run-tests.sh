@@ -1,8 +1,9 @@
 #!/bin/sh
-# Runs every unit test in the repository. Tests that need the game skip
-# when BB_GAME_DIR is unset (environment or local.env). Fails when it
-# finds no tests, so a gate never passes on an empty run.
-# TODO: add ctest here once the CMake build exists (M2).
+# Runs every unit test in the repository: the Python tests, then the C++
+# tests through the debug preset (configure, build, ctest). Tests that need
+# the game skip when BB_GAME_DIR is unset (environment or local.env). Fails
+# when it finds no tests, so a gate never passes on an empty run, and when
+# the C++ build can't run, so a missing toolchain never passes either.
 #
 # Usage: tools/run-tests.sh
 set -eu
@@ -15,4 +16,15 @@ for dir in $dirs; do
     echo "== $dir"
     python3 -m unittest discover -s "$dir" -p 'test_*.py' || status=1
 done
+if [ -f CMakeLists.txt ]; then
+    echo "== C++ (debug preset)"
+    if ! command -v cmake >/dev/null 2>&1; then
+        echo "cmake not found: the C++ tests can't run" >&2
+        status=1
+    elif ! { cmake --preset debug >/dev/null &&
+             cmake --build --preset debug &&
+             ctest --preset debug --no-tests=error; }; then
+        status=1
+    fi
+fi
 [ "$status" -eq 0 ] || { echo "tests failed" >&2; exit 1; }
