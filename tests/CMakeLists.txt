@@ -10,8 +10,11 @@ execute_process(
 cmake_path(GET bb_git_common_dir FILENAME bb_git_common_name)
 if(bb_git_result EQUAL 0 AND bb_git_common_name STREQUAL ".git")
     cmake_path(GET bb_git_common_dir PARENT_PATH BB_MAIN_CHECKOUT)
+    set(BB_IN_GIT_CHECKOUT 1)
 else()
+    # Not a git checkout, e.g. an exported tarball.
     set(BB_MAIN_CHECKOUT ${PROJECT_SOURCE_DIR})
+    set(BB_IN_GIT_CHECKOUT 0)
 endif()
 
 # Helpers shared by all tests, e.g. finding the game.
@@ -30,3 +33,4 @@ endfunction()
 
 add_subdirectory(common)
 bb_add_test(support_test SOURCES support/game_test.cpp)
+target_compile_definitions(support_test PRIVATE BB_IN_GIT_CHECKOUT=${BB_IN_GIT_CHECKOUT})
