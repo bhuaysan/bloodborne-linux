@@ -70,11 +70,15 @@ case "$want_email" in
     *) echo "user.email is not a GitHub noreply address" >&2; exit 1 ;;
 esac
 
-state="$(gh pr view "$pr" --json state --jq .state)"
-base="$(gh pr view "$pr" --json baseRefName --jq .baseRefName)"
-head="$(gh pr view "$pr" --json headRefName --jq .headRefName)"
-head_oid="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
-fork="$(gh pr view "$pr" --json isCrossRepository --jq .isCrossRepository)"
+# One call, so all fields describe the same moment. Ref names can't contain
+# tabs. An empty field would shift the ones after it, which leaves $fork
+# not "false", so the merge is refused.
+pr_info="$(gh pr view "$pr" --json state,baseRefName,headRefName,headRefOid,isCrossRepository \
+    --jq '[.state, .baseRefName, .headRefName, .headRefOid, .isCrossRepository] | @tsv')"
+tab="$(printf '\t')"
+IFS="$tab" read -r state base head head_oid fork <<EOF
+$pr_info
+EOF
 [ "$state" = "OPEN" ] || { echo "PR #$pr is $state" >&2; exit 1; }
 [ "$base" = "main" ] || { echo "PR #$pr targets $base, expected main" >&2; exit 1; }
 # for a fork, headRefName names the fork's branch, not one in origin
