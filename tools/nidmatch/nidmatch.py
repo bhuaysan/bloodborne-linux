@@ -6,11 +6,12 @@ its NID equals one that the pinned ELFs import or export. This is the procedure 
 section of docs/clean-room.md. Every match records the candidate sources it came from.
 
 Input:
-    analysis/imports/*.csv        NIDs per file, written by tools/elfimports
+    analysis/elf/*.elf            the pinned ELFs: their imports and exports, read with
+                                  tools/elfimports, and their identifiers as candidates,
+                                  label = strings:<file stem>
     symbols/nids.csv              earlier matches, hashed again on every run (see read_nids_csv)
     symbols/candidates/*.txt      hand-picked names (committed), label = file stem
     analysis/nids/candidates/     generated lists (local, see syscandidates.py), label = file stem
-    analysis/elf/*.elf            identifiers in the pinned ELFs, label = strings:<file stem>
     FILE ...                      extra candidate files, label = file stem
 
 Candidate files hold one name per line. '#' starts a comment. A file's stem is its source label,
@@ -40,21 +41,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "elfimports"))
 import elfimports  # noqa: E402
-from nid import is_nid, nid  # noqa: E402
+from elfimports import ElfInfo, Entry  # noqa: E402
+from nid import nid  # noqa: E402
 from ps4elf import PINNED_ELFS, ElfError, parse  # noqa: E402
 from toolenv import REPO_ROOT, PinnedError, analysis_dir, read_pinned  # noqa: E402
 
-IMPORTS_DIR = analysis_dir() / "imports"
 ELF_DIR = analysis_dir() / "elf"
 OUT_DIR = analysis_dir() / "nids"
 GENERATED_DIR = OUT_DIR / "candidates"
 NIDS_CSV = REPO_ROOT / "symbols" / "nids.csv"
 CURATED_DIR = REPO_ROOT / "symbols" / "candidates"
 
-FILE_STEMS = sorted(Path(name).stem for name in PINNED_ELFS.values())
-
 NIDS_FIELDS = ["nid", "library", "name", "source"]
-IMPORT_FIELDS = {"direction", "nid", "library", "module", "type", "provided_by"}  # columns we read
 NAME_RE = re.compile(r"[!-~]+")  # printable ASCII, no spaces
 IDENT_RE = re.compile(rb"[A-Za-z_][A-Za-z0-9_]{2,}")
 # Labels are joined with ';' in nids.csv, and 'strings:' marks the labels of read_strings.
@@ -90,34 +88,30 @@ def check_fields(row: dict[str | None, str | None], where: str) -> None:
         raise MatchError(f"{where}: wrong number of fields")
 
 
-def load_nids(imports_dir: Path) -> NidTable:
+def load_nids(infos: list[ElfInfo]) -> NidTable:
+    """The imports and exports of the pinned files, from the same analysis tools/elfimports runs."""
+    resolved = elfimports.resolvers(infos)
     table: NidTable = defaultdict(dict)
-    for stem in FILE_STEMS:
-        path = imports_dir / f"{stem}.csv"
-        if not path.is_file():
-            raise MatchError(f"{path} is missing (run tools/elfimports first)")
-        with path.open(newline="") as f:
-            reader = csv.DictReader(f)
-            if not IMPORT_FIELDS <= set(reader.fieldnames or []):
-                raise MatchError(f"{path}: expected columns {','.join(sorted(IMPORT_FIELDS))}")
-            for lineno, row in enumerate(reader, 2):
-                where = f"{path}:{lineno}"
-                check_fields(row, where)
-                if not is_nid(row["nid"]):
-                    raise MatchError(f"{where}: bad NID {row['nid']!r}")
-                # nids.csv has one row per (NID, library). That is enough only while each pair
-                # comes from one module, which holds for all pinned files.
-                use = table[row["nid"]].setdefault(row["library"], Use(row["module"]))
-                if use.module != row["module"]:
-                    raise MatchError(f"{where}: {row['nid']} of {row['library']} comes from "
-                                     f"modules {use.module} and {row['module']}")
-                use.types.add(row["type"])
-                if row["direction"] == "export":
-                    use.exporters.add(stem)
-                else:
-                    use.importers.add(stem)
-                    if row["provided_by"] == "firmware":
-                        use.firmware_importers.add(stem)
+
+    def use_of(entry: Entry, file_name: str) -> Use:
+        # nids.csv has one row per (NID, library). That is enough only while each pair comes from
+        # one module, which holds for all pinned files.
+        use = table[entry.nid].setdefault(entry.library.name, Use(entry.module.name))
+        if use.module != entry.module.name:
+            raise MatchError(f"{file_name}: {entry.nid} of {entry.library.name} comes from "
+                             f"modules {use.module} and {entry.module.name}")
+        use.types.add(entry.type)
+        return use
+
+    for info in infos:
+        stem = Path(info.name).stem
+        for entry in info.imports:
+            use = use_of(entry, info.name)
+            use.importers.add(stem)
+            if elfimports.key(entry) not in resolved[info.name]:
+                use.firmware_importers.add(stem)
+        for entry in info.exports:
+            use_of(entry, info.name).exporters.add(stem)
     return dict(table)
 
 
@@ -160,6 +154,10 @@ def read_pinned_elfs(elf_dir: Path) -> dict[str, bytes]:
     return elfs
 
 
+def analyze(elfs: dict[str, bytes]) -> list[ElfInfo]:
+    return [elfimports.analyze(file_name, parse(data)) for file_name, data in elfs.items()]
+
+
 def read_strings(elfs: dict[str, bytes], candidates: Candidates) -> None:
     """Identifier-like runs of bytes in the pinned ELFs. Any of them may be a symbol name."""
     for file_name, data in elfs.items():
@@ -168,9 +166,8 @@ def read_strings(elfs: dict[str, bytes], candidates: Candidates) -> None:
             candidates.setdefault(token.decode("ascii"), set()).add(label)
 
 
-def static_load_set(elfs: dict[str, bytes]) -> set[str]:
+def static_load_set(infos: list[ElfInfo]) -> set[str]:
     """Stems of the files loaded at startup, from DT_NEEDED exactly as tools/elfimports does."""
-    infos = [elfimports.analyze(file_name, parse(data)) for file_name, data in elfs.items()]
     return {Path(info.name).stem for info in elfimports.static_load_set(infos)}
 
 
@@ -291,8 +288,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        table = load_nids(IMPORTS_DIR)
         elfs = read_pinned_elfs(ELF_DIR)
+        infos = analyze(elfs)
+        table = load_nids(infos)
         curated = sorted(CURATED_DIR.glob("*.txt"))
         files = curated + sorted(GENERATED_DIR.glob("*.txt")) + args.files
         check_unique_labels(files)
@@ -303,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
             read_candidate_file(path, candidates)
         read_strings(elfs, candidates)
         found = match(table, candidates)
-        load_set = static_load_set(elfs)
+        load_set = static_load_set(infos)
     except (OSError, UnicodeError, MatchError, PinnedError, ElfError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

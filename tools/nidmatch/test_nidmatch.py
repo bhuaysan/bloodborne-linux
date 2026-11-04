@@ -2,7 +2,7 @@
 """Tests for nid and nidmatch. Run: python3 -m unittest discover -s tools/nidmatch
 
 The synthetic tests need no game files. The game test runs only when BB_GAME_DIR is set and the
-outputs of self2elf and elfimports exist in analysis/.
+outputs of self2elf exist in analysis/elf/.
 """
 
 from __future__ import annotations
@@ -20,9 +20,11 @@ from unittest import mock
 TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS / "nidmatch"))
 sys.path.insert(0, str(TOOLS / "common"))
+sys.path.insert(0, str(TOOLS / "elfimports"))
 import nidmatch as m  # noqa: E402
 import syscandidates  # noqa: E402
 from nid import NID_ALPHABET, is_nid, nid  # noqa: E402
+from test_elfimports import Builder  # noqa: E402
 from toolenv import PinnedError, load_game_dir  # noqa: E402
 
 # Exports of the pinned libc.prx, named by matching. strlen (0x2f970) and strcmp (0x30160) were
@@ -32,8 +34,6 @@ KNOWN = {
     "strcmp": "Ovb2dSJOAuE",
     "memset": "8zTFvBIAIN8",
 }
-
-IMPORT_FIELDS = ["direction", "nid", "library", "module", "type", "bind", "provided_by", "value"]
 
 
 class NidTest(unittest.TestCase):
@@ -60,48 +60,77 @@ class NidTest(unittest.TestCase):
 
 
 class Fixture:
-    """A fake analysis/ and symbols/ tree with two pinned files, 'main' and 'lib'."""
+    """A fake analysis/ and symbols/ tree with three pinned files: the executable 'main', the
+    PRX 'lib' that main needs, and the PRX 'other' that nothing needs. So the load set is main
+    and lib.
+
+    imp() and exp() add symbols. Each file imports a module M through DT_NEEDED M.prx unless
+    imp() names another file. So main gets the exports of module 'lib' from lib.elf, and
+    everything else comes from the firmware.
+    """
+
+    PRXS = {"lib", "other"}
 
     def __init__(self, root: Path):
         self.root = root
-        self.imports = root / "imports"
         self.elf = root / "elf"
         self.out = root / "nids"
         self.curated = root / "curated"
         self.nids_csv = root / "nids.csv"
-        for d in (self.imports, self.elf, self.curated):
+        for d in (self.elf, self.curated):
             d.mkdir()
-        self.rows: dict[str, list[dict[str, str]]] = {"main": [], "lib": []}
-        self.elf_data = {"main": b"\0\0alpha_func\0xx\0", "lib": b"\0beta\0"}
+        self.stems = ["main", *sorted(self.PRXS)]
+        # stem -> [(direction, name, library, module)]
+        self.syms: dict[str, list[tuple[str, str, str, str]]] = {stem: [] for stem in self.stems}
+        self.needed: dict[tuple[str, str], str] = {}  # (stem, module) -> DT_NEEDED file name
+        self.strings = {"main": ["alpha_func"]}  # identifiers in the file, not symbols
 
-    def row(self, stem: str, direction: str, name: str, library: str,
-            provided_by: str = "firmware", module: str | None = None) -> Fixture:
-        self.rows[stem].append({
-            "direction": direction, "nid": nid(name), "library": library,
-            "module": module or library,
-            "type": "func", "bind": "global",
-            "provided_by": "" if direction == "export" else provided_by,
-            "value": "0x10" if direction == "export" else "",
-        })
+    def imp(self, stem: str, name: str, library: str, module: str | None = None,
+            needed: str | None = None) -> Fixture:
+        module = module or library
+        self.syms[stem].append(("import", name, library, module))
+        self.needed.setdefault((stem, module), needed or f"{module}.prx")
         return self
+
+    def exp(self, stem: str, name: str, library: str) -> Fixture:
+        self.syms[stem].append(("export", name, library, stem))
+        return self
+
+    def build(self, stem: str) -> bytes:
+        prx = stem in self.PRXS
+        b = Builder(prx=prx, module=stem, soname=f"{stem}.prx" if prx else None)
+        for text in self.strings.get(stem, []):
+            b.str(text)
+        syms = self.syms[stem]
+        modules = {stem: 0}
+        for direction, _, _, module in syms:
+            if direction == "import" and module not in modules:
+                modules[module] = len(modules)
+                b.needed(self.needed[stem, module], modules[module], module)
+        libraries: dict[tuple[str, str], int] = {}
+        for direction, _, library, _ in syms:
+            if (direction, library) not in libraries:
+                libraries[direction, library] = len(libraries)
+                lib_id = libraries[direction, library]
+                (b.import_lib if direction == "import" else b.export_lib)(lib_id, library)
+        for direction, name, library, module in syms:
+            lib_id, mod_id = libraries[direction, library], modules[module]
+            b.sym(f"{nid(name)}#{NID_ALPHABET[lib_id]}#{NID_ALPHABET[mod_id]}",
+                  defined=direction == "export")
+        return b.build()
 
     def run(self, *args: str) -> tuple[int, str, str]:
         pinned = {}
-        for stem, rows in self.rows.items():
-            with (self.imports / f"{stem}.csv").open("w", newline="") as f:
-                w = csv.DictWriter(f, fieldnames=IMPORT_FIELDS, lineterminator="\n")
-                w.writeheader()
-                w.writerows(rows)
-            (self.elf / f"{stem}.elf").write_bytes(self.elf_data[stem])
-            pinned[hashlib.sha256(self.elf_data[stem]).hexdigest()] = f"{stem}.elf"
+        for stem in self.stems:
+            data = self.build(stem)
+            (self.elf / f"{stem}.elf").write_bytes(data)
+            pinned[hashlib.sha256(data).hexdigest()] = f"{stem}.elf"
         out, err = io.StringIO(), io.StringIO()
         with contextlib.ExitStack() as stack:
-            for attr, value in [("IMPORTS_DIR", self.imports), ("ELF_DIR", self.elf),
-                                ("OUT_DIR", self.out), ("GENERATED_DIR", self.out / "candidates"),
+            for attr, value in [("ELF_DIR", self.elf), ("OUT_DIR", self.out),
+                                ("GENERATED_DIR", self.out / "candidates"),
                                 ("NIDS_CSV", self.nids_csv), ("CURATED_DIR", self.curated),
-                                ("PINNED_ELFS", pinned), ("FILE_STEMS", sorted(self.rows)),
-                                # The fake ELFs have no dynamic table to work the load set out of.
-                                ("static_load_set", lambda elfs: {"main"})]:
+                                ("PINNED_ELFS", pinned)]:
                 stack.enter_context(mock.patch.object(m, attr, value))
             stack.enter_context(contextlib.redirect_stdout(out))
             stack.enter_context(contextlib.redirect_stderr(err))
@@ -118,10 +147,10 @@ class MatchTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.fx = Fixture(Path(tmp.name))
-        (self.fx.row("main", "import", "alpha_func", "libA")
-                .row("main", "import", "gamma", "libB", provided_by="lib.elf")
-                .row("main", "import", "unknown_one", "libA")
-                .row("lib", "export", "gamma", "libB"))
+        (self.fx.imp("main", "alpha_func", "libA")
+                .imp("main", "gamma", "libB", module="lib")
+                .imp("main", "unknown_one", "libA")
+                .exp("lib", "gamma", "libB"))
 
     def test_matches_strings_and_files(self):
         (self.fx.curated / "hand.txt").write_text("# comment\ngamma  # used like this\n\n")
@@ -216,26 +245,20 @@ class MatchTest(unittest.TestCase):
         self.assertIn("both give the source label 'hand'", err)
 
     def test_firmware_count_is_per_importer(self):
-        # main gets delta from lib.elf. lib, outside the load set, gets it from firmware. So delta is
-        # not a firmware import of the load set.
-        (self.fx.row("main", "import", "delta", "libC", provided_by="lib.elf")
-                .row("lib", "import", "delta", "libC"))
+        # main gets delta from lib.elf. other, outside the load set, needs lib.sprx instead and so
+        # gets delta from the firmware. So delta is not a firmware import of the load set.
+        (self.fx.imp("main", "delta", "libC", module="lib")
+                .exp("lib", "delta", "libC")
+                .imp("other", "delta", "libC", module="lib", needed="lib.sprx"))
         code, out, err = self.fx.run()
         self.assertEqual(code, 0, err)
         self.assertIn("static load set: 1 of 2", out)
 
     def test_one_module_per_nid_and_library(self):
-        self.fx.row("lib", "import", "alpha_func", "libA", module="otherModule")
+        self.fx.imp("lib", "alpha_func", "libA", module="otherModule")
         code, _, err = self.fx.run()
         self.assertEqual(code, 1)
-        self.assertIn("comes from modules otherModule and libA", err)  # lib.csv is read first
-
-    def test_short_import_row(self):
-        self.fx.run()
-        (self.fx.imports / "lib.csv").write_text(",".join(IMPORT_FIELDS) + "\nimport,x\n")
-        with mock.patch.object(m, "FILE_STEMS", ["lib"]):
-            with self.assertRaisesRegex(m.MatchError, "lib.csv:2: wrong number of fields"):
-                m.load_nids(self.fx.imports)
+        self.assertIn("comes from modules otherModule and libA", err)  # lib.elf is read first
 
     def test_collision_is_an_error(self):
         (self.fx.curated / "hand.txt").write_text("gamma\nother\n")
@@ -262,11 +285,6 @@ class MatchTest(unittest.TestCase):
             with self.assertRaisesRegex(m.MatchError, "lib.elf holds the pinned main.elf"):
                 m.read_pinned_elfs(self.fx.elf)
 
-    def test_missing_imports(self):
-        with mock.patch.object(m, "FILE_STEMS", ["absent"]):
-            with self.assertRaisesRegex(m.MatchError, "is missing"):
-                m.load_nids(self.fx.imports)
-
 
 class ManNamesTest(unittest.TestCase):
     def test_page_names(self):
@@ -281,25 +299,27 @@ class ManNamesTest(unittest.TestCase):
 
 
 @unittest.skipUnless(load_game_dir()
-                     and all((m.IMPORTS_DIR / f"{stem}.csv").is_file() for stem in m.FILE_STEMS)
                      and all((m.ELF_DIR / name).is_file() for name in m.PINNED_ELFS.values()),
-                     "needs BB_GAME_DIR and the analysis/ outputs")
+                     "needs BB_GAME_DIR and the self2elf outputs in analysis/elf/")
 class GameTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.elfs = m.read_pinned_elfs(m.ELF_DIR)
+        cls.infos = m.analyze(cls.elfs)
+
     def test_libc_names(self):
-        table = m.load_nids(m.IMPORTS_DIR)
+        table = m.load_nids(self.infos)
         for name, h in KNOWN.items():
             self.assertIn("libc", table[h], name)
             self.assertTrue(table[h]["libc"].exporters, name)
         candidates: m.Candidates = {}
-        elfs = m.read_pinned_elfs(m.ELF_DIR)
-        m.read_strings(elfs, candidates)
+        m.read_strings(self.elfs, candidates)
         found = m.match(table, candidates)
         self.assertGreater(len(found), 100)
 
     def test_static_load_set(self):
         # The eboot and the two bundled PRXs it needs (docs/formats/imports.md).
-        elfs = m.read_pinned_elfs(m.ELF_DIR)
-        self.assertEqual(m.static_load_set(elfs), {"eboot", "libc", "libSceFios2"})
+        self.assertEqual(m.static_load_set(self.infos), {"eboot", "libc", "libSceFios2"})
 
 
 if __name__ == "__main__":
