@@ -29,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 from toolenv import analysis_dir, is_inside, load_game_dir  # noqa: E402
+from nid import NID_ALPHABET, is_nid  # noqa: E402
 from ps4elf import (  # noqa: E402
     DT_NEEDED, DT_SCE_EXPORT_LIB, DT_SCE_EXPORT_LIB_ATTR, DT_SCE_IMPORT_LIB,
     DT_SCE_IMPORT_LIB_ATTR, DT_SCE_MODULE_INFO, DT_SCE_NEEDED_MODULE, DT_SONAME, ET_SCE_DYNAMIC,
@@ -39,9 +40,8 @@ DEFAULT_IN = analysis_dir() / "elf"
 DEFAULT_OUT = analysis_dir() / "imports"
 KNOWN_FILES = PINNED_ELFS
 
-# Digits of the library and module ids in symbol names, and the NID characters.
-ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
-NID_LENGTH = 11
+# Library and module ids in symbol names use the same base64 digits as NIDs.
+ID_ALPHABET = NID_ALPHABET
 
 STT_NAMES = {0: "notype", 1: "object", 2: "func", 6: "tls"}
 STB_NAMES = {0: "local", 1: "global", 2: "weak"}
@@ -166,8 +166,7 @@ def analyze(name: str, image: DynImage) -> ElfInfo:
             info.plain_symbols.append(parts[0])
             continue
         nid, lib_text, mod_text = parts
-        need(len(nid) == NID_LENGTH and all(c in ID_ALPHABET for c in nid),
-             f"malformed NID in {sym.name!r}")
+        need(is_nid(nid), f"malformed NID in {sym.name!r}")
         defined = sym.shndx != SHN_UNDEF
         lib = libraries.get((defined, decode_id(lib_text)))
         need(lib is not None, f"{sym.name!r} refers to an unknown library")
