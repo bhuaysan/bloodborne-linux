@@ -55,16 +55,16 @@ Sony tags. Offset means an offset into the dynlibdata segment.
 | 0x6100003D | DT_SCE_HASHSZ | size of the hash table | none | confirmed |
 | 0x6100003F | DT_SCE_SYMTABSZ | size of the symbol table | none (Linux derives the count from the hash table) | confirmed |
 | 0x61000007 | | 0 here | | unknown |
-| 0x61000009 | | string table offset (in libSceHand, a build path) | | observed |
-| 0x6100000D | | packed: string offset + ids (this module) | | observed |
-| 0x6100000F | | packed: string offset + ids (a needed module), one per module | | observed |
+| 0x61000009 | | string table offset: the build path of the file | | observed |
+| 0x6100000D | DT_SCE_MODULE_INFO | module record: this file's module, id 0 | | confirmed |
+| 0x6100000F | DT_SCE_NEEDED_MODULE | module record, one per needed module | | confirmed |
 | 0x61000011 | | 0 here | | unknown |
-| 0x61000013 | | packed: string offset + ids (an exported library), PRX only | | observed |
-| 0x61000015 | | packed: string offset + ids (an imported library), one per library | | observed |
-| 0x61000017 | | packed ids, pairs with 0x13 | | observed |
-| 0x61000019 | | packed ids, pairs with 0x15 | | observed |
+| 0x61000013 | DT_SCE_EXPORT_LIB | library record: a library this file exports, PRX only | | confirmed |
+| 0x61000015 | DT_SCE_IMPORT_LIB | library record, one per imported library | | confirmed |
+| 0x61000017 | DT_SCE_EXPORT_LIB_ATTR | library id + attribute word, pairs with 0x13 | | observed |
+| 0x61000019 | DT_SCE_IMPORT_LIB_ATTR | library id + attribute word, pairs with 0x15 | | observed |
 
-The packed values keep a string table offset in the low 32 bits. The upper 32 bits hold small numbers that look like an id and a version. Decoding these module and library records is the subject of the import listing task, not of this note.
+The module and library records are described below. `tools/elfimports` decodes them.
 
 ### Sony hash table
 
@@ -72,11 +72,41 @@ The table at `DT_SCE_HASH` has the SysV layout: `nbucket`, `nchain`, then the bu
 
 ## Symbols
 
-Symbol table entries are standard `Elf64_Sym`. Imported symbols are undefined (`st_shndx` = 0) and are named `<NID>#<library>#<module>`, for example `8zTFvBIAIN8#B#C`:
+Symbol table entries are standard `Elf64_Sym`. Imported symbols are undefined (`st_shndx` = 0) and are named `<NID>#<library>#<module>`, for example `AAAAAAAAAAA#B#C` (a made-up NID):
 - the NID is 11 characters from a base64-style alphabet (letters, digits, `+`, `-`),
-- the library and module parts are short ids. They refer to the library and module records in the dynamic table.
+- the library and module parts are ids written as base64 digits, see [Module and library records](#module-and-library-records).
 
-Exported symbols use the same form and point at their definition (`st_value`). Their library and module ids name the file's own library. A few symbols keep plain names (`module_start`, `module_stop`).
+Exported symbols use the same form and point at their definition (`st_value`). Their library id names one of the file's own exported libraries, and their module id is 0, the file itself. A few symbols keep plain names (`module_start`, `module_stop`, PRX only). Each file also has one unnamed local `STT_SECTION` symbol, which carries nothing.
+
+Symbol types in use: `STT_FUNC` (2), `STT_OBJECT` (1) for imported and exported data, and `STT_TLS` (6) for 4 exports of libc. Bindings are `STB_GLOBAL`, and `STB_WEAK` in libc's exports.
+
+## Module and library records
+
+A **module** is a loadable file (the eboot, a `.prx`). A **library** is a named set of exports inside a module. One module can hold several libraries: the eboot imports library `libScePosix` and library `libkernel`, both from module `libkernel`. An import is identified by its library and NID. The module only says which file provides the library.
+
+All four record tags pack their fields into the 64-bit value the same way:
+
+```
+bits 63..48   id
+bits 47..32   version
+bits 31..0    name: string table offset
+```
+
+| Record | Id | Version | Confidence |
+|---|---|---|---|
+| module (0x0D, 0x0F) | 0 for the file itself, 1..n for needed modules | two bytes, read as major.minor: mostly 1.1, also 0.0, 0.9, 1.0 | id confirmed, version observed |
+| library (0x13, 0x15) | 0..n, numbered separately from the modules | 16 bits, 1 in every file | id confirmed, version observed |
+
+The attribute records (0x17, 0x19) hold a library id in bits 63..48, zero in bits 47..32 and an attribute word in bits 31..0: 1 for every exported library, 9 for every imported one. Their meaning is unknown.
+
+Checks in all 8 files (`tools/elfimports` fails on any violation):
+- Every symbol's library id names a library record of the right kind (import for undefined symbols, export for defined ones), and its module id names a module record (0 for exports, never 0 for imports).
+- Each library is used with exactly one module.
+- The needed module records are numbered 1..n in the order of the `DT_NEEDED` entries, so module *k* is the file named by the *k*-th `DT_NEEDED`. The record names drop the `.prx` suffix, and can differ from the file name in other ways: module `libSceAppContentUtil` is `libSceAppContent.prx`, and `libSceGnmDriver` is `libSceGnmDriver_padebug.prx`.
+
+**Ids in symbol names** are written in the base64 alphabet `A`–`Z`, `a`–`z`, `0`–`9`, `+`, `-` (values 0–63), so `#p#J` means library 41, module 9. Every id in the pinned files fits in one digit, the highest being 42. How larger ids are written is unknown, and `elfimports` refuses them.
+
+Some declared libraries are never used: the eboot needs 4 modules (and declares their libraries) without importing any symbol from them, and libSceHeadTracker has 3. The eboot was linked with link-time optimization, which may have removed the last calls. A loader must still accept such modules.
 
 ## Relocations
 
@@ -118,4 +148,5 @@ The new dynamic table contains the standard tags of the original table unchanged
 
 - The Sony hash function.
 - Tags 0x61000007 and 0x61000011 (0 in every file).
-- The exact packing of the module and library records.
+- The meaning of the library attribute words (1 and 9) and of the version fields.
+- How ids above 63 are written in symbol names.

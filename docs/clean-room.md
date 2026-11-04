@@ -33,6 +33,8 @@ PS4 executables import functions by NID, a short hash derived from the symbol na
 3. Accept a name only if its NID matches an import. Record it in the NID table with where the candidate came from.
 4. Unmatched NIDs keep a descriptive placeholder name based on observed behavior, e.g. `kernel_unk_<NID>`.
 
+Commit a NID only together with what we know about it: a matched name in `symbols/nids.csv`, or a placeholder name and an implementation or stub in the runtime. The complete import and export lists are tool output from the game files (`tools/elfimports` writes them to `analysis/imports/`) and are never committed.
+
 ## Game version
 
 All addresses refer to one exact build:
