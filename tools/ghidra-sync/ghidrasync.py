@@ -107,7 +107,10 @@ def ghidra_dir() -> Path:
     value = local_env("GHIDRA_INSTALL_DIR")
     if not value:
         raise SyncError("GHIDRA_INSTALL_DIR is not set (environment or local.env)")
-    return Path(value).expanduser()
+    install = Path(value).expanduser()
+    if not (install / "Ghidra" / "application.properties").is_file():
+        raise SyncError(f"GHIDRA_INSTALL_DIR is not a Ghidra install: {install}")
+    return install
 
 
 def ghidra_venv(install: Path) -> Path:
