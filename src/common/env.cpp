@@ -69,7 +69,10 @@ std::optional<std::filesystem::path> game_dir(const std::filesystem::path& env_f
     std::filesystem::path path(*value);
     const char* home = std::getenv("HOME");
     if (home && *home && (*value == "~" || value->starts_with("~/"))) {
-        path = std::filesystem::path(home) / value->substr(value->size() > 1 ? 2 : 1);
+        path = std::filesystem::path(home);
+        if (value->size() > 2) {
+            path /= value->substr(2);
+        }
     }
     std::error_code ec;
     auto resolved = std::filesystem::weakly_canonical(std::filesystem::absolute(path), ec);
