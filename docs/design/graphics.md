@@ -256,6 +256,15 @@ Decoder (`src/gpu/gcn/gcn.hpp`, #115):
 - An `Operand` has a kind, its size in dwords, the 8-bit operand code and a 32-bit value. The kinds so far: scalar register (by operand code, so the special registers keep their codes), inline constant (with its 32-bit pattern), literal, and the immediates of SOPK, SOPP and SMRD (hex value, count, branch offset, hardware register, wait counters, message, dword offset). The vector formats add their kinds and modifiers.
 - The opcode tables are in `opcodes.cpp`, one per format, indexed by opcode.
 
+SPIR-V builder (`src/gpu/gcn/spirv_builder.hpp`, #122):
+
+- `SpirvBuilder` collects one module and returns its words. Each call appends to the section of the logical layout it belongs to, so callers may declare a type or a decoration in the middle of a function.
+- Types and constants are shared by value: asking twice gives the same id. Arrays, runtime arrays and structs (second part) will get a new id on every call, because their layout decorations belong to one use: a laid-out array in a buffer block and a plain one for registers or LDS must stay distinct types.
+- `op` and `op_void` emit any instruction inside a block, with enum operands through `spirv_word`. Misuse (an instruction outside a block, a block without a terminator, nested functions, a parameter after the first block) throws `std::logic_error`. Validity is checked by `spirv-val`, not by the builder.
+- Enum values come from `spirv/unified1/spirv.hpp11`.
+- The first part has the module sections, capabilities, memory model, entry points, execution modes, names, decorations, the scalar, vector, pointer and function types, scalar constants, functions and blocks. The second part adds extensions and extended-instruction imports, global and local variables (locals go to the start of the first block wherever they are declared), result ids named ahead for `OpPhi`, aggregates, images and samplers, the `spirv-val` test support, and one validated module per stage.
+- The `SPV_KHR_quad_control` names (`QuadControlKHR`, `QuadDerivativesKHR`, `RequireFullQuadsKHR`) are newer than some distributions' headers, so item 8a checks CI's headers before using them.
+
 ## Offline test strategy
 
 Four levels. The first three need neither a running game nor a GPU.
