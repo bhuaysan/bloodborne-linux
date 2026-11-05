@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "game/image.hpp"
 #include "hle/hle.hpp"
 #include "loader/elf.hpp"
 #include "loader/image.hpp"
@@ -313,6 +314,22 @@ TEST_F(HarnessTest, ComparesFloatsBitwise) {
     EXPECT_TRUE(r) << r.report();
     expect_report(harness.compare<float(std::uint32_t)>(float_bits_at, &positive_zero, minus_zero),
                   "return value: original -0 (bits 0x80000000), replacement 0 (bits 0x0)");
+}
+
+TEST_F(HarnessTest, GameFnCallsTheSetImage) {
+    bb::game::set_image(&image);
+    EXPECT_EQ(&bb::game::image(), &image);
+    int p[2] = {20, 0};
+    EXPECT_EQ(bb::game::fn<int(int*)>(read_write_at)(p), 40);
+    EXPECT_EQ(p[1], 7);
+    EXPECT_THROW(bb::game::fn<int(int*)>(got_a), std::out_of_range);  // data, not code
+    bb::game::set_image(nullptr);
+}
+
+TEST(GameDeathTest, ImageAbortsWhenUnset) {
+    bb::game::set_image(nullptr);
+    EXPECT_DEATH(bb::game::image(),
+                 "game: no image is loaded \\(bb::game::set_image was not called\\)");
 }
 
 TEST_F(HarnessTest, ArenaLayoutIsDeterministic) {
