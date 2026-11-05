@@ -24,6 +24,7 @@ src/gpu/
 src/tools/bb-gcn    command line: disassemble or translate one shader binary
 tools/shaderbnd/    Python: extracts the shaders from the game's archives into analysis/
 tests/gpu/gcn/      bbgcn unit, corpus and execution tests (one directory per target, as in runtime.md)
+tests/gpu/runner/   bbcomputerunner: the test-only Vulkan compute runner on lavapipe (built only with Vulkan)
 tests/gpu/programs/ our GCN test programs: assembly source plus assembled words as hex text
 ```
 
@@ -302,6 +303,12 @@ Four levels. The first three need neither a running game nor a GPU.
    - They cover ALU semantics (output modifiers, clamping, 24-bit multiplies), EXEC predication and loops, scalar and buffer memory with range checks, and LDS.
    - Denormal tests run only where the driver's float-controls properties allow GCN's mode, otherwise they skip. Transcendental results are compared with a tolerance in ULPs.
    - A graphics test renders a VS and PS pair into an offscreen image.
+   - **Compute runner** (`tests/gpu/runner/`, the static library `bbcomputerunner`, #123). `tests/gpu/CMakeLists.txt` builds it only when `find_package(Vulkan)` finds Vulkan, so CI without the packages still builds everything else.
+     - `ComputeRunner::create(why)` makes a Vulkan 1.3 instance and picks the device whose `driverID` is `VK_DRIVER_ID_MESA_LLVMPIPE`. It sets `VK_LOADER_DRIVERS_SELECT=*lvp*` first, unless the environment already sets it, so the loader doesn't load and initialize the other installed drivers. It needs `shaderInt64`, `bufferDeviceAddress`, `subgroupSizeControl` and `computeFullSubgroups`, and the basic, vote, ballot and shuffle subgroup operations in compute, and enables the features on its device.
+     - Without an instance, without lavapipe or without one of these, it returns nothing and `why` names what is missing; the tests then skip with that text. A test points `VK_DRIVER_FILES` at a missing file to check this path.
+     - `info()` reports the device and driver names, the subgroup size with its range, and the 32-bit float controls (denormals preserved or flushed, RTE and RTZ rounding, signed zero, Inf and NaN preserved). Lavapipe from Mesa 26.2 (LLVM 22, 256 bits) reports subgroup size 8 (8 to 8), and neither denormal mode, so the denormal tests will always skip there.
+     - Mesa allocates one-time state under `pthread_once` and never frees it, and the loader unloads the driver before LeakSanitizer runs, so the frames have no module name. The runner defines `__lsan_default_suppressions()` with `leak:pthread_once` for the binaries that link it.
+     - Guest memory, the draw block and running a module follow in the issue's second part, and the check of the test programs' words against their source in its third.
    - The exact wave-64 mode runs locally on an AMD GPU.
 4. **Replays** (later wave, after M3):
    - Captures of real frames, as PM4 streams plus the memory they reference, go to `analysis/captures/`. They come from our runtime, or as reference frames from an emulator run on the game with call logging off (see [clean-room.md](../clean-room.md#code-sources)).
