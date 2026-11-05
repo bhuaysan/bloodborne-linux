@@ -96,9 +96,20 @@ TEST(HleVideo, CallsOnUnknownPortsFail) {
     const std::int32_t port = sceVideoOutOpen(0, 0, 0, nullptr);
     EXPECT_LT(sceVideoOutAddFlipEvent(queue + 1000, port, 0), 0);  // no such queue
     EXPECT_LT(sceVideoOutRegisterBuffers(port, max_buffers - 1, &buffer, 2, block.data()), 0);
-    EXPECT_LT(sceVideoOutRegisterBuffers(port, 0, &buffer, 0, block.data()), 0);
+    EXPECT_LT(sceVideoOutRegisterBuffers(port, 0, &buffer, -1, block.data()), 0);
     EXPECT_EQ(sceVideoOutClose(port), 0);
     EXPECT_EQ(bb::hle::kernel::equeue_delete(queue), 0);
+}
+
+// 0x26d65d6 registers with count 0 when the configured buffer count is 0 and fails on a
+// negative result, so count 0 succeeds on an open port.
+TEST(HleVideo, RegisteringNoBuffersSucceeds) {
+    std::array<unsigned char, 0x40> block{};
+    const std::uint64_t buffer = 0x10000000;
+    const std::int32_t port = sceVideoOutOpen(0, 0, 0, nullptr);
+    EXPECT_EQ(sceVideoOutRegisterBuffers(port, 0, &buffer, 0, block.data()), 0);
+    EXPECT_EQ(sceVideoOutClose(port), 0);
+    EXPECT_LT(sceVideoOutRegisterBuffers(port, 0, &buffer, 0, block.data()), 0);  // closed
 }
 
 TEST(HleVideo, BufferAttributeFillsOnlyOurLayout) {

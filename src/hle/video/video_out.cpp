@@ -92,6 +92,9 @@ public:
         if (port == nullptr) {
             return false;
         }
+        if (count == 0) {
+            return true;
+        }
         std::memcpy(port->buffers + start, addresses, sizeof(std::uint64_t) * count);
         port->attribute = attribute;
         return true;
@@ -231,7 +234,7 @@ std::int32_t sceVideoOutSetBufferAttribute(void* attr, std::uint32_t format, std
 std::int32_t sceVideoOutRegisterBuffers(std::int32_t handle, std::int32_t start,
                                         const std::uint64_t* addresses, std::int32_t count,
                                         const void* attr) {
-    if (addresses == nullptr || attr == nullptr || start < 0 || count < 1 ||
+    if (addresses == nullptr || attr == nullptr || start < 0 || count < 0 ||
         count > max_buffers - start) {
         return video_out_error;
     }
@@ -239,6 +242,10 @@ std::int32_t sceVideoOutRegisterBuffers(std::int32_t handle, std::int32_t start,
     std::memcpy(&a, attr, sizeof a);
     if (!video_out().register_buffers(handle, start, addresses, count, a)) {
         return video_out_error;
+    }
+    if (count == 0) {
+        common::log(common::LogLevel::info, channel, "port {}: no buffers registered", handle);
+        return 0;
     }
     common::log(common::LogLevel::info, channel, "port {}: buffers {}..{}, {}x{} pitch {}",
                 handle, start, start + count - 1, a.width, a.height, a.pitch);
