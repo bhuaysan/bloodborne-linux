@@ -11,9 +11,11 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "hle/hle.hpp"
@@ -180,6 +182,9 @@ private:
     std::vector<std::vector<std::byte>> baseline_, after_original_;
     std::vector<StubCall> log_, original_log_;
     std::unordered_map<std::string, int> arity_;  // by library + '\0' + nid
+    // The start and end of the stack of the thread that last ran compare_log, and that thread.
+    mutable std::thread::id stack_thread_;
+    mutable std::pair<std::uintptr_t, std::uintptr_t> stack_{};
 };
 
 }  // namespace bb::harness

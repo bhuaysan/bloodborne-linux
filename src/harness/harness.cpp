@@ -150,9 +150,11 @@ void Harness::restore() {
 }
 
 void Harness::keep_original() {
-    after_original_.clear();
-    for (const Region& r : regions_) {
-        after_original_.emplace_back(r.data, r.data + r.size);
+    // Sized on the first compare and reused after: the regions never change.
+    after_original_.resize(regions_.size());
+    for (std::size_t i = 0; i < regions_.size(); ++i) {
+        after_original_[i].resize(regions_[i].size);
+        std::memcpy(after_original_[i].data(), regions_[i].data, regions_[i].size);
     }
     original_log_ = log_;
 }
@@ -194,7 +196,11 @@ void Harness::compare_state(Result& result) const {
 }
 
 void Harness::compare_log(Result& result) const {
-    const auto [stack_start, stack_end] = thread_stack();
+    if (stack_thread_ != std::this_thread::get_id()) {
+        stack_ = thread_stack();
+        stack_thread_ = std::this_thread::get_id();
+    }
+    const auto [stack_start, stack_end] = stack_;
     auto normalize = [&](std::uint64_t v) -> Normalized {
         for (std::size_t i = 0; i < regions_.size(); ++i) {
             const auto start = reinterpret_cast<std::uintptr_t>(regions_[i].data);
