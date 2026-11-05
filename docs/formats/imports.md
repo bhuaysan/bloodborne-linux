@@ -29,7 +29,7 @@ The other 5 bundled PRXs (libSceFace, libSceHand, libSceHeadTracker, libSceS3DCo
 
 ## Modules loaded at runtime
 
-Besides `DT_NEEDED`, the eboot loads system modules by numeric id with `sceSysmoduleLoadModule` (names from [nid.md](nid.md)). It calls the function from 22 places, all with a constant id (`mov edi, imm32` right before the call), 16 distinct ids in all. Each id goes with an imported library, found from the calls right after the load. The table lists our own findings; there is no published table of the ids.
+Besides `DT_NEEDED`, the eboot loads system modules by numeric id with `sceSysmoduleLoadModule` (names from [nid.md](nid.md)). It calls the function from 22 places, all with a constant id (`mov edi, imm32` right before the call), 16 distinct ids in all. libSceFios2 loads one more, `0xd7`. Each id goes with an imported library, found from the calls right after the load. The table lists our own findings; there is no published table of the ids.
 
 | Id | Load sites | Library used right after | How clear |
 |---|---|---|---|
@@ -44,6 +44,7 @@ Besides `DT_NEEDED`, the eboot loads system modules by numeric id with `sceSysmo
 | `0xad` | `0x20245ff` | libSceNpTrophy (`sceNpTrophyCreateContext`, …) | only library used in the function |
 | `0xb4` | `0x2026144` | libSceAppContent (`sceAppContentInitialize`) | init call after the load |
 | `0x1e` | `0xcccd55` | libSceNpScore | calls after the load |
+| `0xd7` | libSceFios2 `0x2d78e` (unloaded at `0x2d7cd`, `0x2d832`) | libSceDiscMap (the only library libSceFios2 imports besides libkernel, libSceLibcInternal and libSceSysmodule) | inferred, no init call |
 | `0x1c`, `0xb5`, `0x19`, `0xb2`, `0x1a` | `0xc872b0`, one function | online subsystem, see below | not one to one |
 
 The function at `0xc872b0` loads `0x1c`, `0xb5`, `0x19` and `0xb2`, then `0x1a` only if a check on a subsystem object passes. A matching function at `0xc87330` unloads the same ids and accepts error `0x805a1001`, probably "not loaded". Both have exactly one caller, `0x1ecec4b` and `0x1ecf563`. They sit in the code range `0xc87000`–`0xcdb000`, which calls libSceNpWebApi, libSceVoice, libSceNpMatching2, libSceNpManager, libSceNpCommon, libSceNpUtility, libSceNpSignaling and libSceNpProfileDialog. At least five of these have no load site of their own. So these five ids most likely load online libraries.

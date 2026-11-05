@@ -12,6 +12,10 @@ Facts marked *(survey)* come from our static analysis of the pinned build; addre
 
 What must work before that point: PRX init, TLS, threads, mutexes, rwlocks and condition variables (the task system starts worker threads), kernel memory mapping (the eboot maps a 116 MiB block itself), an advancing wall clock and sleeps, and success results from `sceSysmoduleLoadModule(0xb4)`, `sceAppContentInitialize` and `sceUserServiceInitialize`. Network and PSN initialisation (`sceNetInit`, `sceHttpInit`, …) sit on the init path too *(survey)*.
 
+## System services
+
+libSceSysmodule, libSceUserService, libSceSystemService, libSceAppContent, libScePlayGo and libSceDiscMap live in `src/hle/system/` (`bbhlesystem`, an `OBJECT` library that `bb-run` links next to `bbhle`). Every module load succeeds and is tracked. One user (id 1) is logged in from the start, named after the profile (a setter, default `default`, until the runtime directories pass `--profile` on). No system events, no add-on content, the game fully installed as one PlayGo chunk, no libSceDiscMap remapping. Each value chosen for the game is documented in `system.hpp` with its call-site address. Error results that the game compares (`0x805a1001`, `0x80960002`, `0x80960003`) are the game's; the others are ours, since their callers only test for non-zero.
+
 ## Loading the bundled PRXs
 
 - **Load set.** eboot, `libSceFios2.prx` and `libc.prx`, each checked against the hashes in `docs/clean-room.md`. The PRXs are mapped one after the other above the eboot, each at the next address aligned to its largest `p_align`. The other five bundled PRXs are not loaded.
