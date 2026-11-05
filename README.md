@@ -29,7 +29,7 @@ export BB_GAME_DIR=/path/to/your/CUSA03173
 
 ## Building
 
-The runtime is C++20, built with CMake (3.25 or newer) and Ninja. The unit tests use GoogleTest, which the build finds as an installed package (on Fedora: `cmake ninja-build gtest-devel libasan libubsan`; on Debian and Ubuntu: `cmake ninja-build libgtest-dev`).
+The runtime is C++20, built with CMake (3.27 or newer) and Ninja. The unit tests use GoogleTest, which the build finds as an installed package (on Fedora: `cmake ninja-build gtest-devel libasan libubsan`; on Debian and Ubuntu: `cmake ninja-build libgtest-dev`).
 
 ```sh
 cmake --preset debug          # or relwithdebinfo, release

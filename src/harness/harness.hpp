@@ -2,6 +2,7 @@
 // memory state and compares what they did (docs/design/runtime.md, "Differential test harness").
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -11,8 +12,10 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
+#include "hle/hle.hpp"
 #include "loader/image.hpp"
 
 namespace bb::harness {
@@ -56,7 +59,7 @@ private:
 
 // A block of memory that the harness restores and compares.
 struct Region {
-    std::string name;  // "image" or "arena"
+    std::string name;  // "image", "arena" or "data block <library> <nid>"
     std::byte* data;
     std::size_t size;
     std::uint64_t link;  // link address of data for an image segment, else 0
@@ -77,20 +80,35 @@ private:
     std::string report_;
 };
 
-// Takes the baseline of `image` (mapped and relocated) on construction: its writable segments
-// and the arena. Applies no hooks and runs no init code.
-class Harness {
+// One call to a function stub while a harness was installed, with all six integer argument
+// registers.
+struct StubCall {
+    const hle::StubInfo* stub;
+    std::array<std::uint64_t, 6> args;
+};
+
+// Takes the baseline of `image` (mapped and relocated) on construction: its writable segments,
+// the data blocks that bb::hle::resolve created so far, and the arena. Applies no hooks and runs
+// no init code. Records the stub calls while it exists, so only one harness may exist at a time.
+class Harness : private hle::StubObserver {
 public:
     explicit Harness(loader::Image& image);
+    ~Harness() override;
 
     Arena& arena() { return arena_; }
     const std::vector<Region>& regions() const { return regions_; }
-    // Puts the baseline back into every region and resets the arena.
+    // Puts the baseline back into every region, resets the arena and clears the stub log.
     void restore();
 
+    // The stub calls since the last restore().
+    const std::vector<StubCall>& log() const { return log_; }
+    // Compares the first `n` (0 to 6) arguments of the calls to this import. The default is 0.
+    // Throws std::invalid_argument for other `n`.
+    void declare_arity(std::string_view library, std::string_view nid, int n);
+
     // Calls the original at `link_addr` and `replacement` with the arguments `build(arena())`
-    // returns (a std::tuple), each from the baseline, and compares the return values and every
-    // region.
+    // returns (a std::tuple), each from the baseline, and compares the return values, every
+    // region and the stub logs.
     template <class Sig, class Build>
     Result compare(std::uint64_t link_addr, Sig* replacement, Build&& build) {
         return compare_as(link_addr, replacement, build, std::type_identity<Sig>{});
@@ -130,15 +148,19 @@ private:
         }
     }
 
-    // Saves the regions after the original's call.
+    void on_call(const hle::StubInfo& stub, const std::uint64_t args[6]) override;
+    // Saves the regions and the stub log after the original's call.
     void keep_original();
-    // Compares the regions after the replacement's call with the saved ones.
+    // Compares the regions and the stub log after the replacement's call with the saved ones.
     void compare_state(Result& result) const;
+    void compare_log(Result& result) const;
 
     loader::Image& image_;
     Arena arena_;
     std::vector<Region> regions_;
     std::vector<std::vector<std::byte>> baseline_, after_original_;
+    std::vector<StubCall> log_, original_log_;
+    std::unordered_map<std::string, int> arity_;  // by library + '\0' + nid
 };
 
 }  // namespace bb::harness

@@ -1,5 +1,6 @@
 #include "harness/harness.hpp"
 
+#include <pthread.h>
 #include <sys/mman.h>
 
 #include <algorithm>
@@ -7,11 +8,12 @@
 #include <cstring>
 #include <stdexcept>
 #include <system_error>
+#include <utility>
 
 namespace bb::harness {
 namespace {
 
-constexpr std::size_t page = 4096, max_ranges = 8, max_shown_bytes = 8;
+constexpr std::size_t page = 4096, max_ranges = 8, max_shown_bytes = 8, max_shown_calls = 16;
 
 std::string show_bytes(const std::byte* p, std::size_t n) {
     std::string out;
@@ -19,6 +21,47 @@ std::string show_bytes(const std::byte* p, std::size_t n) {
         out += std::format("{}{:02x}", i ? " " : "", static_cast<unsigned>(p[i]));
     }
     return n > max_shown_bytes ? out + " ..." : out;
+}
+
+std::string arity_key(std::string_view library, std::string_view nid) {
+    std::string k(library);
+    k += '\0';
+    k += nid;
+    return k;
+}
+
+// The start and end of the calling thread's stack.
+std::pair<std::uintptr_t, std::uintptr_t> thread_stack() {
+    pthread_attr_t attr;
+    if (const int err = pthread_getattr_np(pthread_self(), &attr); err != 0) {
+        throw std::system_error(err, std::generic_category(), "harness: pthread_getattr_np");
+    }
+    void* addr = nullptr;
+    std::size_t size = 0;
+    const int err = pthread_attr_getstack(&attr, &addr, &size);
+    pthread_attr_destroy(&attr);
+    if (err != 0) {
+        throw std::system_error(err, std::generic_category(), "harness: pthread_attr_getstack");
+    }
+    const auto start = reinterpret_cast<std::uintptr_t>(addr);
+    return {start, start + size};
+}
+
+// A stub argument as it is compared.
+struct Normalized {
+    enum class Kind { raw, region, stack } kind;
+    std::size_t region;   // for Kind::region
+    std::uint64_t value;  // the offset in the region, or the raw value
+    bool operator==(const Normalized&) const = default;
+};
+
+void show_log(Result& result, std::string_view side, const std::vector<StubCall>& log) {
+    for (std::size_t i = 0; i < std::min(log.size(), max_shown_calls); ++i) {
+        const StubCall& c = log[i];
+        result.add(std::format("  {} {}: {} {} ({}) {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}", side,
+                               i + 1, c.stub->library, c.stub->nid, c.stub->name, c.args[0],
+                               c.args[1], c.args[2], c.args[3], c.args[4], c.args[5]));
+    }
 }
 
 }  // namespace
@@ -68,10 +111,31 @@ Harness::Harness(loader::Image& image) : image_(image) {
                                 s.mem_size, s.link_addr, true});
         }
     }
+    for (const hle::DataBlock& b : hle::data_blocks()) {
+        regions_.push_back({std::format("data block {} {}", b.library, b.nid), b.data,
+                            hle::data_block_size, 0, false});
+    }
     regions_.push_back({"arena", arena_.data(), Arena::size, 0, false});
     for (const Region& r : regions_) {
         baseline_.emplace_back(r.data, r.data + r.size);
     }
+    hle::set_stub_observer(this);
+}
+
+Harness::~Harness() {
+    hle::set_stub_observer(nullptr);
+}
+
+void Harness::declare_arity(std::string_view library, std::string_view nid, int n) {
+    if (n < 0 || n > 6) {
+        throw std::invalid_argument(std::format("harness: arity {} is not 0 to 6", n));
+    }
+    arity_[arity_key(library, nid)] = n;
+}
+
+void Harness::on_call(const hle::StubInfo& stub, const std::uint64_t args[6]) {
+    StubCall& call = log_.emplace_back(&stub);
+    std::copy_n(args, 6, call.args.begin());
 }
 
 void Harness::restore() {
@@ -79,6 +143,7 @@ void Harness::restore() {
         std::memcpy(regions_[i].data, baseline_[i].data(), regions_[i].size);
     }
     arena_.reset();
+    log_.clear();
 }
 
 void Harness::keep_original() {
@@ -86,6 +151,7 @@ void Harness::keep_original() {
     for (const Region& r : regions_) {
         after_original_.emplace_back(r.data, r.data + r.size);
     }
+    original_log_ = log_;
 }
 
 void Harness::compare_state(Result& result) const {
@@ -121,6 +187,49 @@ void Harness::compare_state(Result& result) const {
     if (ranges > max_ranges) {
         result.add(std::format("memory: {} differing ranges in all", ranges));
     }
+    compare_log(result);
+}
+
+void Harness::compare_log(Result& result) const {
+    const auto [stack_start, stack_end] = thread_stack();
+    auto normalize = [&](std::uint64_t v) -> Normalized {
+        for (std::size_t i = 0; i < regions_.size(); ++i) {
+            const auto start = reinterpret_cast<std::uintptr_t>(regions_[i].data);
+            if (v >= start && v - start < regions_[i].size) {
+                return {Normalized::Kind::region, i, v - start};
+            }
+        }
+        if (v >= stack_start && v < stack_end) {
+            return {Normalized::Kind::stack, 0, 0};  // "a stack pointer"
+        }
+        return {Normalized::Kind::raw, 0, v};
+    };
+    auto same = [&](const StubCall& a, const StubCall& b) {
+        if (a.stub != b.stub) {
+            return false;
+        }
+        const auto it = arity_.find(arity_key(a.stub->library, a.stub->nid));
+        const int arity = it == arity_.end() ? 0 : it->second;
+        for (int i = 0; i < arity; ++i) {
+            if (normalize(a.args[i]) != normalize(b.args[i])) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const std::vector<StubCall>& orig = original_log_;
+    const std::vector<StubCall>& repl = log_;
+    std::size_t n = 0;
+    while (n < orig.size() && n < repl.size() && same(orig[n], repl[n])) {
+        ++n;
+    }
+    if (n == orig.size() && n == repl.size()) {
+        return;
+    }
+    result.add(std::format("stub log: differs at call {} (original {} calls, replacement {})",
+                           n + 1, orig.size(), repl.size()));
+    show_log(result, "original", orig);
+    show_log(result, "replacement", repl);
 }
 
 }  // namespace bb::harness

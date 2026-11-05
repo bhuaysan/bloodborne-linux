@@ -2,4 +2,4 @@
 # executables link the OBJECT libraries themselves (docs/design/runtime.md, "Static
 # registration").
 add_library(bbharness STATIC harness.cpp)
-target_link_libraries(bbharness PUBLIC bbloader PRIVATE bb_warnings)
+target_link_libraries(bbharness PUBLIC bbloader $<COMPILE_ONLY:bbhle> PRIVATE bb_warnings)
