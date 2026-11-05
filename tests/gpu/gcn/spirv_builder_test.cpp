@@ -1,5 +1,4 @@
-// SPIR-V builder: the word encoding, sharing of types and constants, and misuse. Validation with
-// spirv-val follows with the modules of each stage.
+// SPIR-V builder: the word encoding, sharing of types and constants, and misuse.
 
 #include <cstdint>
 #include <stdexcept>
@@ -11,6 +10,7 @@
 
 namespace {
 
+using bb::gcn::spirv_word;
 using bb::gcn::SpirvBuilder;
 using Id = SpirvBuilder::Id;
 using Op = spv::Op;
@@ -97,7 +97,42 @@ TEST(SpirvBuilder, EncodesInstructionsTypesAndInterface) {
     EXPECT_EQ(b.words(), expected);
 }
 
-TEST(SpirvBuilder, SharesTypesAndConstants) {
+// Declarations called out of order land in their sections. Strings are padded to whole words.
+TEST(SpirvBuilder, EncodesDeclarationSections) {
+    SpirvBuilder b;
+    b.memory_model(spv::AddressingModel::Logical, spv::MemoryModel::GLSL450);
+    const Id one = b.constant_f32(1.0f);  // %1 is its type
+    const Id minus_one = b.constant_i32(-1);
+    b.decorate(7, spv::Decoration::BuiltIn, {spirv_word(spv::BuiltIn::LocalInvocationIndex)});
+    b.member_decorate(7, 1, spv::Decoration::Offset, {16});
+    b.name(7, "");
+    b.name(7, "abc");
+    b.name(7, "abcd");
+    const Id glsl = b.import_extended("GLSL.std.450");
+    b.extension("ab");
+    EXPECT_EQ(one, 2u);
+    EXPECT_EQ(minus_one, 4u);
+    EXPECT_EQ(glsl, 5u);
+    const std::vector<std::uint32_t> expected = {
+        head(2, 10), 0x00006261,                  // OpExtension "ab"
+        head(6, 11), 5, 0x4c534c47, 0x6474732e,   // %5 = OpExtInstImport "GLSL.std.450"
+        0x3035342e, 0,                            //
+        head(3, 14), 0, 1,                        // OpMemoryModel
+        head(3, 5), 7, 0,                         // OpName %7 ""
+        head(3, 5), 7, 0x00636261,                // "abc" and its nul share a word
+        head(4, 5), 7, 0x64636261, 0,             // "abcd" needs a word for the nul
+        head(4, 71), 7, 11, 29,                   // OpDecorate %7 BuiltIn LocalInvocationIndex
+        head(5, 72), 7, 1, 35, 16,                // OpMemberDecorate %7 1 Offset 16
+        head(3, 22), 1, 32,                       // %1 = OpTypeFloat 32
+        head(4, 43), 1, 2, 0x3f800000,            // %2 = OpConstant %1 1.0
+        head(4, 21), 3, 32, 1,                    // %3 = OpTypeInt 32 1
+        head(4, 43), 3, 4, 0xffffffff,            // %4 = OpConstant %3 -1
+    };
+    const auto words = b.words();
+    EXPECT_EQ(std::vector<std::uint32_t>(words.begin() + 5, words.end()), expected);
+}
+
+TEST(SpirvBuilder, SharesTypesAndConstantsButNotAggregates) {
     SpirvBuilder b;
     const Id u32 = b.type_int(32, false);
     EXPECT_EQ(b.type_int(32, false), u32);
@@ -105,17 +140,29 @@ TEST(SpirvBuilder, SharesTypesAndConstants) {
     EXPECT_EQ(b.type_pointer(SC::Function, u32), b.type_pointer(SC::Function, u32));
     EXPECT_NE(b.type_pointer(SC::Private, u32), b.type_pointer(SC::Function, u32));
     EXPECT_EQ(b.constant_u32(7), b.constant_u32(7));
-    EXPECT_NE(b.constant(b.type_int(32, true), {7}), b.constant_u32(7));
+    EXPECT_NE(b.constant_i32(7), b.constant_u32(7));
     EXPECT_EQ(b.constant_bool(true), b.constant_bool(true));
     EXPECT_NE(b.constant_bool(false), b.constant_bool(true));
     EXPECT_EQ(b.type_function(u32, {u32}), b.type_function(u32, {u32}));
+    const Id uvec2 = b.type_vector(u32, 2);
+    EXPECT_EQ(b.constant_composite(uvec2, {b.constant_u32(1), b.constant_u32(2)}),
+              b.constant_composite(uvec2, {b.constant_u32(1), b.constant_u32(2)}));
+    EXPECT_EQ(b.constant_null(uvec2), b.constant_null(uvec2));
+    EXPECT_NE(b.type_struct({u32}), b.type_struct({u32}));
+    EXPECT_NE(b.type_array(u32, b.constant_u32(4)), b.type_array(u32, b.constant_u32(4)));
+    EXPECT_NE(b.type_runtime_array(u32), b.type_runtime_array(u32));
+    EXPECT_EQ(b.import_extended("GLSL.std.450"), b.import_extended("GLSL.std.450"));
 
     b.capability(spv::Capability::Shader);
     b.capability(spv::Capability::Shader);
+    b.extension("ab");
+    b.extension("ab");
     b.memory_model(spv::AddressingModel::Logical, spv::MemoryModel::GLSL450);
     const auto words = b.words();
-    EXPECT_EQ(words[5], head(2, 17));
-    EXPECT_EQ(words[7], head(3, 14));  // the memory model right after one OpCapability
+    EXPECT_EQ(words[5], head(2, 17));   // one OpCapability
+    EXPECT_EQ(words[7], head(2, 10));   // one OpExtension
+    EXPECT_EQ(words[9], head(6, 11));   // one OpExtInstImport
+    EXPECT_EQ(words[15], head(3, 14));  // then the memory model
 }
 
 TEST(SpirvBuilder, RejectsMisuse) {
@@ -123,6 +170,8 @@ TEST(SpirvBuilder, RejectsMisuse) {
     const Id void_t = b.type_void();
     const Id u32 = b.type_int(32, false);
     EXPECT_THROW(b.op(Op::OpUndef, u32, {}), std::logic_error);  // outside a function
+    EXPECT_THROW(b.local_variable(b.type_pointer(SC::Function, u32)), std::logic_error);
+    EXPECT_THROW(b.variable(b.type_pointer(SC::Function, u32), SC::Function), std::logic_error);
     EXPECT_THROW(b.words(), std::logic_error);  // no memory model
     b.memory_model(spv::AddressingModel::Logical, spv::MemoryModel::GLSL450);
 
