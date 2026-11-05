@@ -172,6 +172,11 @@ Resolved PathMap::resolve(std::string_view guest, Access access) {
     if (!mount.writable && !relative.empty() && !host_exists(host)) {
         host = find_case_insensitive(mount.host, relative);
     }
+    // A trailing "/" or "/." names a directory: keep the "/" so the host call fails with ENOTDIR
+    // on a file, as it does on the guest.
+    if (!relative.empty() && (guest.ends_with('/') || guest.ends_with("/."))) {
+        host += "/";
+    }
     return {std::move(host), 0};
 }
 

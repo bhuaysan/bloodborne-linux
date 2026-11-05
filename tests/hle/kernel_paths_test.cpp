@@ -8,6 +8,7 @@
 #include <string>
 
 #include <stdlib.h>
+#include <sys/stat.h>
 
 #include <gtest/gtest.h>
 
@@ -61,7 +62,7 @@ TEST(PathNames, JunkFiles) {
     EXPECT_FALSE(is_junk_name("."));
 }
 
-TEST_F(PathMapTest, GameMountReadsResolveUnderTheGameDirectory) {
+TEST_F(PathMapTest, GameMountIsReadOnly) {
     Resolved r = map_.resolve("/app0/eboot.bin", Access::read);
     ASSERT_TRUE(r);
     EXPECT_EQ(r.host, game_ / "eboot.bin");
@@ -72,19 +73,29 @@ TEST_F(PathMapTest, GameMountReadsResolveUnderTheGameDirectory) {
     r = map_.resolve("/app0/missing/file", Access::read);
     ASSERT_TRUE(r);
     EXPECT_EQ(r.host, game_ / "missing" / "file");
-}
-
-TEST_F(PathMapTest, WritesUnderTheGameMountFailWithErofs) {
     EXPECT_EQ(map_.resolve("/app0/eboot.bin", Access::write).error, guest(EROFS));
     EXPECT_EQ(map_.resolve("/app0/new.txt", Access::write).error, guest(EROFS));
     EXPECT_EQ(map_.resolve("/app0", Access::write).error, guest(EROFS));
 }
 
 TEST_F(PathMapTest, Normalisation) {
-    const Resolved r = map_.resolve("//app0/./dvdroot_ps4//Map/../Map/./m10_00.txt/", Access::read);
+    const Resolved r = map_.resolve("//app0/./dvdroot_ps4//Map/../Map/./m10_00.txt", Access::read);
     ASSERT_TRUE(r);
     EXPECT_EQ(r.host, game_ / "dvdroot_ps4" / "Map" / "m10_00.txt");
     EXPECT_EQ(map_.resolve("/app0/dvdroot_ps4/..", Access::read).host, game_);
+}
+
+TEST_F(PathMapTest, TrailingSlashNamesADirectory) {
+    EXPECT_EQ(map_.resolve("/app0/dvdroot_ps4/Map/", Access::read).host,
+              game_ / "dvdroot_ps4" / "Map" / "");
+    EXPECT_EQ(map_.resolve("/app0/DVDROOT_PS4/.", Access::read).host, game_ / "dvdroot_ps4" / "");
+    // On a file the host call fails with ENOTDIR, as on the guest.
+    const Resolved r = map_.resolve("/app0/eboot.bin/", Access::read);
+    ASSERT_TRUE(r);
+    EXPECT_EQ(r.host, game_ / "eboot.bin" / "");
+    struct stat st;
+    EXPECT_EQ(::stat(r.host.c_str(), &st), -1);
+    EXPECT_EQ(errno, ENOTDIR);
 }
 
 TEST_F(PathMapTest, DotDotNeverLeavesTheMount) {
@@ -107,12 +118,9 @@ TEST_F(PathMapTest, CaseInsensitiveFallbackUnderTheGameMount) {
     const std::string log = testing::internal::GetCapturedStderr();
     EXPECT_NE(log.find("case-insensitive"), std::string::npos) << log;
     EXPECT_EQ(log.find("case-insensitive"), log.rfind("case-insensitive")) << log;
-}
-
-TEST_F(PathMapTest, CaseFallbackKeepsTheUnmatchedRest) {
-    const Resolved r = map_.resolve("/app0/DVDROOT_PS4/nothing/Here", Access::read);
-    ASSERT_TRUE(r);
-    EXPECT_EQ(r.host, game_ / "dvdroot_ps4" / "nothing" / "Here");
+    // The first component without a match ends the walk; the rest is kept as given.
+    EXPECT_EQ(map_.resolve("/app0/DVDROOT_PS4/nothing/Here", Access::read).host,
+              game_ / "dvdroot_ps4" / "nothing" / "Here");
 }
 
 TEST_F(PathMapTest, CaseFallbackIgnoresJunkFiles) {
@@ -123,18 +131,15 @@ TEST_F(PathMapTest, CaseFallbackIgnoresJunkFiles) {
     EXPECT_EQ(map_.resolve("/app0/.DS_Store", Access::read).error, guest(ENOENT));
 }
 
-TEST_F(PathMapTest, NoCaseFallbackInWritableMounts) {
-    ASSERT_TRUE(map_.mount("/savedata0", save_));
-    touch(save_ / "UserData");
-    EXPECT_EQ(map_.resolve("/savedata0/userdata", Access::read).host, save_ / "userdata");
-}
-
 TEST_F(PathMapTest, WritableMountsAndUnmount) {
     ASSERT_TRUE(map_.mount("/savedata0", save_));
     EXPECT_FALSE(map_.mount("/savedata0", tmp_));
     Resolved r = map_.resolve("/savedata0/sub/userdata0010", Access::write);
     ASSERT_TRUE(r);
     EXPECT_EQ(r.host, save_ / "sub" / "userdata0010");
+    // No case-insensitive fallback in writable mounts.
+    touch(save_ / "UserData");
+    EXPECT_EQ(map_.resolve("/savedata0/userdata", Access::read).host, save_ / "userdata");
     EXPECT_TRUE(map_.unmount("/savedata0"));
     EXPECT_FALSE(map_.unmount("/savedata0"));
     EXPECT_FALSE(map_.unmount("/app0"));

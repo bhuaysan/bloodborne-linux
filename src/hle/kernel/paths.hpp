@@ -53,8 +53,9 @@ public:
     // Removes the read-write mount at `guest_point`. Returns false if there is none.
     bool unmount(std::string_view guest_point);
 
-    // Maps an absolute guest path to its host path. "." and repeated "/" are dropped, ".." is
-    // applied, and so is a trailing "/". Errors (guest errno):
+    // Maps an absolute guest path to its host path. "." and repeated "/" are dropped and ".." is
+    // applied. A trailing "/" or "/." stays a trailing "/", so a file there fails with ENOTDIR on
+    // the host. Errors (guest errno):
     // - ENOENT: no mount (logged once per first component; /hostapp is refused the same way),
     //   a relative or empty path, ".." above the mount point, or a junk file name;
     // - EROFS: `write` under /app0;
