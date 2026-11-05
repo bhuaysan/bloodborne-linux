@@ -1,0 +1,262 @@
+// libkernel and libScePosix mutexes and mutex attributes on glibc primitives
+// (docs/design/m3-core-os.md, "Sync"; values in docs/formats/kernel-abi.md, "Mutexes and
+// rwlocks"). The core functions return a host errno; the sce and POSIX entry points translate it
+// into their own error form.
+
+#include "hle/kernel/sync.hpp"
+
+#include <pthread.h>
+
+#include <atomic>
+#include <cerrno>
+#include <cstdint>
+#include <mutex>
+
+#include "hle/hle.hpp"
+#include "hle/kernel/abi.hpp"
+
+namespace bb::hle::kernel {
+namespace {
+
+using Cell = std::uintptr_t;
+
+// Cell values below this are no pointers to our objects, so they are refused without reading.
+constexpr Cell lowest_object = 0x10000;
+
+// Each object type has a tag and the host primitive, and makes the object for a cell that holds
+// the static initialiser with create_default.
+struct Mutex {
+    static constexpr std::uint64_t tag_value = 0x786574756d5f6262;  // "bb_mutex"
+    std::uint64_t tag = tag_value;
+    pthread_mutex_t host;
+
+    static int create_default(Cell* cell);
+};
+
+// Serialises the creation of objects for cells that hold the static initialiser.
+constinit std::mutex creation_lock;
+
+std::atomic_ref<Cell> atomic(Cell* cell) {
+    return std::atomic_ref<Cell>(*cell);
+}
+
+// The object of ours that `value` points to, or nullptr.
+template <class T>
+T* object_at(Cell value) {
+    if (value < lowest_object || value % alignof(T) != 0) {
+        return nullptr;
+    }
+    T* object = reinterpret_cast<T*>(value);
+    return object->tag == T::tag_value ? object : nullptr;
+}
+
+// Stores a new mutex in `cell`. Returns a host errno.
+int create_mutex(Cell* cell, int host_mutex_type) {
+    auto* m = new Mutex;
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, host_mutex_type);
+    const int error = pthread_mutex_init(&m->host, &attr);
+    pthread_mutexattr_destroy(&attr);
+    if (error != 0) {
+        delete m;
+        return error;
+    }
+    atomic(cell).store(reinterpret_cast<Cell>(m), std::memory_order_release);
+    return 0;
+}
+
+// The object of `cell`, created with the default attributes if the cell holds the static
+// initialiser. Sets `*error` and returns nullptr on failure.
+template <class T>
+T* lookup(Cell* cell, int* error) {
+    *error = EINVAL;
+    if (cell == nullptr) {
+        return nullptr;
+    }
+    Cell value = atomic(cell).load(std::memory_order_acquire);
+    if (value == 0) {
+        const std::lock_guard lock(creation_lock);
+        value = atomic(cell).load(std::memory_order_acquire);
+        if (value == 0) {
+            *error = T::create_default(cell);
+            if (*error != 0) {
+                return nullptr;
+            }
+            value = atomic(cell).load(std::memory_order_relaxed);
+        }
+    }
+    T* object = object_at<T>(value);
+    *error = object != nullptr ? 0 : EINVAL;
+    return object;
+}
+
+// Frees the object of `cell` and resets the cell to the static initialiser. A cell that holds the
+// static initialiser has nothing to free.
+template <class T, class Destroy>
+int destroy(Cell* cell, Destroy host_destroy) {
+    if (cell == nullptr) {
+        return EINVAL;
+    }
+    const Cell value = atomic(cell).load(std::memory_order_acquire);
+    if (value == 0) {
+        return 0;
+    }
+    T* object = object_at<T>(value);
+    if (object == nullptr) {
+        return EINVAL;
+    }
+    if (const int error = host_destroy(&object->host); error != 0) {
+        return error;
+    }
+    object->tag = 0;
+    delete object;
+    atomic(cell).store(0, std::memory_order_release);
+    return 0;
+}
+
+// ---- mutex attributes ----------------------------------------------------------------------
+// The guest attribute is one 8-byte cell. It holds the values themselves, tagged in the upper
+// half, so it needs no object of ours: type in bits 0-7, protocol in bits 8-15.
+
+constexpr std::uint64_t attr_tag = 0x4d41545400000000;  // "MATT" in the upper half
+
+std::uint64_t pack_attr(int type, int protocol) {
+    return attr_tag | static_cast<std::uint64_t>(protocol) << 8 | static_cast<std::uint64_t>(type);
+}
+
+bool valid_attr(const std::uint64_t* attr) {
+    return attr != nullptr && (*attr & 0xffffffff00000000) == attr_tag;
+}
+
+int attr_type(std::uint64_t attr) {
+    return static_cast<int>(attr & 0xff);
+}
+
+int attr_protocol(std::uint64_t attr) {
+    return static_cast<int>(attr >> 8 & 0xff);
+}
+
+int mutexattr_init(std::uint64_t* attr) {
+    if (attr == nullptr) {
+        return EINVAL;
+    }
+    *attr = pack_attr(guest_mutex_errorcheck, guest_prio_none);
+    return 0;
+}
+
+int mutexattr_destroy(std::uint64_t* attr) {
+    if (!valid_attr(attr)) {
+        return EINVAL;
+    }
+    *attr = 0;
+    return 0;
+}
+
+int mutexattr_settype(std::uint64_t* attr, int type) {
+    if (!valid_attr(attr) || type < guest_mutex_errorcheck || type > guest_mutex_adaptive) {
+        return EINVAL;
+    }
+    *attr = pack_attr(type, attr_protocol(*attr));
+    return 0;
+}
+
+// ---- mutexes -------------------------------------------------------------------------------
+
+int Mutex::create_default(Cell* cell) {
+    return create_mutex(cell, PTHREAD_MUTEX_ERRORCHECK);
+}
+
+// The adaptive type spins before it sleeps on the guest. It is error-checking here, which is
+// what libSceFios2, its only user, needs (0x2e52b).
+int host_mutex_type(int guest_type) {
+    switch (guest_type) {
+    case guest_mutex_recursive:
+        return PTHREAD_MUTEX_RECURSIVE;
+    case guest_mutex_normal:
+        return PTHREAD_MUTEX_NORMAL;
+    default:
+        return PTHREAD_MUTEX_ERRORCHECK;
+    }
+}
+
+int mutex_init(Cell* mutex, const std::uint64_t* attr) {
+    if (mutex == nullptr || (attr != nullptr && !valid_attr(attr))) {
+        return EINVAL;
+    }
+    const int type = attr != nullptr ? attr_type(*attr) : guest_mutex_errorcheck;
+    return create_mutex(mutex, host_mutex_type(type));
+}
+
+int mutex_destroy(Cell* mutex) {
+    return destroy<Mutex>(mutex, pthread_mutex_destroy);
+}
+
+int mutex_lock(Cell* mutex) {
+    int error = 0;
+    Mutex* m = lookup<Mutex>(mutex, &error);
+    return m != nullptr ? pthread_mutex_lock(&m->host) : error;
+}
+
+int mutex_trylock(Cell* mutex) {
+    int error = 0;
+    Mutex* m = lookup<Mutex>(mutex, &error);
+    return m != nullptr ? pthread_mutex_trylock(&m->host) : error;
+}
+
+int mutex_unlock(Cell* mutex) {
+    int error = 0;
+    Mutex* m = lookup<Mutex>(mutex, &error);
+    return m != nullptr ? pthread_mutex_unlock(&m->host) : error;
+}
+
+// ---- entry points --------------------------------------------------------------------------
+
+// Sce<f>::call and Posix<f>::call wrap a core function `f` in the sce or POSIX error form.
+template <auto F>
+struct Sce;
+template <class... A, int (*F)(A...)>
+struct Sce<F> {
+    static std::int32_t call(A... args) { return sce_fail(F(args...)); }
+};
+
+template <auto F>
+struct Posix;
+template <class... A, int (*F)(A...)>
+struct Posix<F> {
+    static int call(A... args) { return pthread_error(F(args...)); }
+};
+
+// The name is not kept (libc.prx passes one, 0x64e7; the eboot passes null, 0xd1ac41).
+std::int32_t sce_mutex_init(Cell* mutex, const std::uint64_t* attr, const char* /*name*/) {
+    return sce_fail(mutex_init(mutex, attr));
+}
+
+}  // namespace
+
+pthread_mutex_t* host_mutex(Cell* mutex, int* host_errno) {
+    Mutex* m = lookup<Mutex>(mutex, host_errno);
+    return m != nullptr ? &m->host : nullptr;
+}
+
+}  // namespace bb::hle::kernel
+
+namespace k = bb::hle::kernel;
+
+BB_HLE_FUNCTION("libkernel", "F8bUHwAG284", k::Sce<k::mutexattr_init>::call);
+BB_HLE_FUNCTION("libkernel", "smWEktiyyG0", k::Sce<k::mutexattr_destroy>::call);
+BB_HLE_FUNCTION("libkernel", "iMp8QpE+XO4", k::Sce<k::mutexattr_settype>::call);
+BB_HLE_FUNCTION("libkernel", "cmo1RIYva9o", k::sce_mutex_init);
+BB_HLE_FUNCTION("libkernel", "2Of0f+3mhhE", k::Sce<k::mutex_destroy>::call);
+BB_HLE_FUNCTION("libkernel", "9UK1vLZQft4", k::Sce<k::mutex_lock>::call);
+BB_HLE_FUNCTION("libkernel", "upoVrzMHFeE", k::Sce<k::mutex_trylock>::call);
+BB_HLE_FUNCTION("libkernel", "tn3VlD0hG60", k::Sce<k::mutex_unlock>::call);
+
+BB_HLE_FUNCTION("libScePosix", "dQHWEsJtoE4", k::Posix<k::mutexattr_init>::call);
+BB_HLE_FUNCTION("libScePosix", "HF7lK46xzjY", k::Posix<k::mutexattr_destroy>::call);
+BB_HLE_FUNCTION("libScePosix", "mDmgMOGVUqg", k::Posix<k::mutexattr_settype>::call);
+BB_HLE_FUNCTION("libScePosix", "ttHNfU+qDBU", k::Posix<k::mutex_init>::call);
+BB_HLE_FUNCTION("libScePosix", "ltCfaGr2JGE", k::Posix<k::mutex_destroy>::call);
+BB_HLE_FUNCTION("libScePosix", "7H0iTOciTLo", k::Posix<k::mutex_lock>::call);
+BB_HLE_FUNCTION("libScePosix", "K-jXhbt2gn4", k::Posix<k::mutex_trylock>::call);
+BB_HLE_FUNCTION("libScePosix", "2Z+PpY6CaJg", k::Posix<k::mutex_unlock>::call);

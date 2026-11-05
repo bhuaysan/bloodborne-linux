@@ -173,7 +173,7 @@ TEST(BbLoadGame, PrintsTheLoadSet) {
     EXPECT_EQ(modules[0].bindings["libc"], "202 0 0 14");
     EXPECT_EQ(modules[0].bindings["libSceFios2"], "17 0 0 0");
     // src/hle/kernel implements some of the libkernel imports.
-    EXPECT_EQ(modules[0].bindings["libkernel"], "0 5 75 0");
+    EXPECT_EQ(modules[0].bindings["libkernel"], "0 13 67 0");
     // src/hle/net implements sceNetInit and sceNetPoolCreate.
     EXPECT_EQ(modules[0].bindings["libSceNet"], "0 2 33 0");
 
@@ -187,7 +187,7 @@ TEST(BbLoadGame, PrintsTheLoadSet) {
     EXPECT_EQ(modules[2].header.back(), "reloc      R_X86_64_DTPMOD64 14");
     EXPECT_EQ(modules[2].imports, "imports    79 in 2 libraries");
     EXPECT_EQ(modules[2].bindings["libSceFios2"], "8 0 0 0");
-    EXPECT_EQ(last, "hle        494 stubs, 3 data blocks");
+    EXPECT_EQ(last, "hle        478 stubs, 3 data blocks");
 }
 
 }  // namespace
