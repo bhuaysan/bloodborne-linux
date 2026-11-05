@@ -14,7 +14,7 @@ namespace bb::hle {
 // One stubbed function import. Lives as long as the process; its thunk passes its address.
 struct StubInfo {
     std::string library, module, nid;
-    std::string_view name;                         // "?" until the NID name table exists
+    std::string_view name;                         // nid_name(nid)
     mutable std::atomic<std::uint64_t> calls{0};  // calls so far, including the current one
 };
 
@@ -24,6 +24,9 @@ public:
     virtual ~StubObserver() = default;
     virtual void on_call(const StubInfo& stub, const std::uint64_t args[6]) = 0;
 };
+
+// The name of `nid` in symbols/nids.csv, or "?" if it has none.
+std::string_view nid_name(std::string_view nid);
 
 // Registers `impl` for an import. Throws std::logic_error if the import already has an
 // implementation or was already resolved.

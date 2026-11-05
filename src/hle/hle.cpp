@@ -3,6 +3,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cinttypes>
 #include <cstdio>
@@ -11,10 +12,13 @@
 #include <deque>
 #include <format>
 #include <mutex>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <system_error>
 #include <unordered_map>
+
+#include "hle/nid_table.hpp"
 
 extern "C" void bb_hle_stub_entry();  // stub_entry.S
 
@@ -93,6 +97,12 @@ std::string key(std::string_view library, std::string_view nid) {
 
 }  // namespace
 
+std::string_view nid_name(std::string_view nid) {
+    const std::span<const NidName> table = nid_table();
+    const auto it = std::ranges::lower_bound(table, nid, {}, &NidName::nid);
+    return it != table.end() && it->nid == nid ? it->name : "?";
+}
+
 void register_function(std::string_view library, std::string_view nid, void* impl) {
     Registry& r = registry();
     const std::lock_guard lock(r.mutex);
@@ -119,7 +129,7 @@ std::uintptr_t resolve(const loader::Import& imp) {
         ++r.data_blocks;
     } else {
         const StubInfo& stub =
-            r.stubs.emplace_back(imp.library, imp.module, imp.nid, "?");
+            r.stubs.emplace_back(imp.library, imp.module, imp.nid, nid_name(imp.nid));
         address = r.thunks.add(&stub);
     }
     r.resolved.emplace(k, address);

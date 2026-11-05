@@ -62,12 +62,18 @@ TEST(Hle, StubPassesArgumentsAndReturnsZero) {
     EXPECT_EQ(info.library, "libTest");
     EXPECT_EQ(info.module, "libTestModule");
     EXPECT_EQ(info.nid, "wZi5ly2guNw");
-    EXPECT_EQ(info.name, "?");
+    EXPECT_EQ(info.name, "_Exit");
     EXPECT_EQ(recorder.calls[0].calls, 1U);
     EXPECT_EQ(recorder.calls[0].args,
               (std::vector<std::uint64_t>{1, 0x22, 0x333, 0x4444, 0x55555, 0xfedcba9876543210}));
     EXPECT_EQ(recorder.calls[1].stub, &info);
     EXPECT_EQ(recorder.calls[1].calls, 2U);
+}
+
+TEST(Hle, NidNameFromTheTable) {
+    EXPECT_EQ(nid_name("wZi5ly2guNw"), "_Exit");  // in symbols/nids.csv
+    EXPECT_EQ(nid_name("AAAAAAAAAAA"), "?");
+    EXPECT_EQ(nid_name(""), "?");
 }
 
 TEST(Hle, ResolveIsIdempotent) {

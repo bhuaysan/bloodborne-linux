@@ -161,7 +161,7 @@ That is 24 bytes per thunk. `r11` is a scratch register in the System V ABI and 
 
 The thunks live in anonymous pages of `bbhle`. A thunk is written while its page is `rw-`, and the page goes back to `r-x` right after. That is safe as long as `resolve` runs before game code; resolving while game threads may execute an earlier thunk of the same page (lazy PRX loading in M3) needs another scheme, for example a second, writable mapping of the same pages. Thunks, `StubInfo` objects and data blocks are never freed.
 
-The NID name table is generated at build time from `symbols/nids.csv` by a small Python script into a sorted array that is searched with binary search. CMake reruns the script when the CSV changes. Until it lands (the last part of #44), every `StubInfo` name is `?`.
+The NID name table is generated at build time from `symbols/nids.csv` by a small Python script into a sorted array that is searched with binary search. CMake reruns the script when the CSV changes. `bb::hle::nid_name(nid)` returns the name, or `?` for a NID the table doesn't have.
 
 ### Data imports
 
