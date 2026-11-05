@@ -81,6 +81,17 @@ TEST_F(SystemTest, SysmoduleLoadsAndLogsUnknownIds) {
     EXPECT_EQ(sysmodule_is_loaded(0x1234), 0);
 }
 
+TEST_F(SystemTest, SysmoduleLogsUnknownIdsInIsLoaded) {
+    const std::string unknown = stderr_of([] {
+        EXPECT_EQ(sysmodule_is_loaded(0x1234), sysmodule_error_not_loaded);
+    });
+    EXPECT_TRUE(contains(unknown, "is loaded 0x1234 (unknown) (caller 0x")) << unknown;
+    const std::string known = stderr_of([] {
+        EXPECT_EQ(sysmodule_is_loaded(0xa0), sysmodule_error_not_loaded);
+    });
+    EXPECT_FALSE(contains(known, "is loaded")) << known;
+}
+
 TEST_F(SystemTest, SysmoduleNamesTheIdsOfTheImportsDoc) {
     EXPECT_EQ(sysmodule_library(0x83), "libScePlayGo");
     EXPECT_EQ(sysmodule_library(0xa0), "libSceSaveData");

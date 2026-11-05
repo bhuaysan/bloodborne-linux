@@ -69,6 +69,10 @@ std::int32_t sysmodule_unload_module(std::uint32_t id) {
 }
 
 std::int32_t sysmodule_is_loaded(std::uint32_t id) {
+    // Known ids are polled often, so only unknown ones are logged.
+    if (sysmodule_library(id) == "unknown") {
+        log(library, BB_SYSTEM_CALLER(), "is loaded {:#x} (unknown)", id);
+    }
     Loaded& l = loaded();
     const std::lock_guard lock(l.mutex);
     return l.ids.contains(id) ? 0 : sysmodule_error_not_loaded;
