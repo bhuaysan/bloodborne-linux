@@ -134,7 +134,7 @@ Header `sys/sys/time.h`. `clockid_t` is a 32-bit int.
 | 1 | CLOCK_VIRTUAL | none | no use found; reported as unknown |
 | 2 | CLOCK_PROF | none | no use found; reported as unknown |
 | 3 | unassigned | none | reported as unknown |
-| 4 | CLOCK_MONOTONIC | CLOCK_MONOTONIC | no use found |
+| 4 | CLOCK_MONOTONIC | CLOCK_MONOTONIC | eboot 0xd1a780, libSceFios2.prx 0x2cc4b: the only clock of `QBi7HCK03hw`, read as an elapsed time |
 | 5 | CLOCK_UPTIME | CLOCK_MONOTONIC | no use found |
 | 6 | unassigned | none | reported as unknown |
 | 7 | CLOCK_UPTIME_PRECISE | CLOCK_MONOTONIC | no use found |
@@ -147,7 +147,7 @@ Header `sys/sys/time.h`. `clockid_t` is a 32-bit int.
 | 14 | CLOCK_THREAD_CPUTIME_ID | CLOCK_THREAD_CPUTIME_ID | no use found |
 | 15 | CLOCK_PROCESS_CPUTIME_ID | CLOCK_PROCESS_CPUTIME_ID | no use found |
 
-The eboot doesn't import `clock_gettime` by name. Its clocks are `gettimeofday`, `sceKernelUsleep`, and libc's `time` and `clock`. libc's `clock` uses `getrusage(0)` (libc 0x2ef11). The mapping of the `_FAST` and `_PRECISE` variants and of `CLOCK_UPTIME` to Linux clocks is our choice (design note, Time: every counter from `CLOCK_MONOTONIC`).
+The eboot doesn't import `clock_gettime` by name. Its clocks are `gettimeofday`, `sceKernelUsleep`, the unnamed libkernel time imports ([kernel-imports.md](kernel-imports.md#time)), and libc's `time` and `clock`. libc's `clock` export (0x2ef60) tail-jumps to `4J2sUJmuHZQ`; an unexported libc function next to it (0x2eef0) computes the same microseconds from `getrusage(0)` (libc 0x2ef11). The mapping of the `_FAST` and `_PRECISE` variants and of `CLOCK_UPTIME` to Linux clocks is our choice (design note, Time: every counter from `CLOCK_MONOTONIC`).
 
 ## timespec and timeval
 

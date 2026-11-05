@@ -60,10 +60,10 @@ The other NIDs stay unnamed. The FreeBSD manual page lists and the derivation ru
 
 | NID | Callers | Behaviour |
 |---|---|---|
-| `4J2sUJmuHZQ` | eboot, libc.prx | Returns a u64 counter *(survey)* |
-| `-2IRUCO--PM` | eboot | Returns a u64 that callers add to a timeout *(survey)* |
-| `QBi7HCK03hw` | eboot, libSceFios2.prx | Clock id and a 16-byte time struct *(survey)* |
-| `kOcnerypnQA` | libc.prx | Fills two int32 values *(survey)* |
+| `4J2sUJmuHZQ` | eboot 0x33c954, 0x33c969, 0x3a1875, 0x3a18be; libc.prx 0x2ef60 | No arguments, returns a u64 time in microseconds. libc's export `clock` (0x2ef60) is a tail jump to it, and libc's own `getrusage`-based counterpart (0x2eef0) returns microseconds (seconds × 1000000). The eboot uses differences as spin-wait timeouts: 100000 at 0x33c977, 10000 at 0x3a18b5 |
+| `-2IRUCO--PM` | eboot 0x21b9850, 0x21b99bf | No arguments, returns a u64. Both callers add a u32 field (+0xa0) and take the sum modulo a ring size as the start index of a slot search, so the unit doesn't matter to them |
+| `QBi7HCK03hw` | eboot 0xd1a785, 0xd1a815; libSceFios2.prx 0x2cc50 | `(clock id, timespec*)`, always clock 4 (`CLOCK_MONOTONIC`). Returns 0 on success: the eboot returns its own error 0x21 for anything else and converts `tv_sec`/`tv_nsec` to µs and ms, Fios converts them to ns. `clock_gettime` with an sce result |
+| `kOcnerypnQA` | libc.prx 0x1939, 0x91f4, 0x9a6f | Fills two int32 values in an 8-byte buffer (zeroed by the caller); result ignored. Callers add both and multiply by 60 to get the offset from UTC to local time in seconds, and set `tm_isdst` when the second is non-zero: minutes east of UTC in standard time, and the daylight saving shift in minutes |
 
 ### Virtual and direct memory
 

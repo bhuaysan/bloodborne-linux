@@ -79,6 +79,11 @@ The process basics live in `src/hle/kernel/process.cpp`. Call sites are in libc.
 
 Wall clock from `CLOCK_REALTIME`, every counter from `CLOCK_MONOTONIC`, sleeps through `clock_nanosleep`. Clock ids and the counter frequency are confirmed from the game's use. libSceRtc is implemented from the game's call sites only (see Naming).
 
+- `src/hle/kernel/time.cpp`. Sleeps are relative `clock_nanosleep` calls on `CLOCK_MONOTONIC`. An interrupted sleep is not restarted: `nanosleep` and `usleep` fail with `EINTR` (`nanosleep` fills the remainder, libc's `sleep` loops on it, libc.prx 0x61f5), `sceKernelUsleep` returns the sce code of `EINTR` (its callers ignore the result and read the clock again), libScePosix `sleep` returns the unslept seconds rounded up.
+- No call site reads a counter frequency. The two unnamed counters count from the runtime's start: `4J2sUJmuHZQ` in microseconds (libc's `clock` returns it), `-2IRUCO--PM` in nanoseconds (its callers use it only modulo a ring size). Units and call sites are in [kernel-imports.md](../formats/kernel-imports.md#time).
+- The time zone of `gettimeofday` and of `kOcnerypnQA` is the host's, with a daylight saving shift of 60 minutes, as the game assumes (eboot 0x1a386d).
+- **Main-loop probe.** The libScePosix `gettimeofday` (the frame pacer's) passes its return address to an optional observer: `bb::hle::kernel::set_gettimeofday_observer(void (*)(std::uintptr_t))` in `time.hpp`, nullptr to remove it. It runs on the calling thread before the clock is read. libkernel's `gettimeofday` (libc.prx's) doesn't report.
+
 ## Files and paths
 
 Guest paths are mapped through a mount table. Everything else is refused with `ENOENT` and logged once per prefix.
