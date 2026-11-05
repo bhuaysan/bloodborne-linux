@@ -29,6 +29,15 @@ public:
     virtual void on_call(const StubInfo& stub, const std::uint64_t args[6]) = 0;
 };
 
+// The key of an import in maps by (library, NID). Names come from C strings, so they contain no
+// '\0'.
+inline std::string import_key(std::string_view library, std::string_view nid) {
+    std::string k(library);
+    k += '\0';
+    k += nid;
+    return k;
+}
+
 // The name of `nid` in symbols/nids.csv, or "?" if it has none.
 std::string_view nid_name(std::string_view nid);
 

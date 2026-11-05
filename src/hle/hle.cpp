@@ -73,8 +73,8 @@ private:
 
 struct Registry {
     std::mutex mutex;
-    std::unordered_map<std::string, void*> impls;              // key(library, nid)
-    std::unordered_map<std::string, std::uintptr_t> resolved;  // key(library, nid)
+    std::unordered_map<std::string, void*> impls;              // import_key(library, nid)
+    std::unordered_map<std::string, std::uintptr_t> resolved;  // import_key(library, nid)
     std::deque<StubInfo> stubs;                                // stable addresses
     ThunkPages thunks;
     std::vector<DataBlock> data_blocks;
@@ -88,14 +88,6 @@ Registry& registry() {
     return r;
 }
 
-// Names come from C strings, so they contain no '\0'.
-std::string key(std::string_view library, std::string_view nid) {
-    std::string k(library);
-    k += '\0';
-    k += nid;
-    return k;
-}
-
 }  // namespace
 
 std::string_view nid_name(std::string_view nid) {
@@ -107,7 +99,7 @@ std::string_view nid_name(std::string_view nid) {
 void register_function(std::string_view library, std::string_view nid, void* impl) {
     Registry& r = registry();
     const std::lock_guard lock(r.mutex);
-    const std::string k = key(library, nid);
+    const std::string k = import_key(library, nid);
     if (r.resolved.contains(k) || !r.impls.emplace(k, impl).second) {
         throw std::logic_error(std::format("hle: {} {} registered twice or after it was resolved",
                                            library, nid));
@@ -117,7 +109,7 @@ void register_function(std::string_view library, std::string_view nid, void* imp
 std::uintptr_t resolve(const loader::Import& imp) {
     Registry& r = registry();
     const std::lock_guard lock(r.mutex);
-    const std::string k = key(imp.library, imp.nid);
+    const std::string k = import_key(imp.library, imp.nid);
     if (auto it = r.resolved.find(k); it != r.resolved.end()) {
         return it->second;
     }
@@ -140,7 +132,7 @@ std::uintptr_t resolve(const loader::Import& imp) {
 std::uintptr_t import_address(std::string_view library, std::string_view nid) {
     Registry& r = registry();
     const std::lock_guard lock(r.mutex);
-    const std::string k = key(library, nid);
+    const std::string k = import_key(library, nid);
     if (auto it = r.resolved.find(k); it != r.resolved.end()) {
         return it->second;
     }
