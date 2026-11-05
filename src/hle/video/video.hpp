@@ -66,7 +66,9 @@ struct BufferAttribute {
 
 // Records `count` buffer addresses from `addresses` for indices start..start+count-1 of the
 // port, with a copy of `*attr`, and returns 0. 0x11e4915 registers 2 from index 0 and ignores
-// the result, 0x26d65f3 fails on a negative one. At most max_buffers per port.
+// the result, 0x26d65f3 fails on a negative one. At most max_buffers per port. A count of 0
+// succeeds and registers nothing: when its configured buffer count [r14+0x28] is 0, 0x26d626b
+// jumps to 0x26d65d6, which still calls with count 0 and fails on a negative result.
 std::int32_t sceVideoOutRegisterBuffers(std::int32_t handle, std::int32_t start,
                                         const std::uint64_t* addresses, std::int32_t count,
                                         const void* attr);
@@ -99,14 +101,15 @@ std::int32_t gnm_submit_other(std::uint32_t count, const std::uint64_t* draw,
                               const std::uint32_t* second_sizes);
 
 // NID xbxNatawohc, name unknown. gnm_submit followed by sceVideoOutSubmitFlip(handle, index,
-// mode, arg): 0x26b0dd5..0x26b0dff and 0x26b0eba..0x26b0ee2 pass the port handle in r9 and the
-// rest on the stack, and call sceGnmSubmitDone right after. Returns the flip's result.
+// mode, arg). It has 8 call sites (0x1094f98, 0x10953a8, 0x1096775, 0x109c300, 0x11fb4f8,
+// 0x11fb644, 0x26b0dff, 0x26b0ee2); 0x26b0dd5..0x26b0dff, 0x26b0eba..0x26b0ee2 and 0x1094f98
+// pass the port handle in r9 and the rest on the stack. Returns the flip's result.
 std::int32_t gnm_submit_and_flip(std::uint32_t count, const std::uint64_t* draw,
                                  const std::uint32_t* draw_sizes, const std::uint64_t* second,
                                  const std::uint32_t* second_sizes, std::int32_t handle,
                                  std::int32_t index, std::int32_t mode, std::int64_t arg);
 
-// Returns 0. Called after each submit-and-flip (0x26b0e04, 0x26b0ee7) through 0x1089b50.
+// Returns 0. Called through 0x1089b50 after the submit-and-flip at 0x26b0dff and 0x26b0ee2.
 std::int32_t sceGnmSubmitDone();
 
 }  // namespace bb::hle::video
