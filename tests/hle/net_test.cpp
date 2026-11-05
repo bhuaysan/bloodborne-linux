@@ -107,7 +107,7 @@ TEST(HleNet, NpSizedRequestSucceeds) {
 TEST(HleNetGame, EbootImportsBindToTheImplementations) {
     BB_REQUIRE_GAME(game);
     bb::loader::Image image = bb::loader::map_eboot(game);
-    bb::loader::relocate(image, bb::hle::resolve);
+    bb::loader::relocate(image, bb::hle::resolve, bb::loader::eboot_module_id);
 
     struct Expected {
         std::string_view library, nid;
