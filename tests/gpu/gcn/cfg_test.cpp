@@ -142,6 +142,17 @@ TEST(GcnCfg, NestedExeczSkipsFallThrough) {
     EXPECT_EQ(cfg.blocks[1].exit, Exit::next);
 }
 
+TEST(GcnCfg, OverlappingExeczSkipsStayBranches) {
+    // 0: if execz goto 3; 1: if execz goto 4; 2: s_mov_b32; 3: s_mov_b32; 4: end
+    auto p = program({br(execz, 0, 3), br(execz, 1, 4), sopp(nop), sopp(nop), sopp(endpgm)});
+    write_scalar(p, 2);
+    write_scalar(p, 3);
+    const Cfg cfg = build_cfg(p);
+    ASSERT_EQ(cfg.blocks.size(), 5u);
+    EXPECT_EQ(cfg.blocks[0].exit, Exit::conditional);
+    EXPECT_EQ(cfg.blocks[1].exit, Exit::conditional);
+}
+
 TEST(GcnCfg, AnalyzesOrderDominatorsAndLoops) {
     constexpr std::uint32_t none = CfgAnalysis::none;
     // If/else: blocks 0 [0], 1 [1-2], 2 [3], 3 [4]; block 3 joins.
