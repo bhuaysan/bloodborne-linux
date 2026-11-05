@@ -14,7 +14,7 @@ This is also a learning project. Everything here is worked out independently.
 
 ## Status
 
-Executable analysis (M1) is done: tools under `tools/` extract the executable, make it importable in Ghidra and name its imports. Nothing runs yet; the loader comes next (M2). See [docs/roadmap.md](docs/roadmap.md).
+Executable analysis (M1) and the loader with its test harness (M2) are done. `bb-load` maps and relocates the game executable in a Linux process, imports resolve to logging stubs, and the first game functions are replaced by C++ that passes differential tests against the original. No game code runs on its own yet; reaching the main loop is next (M3). See [docs/roadmap.md](docs/roadmap.md).
 
 ## Requirements
 
