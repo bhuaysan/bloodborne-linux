@@ -56,6 +56,56 @@ TEST(SpirvBuilder, EncodesTheModule) {
     EXPECT_EQ(b.words(), expected);
 }
 
+// A function with a parameter and an instruction with a result, the vector and pointer types,
+// the bool and u32 constants, and an entry point with interface ids.
+TEST(SpirvBuilder, EncodesInstructionsTypesAndInterface) {
+    SpirvBuilder b;
+    b.memory_model(spv::AddressingModel::Logical, spv::MemoryModel::GLSL450);
+    const Id u32 = b.type_int(32, false);
+    const Id add_two = b.begin_function(u32, b.type_function(u32, {u32}));
+    const Id a = b.parameter(u32);
+    b.begin_block(b.id());
+    const Id two = b.constant_u32(2);
+    const Id sum = b.op(Op::OpIAdd, u32, {a, two});
+    b.op_void(Op::OpReturnValue, {sum});
+    b.end_function();
+    const Id uvec4 = b.type_vector(u32, 4);
+    const Id pointer = b.type_pointer(SC::Private, uvec4);
+    const Id yes = b.constant_bool(true);
+    const Id no = b.constant_bool(false);
+    const Id input = b.id();
+    const Id output = b.id();
+    b.entry_point(spv::ExecutionModel::Fragment, add_two, "f", {input, output});
+    EXPECT_EQ(add_two, 3u);
+    EXPECT_EQ(a, 4u);
+    EXPECT_EQ(sum, 7u);
+    EXPECT_EQ(uvec4, 8u);
+    EXPECT_EQ(pointer, 9u);
+    EXPECT_EQ(yes, 11u);
+    EXPECT_EQ(no, 12u);
+    EXPECT_EQ(input, 13u);
+    const std::vector<std::uint32_t> expected = {
+        0x07230203, 0x00010600, 0, 15, 0,          // header, bound 15
+        head(3, 14), 0, 1,                         // OpMemoryModel Logical GLSL450
+        head(6, 15), 4, 3, 0x00000066, 13, 14,     // OpEntryPoint Fragment %3 "f" %13 %14
+        head(4, 21), 1, 32, 0,                     // %1 = OpTypeInt 32 0
+        head(4, 33), 2, 1, 1,                      // %2 = OpTypeFunction %1 %1
+        head(4, 43), 1, 6, 2,                      // %6 = OpConstant %1 2
+        head(4, 23), 8, 1, 4,                      // %8 = OpTypeVector %1 4
+        head(4, 32), 9, 6, 8,                      // %9 = OpTypePointer Private %8
+        head(2, 20), 10,                           // %10 = OpTypeBool
+        head(3, 41), 10, 11,                       // %11 = OpConstantTrue %10
+        head(3, 42), 10, 12,                       // %12 = OpConstantFalse %10
+        head(5, 54), 1, 3, 0, 2,                   // %3 = OpFunction %1 None %2
+        head(3, 55), 1, 4,                         // %4 = OpFunctionParameter %1
+        head(2, 248), 5,                           // %5 = OpLabel
+        head(5, 128), 1, 7, 4, 6,                  // %7 = OpIAdd %1 %4 %6
+        head(2, 254), 7,                           // OpReturnValue %7
+        head(1, 56),                               // OpFunctionEnd
+    };
+    EXPECT_EQ(b.words(), expected);
+}
+
 // Names, decorations and constants, called out of order, land in their sections. Strings are
 // padded to whole words.
 TEST(SpirvBuilder, EncodesNamesDecorationsAndConstants) {
