@@ -16,7 +16,8 @@ using namespace bb::gcn;
 using bb::test::gcn::sopp;
 
 // SOPP opcodes.
-constexpr unsigned nop = 0, endpgm = 1, branch = 2, scc0 = 4, vccz = 6, execz = 8, execnz = 9;
+constexpr unsigned nop = 0, endpgm = 1, branch = 2, scc0 = 4, scc1 = 5, vccz = 6, execz = 8,
+                   execnz = 9;
 
 // A SOPP branch at instruction `at` to instruction `to`, all instructions one dword long.
 std::uint32_t br(unsigned op, int at, int to) {
@@ -138,6 +139,39 @@ TEST(GcnCfg, NestedExeczSkipsFallThrough) {
     const Cfg cfg = build_cfg(p);
     EXPECT_EQ(cfg.blocks[0].exit, Exit::next);
     EXPECT_EQ(cfg.blocks[1].exit, Exit::next);
+}
+
+TEST(GcnCfg, AnalyzesOrderDominatorsAndLoops) {
+    constexpr std::uint32_t none = CfgAnalysis::none;
+    // If/else: blocks 0 [0], 1 [1-2], 2 [3], 3 [4]; block 3 joins.
+    CfgAnalysis a = analyze(build_cfg(
+        program({br(scc0, 0, 3), sopp(nop), br(branch, 2, 4), sopp(nop), sopp(endpgm)})));
+    EXPECT_TRUE(a.reducible);
+    EXPECT_EQ(a.rpo, (std::vector<std::uint32_t>{0, 1, 2, 3}));
+    EXPECT_EQ(a.idom, (std::vector<std::uint32_t>{0, 0, 0, 0}));
+    EXPECT_EQ(a.merge_node, (std::vector<bool>{false, false, false, true}));
+    EXPECT_EQ(a.loop_header, (std::vector<bool>(4, false)));
+    EXPECT_TRUE(a.dominates(0, 3));
+    EXPECT_FALSE(a.dominates(1, 3));
+
+    // Nested loops and an unreachable block: 0: nop; 1: nop; 2: if scc1 goto 2;
+    // 3: if vccz goto 1; 4: end; 5: nop (unreachable); 6: end
+    a = analyze(build_cfg(program({sopp(nop), sopp(nop), br(scc1, 2, 2), br(vccz, 3, 1),
+                                   sopp(endpgm), sopp(nop), sopp(endpgm)})));
+    EXPECT_TRUE(a.reducible);
+    EXPECT_EQ(a.rpo, (std::vector<std::uint32_t>{0, 1, 2, 3, 4}));
+    EXPECT_EQ(a.order[5], none);
+    EXPECT_EQ(a.idom, (std::vector<std::uint32_t>{0, 0, 1, 2, 3, none}));
+    EXPECT_EQ(a.loop_header, (std::vector<bool>{false, true, true, false, false, false}));
+    EXPECT_EQ(a.merge_node, (std::vector<bool>(6, false)));
+    EXPECT_TRUE(a.dominates(1, 4));
+    EXPECT_TRUE(a.dominates(2, 2));
+    EXPECT_FALSE(a.dominates(3, 2));
+
+    // A loop with two entries: 0: if scc0 goto 2; 1: nop; 2: if scc1 goto 1; 3: end
+    a = analyze(build_cfg(program({br(scc0, 0, 2), sopp(nop), br(scc1, 2, 1), sopp(endpgm)})));
+    EXPECT_FALSE(a.reducible);
+    EXPECT_EQ(a.idom[2], 0u);
 }
 
 }  // namespace

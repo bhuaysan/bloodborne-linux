@@ -1,5 +1,7 @@
 // Control flow graph of a GCN program, from its scalar branches (Sea Islands ISA manual, "SOPP
-// Instructions"; docs/design/graphics.md, "Execz skips and live-out scalars").
+// Instructions"; docs/design/graphics.md, "Execz skips and live-out scalars"), and its analysis.
+// Dominators are computed with the iterative algorithm of K. D. Cooper, T. J. Harvey and
+// K. Kennedy, "A Simple, Fast Dominance Algorithm" (2001).
 
 #include "gpu/gcn/cfg.hpp"
 
@@ -7,6 +9,7 @@
 #include <format>
 #include <iterator>
 #include <string_view>
+#include <utility>
 
 namespace bb::gcn {
 
@@ -151,6 +154,93 @@ Cfg build_cfg(std::span<const Instruction> program) {
         }
     }
     return cfg;
+}
+
+bool CfgAnalysis::dominates(std::uint32_t a, std::uint32_t b) const {
+    for (;; b = idom[b]) {
+        if (b == a) {
+            return true;
+        }
+        if (b == 0) {  // the entry
+            return false;
+        }
+    }
+}
+
+CfgAnalysis analyze(const Cfg& cfg) {
+    const auto n = static_cast<std::uint32_t>(cfg.blocks.size());
+    CfgAnalysis a;
+    // Postorder by an iterative depth-first search from the entry.
+    std::vector<std::uint32_t> post;
+    std::vector<bool> seen(n, false);
+    std::vector<std::pair<std::uint32_t, std::size_t>> stack = {{0, 0}};  // block, next successor
+    seen[0] = true;
+    while (!stack.empty()) {
+        const std::uint32_t block = stack.back().first;
+        const auto succ = successors(cfg.blocks[block]);
+        if (stack.back().second == succ.size()) {
+            post.push_back(block);
+            stack.pop_back();
+        } else if (const std::uint32_t s = succ[stack.back().second++]; !seen[s]) {
+            seen[s] = true;
+            stack.push_back({s, 0});
+        }
+    }
+    a.rpo.assign(post.rbegin(), post.rend());
+    a.order.assign(n, CfgAnalysis::none);
+    for (std::uint32_t i = 0; i < a.rpo.size(); ++i) {
+        a.order[a.rpo[i]] = i;
+    }
+    std::vector<std::vector<std::uint32_t>> preds(n);
+    for (std::uint32_t block : a.rpo) {
+        for (std::uint32_t s : successors(cfg.blocks[block])) {
+            preds[s].push_back(block);
+        }
+    }
+
+    // The nearest common dominator of two blocks whose dominators are known so far.
+    const auto intersect = [&](std::uint32_t x, std::uint32_t y) {
+        while (x != y) {
+            while (a.order[x] > a.order[y]) {
+                x = a.idom[x];
+            }
+            while (a.order[y] > a.order[x]) {
+                y = a.idom[y];
+            }
+        }
+        return x;
+    };
+    a.idom.assign(n, CfgAnalysis::none);
+    a.idom[0] = 0;
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (std::uint32_t block : std::span(a.rpo).subspan(1)) {
+            std::uint32_t dom = CfgAnalysis::none;
+            for (std::uint32_t p : preds[block]) {
+                if (a.idom[p] != CfgAnalysis::none) {
+                    dom = dom == CfgAnalysis::none ? p : intersect(p, dom);
+                }
+            }
+            changed = changed || a.idom[block] != dom;
+            a.idom[block] = dom;
+        }
+    }
+
+    a.loop_header.assign(n, false);
+    a.merge_node.assign(n, false);
+    std::vector<std::uint32_t> forward_preds(n, 0);
+    for (std::uint32_t block : a.rpo) {
+        for (std::uint32_t s : successors(cfg.blocks[block])) {
+            if (a.order[s] > a.order[block]) {
+                a.merge_node[s] = ++forward_preds[s] > 1;
+            } else if (a.dominates(s, block)) {
+                a.loop_header[s] = true;
+            } else {
+                a.reducible = false;
+            }
+        }
+    }
+    return a;
 }
 
 }  // namespace bb::gcn

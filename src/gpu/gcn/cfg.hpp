@@ -1,4 +1,5 @@
-// Control flow graph of a GCN program (docs/design/graphics.md, "Control flow").
+// Control flow graph of a GCN program and its analysis (docs/design/graphics.md, "Control
+// flow").
 #pragma once
 
 #include <cstdint>
@@ -40,5 +41,24 @@ struct Cfg {
 // GcnError for a branch that doesn't land on an instruction, control running off the end, and the
 // unsupported branches (fork and join, s_setpc_b64, the debug branches).
 Cfg build_cfg(std::span<const Instruction> program);
+
+// Orders, dominators and loops of the blocks reachable from the entry.
+struct CfgAnalysis {
+    static constexpr std::uint32_t none = UINT32_MAX;
+
+    std::vector<std::uint32_t> rpo;    // the reachable blocks in reverse postorder
+    std::vector<std::uint32_t> order;  // each block's position in `rpo`, or `none`
+    std::vector<std::uint32_t> idom;   // immediate dominator (the entry's is itself), or `none`
+    // An edge to a block at the same or an earlier position in `rpo` is a back edge. Its target
+    // is a loop header when it dominates the edge's source; otherwise the graph is irreducible.
+    std::vector<bool> loop_header;
+    std::vector<bool> merge_node;  // more than one forward edge comes in
+    bool reducible = true;
+
+    // Whether reachable block `a` dominates reachable block `b`.
+    bool dominates(std::uint32_t a, std::uint32_t b) const;
+};
+
+CfgAnalysis analyze(const Cfg& cfg);
 
 }  // namespace bb::gcn
