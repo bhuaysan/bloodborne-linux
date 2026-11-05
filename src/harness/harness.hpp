@@ -100,7 +100,6 @@ public:
     ~Harness() override;
 
     Arena& arena() { return arena_; }
-    const std::vector<Region>& regions() const { return regions_; }
     // Puts the baseline back into every region, resets the arena and clears the stub log.
     void restore();
 
