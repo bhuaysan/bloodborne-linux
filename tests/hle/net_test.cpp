@@ -1,6 +1,7 @@
 #include "hle/net/net.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <set>
 #include <string>
@@ -82,12 +83,22 @@ TEST(HleNet, NpReportsSignedOut) {
 }
 
 TEST(HleNet, NpSizedRequestSucceeds) {
-    // As built at 0x1fb6fb5..0x1fb7047.
-    std::array<std::uint64_t, 3> block{0x18, 0, 0};
-    EXPECT_EQ(np_manager_sized_request(block.data()), 0);
-    block[0] = 0x20;
+    // Laid out like the block built at 0x1fb6fc6..0x1fb7047; the field values are arbitrary.
+    struct Block {
+        std::uint64_t size;
+        std::uint8_t byte;
+        std::int32_t value;
+        std::uint64_t qword;
+    };
+    static_assert(sizeof(Block) == 0x18);
+    static_assert(offsetof(Block, byte) == 0x8);
+    static_assert(offsetof(Block, value) == 0xc);
+    static_assert(offsetof(Block, qword) == 0x10);
+    Block block{0x18, 2, 3, 0};
+    EXPECT_EQ(np_manager_sized_request(&block), 0);
+    block.size = 0x20;
     testing::internal::CaptureStderr();
-    EXPECT_EQ(np_manager_sized_request(block.data()), 0);
+    EXPECT_EQ(np_manager_sized_request(&block), 0);
     EXPECT_NE(testing::internal::GetCapturedStderr().find("block size 0x20"), std::string::npos);
 }
 
