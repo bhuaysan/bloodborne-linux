@@ -11,7 +11,6 @@
 
 namespace {
 
-using bb::gcn::spirv_word;
 using bb::gcn::SpirvBuilder;
 using Id = SpirvBuilder::Id;
 using Op = spv::Op;
@@ -70,20 +69,12 @@ TEST(SpirvBuilder, EncodesInstructionsTypesAndInterface) {
     b.op_void(Op::OpReturnValue, {sum});
     b.end_function();
     const Id uvec4 = b.type_vector(u32, 4);
-    const Id pointer = b.type_pointer(SC::Private, uvec4);
-    const Id yes = b.constant_bool(true);
-    const Id no = b.constant_bool(false);
+    b.type_pointer(SC::Private, uvec4);
+    b.constant_bool(true);
+    b.constant_bool(false);
     const Id input = b.id();
     const Id output = b.id();
     b.entry_point(spv::ExecutionModel::Fragment, add_two, "f", {input, output});
-    EXPECT_EQ(add_two, 3u);
-    EXPECT_EQ(a, 4u);
-    EXPECT_EQ(sum, 7u);
-    EXPECT_EQ(uvec4, 8u);
-    EXPECT_EQ(pointer, 9u);
-    EXPECT_EQ(yes, 11u);
-    EXPECT_EQ(no, 12u);
-    EXPECT_EQ(input, 13u);
     const std::vector<std::uint32_t> expected = {
         0x07230203, 0x00010600, 0, 15, 0,          // header, bound 15
         head(3, 14), 0, 1,                         // OpMemoryModel Logical GLSL450
@@ -106,34 +97,6 @@ TEST(SpirvBuilder, EncodesInstructionsTypesAndInterface) {
     EXPECT_EQ(b.words(), expected);
 }
 
-// Names, decorations and constants, called out of order, land in their sections. Strings are
-// padded to whole words.
-TEST(SpirvBuilder, EncodesNamesDecorationsAndConstants) {
-    SpirvBuilder b;
-    b.memory_model(spv::AddressingModel::Logical, spv::MemoryModel::GLSL450);
-    const Id one = b.constant_f32(1.0f);  // %1 is its type
-    const Id minus_one = b.constant_i32(-1);
-    b.decorate(7, spv::Decoration::BuiltIn, {spirv_word(spv::BuiltIn::LocalInvocationIndex)});
-    b.name(7, "");
-    b.name(7, "abc");
-    b.name(7, "abcd");
-    EXPECT_EQ(one, 2u);
-    EXPECT_EQ(minus_one, 4u);
-    const std::vector<std::uint32_t> expected = {
-        head(3, 14), 0, 1,                        // OpMemoryModel
-        head(3, 5), 7, 0,                         // OpName %7 ""
-        head(3, 5), 7, 0x00636261,                // "abc" and its nul share a word
-        head(4, 5), 7, 0x64636261, 0,             // "abcd" needs a word for the nul
-        head(4, 71), 7, 11, 29,                   // OpDecorate %7 BuiltIn LocalInvocationIndex
-        head(3, 22), 1, 32,                       // %1 = OpTypeFloat 32
-        head(4, 43), 1, 2, 0x3f800000,            // %2 = OpConstant %1 1.0
-        head(4, 21), 3, 32, 1,                    // %3 = OpTypeInt 32 1
-        head(4, 43), 3, 4, 0xffffffff,            // %4 = OpConstant %3 -1
-    };
-    const auto words = b.words();
-    EXPECT_EQ(std::vector<std::uint32_t>(words.begin() + 5, words.end()), expected);
-}
-
 TEST(SpirvBuilder, SharesTypesAndConstants) {
     SpirvBuilder b;
     const Id u32 = b.type_int(32, false);
@@ -142,7 +105,7 @@ TEST(SpirvBuilder, SharesTypesAndConstants) {
     EXPECT_EQ(b.type_pointer(SC::Function, u32), b.type_pointer(SC::Function, u32));
     EXPECT_NE(b.type_pointer(SC::Private, u32), b.type_pointer(SC::Function, u32));
     EXPECT_EQ(b.constant_u32(7), b.constant_u32(7));
-    EXPECT_NE(b.constant_i32(7), b.constant_u32(7));
+    EXPECT_NE(b.constant(b.type_int(32, true), {7}), b.constant_u32(7));
     EXPECT_EQ(b.constant_bool(true), b.constant_bool(true));
     EXPECT_NE(b.constant_bool(false), b.constant_bool(true));
     EXPECT_EQ(b.type_function(u32, {u32}), b.type_function(u32, {u32}));

@@ -21,12 +21,13 @@ constexpr std::uint32_t spirv_word(Enum value) {
 }
 
 // Builds one module. Whatever the order of the calls, every instruction lands in its section of
-// the SPIR-V logical layout: capabilities, memory model, entry points, execution modes, names,
-// decorations, then types and constants in the order they were declared, then the functions.
+// the SPIR-V logical layout: capabilities, memory model, entry points, execution modes, then
+// types and constants in the order they were declared, then the functions.
 //
 // Types and constants are shared: asking twice for the same one returns the same id. So far the
-// builder has the scalar, vector, pointer and function types. Extensions, variables, aggregates
-// and images follow with the modules that need them.
+// builder has the scalar, vector, pointer and function types and scalar constants. Names,
+// decorations, extensions, variables, aggregates and images follow with the modules that need
+// them.
 //
 // Misuse (an instruction outside a block, a block that doesn't end in a terminator, a nested
 // function) throws std::logic_error. Whether the module is valid is left to spirv-val.
@@ -45,8 +46,6 @@ public:
     void entry_point(spv::ExecutionModel model, Id function, std::string_view name,
                      const std::vector<Id>& interface);
     void execution_mode(Id function, spv::ExecutionMode mode, const Words& literals = {});
-    void name(Id target, std::string_view name);
-    void decorate(Id target, spv::Decoration decoration, const Words& literals = {});
 
     // Types.
     Id type_void();
@@ -60,8 +59,6 @@ public:
     // Constants.
     Id constant_bool(bool value);
     Id constant_u32(std::uint32_t value);
-    Id constant_i32(std::int32_t value);
-    Id constant_f32(float value);
     Id constant(Id type, const Words& value);  // a scalar of any width, low-order word first
 
     // Functions. Parameters come before the first block.
@@ -95,8 +92,7 @@ private:
     Function& function(const char* what);
 
     Id next_id_ = 1;
-    Words capabilities_, memory_model_, entry_points_, execution_modes_, names_, decorations_,
-        globals_, functions_;
+    Words capabilities_, memory_model_, entry_points_, execution_modes_, globals_, functions_;
     std::map<Words, Id> shared_;  // opcode, result type and operands → id
     std::vector<std::uint32_t> declared_capabilities_;
     std::optional<Function> function_;

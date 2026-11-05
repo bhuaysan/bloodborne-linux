@@ -4,7 +4,6 @@
 #include "gpu/gcn/spirv_builder.hpp"
 
 #include <algorithm>
-#include <bit>
 #include <format>
 #include <stdexcept>
 
@@ -81,18 +80,6 @@ void SpirvBuilder::execution_mode(Id function, spv::ExecutionMode mode, const Wo
     emit(execution_modes_, spv::Op::OpExecutionMode, operands);
 }
 
-void SpirvBuilder::name(Id target, std::string_view name) {
-    Words operands{target};
-    append_string(operands, name);
-    emit(names_, spv::Op::OpName, operands);
-}
-
-void SpirvBuilder::decorate(Id target, spv::Decoration decoration, const Words& literals) {
-    Words operands{target, spirv_word(decoration)};
-    operands.insert(operands.end(), literals.begin(), literals.end());
-    emit(decorations_, spv::Op::OpDecorate, operands);
-}
-
 SpirvBuilder::Id SpirvBuilder::declare(spv::Op opcode, Id type, const Words& operands) {
     Words key{spirv_word(opcode), type};
     key.insert(key.end(), operands.begin(), operands.end());
@@ -143,14 +130,6 @@ SpirvBuilder::Id SpirvBuilder::constant_bool(bool value) {
 
 SpirvBuilder::Id SpirvBuilder::constant_u32(std::uint32_t value) {
     return constant(type_int(32, false), {value});
-}
-
-SpirvBuilder::Id SpirvBuilder::constant_i32(std::int32_t value) {
-    return constant(type_int(32, true), {static_cast<std::uint32_t>(value)});
-}
-
-SpirvBuilder::Id SpirvBuilder::constant_f32(float value) {
-    return constant(type_float(32), {std::bit_cast<std::uint32_t>(value)});
 }
 
 SpirvBuilder::Id SpirvBuilder::constant(Id type, const Words& value) {
@@ -239,8 +218,8 @@ Words SpirvBuilder::words() const {
     // Magic, version 1.6, generator 0 (unregistered), id bound, reserved schema.
     Words out{spv::MagicNumber, 0x00010600, 0, next_id_, 0};
     for (const Words* section :
-         {&capabilities_, &memory_model_, &entry_points_, &execution_modes_, &names_,
-          &decorations_, &globals_, &functions_}) {
+         {&capabilities_, &memory_model_, &entry_points_, &execution_modes_, &globals_,
+          &functions_}) {
         out.insert(out.end(), section->begin(), section->end());
     }
     return out;
