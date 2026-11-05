@@ -14,7 +14,7 @@ Three of the NIDs in scope got a name by hand-picked candidates from allowed doc
 | libkernel | `9BcDykPmo1I` | `__error` | `freebsd-intro2` | No arguments; returns the calling thread's `int*` errno (libc.prx 0x73f6 stores 9 there, libSceFios2.prx 0x2cf86 reads it, eboot 0x64c17) |
 | libkernel | `f7uOxY9mM1U` | `__stack_chk_guard` | `gcc-internals` | Data: the stack-protector canary every pinned ELF imports. libc.prx loads it in prologues and compares it in epilogues before `__stack_chk_fail` (function 0x1040: load at 0x1053, compare at 0x107e) |
 
-`src/hle/kernel/tls.cpp` implements `__tls_get_addr`, `src/hle/kernel/process.cpp` the other two (design note, TLS and Process).
+`src/hle/kernel/tls.cpp` implements `__tls_get_addr` (as `tls_block_address`), `src/hle/kernel/process.cpp` the other two (design note, TLS and Process).
 
 The other NIDs stay unnamed. The FreeBSD manual page lists and the derivation rules found no further names for them.
 

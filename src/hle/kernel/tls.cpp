@@ -66,7 +66,7 @@ public:
     }
 
     // The start of this thread's block of `module`, created on first use. Aborts as
-    // __tls_get_addr does.
+    // tls_block_address does.
     std::byte* block(std::uint64_t module, std::uint64_t offset) {
         for (const Block& b : blocks_) {
             if (b.module == module) {
@@ -202,7 +202,7 @@ void register_tls_modules(const loader::LoadSet& set) {
     }
 }
 
-void* __tls_get_addr(const void* index) {
+void* tls_block_address(const void* index) {
     std::uint64_t pair[2];
     std::memcpy(pair, index, sizeof pair);
     return thread_blocks.block(pair[0], pair[1]) + pair[1];
@@ -212,7 +212,7 @@ std::size_t live_tls_blocks() {
     return live_blocks.load(std::memory_order_relaxed);
 }
 
-// The TLS helper's name is matched (symbols/nids.csv).
-BB_HLE_FUNCTION("libkernel", "vNe1w4diLCs", __tls_get_addr);
+// The TLS helper's name __tls_get_addr is matched (symbols/nids.csv).
+BB_HLE_FUNCTION("libkernel", "vNe1w4diLCs", tls_block_address);
 
 }  // namespace bb::hle::kernel

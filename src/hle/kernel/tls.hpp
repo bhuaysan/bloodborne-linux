@@ -58,14 +58,14 @@ void register_tls_module(std::uint64_t id, const std::byte* init, const loader::
 // eboot_tls_align, no initialization image), else as register_tls_module.
 void register_tls_modules(const loader::LoadSet& set);
 
-// The TLS helper, libkernel vNe1w4diLCs: `index` points to a {module id, offset} pair of two
-// 64-bit cells, not necessarily 8-byte aligned. Returns the address at `offset` in the calling
-// thread's block of that module, which it creates on first use from the module's template (file
-// bytes copied, the rest zero). The block is freed when the thread exits. Aborts for a module
-// without a registered template or an offset outside its block.
-void* __tls_get_addr(const void* index);
+// The TLS helper, libkernel vNe1w4diLCs (matched name __tls_get_addr): `index` points to a
+// {module id, offset} pair of two 64-bit cells, not necessarily 8-byte aligned. Returns the
+// address at `offset` in the calling thread's block of that module, which it creates on first use
+// from the module's template (file bytes copied, the rest zero). The block is freed when the
+// thread exits. Aborts for a module without a registered template or an offset outside its block.
+void* tls_block_address(const void* index);
 
-// The number of blocks __tls_get_addr has created and not yet freed, over all threads.
+// The number of blocks tls_block_address has created and not yet freed, over all threads.
 std::size_t live_tls_blocks();
 
 }  // namespace bb::hle::kernel

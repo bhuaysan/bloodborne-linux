@@ -84,7 +84,7 @@ void register_synthetic() {
 
 std::byte* helper(std::uint64_t module, std::uint64_t offset) {
     const std::array<std::uint64_t, 2> pair = {module, offset};
-    return static_cast<std::byte*>(__tls_get_addr(pair.data()));
+    return static_cast<std::byte*>(tls_block_address(pair.data()));
 }
 
 // The block holds the template's file bytes followed by zeros and keeps its link alignment.
@@ -130,7 +130,7 @@ TEST(TlsHelper, ReadsAMisalignedPair) {
     alignas(8) std::array<std::byte, 20> buffer{};
     const std::uint64_t pair[2] = {synthetic_id, 0x20};
     std::memcpy(buffer.data() + 4, pair, sizeof pair);
-    EXPECT_EQ(static_cast<std::byte*>(__tls_get_addr(buffer.data() + 4)),
+    EXPECT_EQ(static_cast<std::byte*>(tls_block_address(buffer.data() + 4)),
               helper(synthetic_id, 0) + 0x20);
 }
 
@@ -155,7 +155,7 @@ TEST(TlsHelperDeathTest, AbortsForAnOffsetOutsideTheBlock) {
 
 TEST(TlsHelper, IsTheLibkernelImplementation) {
     const bb::loader::Import imp{"vNe1w4diLCs", "libkernel", "libkernel", 2 /* STT_FUNC */};
-    EXPECT_EQ(bb::hle::resolve(imp), reinterpret_cast<std::uintptr_t>(&__tls_get_addr));
+    EXPECT_EQ(bb::hle::resolve(imp), reinterpret_cast<std::uintptr_t>(&tls_block_address));
 }
 
 // ---- the game ----------------------------------------------------------------------------------
