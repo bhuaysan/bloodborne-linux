@@ -115,6 +115,19 @@ TEST(KernelAbi, OpenFlagsRoundTrip) {
     EXPECT_EQ(host_open_flags(0x20004), (Flags{O_DIRECTORY | O_NONBLOCK, 0}));
 }
 
+TEST(KernelAbi, GuestOpenFlagsDropHostLargeFile) {
+    // The kernel's __O_LARGEFILE (0x8000), which F_GETFL always reports on x86-64.
+    EXPECT_EQ(guest_open_flags(0x8000 | O_RDWR), (Flags{0x2, 0}));
+    EXPECT_EQ(guest_open_flags(0x8000 | O_NOCTTY), (Flags{0x8000, 0}));
+
+    const int fd = ::open("/dev/null", O_RDWR | O_CLOEXEC);
+    ASSERT_GE(fd, 0);
+    const int host = ::fcntl(fd, F_GETFL);
+    ::close(fd);
+    ASSERT_GE(host, 0);
+    EXPECT_EQ(guest_open_flags(host), (Flags{0x2, 0})) << std::hex << host;
+}
+
 TEST(KernelAbi, UnknownOpenFlagsAreReported) {
     // O_SHLOCK, O_EXLOCK, O_EXEC, O_TTY_INIT, an unassigned bit, and access mode 3.
     for (int bit : {0x10, 0x20, 0x40000, 0x80000, 0x200000}) {

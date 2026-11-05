@@ -75,6 +75,8 @@ Header `sys/sys/fcntl.h`. Linux values are those of glibc's `<fcntl.h>` on x86-6
 
 `fopen`'s mode parser (libc 0xebad–0xec4b) and flag conversion (libc 0x17ed0) give: `"r"` 0x0, `"w"` 0x601, `"a"` 0x209, with `+` the access mode becomes `O_RDWR`. The creation mode is 0666 (libc 0x17f0f), or 0600 for one caller. libc's `open` (libc 0x27470) hands the flags to libSceFios2, which opens files with `sceKernelOpen` (Fios 0x2d203). The eboot also calls `sceKernelOpen` directly, with flags from its own table (eboot 0x2073ab0: 0x0, 0x201, 0x202, plus 0x8).
 
+Going from host to guest, the x86-64 kernel's `__O_LARGEFILE` (0x8000) is dropped. The kernel sets it in every `fcntl(F_GETFL)` result, but glibc defines `O_LARGEFILE` as 0 for 64-bit code, so it can't be matched by name. It is not guest `O_NOCTTY` (host `O_NOCTTY` is 0x100).
+
 `O_DIRECT` translates faithfully, but Linux requires aligned buffers and offsets for it. The file I/O implementation has to drop it.
 
 ## lseek whence

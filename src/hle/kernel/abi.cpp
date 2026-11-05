@@ -114,6 +114,11 @@ int guest_errno_or_eio(int host) {
 
 thread_local int errno_cell = 0;
 
+// The x86-64 kernel's __O_LARGEFILE. It always sets it in fcntl(F_GETFL), but glibc defines
+// O_LARGEFILE as 0 for 64-bit code, so it has no table entry. Every guest file is large-file
+// capable, so the bit carries no information.
+constexpr int host_o_largefile = 0x8000;
+
 }  // namespace
 
 std::optional<int> guest_errno(int host_errno) {
@@ -156,7 +161,7 @@ Flags host_open_flags(int guest) {
 }
 
 Flags guest_open_flags(int host) {
-    return translate_open(host, false);
+    return translate_open(host & ~host_o_largefile, false);
 }
 
 Flags host_prot(int guest) {
