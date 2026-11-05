@@ -317,7 +317,7 @@ Not compared: the stack below the call, registers other than the return register
 
 ### Limits for M2
 
-- No TLS: functions that use `%fs` must not be called until M3 sets up TLS. The harness doesn't set `%fs`, so such a function would read and possibly overwrite glibc's own TLS block and thread control block, which can crash or corrupt the test process.
+- No TLS: functions that use `%fs` must not be called until M3 sets up TLS. The harness doesn't set `%fs`, so such a function would read and possibly overwrite glibc's own TLS block and thread control block, which can crash or corrupt the test process. From M3 the eboot test executables (`harness_eboot_test`, `game_eboot_test`) link the eboot's TLS reservation (`bbeboottls`), so `%fs` accesses land in it, but the harness doesn't snapshot it until the harness issue of M3 does ([m3-core-os.md](m3-core-os.md#memory)).
 - HLE implementations called from a diff test must be stateless, or keep their state in a snapshot region. Other state isn't restored between the two calls, and calls to implementations aren't compared.
 - No heap: an import such as `malloc` is a stub that returns 0. Functions that allocate wait for M3, where `malloc` comes either from an HLE allocator or from the loaded `libc.prx`. Either way its memory must come from the arena so it is compared too.
 - A crash in the original or the replacement kills the test binary. Isolating each call in a forked child can come later if it is needed.
