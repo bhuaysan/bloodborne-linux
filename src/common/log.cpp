@@ -1,5 +1,6 @@
 #include "common/log.hpp"
 
+#include <fcntl.h>
 #include <pthread.h>
 #include <unistd.h>
 
@@ -12,15 +13,20 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <system_error>
+
+#include "common/runtime_dirs.hpp"
 
 namespace bb::common {
+namespace fs = std::filesystem;
 namespace {
 
 constexpr std::array<std::string_view, 7> level_names = {"trace", "debug", "info", "warn",
                                                          "error", "fatal", "off"};
 
 struct Logger {
-    std::mutex mutex;  // serialises whole lines and guards filters
+    std::mutex mutex;  // serialises whole lines and guards file_fd and filters
+    int file_fd = -1;
     // Every filter ever set, kept because a thread may still be reading a replaced one.
     // set_log_filter is rare.
     std::vector<std::unique_ptr<const LogFilter>> filters;
@@ -143,6 +149,9 @@ void log_message(LogLevel level, std::string_view channel, std::string_view mess
     Logger& l = logger();
     const std::lock_guard lock(l.mutex);
     write_all(STDERR_FILENO, line);
+    if (l.file_fd >= 0) {
+        write_all(l.file_fd, line);
+    }
 }
 
 void log_fatal(std::string_view channel, std::string_view message) {
@@ -151,8 +160,45 @@ void log_fatal(std::string_view channel, std::string_view message) {
     std::abort();
 }
 
+fs::path open_log_file(const RuntimeDirs& dirs) {
+    const fs::path dir = dirs.ensure(dirs.logs());
+    const std::time_t now = std::time(nullptr);
+    tm utc{};
+    ::gmtime_r(&now, &utc);
+    const fs::path path =
+        dir / std::format("{:04}{:02}{:02}T{:02}{:02}{:02}Z-{}.log", utc.tm_year + 1900,
+                          utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec,
+                          ::getpid());
+    const int fd =
+        ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) {
+        throw fs::filesystem_error("cannot create log file", path,
+                                   std::error_code(errno, std::generic_category()));
+    }
+    Logger& l = logger();
+    const std::lock_guard lock(l.mutex);
+    if (l.file_fd >= 0) {
+        ::close(l.file_fd);
+    }
+    l.file_fd = fd;
+    return path;
+}
+
+void close_log_file() {
+    Logger& l = logger();
+    const std::lock_guard lock(l.mutex);
+    if (l.file_fd >= 0) {
+        ::close(l.file_fd);
+        l.file_fd = -1;
+    }
+}
+
 void log_flush() {
-    const std::lock_guard lock(logger().mutex);
+    Logger& l = logger();
+    const std::lock_guard lock(l.mutex);
+    if (l.file_fd >= 0) {
+        ::fdatasync(l.file_fd);
+    }
 }
 
 void set_thread_name(std::string_view name) {

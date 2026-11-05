@@ -1,12 +1,13 @@
-// The runtime's logger: levels, channels, the thread name on every line, output to stderr
-// (docs/design/m3-core-os.md, "Logging").
+// The runtime's logger: levels, channels, the thread name on every line, output to stderr and to
+// one file per run (docs/design/m3-core-os.md, "Logging").
 //
 // Channels are dotted names: "loader", "hle.<library>", "game". Every line is written with one
-// write(2) under one lock, so lines from different threads never interleave and
+// write(2) per output under one lock, so lines from different threads never interleave and
 // nothing is buffered in the process: a line that log() returned from is in the kernel, also
 // after _exit or abort. Not async-signal-safe.
 #pragma once
 
+#include <filesystem>
 #include <format>
 #include <optional>
 #include <string>
@@ -15,6 +16,8 @@
 #include <vector>
 
 namespace bb::common {
+
+class RuntimeDirs;
 
 // In increasing severity. A channel at level L shows L and everything above it. `fatal` is
 // always shown; `off` shows nothing else.
@@ -56,8 +59,8 @@ void set_log_filter_from_environment();
 // Whether a line at `level` on `channel` would be written. Cheap enough for every call.
 bool log_enabled(LogLevel level, std::string_view channel);
 
-// Writes one line, `<UTC hh:mm:ss.mmm> <level> [<thread>] <channel>: <message>`, to stderr if
-// the filter lets it through. A newline in `message` stays part of the line.
+// Writes one line, `<UTC hh:mm:ss.mmm> <level> [<thread>] <channel>: <message>`, to stderr and
+// the log file, if the filter lets it through. A newline in `message` stays part of the line.
 void log_message(LogLevel level, std::string_view channel, std::string_view message);
 
 // Formats only when the line is written.
@@ -72,7 +75,15 @@ void log(LogLevel level, std::string_view channel, std::format_string<Args...> f
 // Logs at fatal level, flushes and aborts.
 [[noreturn]] void log_fatal(std::string_view channel, std::string_view message);
 
-// Waits for a line that another thread is writing. Call it before _exit and abort.
+// Creates dirs.logs() and opens `<UTC yyyymmddThhmmssZ>-<pid>.log` in it (mode 0600, never
+// overwritten) as the log file, closing any previous one. Returns its path. Throws
+// std::filesystem::filesystem_error when the directory or the file can't be created.
+std::filesystem::path open_log_file(const RuntimeDirs& dirs);
+// Closes the log file. Lines go to stderr only afterwards.
+void close_log_file();
+
+// Waits for a line that another thread is writing and syncs the log file to disk. Call it before
+// _exit and abort.
 void log_flush();
 
 // Names the calling thread in the log and, cut to 15 bytes, for the host (pthread_setname_np).

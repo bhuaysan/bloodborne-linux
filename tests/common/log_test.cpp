@@ -1,6 +1,7 @@
 #include "common/log.hpp"
 
 #include <cstdlib>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <regex>
@@ -11,11 +12,16 @@
 #include <vector>
 
 #include <pthread.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 
+#include "common/runtime_dirs.hpp"
+
 namespace {
 
+namespace fs = std::filesystem;
 using bb::common::LogFilter;
 using bb::common::LogLevel;
 
@@ -70,39 +76,81 @@ TEST(LogLevel, NamesRoundTrip) {
     EXPECT_EQ(bb::common::parse_log_level("Info"), std::nullopt);
 }
 
-// Tests that change the process's logger: the filter and BB_LOG are restored afterwards.
+// Tests that change the process's logger: XDG_STATE_HOME points into a fresh temporary directory
+// (HOME too), and the filter, the log file and the environment are restored afterwards.
 class LogTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        const char* value = std::getenv("BB_LOG");
-        saved_ = value ? std::optional<std::string>(value) : std::nullopt;
+        std::string templ = (fs::temp_directory_path() / "bb-log-test-XXXXXX").string();
+        ASSERT_NE(::mkdtemp(templ.data()), nullptr);
+        tmp_ = fs::canonical(templ);
+        for (const char* key : {"HOME", "XDG_STATE_HOME", "BB_LOG"}) {
+            const char* value = std::getenv(key);
+            saved_[key] = value ? std::optional<std::string>(value) : std::nullopt;
+        }
+        ::setenv("HOME", (tmp_ / "home").c_str(), 1);
+        ::setenv("XDG_STATE_HOME", (tmp_ / "state").c_str(), 1);
     }
     void TearDown() override {
+        bb::common::close_log_file();
         bb::common::set_log_filter(LogFilter{});
-        if (saved_) {
-            ::setenv("BB_LOG", saved_->c_str(), 1);
-        } else {
-            ::unsetenv("BB_LOG");
+        for (const auto& [key, value] : saved_) {
+            if (value) {
+                ::setenv(key.c_str(), value->c_str(), 1);
+            } else {
+                ::unsetenv(key.c_str());
+            }
+        }
+        if (!tmp_.empty()) {
+            fs::remove_all(tmp_);
         }
     }
 
-    std::optional<std::string> saved_;
+    static std::string read(const fs::path& path) {
+        std::ifstream in(path);
+        std::stringstream s;
+        s << in.rdbuf();
+        return s.str();
+    }
+
+    fs::path tmp_;
+    std::map<std::string, std::optional<std::string>> saved_;
 };
 
-TEST_F(LogTest, WritesLevelThreadAndChannel) {
+TEST_F(LogTest, FileLandsInTheStateDirectory) {
+    const auto dirs = bb::common::RuntimeDirs::from_environment("default", {});
+    const fs::path path = bb::common::open_log_file(dirs);
+    EXPECT_EQ(path.parent_path(), tmp_ / "state" / "bloodborne-linux" / "logs");
+    EXPECT_TRUE(std::regex_match(path.filename().string(),
+                                 std::regex("[0-9]{8}T[0-9]{6}Z-" + std::to_string(::getpid()) +
+                                            "\\.log")))
+        << path;
+    struct stat st {};
+    ASSERT_EQ(::stat(path.c_str(), &st), 0);
+    EXPECT_EQ(st.st_mode & 0777, 0600U);
+
     testing::internal::CaptureStderr();
     bb::common::set_thread_name("log-test-main");
     bb::common::log(LogLevel::warn, "loader", "segment {:#x}", 0x400000);
     bb::common::log(LogLevel::debug, "loader", "hidden");
     bb::common::log_flush();
     const std::string err = testing::internal::GetCapturedStderr();
+
+    const std::string file = read(path);
+    EXPECT_EQ(file, err);
     EXPECT_TRUE(std::regex_match(
-        err, std::regex("[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3} warn \\[log-test-main\\] "
-                        "loader: segment 0x400000\n")))
-        << err;
+        file, std::regex("[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3} warn \\[log-test-main\\] "
+                         "loader: segment 0x400000\n")))
+        << file;
     char host[16] = {};
     ASSERT_EQ(::pthread_getname_np(::pthread_self(), host, sizeof host), 0);
     EXPECT_STREQ(host, "log-test-main");
+
+    bb::common::close_log_file();
+    testing::internal::CaptureStderr();
+    bb::common::log(LogLevel::error, "loader", "after close");
+    EXPECT_NE(testing::internal::GetCapturedStderr().find("after close"), std::string::npos);
+    EXPECT_EQ(read(path), file);
 }
 
 TEST_F(LogTest, FilterComesFromTheEnvironment) {
@@ -136,6 +184,8 @@ TEST_F(LogTest, UnnamedThreadShowsItsId) {
 }
 
 TEST_F(LogTest, LinesFromTwoThreadsNeverInterleave) {
+    const auto dirs = bb::common::RuntimeDirs::from_environment("default", {});
+    const fs::path path = bb::common::open_log_file(dirs);
     constexpr int lines = 2000;
     const std::string payload(300, 'x');
     auto writer = [&](const char* name) {
@@ -149,8 +199,9 @@ TEST_F(LogTest, LinesFromTwoThreadsNeverInterleave) {
     std::thread b(writer, "writer-b");
     a.join();
     b.join();
+    testing::internal::GetCapturedStderr();
 
-    std::istringstream in(testing::internal::GetCapturedStderr());
+    std::istringstream in(read(path));
     const std::regex line_re("[0-9:.]{12} info \\[(writer-[ab])\\] game: ([0-9]+) x{300}");
     std::map<std::string, int> next;
     std::string line;
