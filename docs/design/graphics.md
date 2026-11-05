@@ -178,6 +178,8 @@ Each draw or dispatch passes one push constant: a buffer device address pointing
 - `address_bias`, so that device address = guest GPU address + bias;
 - `code_address`, the guest address of the program, for `s_getpc_b64`.
 
+The layout is `user_data` at offset 0, `address_bias` at 64 and `code_address` at 72, 80 bytes in all (constants in `tests/gpu/runner/compute_runner.hpp` until the translator, item 6c, owns them). The shader reads it through `PhysicalStorageBuffer` pointers.
+
 For the first wave, the guest's GPU-visible memory is **one contiguous imported range**, so a single bias is enough. The execution tests allocate one buffer and set the bias to match. A page table can replace the bias later without changing the shaders' view.
 
 ### Resources and memory
@@ -308,7 +310,10 @@ Four levels. The first three need neither a running game nor a GPU.
      - Without an instance, without lavapipe or without one of these, it returns nothing and `why` names what is missing; the tests then skip with that text. While the filter is `*lvp*`, the loader fails `vkCreateInstance` when lavapipe is missing, even with other drivers installed, so that failure is reported as a missing lavapipe driver; under another filter from the environment it is reported as a missing Vulkan instance. Two tests point `VK_DRIVER_FILES` at a missing file to check both wordings.
      - `info()` reports the device and driver names, the subgroup size with its range, and the 32-bit float controls (denormals preserved or flushed, RTE and RTZ rounding, signed zero, Inf and NaN preserved). Lavapipe from Mesa 26.2 (LLVM 22, 256 bits) reports subgroup size 8 (8 to 8), and neither denormal mode, so the denormal tests will always skip there.
      - Mesa allocates one-time state under `pthread_once` and never frees it, and the loader unloads the driver before LeakSanitizer runs, so the frames have no module name. The runner defines `__lsan_default_suppressions()` with `leak:pthread_once` for the binaries that link it.
-     - Guest memory, the draw block and running a module follow in the issue's second part, and the check of the test programs' words against their source in its third.
+     - `guest_memory(base, size)` allocates the guest's GPU-visible memory: one zeroed, host-visible and host-coherent buffer with a device address, at guest address `base`. It returns the mapped bytes.
+     - `run(spirv, draw, groups)` writes the draw block into a buffer of its own, with `address_bias` = device address of the guest memory − `base` (modulo 2^64). Its device address is the only push constant, 8 bytes, and there are no descriptor sets. It builds the pipeline (entry point `main`), dispatches, and waits on a fence (30 s), behind a barrier from shader writes to host reads.
+     - The test module is written with `SpirvBuilder` and checked with `spirv-val` when it is installed. It reads the draw block like a translated program: the guest addresses of its output and input come from user data, it adds a user-data value to every input word, and invocation 0 writes `SubgroupSize` and `code_address`. The guest addresses lie above 2^32, so the high words count.
+     - The check of the test programs' words against their source follows in the issue's third part.
    - The exact wave-64 mode runs locally on an AMD GPU.
 4. **Replays** (later wave, after M3):
    - Captures of real frames, as PM4 streams plus the memory they reference, go to `analysis/captures/`. They come from our runtime, or as reference frames from an emulator run on the game with call logging off (see [clean-room.md](../clean-room.md#code-sources)).
