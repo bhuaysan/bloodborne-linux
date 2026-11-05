@@ -22,17 +22,13 @@ namespace {
 using detail::Imm;
 using detail::OpInfo;
 
-constexpr std::array<float, 8> float_constants = {0.5f, -0.5f, 1.0f, -1.0f,
-                                                  2.0f, -2.0f, 4.0f, -4.0f};
-
 // `value` of the float inline constant with code `c`: the f32 pattern, or on a 64-bit operand the
 // high dword of the f64 (its low dword is 0 for every float constant).
 std::uint32_t float_constant(unsigned c, unsigned dwords) {
-    const float f = float_constants[c - 240];
-    if (dwords == 2) {
-        return static_cast<std::uint32_t>(std::bit_cast<std::uint64_t>(double{f}) >> 32);
-    }
-    return std::bit_cast<std::uint32_t>(f);
+    constexpr std::array<double, 8> numbers = {0.5, -0.5, 1.0, -1.0, 2.0, -2.0, 4.0, -4.0};
+    const double d = numbers[c - 240];
+    return dwords == 2 ? static_cast<std::uint32_t>(std::bit_cast<std::uint64_t>(d) >> 32)
+                       : std::bit_cast<std::uint32_t>(static_cast<float>(d));
 }
 
 std::uint32_t bits(std::uint32_t word, unsigned low, unsigned count) {
@@ -126,9 +122,8 @@ private:
             return {OperandKind::literal, dwords, c16, literal()};
         }
         if (c >= 128 && c <= 208) {
-            auto value = c <= 192 ? static_cast<std::int32_t>(c - 128)
-                                  : -static_cast<std::int32_t>(c - 192);
-            return {OperandKind::constant, dwords, c16, static_cast<std::uint32_t>(value)};
+            const std::uint32_t value = c <= 192 ? c - 128 : 192 - c;  // 0 to 64, -1 to -16
+            return {OperandKind::constant, dwords, c16, value};
         }
         if (c >= 240 && c <= 247) {
             return {OperandKind::constant, dwords, c16, float_constant(c, dwords)};
@@ -216,16 +211,15 @@ private:
     }
 
     void smrd_operands() {
-        const std::uint32_t w = word_;
         if (info_->dst) {
-            add_dst(scalar(bits(w, 15, 7), info_->dst));
+            add_dst(scalar(bits(word_, 15, 7), info_->dst));
         }
         if (info_->src0) {
-            add_src(scalar(bits(w, 9, 6) * 2, info_->src0));
+            add_src(scalar(bits(word_, 9, 6) * 2, info_->src0));
         }
         if (info_->src1) {
-            const unsigned offset = bits(w, 0, 8);
-            if (bits(w, 8, 1)) {
+            const unsigned offset = bits(word_, 0, 8);
+            if (bits(word_, 8, 1)) {
                 add_src(imm(OperandKind::offset, offset));
             } else if (offset >= 128 && offset != code::literal) {
                 fail(std::format("invalid SMRD offset register {}", offset));

@@ -84,10 +84,13 @@ Table make_sopk() {
 
 Table make_sop1() {
     Table t;
-    constexpr std::array<const char*, 5> moves = {"mov", "cmov", "not", "wqm", "brev"};
-    for (unsigned i = 0; i < moves.size(); ++i) {
-        set(t, 3 + 2 * i, std::string("s_") + moves[i] + "_b32", 1, 1);
-        set(t, 4 + 2 * i, std::string("s_") + moves[i] + "_b64", 2, 2);
+    // The b32 form at `op` and the b64 form at `op + 1`, with operands of 1 and 2 dwords.
+    constexpr std::array<std::pair<unsigned, const char*>, 8> pairs = {{
+        {3, "mov"}, {5, "cmov"}, {7, "not"}, {9, "wqm"}, {11, "brev"},
+        {44, "quadmask"}, {46, "movrels"}, {48, "movreld"}}};
+    for (auto [op, name] : pairs) {
+        set(t, op, std::string("s_") + name + "_b32", 1, 1);
+        set(t, op + 1, std::string("s_") + name + "_b64", 2, 2);
     }
     constexpr std::array<const char*, 5> counts = {"bcnt0", "bcnt1", "ff0", "ff1", "flbit"};
     for (unsigned i = 0; i < counts.size(); ++i) {
@@ -109,12 +112,6 @@ Table make_sop1() {
     for (unsigned i = 0; i < bitwise.size(); ++i) {
         set(t, 36 + i, std::string("s_") + bitwise[i] + "_saveexec_b64", 2, 2);
     }
-    set(t, 44, "s_quadmask_b32", 1, 1);
-    set(t, 45, "s_quadmask_b64", 2, 2);
-    set(t, 46, "s_movrels_b32", 1, 1);
-    set(t, 47, "s_movrels_b64", 2, 2);
-    set(t, 48, "s_movreld_b32", 1, 1);
-    set(t, 49, "s_movreld_b64", 2, 2);
     set(t, 50, "s_cbranch_join", 0, 1);
     set(t, 51, "s_mov_regrd_b32", 1, 1);
     set(t, 52, "s_abs_i32", 1, 1);
