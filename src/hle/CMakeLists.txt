@@ -16,3 +16,4 @@ add_library(bbhle OBJECT hle.cpp stub_entry.S ${CMAKE_CURRENT_BINARY_DIR}/nid_ta
     kernel/abi.cpp)
 target_link_libraries(bbhle PUBLIC bbloader PRIVATE bb_warnings)
 add_subdirectory(net)
+add_subdirectory(system)
