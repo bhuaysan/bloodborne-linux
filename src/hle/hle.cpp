@@ -17,6 +17,7 @@
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <vector>
 
 #include "hle/nid_table.hpp"
 
@@ -25,7 +26,7 @@ extern "C" void bb_hle_stub_entry();  // stub_entry.S
 namespace bb::hle {
 namespace {
 
-constexpr std::size_t thunk_size = 24, data_block_size = 4096;
+constexpr std::size_t thunk_size = 24;
 
 void* map(std::size_t size, int prot) {
     void* p = mmap(nullptr, size, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -76,7 +77,7 @@ struct Registry {
     std::unordered_map<std::string, std::uintptr_t> resolved;  // key(library, nid)
     std::deque<StubInfo> stubs;                                // stable addresses
     ThunkPages thunks;
-    std::size_t data_blocks = 0;
+    std::vector<DataBlock> data_blocks;
     std::atomic<StubObserver*> observer = nullptr;
 };
 
@@ -124,9 +125,9 @@ std::uintptr_t resolve(const loader::Import& imp) {
     if (auto it = r.impls.find(k); it != r.impls.end()) {
         address = reinterpret_cast<std::uintptr_t>(it->second);
     } else if (imp.type == loader::stt_object) {
-        address = reinterpret_cast<std::uintptr_t>(
-            map(data_block_size, PROT_READ | PROT_WRITE));
-        ++r.data_blocks;
+        auto* block = static_cast<std::byte*>(map(data_block_size, PROT_READ | PROT_WRITE));
+        r.data_blocks.push_back({imp.library, imp.nid, block});
+        address = reinterpret_cast<std::uintptr_t>(block);
     } else {
         const StubInfo& stub =
             r.stubs.emplace_back(imp.library, imp.module, imp.nid, nid_name(imp.nid));
@@ -170,7 +171,13 @@ void on_stub_call(const StubInfo* stub, const std::uint64_t args[6]) {
 Counts counts() {
     Registry& r = registry();
     const std::lock_guard lock(r.mutex);
-    return {r.stubs.size(), r.data_blocks};
+    return {r.stubs.size(), r.data_blocks.size()};
+}
+
+std::vector<DataBlock> data_blocks() {
+    Registry& r = registry();
+    const std::lock_guard lock(r.mutex);
+    return r.data_blocks;
 }
 
 }  // namespace bb::hle

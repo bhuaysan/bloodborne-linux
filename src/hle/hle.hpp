@@ -6,10 +6,14 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "loader/dynamic.hpp"
 
 namespace bb::hle {
+
+// The size of the zero-filled block that resolve() maps for each data import.
+inline constexpr std::size_t data_block_size = 4096;
 
 // One stubbed function import. Lives as long as the process; its thunk passes its address.
 struct StubInfo {
@@ -56,6 +60,15 @@ struct Counts {
     std::size_t stubs, data_blocks;
 };
 Counts counts();
+
+// A data block that resolve() created, data_block_size bytes at `data`.
+struct DataBlock {
+    std::string library, nid;
+    std::byte* data;
+};
+// A copy of the list of data blocks, in creation order. The differential test harness takes them
+// into its snapshot.
+std::vector<DataBlock> data_blocks();
 
 // Registers a function at static initialization (docs/design/runtime.md, "Static
 // registration"). Use BB_HLE_FUNCTION.

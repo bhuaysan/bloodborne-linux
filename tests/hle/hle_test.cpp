@@ -96,7 +96,7 @@ TEST(Hle, DataBlockIsZeroFilledAndCached) {
     auto* a = reinterpret_cast<unsigned char*>(resolve(object("dataBlockAA")));
     auto* b = reinterpret_cast<unsigned char*>(resolve(object("dataBlockBB")));
     EXPECT_NE(a, b);
-    for (std::size_t i = 0; i < 4096; ++i) {
+    for (std::size_t i = 0; i < data_block_size; ++i) {
         ASSERT_EQ(a[i], 0) << i;
     }
     a[4095] = 1;  // writable to the end
@@ -104,6 +104,14 @@ TEST(Hle, DataBlockIsZeroFilledAndCached) {
     EXPECT_EQ(reinterpret_cast<unsigned char*>(resolve(object("dataBlockAA"))), a);
     EXPECT_EQ(counts().data_blocks, before.data_blocks + 2);
     EXPECT_EQ(counts().stubs, before.stubs);
+    const std::vector<DataBlock> blocks = data_blocks();
+    ASSERT_EQ(blocks.size(), before.data_blocks + 2);
+    const DataBlock& last_a = blocks[blocks.size() - 2];
+    EXPECT_EQ(last_a.library, "libTest");
+    EXPECT_EQ(last_a.nid, "dataBlockAA");
+    EXPECT_EQ(last_a.data, reinterpret_cast<std::byte*>(a));
+    EXPECT_EQ(blocks.back().nid, "dataBlockBB");
+    EXPECT_EQ(blocks.back().data, reinterpret_cast<std::byte*>(b));
 }
 
 TEST(Hle, RegisteredFunctionWinsOverStub) {
