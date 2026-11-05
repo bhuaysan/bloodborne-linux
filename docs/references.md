@@ -11,6 +11,10 @@ Every external source consulted for this project is listed here. Off-limits sour
 | PyGhidra 3.1.0 and JPype 1.5.2 (bundled with Ghidra) | Apache-2.0 | Running headless Ghidra scripts in Python 3 (`tools/ghidra-sync`) |
 | [actions/checkout](https://github.com/actions/checkout) v7.0.1 (pinned by commit SHA) | MIT | Checking out the repository in the GitHub Actions CI (`.github/workflows/ci.yml`) |
 | GNU binutils (`objdump`, `readelf`) | GPL-3.0 | Quick inspection of ELF files |
+| [CMake](https://cmake.org/cmake/help/latest/) 4.3 (installed) and its documentation | BSD-3-Clause | Build system; `OBJECT` and `STATIC` library semantics, `$<COMPILE_ONLY:…>` (3.27), `add_test` and the `GoogleTest` module's `gtest_discover_tests` (`CMakeLists.txt`, `docs/design/runtime.md`) |
+| [Ninja](https://ninja-build.org/) 1.13 (installed) | Apache-2.0 | Build backend of the CMake presets |
+| [GoogleTest](https://github.com/google/googletest) 1.17 (installed `gtest-devel`) | BSD-3-Clause | Unit test framework; `GTEST_SKIP()`, fixtures and `gtest_main` (`tests/`, `docs/design/runtime.md`) |
+| GCC 16.2 (installed) | GPL-3.0+ with runtime exception | Compiler; `-fsanitize=address,undefined` in the `debug` preset (`CMakeLists.txt`) |
 | GNU coreutils 9.10 `sha256sum` (installed) | GPL-3.0+ | Expected digests for the SHA-256 unit tests (`tests/common/sha256_test.cpp`) |
 | libelf (elfutils) | LGPL-3.0+ / GPL-2.0+ | Cross-check of the SysV hash function used by `tools/elf2std` (test vectors) |
 | [Linux man-pages](https://www.kernel.org/doc/man-pages/) 6.13 (installed) | Various free licenses | Page names of sections 2 and 3 as NID candidate names and as input to the derivation rules (`tools/nidmatch/syscandidates.py`, `derive.py`); `mmap(2)` (`MAP_FIXED_NOREPLACE`, `MAP_FIXED`) and `mprotect(2)` semantics for the loader (`docs/design/runtime.md`) |
@@ -30,3 +34,5 @@ Every external source consulted for this project is listed here. Off-limits sour
 | [Keys, PS4 Developer wiki](https://www.psdevwiki.com/ps4/Keys) (revision 297425, GFDL 1.2), section "PS4 NID default_suffix" only | That NIDs are SHA-1 over the symbol name with a suffix appended, and the suffix value (`docs/formats/nid.md`, `tools/common/nid.py`). Byte order and encoding are our own findings | 2026-11-04 |
 | Ghidra API documentation 12.1.4 (`docs/GhidraAPI_javadoc.zip`, shipped with Ghidra), classes `CParser`, `StandAloneDataTypeManager`, `DataTypeManager`, `Structure`, `Composite` and `DataTypeConflictHandler` | Parsing `symbols/types/*.h` into a scratch data type manager and copying the types into a program (`tools/ghidra-sync`) | 2026-11-04 |
 | [FIPS 180-4, Secure Hash Standard](https://doi.org/10.6028/NIST.FIPS.180-4) (NIST, 2015) | SHA-256: constants, padding, message schedule and compression (`src/common/sha256.cpp`) | 2026-11-04 |
+| [UndefinedBehaviorSanitizer, Clang documentation](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html) (in-progress docs) | `-fsanitize=function` is part of the `undefined` group, and the `-fno-sanitize=<check>` form (`CMakeLists.txt`, `docs/design/runtime.md`) | 2026-11-05 |
+| [GCC Instrumentation Options](https://gcc.gnu.org/onlinedocs/gcc/Instrumentation-Options.html) (current docs) | The checks in GCC's `-fsanitize=undefined`, which have no function-type check (`docs/design/runtime.md`) | 2026-11-05 |

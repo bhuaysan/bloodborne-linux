@@ -292,7 +292,7 @@ Not compared: the stack below the call, registers other than the return register
 - A crash in the original or the replacement kills the test binary. Isolating each call in a forked child can come later if it is needed.
 - The original code isn't instrumented by AddressSanitizer. Only the replacement and the harness are.
 - AddressSanitizer's stack-use-after-return detection, on by default, moves an instrumented function's locals into fake stack frames on the heap. Pointers to the replacement's locals would then not look like stack pointers and would compare unequal. The harness turns it off with `__asan_default_options()` returning `detect_stack_use_after_return=0`, defined in the harness tests' own main (`tests/harness/main.cpp`, instead of `gtest_main`) so the linker keeps it.
-- With clang, `-fsanitize=undefined` includes `-fsanitize=function`, which reads a signature word next to the target of every indirect call. Game code and stub thunks have none, so clang builds add `-fno-sanitize=function`. GCC has no such check.
+- With clang, `-fsanitize=undefined` includes `-fsanitize=function`, which checks that an indirect call goes through a function pointer of the right type. The game code and the stub thunks were not built by clang, so the check has nothing to compare against; clang builds turn it off with `-fno-sanitize=function`. How clang implements the check is not documented, and no clang build has been tested yet (CI and local builds use GCC). GCC's `-fsanitize=undefined` has no such check.
 
 ## Tools
 
