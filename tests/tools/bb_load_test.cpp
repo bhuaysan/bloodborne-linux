@@ -145,6 +145,17 @@ std::vector<ModuleOutput> parse(const std::string& output, std::string& last) {
     return modules;
 }
 
+// Checks a "<export> <hle> <stub> <unused>" binding of a library whose imports all go to HLE:
+// none exported or unused, `total` in all, at least `implemented` of them implemented.
+testing::AssertionResult hle_at_least(const std::string& binding, int total, int implemented) {
+    int exported = -1, hle = -1, stub = -1, unused = -1;
+    std::istringstream(binding) >> exported >> hle >> stub >> unused;
+    if (exported == 0 && unused == 0 && hle + stub == total && hle >= implemented) {
+        return testing::AssertionSuccess();
+    }
+    return testing::AssertionFailure() << "binding \"" << binding << "\"";
+}
+
 TEST(BbLoadGame, PrintsTheLoadSet) {
     BB_REQUIRE_GAME(game);
     Result r = run(bb_load + " --game-dir " + quote(game.string()));
@@ -172,8 +183,10 @@ TEST(BbLoadGame, PrintsTheLoadSet) {
     // 14 of the libc imports are never referenced.
     EXPECT_EQ(modules[0].bindings["libc"], "202 0 0 14");
     EXPECT_EQ(modules[0].bindings["libSceFios2"], "17 0 0 0");
-    // src/hle/kernel implements some of the libkernel imports.
-    EXPECT_EQ(modules[0].bindings["libkernel"], "0 16 64 0");
+    // All 80 libkernel imports go to HLE, at least 16 of them to implementations in
+    // src/hle/kernel. Bounds rather than exact numbers, so that each new kernel function
+    // doesn't edit this line.
+    EXPECT_TRUE(hle_at_least(modules[0].bindings["libkernel"], 80, 16));
     // src/hle/net implements sceNetInit and sceNetPoolCreate.
     EXPECT_EQ(modules[0].bindings["libSceNet"], "0 2 33 0");
 
@@ -187,7 +200,13 @@ TEST(BbLoadGame, PrintsTheLoadSet) {
     EXPECT_EQ(modules[2].header.back(), "reloc      R_X86_64_DTPMOD64 14");
     EXPECT_EQ(modules[2].imports, "imports    79 in 2 libraries");
     EXPECT_EQ(modules[2].bindings["libSceFios2"], "8 0 0 0");
-    EXPECT_EQ(last, "hle        468 stubs, 3 data blocks");
+    // At most 468 stubs across the load set; each new HLE function lowers the number.
+    std::string word;
+    int stubs = -1;
+    std::istringstream(last) >> word >> stubs;
+    EXPECT_EQ(word, "hle") << last;
+    EXPECT_LE(stubs, 468) << last;
+    EXPECT_TRUE(last.ends_with(" stubs, 3 data blocks")) << last;
 }
 
 }  // namespace
