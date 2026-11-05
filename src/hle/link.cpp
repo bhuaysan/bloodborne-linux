@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "hle/hle.hpp"
+#include "hle/kernel/tls.hpp"
 #include "loader/relocate.hpp"
 
 namespace bb::hle {
@@ -33,6 +34,7 @@ void link(loader::LoadSet& set) {
     for (loader::LoadedModule& m : set.modules) {
         loader::relocate(m.image, resolve, m.id);
     }
+    kernel::register_tls_modules(set);
 }
 
 }  // namespace bb::hle

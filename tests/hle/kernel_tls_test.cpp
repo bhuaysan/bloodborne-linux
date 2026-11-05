@@ -12,7 +12,10 @@
 #include <gtest/gtest.h>
 
 #include "hle/hle.hpp"
+#include "hle/link.hpp"
+#include "loader/load_set.hpp"
 #include "loader/relocate.hpp"
+#include "support/game.hpp"
 
 namespace {
 
@@ -153,6 +156,38 @@ TEST(TlsHelperDeathTest, AbortsForAnOffsetOutsideTheBlock) {
 TEST(TlsHelper, IsTheLibkernelImplementation) {
     const bb::loader::Import imp{"vNe1w4diLCs", "libkernel", "libkernel", 2 /* STT_FUNC */};
     EXPECT_EQ(bb::hle::resolve(imp), reinterpret_cast<std::uintptr_t>(&__tls_get_addr));
+}
+
+// ---- the game ----------------------------------------------------------------------------------
+
+// libc.prx (module 3) has 0x220 file bytes in a 0x4a0-byte block, libSceFios2.prx (module 2) none
+// in 0x40 bytes. The eboot's template fits the reservation.
+TEST(TlsGame, HelperBlocksHoldTheLoadSetsTemplates) {
+    BB_REQUIRE_GAME(game);
+    bb::loader::LoadSet set = bb::loader::map_load_set(game);
+    bb::hle::link(set);  // registers the TLS templates
+    for (bb::loader::LoadedModule& m : set.modules) {
+        m.image.finalize_protection();
+    }
+    const bb::loader::TlsTemplate& eboot = *set.modules[0].image.tls;
+    EXPECT_EQ(eboot.mem_size, eboot_tls_size);
+    EXPECT_EQ(eboot.align, eboot_tls_align);
+    EXPECT_EQ(eboot.file_size, 0U);
+
+    const bb::loader::LoadedModule& libc = set.modules[2];
+    ASSERT_EQ(libc.id, 3U);
+    const bb::loader::TlsTemplate& tls = *libc.image.tls;
+    ASSERT_EQ(tls.file_size, 0x220U);
+    const auto* init = reinterpret_cast<const std::byte*>(libc.image.runtime(tls.link_addr));
+    std::thread([&] {
+        const std::byte* block = helper(libc.id, 0);
+        EXPECT_EQ(std::memcmp(block, init, tls.file_size), 0);
+        EXPECT_TRUE(std::all_of(block + tls.file_size, block + tls.mem_size,
+                                [](std::byte b) { return b == std::byte{0}; }));
+        const std::byte* fios2 = helper(2, 0x3f) - 0x3f;
+        EXPECT_TRUE(
+            std::all_of(fios2, fios2 + 0x40, [](std::byte b) { return b == std::byte{0}; }));
+    }).join();
 }
 
 }  // namespace

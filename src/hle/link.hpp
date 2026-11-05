@@ -9,7 +9,9 @@ namespace bb::hle {
 // Registers every export of every module of `set` with register_export, those of the module named
 // libc a second time under libSceLibcInternal unless a module exports the NID there itself. Then
 // relocates each module with resolve() and its module id, so imports bind to the exports first.
-// Throws as register_export and loader::relocate do; the images are then unusable.
+// Last registers the modules' TLS templates with kernel::register_tls_modules.
+// Throws as register_export, loader::relocate and register_tls_modules do; the images are then
+// unusable.
 void link(loader::LoadSet& set);
 
 }  // namespace bb::hle
