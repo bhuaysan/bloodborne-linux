@@ -9,6 +9,10 @@
 
 #include <gtest/gtest.h>
 
+#include "loader/image.hpp"
+#include "loader/relocate.hpp"
+#include "support/game.hpp"
+
 namespace {
 
 using namespace bb::hle;
@@ -124,6 +128,35 @@ TEST(Hle, LogsWithoutObserver) {
     const std::string log = testing::internal::GetCapturedStderr();
     EXPECT_NE(log.find("libTest (libTestModule) loggedStub1 ? call 1: 0xabc "), std::string::npos)
         << log;
+}
+
+// Every import of the eboot gets a stub or a data block, and a call through a GOT slot reaches
+// the stub of the slot's import. 686 of the 701 imports are referenced, 20 of them data.
+TEST(HleGame, RelocatesTheEbootWithStubs) {
+    BB_REQUIRE_GAME(game);
+    const Counts before = counts();
+    bb::loader::Image image = bb::loader::map_eboot(game);
+    bb::loader::relocate(image, resolve);
+    image.finalize_protection();
+    EXPECT_EQ(counts().stubs - before.stubs, 666U);
+    EXPECT_EQ(counts().data_blocks - before.data_blocks, 20U);
+
+    const bb::loader::Rela& rela = image.dyn.plt_relocs.at(0);
+    ASSERT_EQ(rela.offset, 0x53e4690U);
+    const bb::loader::Import& imp = image.dyn.symbols.at(rela.sym).decoded;
+    ASSERT_EQ(imp.nid, "bzQExy189ZI");
+    const auto slot = *reinterpret_cast<const std::uintptr_t*>(image.runtime(rela.offset));
+    EXPECT_EQ(slot, import_address(imp.library, imp.nid));
+
+    Recorder recorder;
+    const auto stub = reinterpret_cast<std::uint64_t (*)(std::uint64_t, std::uint64_t,
+                                                         std::uint64_t, std::uint64_t,
+                                                         std::uint64_t, std::uint64_t)>(slot);
+    EXPECT_EQ(stub(6, 5, 4, 3, 2, 1), 0U);
+    ASSERT_EQ(recorder.calls.size(), 1U);
+    EXPECT_EQ(recorder.calls[0].stub->nid, "bzQExy189ZI");
+    EXPECT_EQ(recorder.calls[0].stub->library, imp.library);
+    EXPECT_EQ(recorder.calls[0].args, (std::vector<std::uint64_t>{6, 5, 4, 3, 2, 1}));
 }
 
 }  // namespace
