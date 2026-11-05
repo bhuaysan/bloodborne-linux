@@ -62,6 +62,10 @@ struct Query {
         if (!f12.bufferDeviceAddress) {
             return "bufferDeviceAddress";
         }
+        // v_readfirstlane_b32 and v_readlane_b32 broadcast from a lane computed at run time.
+        if (!f12.subgroupBroadcastDynamicId) {
+            return "subgroupBroadcastDynamicId";
+        }
         if (!f13.subgroupSizeControl || !f13.computeFullSubgroups) {
             return "subgroup size control";
         }
@@ -173,6 +177,7 @@ struct ComputeRunner::State {
         auto f12 = make<VkPhysicalDeviceVulkan12Features>(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, &f13);
         f12.bufferDeviceAddress = VK_TRUE;
+        f12.subgroupBroadcastDynamicId = VK_TRUE;
         auto features = make<VkPhysicalDeviceFeatures2>(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &f12);
         features.features.shaderInt64 = VK_TRUE;
