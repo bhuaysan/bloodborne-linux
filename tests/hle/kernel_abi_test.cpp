@@ -1,5 +1,6 @@
 #include "hle/kernel/abi.hpp"
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -9,7 +10,9 @@
 #include <cstdint>
 #include <cstring>
 #include <set>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -250,6 +253,27 @@ TEST(KernelAbi, StatFieldsAtTheirGuestOffsets) {
     EXPECT_EQ(at<std::uint32_t>(&g, 88), 4096u);
     EXPECT_EQ(at<std::uint32_t>(&g, 92), 0u);
     EXPECT_EQ(at<std::int64_t>(&g, 104), 0);
+}
+
+TEST(KernelAbi, DirentRecords) {
+    EXPECT_EQ(dirent_length(1), 12u);
+    EXPECT_EQ(dirent_length(3), 12u);
+    EXPECT_EQ(dirent_length(4), 16u);
+    std::vector<std::byte> buf(64, std::byte{0xaa});
+    std::span<std::byte> out(buf.data() + 1, 40);  // unaligned, as a guest buffer can be
+    ASSERT_EQ(put_dirent(out, 0x11223344, DT_DIR, "abcd"), 16u);
+    EXPECT_EQ(at<std::uint32_t>(out.data(), 0), 0x11223344u);
+    EXPECT_EQ(at<std::uint16_t>(out.data(), 4), 16);
+    EXPECT_EQ(at<std::uint8_t>(out.data(), 6), 4);
+    EXPECT_EQ(at<std::uint8_t>(out.data(), 7), 4);
+    EXPECT_EQ(std::memcmp(out.data() + 8, "abcd\0\0\0\0", 8), 0);
+    EXPECT_EQ(out[16], std::byte{0xaa}) << "wrote past the record";
+
+    EXPECT_EQ(put_dirent(out.first(15), 1, DT_REG, "abcd"), 0u);
+    EXPECT_EQ(put_dirent(out, 1, DT_REG, ""), 0u);
+    std::vector<std::byte> big(300);
+    EXPECT_EQ(put_dirent(big, 1, DT_REG, std::string(255, 'x')), 264u);
+    EXPECT_EQ(put_dirent(big, 1, DT_REG, std::string(256, 'x')), 0u);
 }
 
 }  // namespace

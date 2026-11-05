@@ -1,5 +1,6 @@
 #include "hle/kernel/abi.hpp"
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -8,6 +9,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <span>
 
 namespace bb::hle::kernel {
@@ -18,6 +20,8 @@ static_assert(offsetof(GuestStat, st_mode) == 8 && offsetof(GuestStat, st_atim) 
 static_assert(offsetof(GuestStat, st_mtim) == 40 && offsetof(GuestStat, st_size) == 72);
 static_assert(offsetof(GuestStat, st_blksize) == 88 && offsetof(GuestStat, st_birthtim) == 104);
 static_assert(sizeof(GuestStat) == 120);
+static_assert(offsetof(GuestDirent, reclen) == 4 && offsetof(GuestDirent, name) == 8);
+static_assert(sizeof(GuestDirent) == 264 && dirent_length(255) == 264);
 
 // Values that are the same on both sides and therefore pass through unchanged.
 static_assert(SEEK_SET == 0 && SEEK_CUR == 1 && SEEK_END == 2 && SEEK_DATA == 3 && SEEK_HOLE == 4);
@@ -25,6 +29,8 @@ static_assert(O_RDONLY == 0 && O_WRONLY == 1 && O_RDWR == 2);
 static_assert(S_IFMT == 0170000 && S_IFIFO == 0010000 && S_IFCHR == 0020000 &&
               S_IFDIR == 0040000 && S_IFBLK == 0060000 && S_IFREG == 0100000 &&
               S_IFLNK == 0120000 && S_IFSOCK == 0140000);
+static_assert(DT_UNKNOWN == 0 && DT_FIFO == 1 && DT_CHR == 2 && DT_DIR == 4 && DT_BLK == 6 &&
+              DT_REG == 8 && DT_LNK == 10 && DT_SOCK == 12 && DT_WHT == 14);
 
 struct Pair {
     int guest, host;
@@ -234,6 +240,22 @@ GuestStat guest_stat(const struct stat& host) {
     g.st_blocks = host.st_blocks;
     g.st_blksize = static_cast<std::uint32_t>(host.st_blksize);
     return g;
+}
+
+std::size_t put_dirent(std::span<std::byte> out, std::uint32_t fileno, std::uint8_t type,
+                       std::string_view name) {
+    const std::size_t length = dirent_length(name.size());
+    if (name.empty() || name.size() > 255 || length > out.size()) {
+        return 0;
+    }
+    GuestDirent d{};
+    d.fileno = fileno;
+    d.reclen = static_cast<std::uint16_t>(length);
+    d.type = type;
+    d.namlen = static_cast<std::uint8_t>(name.size());
+    std::memcpy(d.name, name.data(), name.size());
+    std::memcpy(out.data(), &d, length);  // the guest buffer need not be aligned
+    return length;
 }
 
 }  // namespace bb::hle::kernel

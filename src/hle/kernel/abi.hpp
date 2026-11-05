@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <ctime>
 #include <optional>
+#include <span>
+#include <string_view>
 
 namespace bb::hle::kernel {
 
@@ -121,5 +123,25 @@ struct GuestStat {
 // Fields wider in the host (st_dev, st_ino, st_rdev, st_blksize) are truncated, st_nlink is
 // clamped to 0xffff. st_flags, st_gen, st_lspare and st_birthtim are 0.
 GuestStat guest_stat(const struct stat& host);
+
+// One getdirentries(2) record: an 8-byte header and the name, NUL-terminated and padded with NULs
+// to a multiple of 4. A full record (255-byte name) is 264 bytes.
+struct GuestDirent {
+    std::uint32_t fileno;
+    std::uint16_t reclen;
+    std::uint8_t type;
+    std::uint8_t namlen;
+    char name[256];
+};
+
+// The record length for a name of `name_length` bytes.
+constexpr std::size_t dirent_length(std::size_t name_length) {
+    return 8 + ((name_length + 1 + 3) & ~std::size_t{3});
+}
+
+// Writes one record to the start of `out`, with a host type (the DT_* values are the same).
+// Returns its length, or 0 if it doesn't fit or the name is empty or longer than 255 bytes.
+std::size_t put_dirent(std::span<std::byte> out, std::uint32_t fileno, std::uint8_t type,
+                       std::string_view name);
 
 }  // namespace bb::hle::kernel
