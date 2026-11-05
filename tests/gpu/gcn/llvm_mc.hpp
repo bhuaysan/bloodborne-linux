@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -13,5 +14,10 @@ bool have_llvm_mc();
 // The words of each line, assembled by `llvm-mc -triple=amdgcn -mcpu=bonaire -show-encoding`.
 // Throws std::runtime_error with llvm-mc's output when it rejects a line.
 std::vector<std::vector<std::uint32_t>> assemble(const std::vector<std::string>& lines);
+
+// The words of every instruction in the source file, in order. Comments and blank lines give
+// none. Throws std::runtime_error with llvm-mc's output when it rejects the source, or when a
+// branch names a label, whose offset -show-encoding leaves unresolved.
+std::vector<std::vector<std::uint32_t>> assemble_file(const std::filesystem::path& source);
 
 }  // namespace bb::test::gcn

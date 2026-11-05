@@ -51,6 +51,27 @@ bool have_llvm_mc() {
     return !std::string_view(BB_LLVM_MC).empty();
 }
 
+std::vector<std::vector<std::uint32_t>> assemble_file(const fs::path& source) {
+    const std::string output = run(std::string("'") + BB_LLVM_MC +
+                                   "' -triple=amdgcn -mcpu=bonaire -show-encoding '" +
+                                   source.string() + "'");
+    std::vector<std::vector<std::uint32_t>> out;
+    std::istringstream stream(output);
+    for (std::string line; std::getline(stream, line);) {
+        if (auto pos = line.find("; encoding: ["); pos != std::string::npos) {
+            out.push_back(words(std::string_view(line).substr(pos)));
+        }
+    }
+    if (output.find("error:") != std::string::npos) {
+        throw std::runtime_error("llvm-mc rejected the source:\n" + output);
+    }
+    // A label's fixup is left unresolved, and its bytes print as "A".
+    if (output.find("fixup") != std::string::npos) {
+        throw std::runtime_error("branches need numeric offsets, not labels:\n" + output);
+    }
+    return out;
+}
+
 std::vector<std::vector<std::uint32_t>> assemble(const std::vector<std::string>& lines) {
     std::string path = (fs::temp_directory_path() / "bb-gcn-XXXXXX").string();
     int fd = ::mkstemp(path.data());
@@ -64,19 +85,17 @@ std::vector<std::vector<std::uint32_t>> assemble(const std::vector<std::string>&
             source << line << '\n';
         }
     }
-    const std::string output = run(std::string("'") + BB_LLVM_MC +
-                                   "' -triple=amdgcn -mcpu=bonaire -show-encoding '" + path + "'");
-    fs::remove(path);
-
     std::vector<std::vector<std::uint32_t>> out;
-    std::istringstream stream(output);
-    for (std::string line; std::getline(stream, line);) {
-        if (auto pos = line.find("; encoding: ["); pos != std::string::npos) {
-            out.push_back(words(std::string_view(line).substr(pos)));
-        }
+    try {
+        out = assemble_file(path);
+    } catch (...) {
+        fs::remove(path);
+        throw;
     }
-    if (output.find("error:") != std::string::npos || out.size() != lines.size()) {
-        throw std::runtime_error("llvm-mc rejected the source:\n" + output);
+    fs::remove(path);
+    if (out.size() != lines.size()) {
+        throw std::runtime_error("llvm-mc gave " + std::to_string(out.size()) +
+                                 " encodings for " + std::to_string(lines.size()) + " lines");
     }
     return out;
 }
