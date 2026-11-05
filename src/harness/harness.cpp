@@ -189,7 +189,12 @@ void Harness::compare_state(Result& result) const {
 }
 
 void Harness::compare_log(Result& result) const {
-    if (stack_thread_ != std::this_thread::get_id()) {
+    // A thread id can be reused after its thread exits, so the cached bounds also have to
+    // contain the current stack.
+    const char local = 0;
+    const auto here = reinterpret_cast<std::uintptr_t>(&local);
+    if (stack_thread_ != std::this_thread::get_id() || here < stack_.first ||
+        here >= stack_.second) {
         stack_ = thread_stack();
         stack_thread_ = std::this_thread::get_id();
     }
