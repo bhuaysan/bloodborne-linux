@@ -7,6 +7,7 @@
 #include <cstring>
 #include <format>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -34,11 +35,14 @@ public:
 
     // `n` zeroed bytes aligned to `align` (a power of two). Throws std::length_error when full.
     void* alloc(std::size_t n, std::size_t align = 16);
-    // `count` zeroed objects of T.
+    // `count` zeroed objects of T. Throws std::length_error when they don't fit.
     template <class T>
     T* zeroed(std::size_t count = 1) {
         static_assert(std::is_trivially_copyable_v<T> &&
                       std::is_trivially_default_constructible_v<T>);
+        if (count > size / sizeof(T)) {  // also keeps sizeof(T) * count from wrapping
+            throw std::length_error("harness: the arena is full");
+        }
         return static_cast<T*>(alloc(sizeof(T) * count, alignof(T)));
     }
     // A copy of `s` with a terminating NUL.

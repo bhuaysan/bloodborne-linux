@@ -206,6 +206,11 @@ TEST_F(HarnessTest, ArenaLayoutIsDeterministic) {
     harness.restore();
     EXPECT_EQ(a.str("abc"), s);
     EXPECT_THROW(a.alloc(Arena::size), std::length_error);
+    EXPECT_STREQ(a.str({}), "");
+    EXPECT_NE(a.bytes({}), nullptr);
+    // 8 * 2^61 wraps to 0 without the check.
+    EXPECT_THROW(a.zeroed<std::uint64_t>(SIZE_MAX / 8 + 1), std::length_error);
+    EXPECT_THROW(a.zeroed<std::uint64_t>(Arena::size / 8 + 1), std::length_error);
 }
 
 }  // namespace

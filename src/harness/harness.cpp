@@ -46,13 +46,17 @@ void* Arena::alloc(std::size_t n, std::size_t align) {
 
 char* Arena::str(std::string_view s) {
     auto* p = static_cast<char*>(alloc(s.size() + 1, 1));
-    std::memcpy(p, s.data(), s.size());
+    if (!s.empty()) {  // an empty view's data() may be null, which memcpy must not get
+        std::memcpy(p, s.data(), s.size());
+    }
     return p;
 }
 
 std::byte* Arena::bytes(std::span<const std::byte> b) {
     auto* p = static_cast<std::byte*>(alloc(b.size()));
-    std::memcpy(p, b.data(), b.size());
+    if (!b.empty()) {
+        std::memcpy(p, b.data(), b.size());
+    }
     return p;
 }
 
