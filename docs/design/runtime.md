@@ -12,7 +12,7 @@ src/
   hook/      bbhook     function-entry patches
   game/      bbgame     decompiled functions (registered into bbhook), the image accessor
   harness/   bbharness  differential test harness (tests only)
-  tools/                small command-line programs (bb-load)
+  tools/                small command-line programs (bb-load, bb-gcn)
 tests/<target>/         GoogleTest unit and differential tests, one directory per target
 tests/support/          bbtestsupport: shared test helpers (game directory lookup, BB_REQUIRE_GAME)
 tests/harness/          harness tests, plus bbeboottest: the EbootTest fixture (also used by tests/game/)
@@ -330,3 +330,5 @@ Not compared: the stack below the call, registers other than the return register
 `bb-load` maps the load set, binds and relocates it through `bb::hle::link`, finalizes the protections and exits without running game code. For each module (file and module id) it prints the base, the entry point, the segments (link address, memory and file size, protection), the TLS template, the `PT_SCE_PROCPARAM` address, the number of relocations by type over both tables, and the imports by library (functions and objects, in the order of `tools/elfimports`, and how many of them `resolve` bound to a bundled export, an HLE implementation or a stub or data block, or never resolved because nothing references them). Last come the numbers of function stubs and data blocks that `resolve` created over the whole load set. The test checks the 3 data blocks exactly and the number of stubs only against an upper bound, so that a new HLE function doesn't have to edit it. It links `bbhlenet`, so the network imports that module implements count as HLE, not as stubs.
 
 The game directory comes from `--game-dir` or else `BB_GAME_DIR` in the environment. Unlike the tests, `bb-load` doesn't read `local.env`: it is a user-facing program and runs outside the repository too. A test runs it on the game and compares the eboot's output with fixed expected values, and the bases, DTPMOD64 counts and bindings of the PRXs. The imports by library are those of `tools/elfimports` for `eboot.elf` (701 imports in 39 libraries), copied into the test.
+
+`bb-gcn disasm` disassembles a GCN shader binary (see [graphics.md](graphics.md#interface), "Disassembler").
