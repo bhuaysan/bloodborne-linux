@@ -10,7 +10,7 @@
 
 namespace bb::hle::kernel {
 
-// Mutex types that the attribute's type setter takes.
+// Mutex types that the attribute's type setter takes (values of FreeBSD 10.4 include/pthread.h).
 inline constexpr int guest_mutex_errorcheck = 1;
 inline constexpr int guest_mutex_recursive = 2;
 inline constexpr int guest_mutex_normal = 3;
