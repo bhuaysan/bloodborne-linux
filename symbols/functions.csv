@@ -1,1 +1,3 @@
 address,name,signature,status,file
+0x0040e9e0,utf16_range_equals,"int utf16_range_equals(const void* self, const char16_t* begin, const char16_t* end, const char* narrow)",replaced,src/game/text/compare.cpp
+0x0043e190,text_starts_with,"int text_starts_with(const char* const* text, const char* prefix)",replaced,src/game/text/compare.cpp
