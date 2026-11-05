@@ -105,7 +105,7 @@ A header found by a byte scan counts only once a writer is found that stores it:
 | 0x85 | `INCREMENT_DE_COUNTER` | 0x1078220 | DCB |
 | 0x86 | `WAIT_ON_CE_COUNTER` | 0x10781d0 | DCB |
 | 0x88 | `WAIT_ON_DE_COUNTER_DIFF` | 0x11fd230 | CCB |
-| 0x8C | none | 0x1074a90 | 5-dword body: one dword of three bitfields (bits 0–9, 10–19, 20–30), the constant 0x420, then a 40-bit address; 1 caller. The compute-side writer 0x108a590 writes only the bitfield dword (1-dword body) and no shader-type bit, then the 3-dword profiling slot (below) |
+| 0x8C | none | 0x1074a90 | 5-dword body: one dword of three bitfields (bits 0–9, 10–19, 20–30), the constant 0x420, a 40-bit address (low dword `& 0xFFFFFF00`, then the high byte), and the sixth argument shifted right by 8; 1 caller. Header has the predicate bit. The compute-side writer 0x108a590 writes only the bitfield dword (1-dword body) and no shader-type bit, then the 3-dword profiling slot (below) |
 | 0x8D | none | 0x1074b50 | 3-dword body, followed by the draw trailer like a draw; 4 callers. The compute-side writer 0x108a680 writes a different 5-dword body (four argument dwords, then `(arg & 3) << 3 | 1`) with the shader-type bit set, after the profiling slot and before the draw trailer |
 
 The default state block that the game writes itself at 0x10728d0 is `CONTEXT_CONTROL`, `CLEAR_STATE`, `NUM_INSTANCES` 1 and `CB_COLOR_CONTROL` = 0x00CC0010.
