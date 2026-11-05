@@ -184,7 +184,7 @@ That is 24 bytes per thunk. `r11` is a scratch register in the System V ABI and 
 
 `StubInfo` holds the library, the module, the NID, the name from `symbols/nids.csv` (or `?`) and a call counter (atomic, incremented before the observer or the log sees the call). `StubObserver` is an interface with `virtual void on_call(const StubInfo&, const uint64_t args[6])`, so an observer can keep its own state, as the harness's recorder does. `on_stub_call` has C++ linkage: `stub_entry.S` calls it by its mangled name, so a change of its signature fails at link time instead of passing arguments wrongly. Only `bb_hle_stub_entry` itself, an assembly symbol, is declared `extern "C"`.
 
-`on_stub_call` logs all of these plus the six integer arguments. It logs the first 10 calls per import and then every 1000th. When an observer is set, it receives the call instead of the log.
+`on_stub_call` logs all of these plus the six integer arguments, at `warn` on the channel `hle.<library>` of the M3 logger (`docs/design/m3-core-os.md`, "Logging"). It logs the first 10 calls per import and then every 1000th. When an observer is set, it receives the call instead of the log.
 
 The thunks live in anonymous pages of `bbhle`. A thunk is written while its page is `rw-`, and the page goes back to `r-x` right after. That is safe as long as `resolve` runs before game code; resolving while game threads may execute an earlier thunk of the same page (lazy PRX loading in M3) needs another scheme, for example a second, writable mapping of the same pages. Thunks, `StubInfo` objects and data blocks are never freed.
 

@@ -46,7 +46,8 @@ std::string_view nid_name(std::string_view nid);
 // implementation or was already resolved.
 void register_function(std::string_view library, std::string_view nid, void* impl);
 
-// The registered implementation of `imp`, else its function stub (STT_FUNC) or its zero-filled
+// The registered implementation of `imp` (in debug builds, a thunk that logs every call and then
+// jumps to it, if the log filter shows trace level for hle.<library> at this moment), else its function stub (STT_FUNC) or its zero-filled
 // 4 KiB data block (STT_OBJECT). Created on the first call per (library, NID), then cached.
 std::uintptr_t resolve(const loader::Import& imp);
 
@@ -60,6 +61,11 @@ StubObserver* set_stub_observer(StubObserver* observer);
 // Called by stub_entry (stub_entry.S, through the mangled name) with the integer argument
 // registers rdi, rsi, rdx, rcx, r8, r9.
 void on_stub_call(const StubInfo* stub, const std::uint64_t args[6]);
+
+// Called by trace_entry (stub_entry.S, through the mangled name) in debug builds, before a
+// traced implementation runs, with its internal trace record and the integer argument registers.
+// Logs the call at trace level on the channel hle.<library>.
+void on_traced_call(const void* info, const std::uint64_t args[6]);
 
 // Whether call number `call` (counted from 1) of one stub is logged: 1 to 10, then every 1000th.
 constexpr bool should_log(std::uint64_t call) {

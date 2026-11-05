@@ -1,7 +1,9 @@
 #include "hle/hle.hpp"
 
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -9,6 +11,7 @@
 
 #include <gtest/gtest.h>
 
+#include "common/log.hpp"
 #include "loader/image.hpp"
 #include "loader/relocate.hpp"
 #include "support/game.hpp"
@@ -140,8 +143,68 @@ TEST(Hle, LogsWithoutObserver) {
     testing::internal::CaptureStderr();
     stub(0xabc);
     const std::string log = testing::internal::GetCapturedStderr();
-    EXPECT_NE(log.find("libTest (libTestModule) loggedStub1 ? call 1: 0xabc "), std::string::npos)
+    // The M2 text, as a warning on the channel hle.<library>.
+    EXPECT_NE(log.find(" warn ["), std::string::npos) << log;
+    EXPECT_NE(log.find("] hle.libTest: stub libTest (libTestModule) loggedStub1 ? call 1: 0xabc "),
+              std::string::npos)
         << log;
+}
+
+// Integer arguments in all six registers and on the stack, and floating-point ones.
+double traced_sum(std::uint64_t a, std::uint64_t b, std::uint64_t c, std::uint64_t d,
+                  std::uint64_t e, std::uint64_t f, std::uint64_t g, double x, double y) {
+    return static_cast<double>(a + b + c + d + e + f + g) + x * y;
+}
+BB_HLE_FUNCTION("libTraceTest", "tracedSum", traced_sum);
+
+// A variadic call passes the number of vector registers in al.
+int traced_format(char* out, std::size_t size, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    const int n = std::vsnprintf(out, size, format, args);
+    va_end(args);
+    return n;
+}
+BB_HLE_FUNCTION("libTraceTest", "tracedFormat", traced_format);
+
+// With trace level for its channel at resolve time, an implementation call is logged and still
+// gets every argument.
+TEST(Hle, TracesImplementationCallsInDebugBuilds) {
+#ifdef NDEBUG
+    GTEST_SKIP() << "HLE call tracing exists in debug builds only";
+#else
+    bb::common::set_log_filter(bb::common::LogFilter::parse("hle.libTraceTest=trace"));
+    const Import sum_imp{"tracedSum", "libTraceTest", "libTraceTestModule", bb::loader::stt_func};
+    const Import format_imp{"tracedFormat", "libTraceTest", "libTraceTestModule",
+                            bb::loader::stt_func};
+    const std::uintptr_t sum_addr = resolve(sum_imp);
+    const std::uintptr_t format_addr = resolve(format_imp);
+    bb::common::set_log_filter({});
+    EXPECT_NE(sum_addr, reinterpret_cast<std::uintptr_t>(&traced_sum));
+    EXPECT_EQ(resolve(sum_imp), sum_addr);
+    EXPECT_EQ(import_address("libTraceTest", "tracedSum"), sum_addr);
+
+    // The filter at call time decides whether the line is written.
+    bb::common::set_log_filter(bb::common::LogFilter::parse("hle=trace"));
+    testing::internal::CaptureStderr();
+    const double sum = reinterpret_cast<decltype(&traced_sum)>(sum_addr)(1, 2, 3, 4, 5, 6, 7, 1.5,
+                                                                         4.0);
+    char text[64];
+    const int n = reinterpret_cast<decltype(&traced_format)>(format_addr)(
+        text, sizeof text, "%d %.2f %s", 17, 2.25, "x");
+    const std::string log = testing::internal::GetCapturedStderr();
+    bb::common::set_log_filter({});
+
+    EXPECT_EQ(sum, 34.0);
+    EXPECT_EQ(n, 9);
+    EXPECT_STREQ(text, "17 2.25 x");
+    EXPECT_NE(log.find(" trace ["), std::string::npos) << log;
+    EXPECT_NE(log.find("] hle.libTraceTest: call libTraceTest tracedSum ?: 0x1 0x2 0x3 0x4 0x5 "
+                       "0x6\n"),
+              std::string::npos)
+        << log;
+    EXPECT_NE(log.find("call libTraceTest tracedFormat ?: "), std::string::npos) << log;
+#endif
 }
 
 // Every import of the eboot gets a stub or a data block, and a call through a GOT slot reaches
