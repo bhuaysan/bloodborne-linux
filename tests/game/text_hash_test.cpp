@@ -49,6 +49,13 @@ TEST_F(EbootTest, HashBytesBackwardMatches) {
             EXPECT_TRUE(r) << bytes.size() << " bytes, seed " << seed << ": " << r.report();
         }
     }
+    // With size 0 the data is never read, so a null pointer is fine.
+    const Result r = harness().compare<HashBytesFn>(
+        0x3233c0, &bb::game::hash_bytes_backward, [](Arena&) {
+            return std::tuple<const std::uint8_t*, std::size_t, std::uint64_t>{nullptr, 0,
+                                                                              0x1234};
+        });
+    EXPECT_TRUE(r) << "null data, size 0: " << r.report();
 }
 
 // `text` in the arena, passed as a range; `reversed` swaps begin and end.
