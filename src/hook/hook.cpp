@@ -9,11 +9,13 @@
 #include <cstring>
 #include <format>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include "loader/bytes.hpp"
 
@@ -77,13 +79,23 @@ std::map<Key, Saved>::iterator live(const loader::Image& image, std::uint64_t li
 
 // Checks the parts that apply and remove share. A patch it passes lies in a code segment.
 void check(const loader::Image& image, std::span<const Replacement> replaced) {
+    // Two patches overlap only if they are neighbours by address. Of each overlapping pair the
+    // later entry of the list is refused, the earliest such entry first.
+    std::vector<std::size_t> by_addr(replaced.size());
+    std::iota(by_addr.begin(), by_addr.end(), std::size_t{0});
+    std::sort(by_addr.begin(), by_addr.end(), [&](std::size_t a, std::size_t b) {
+        return std::pair(replaced[a].link_addr, a) < std::pair(replaced[b].link_addr, b);
+    });
+    std::size_t overlapping = replaced.size();
+    for (std::size_t k = 1; k < by_addr.size(); ++k) {
+        const std::size_t a = by_addr[k - 1], b = by_addr[k];
+        if (replaced[b].link_addr - replaced[a].link_addr < patch_size) {
+            overlapping = std::min(overlapping, std::max(a, b));
+        }
+    }
     for (std::size_t i = 0; i < replaced.size(); ++i) {
         const Replacement& r = replaced[i];
-        auto overlaps = [&](const Replacement& other) {
-            std::uint64_t a = other.link_addr, b = r.link_addr;
-            return (a > b ? a - b : b - a) < patch_size;
-        };
-        if (std::any_of(replaced.begin(), replaced.begin() + i, overlaps)) {
+        if (i == overlapping) {
             refuse(r, "double hook: the patch overlaps another entry of the list");
         }
         if (!code_segment(image, r.link_addr)) {
