@@ -224,10 +224,14 @@ namespace bb::gcn {
 
 enum class Stage { vertex, pixel, compute };
 
-class GcnError : public std::runtime_error { /* offset and word of the failing instruction */ };
+class GcnError : public std::runtime_error { /* offset() and word() of the failing instruction */ };
 
-std::vector<Instruction> decode(std::span<const std::uint32_t> code);   // throws GcnError
+enum class Until { program_end, code_end };          // the stop rule above, or every word
+std::vector<Instruction> decode(std::span<const std::uint32_t> code,    // throws GcnError
+                                Until until = Until::program_end);
 std::string disassemble(const Instruction& inst);    // LLVM syntax, one line
+std::optional<std::uint32_t> branch_target(const Instruction& inst);   // byte offset
+bool is_endpgm(const Instruction& inst);
 
 struct ShaderKey { Stage stage; /* see "Stage interfaces and ShaderKey" */ };
 
@@ -245,6 +249,12 @@ Translation translate(std::span<const std::uint32_t> code,     // throws GcnErro
 ```
 
 Errors are exceptions, as in the loader and hooks (C++20, no `std::expected`). The exact members are settled by the decoder and translator issues, and recorded here when they are.
+
+Decoder (`src/gpu/gcn/gcn.hpp`, #115):
+
+- An `Instruction` holds its byte offset, its size in dwords (with the literal), the format, the format's opcode field, LLVM's mnemonic, and up to 2 destination and 4 source `Operand`s in the order of LLVM's syntax.
+- An `Operand` has a kind, its size in dwords, the 8-bit operand code and a 32-bit value. The kinds so far: scalar register (by operand code, so the special registers keep their codes), inline constant (with its 32-bit pattern), literal, and the immediates of SOPK, SOPP and SMRD (hex value, count, branch offset, hardware register, wait counters, message, dword offset). The vector formats add their kinds and modifiers.
+- The opcode tables are in `opcodes.cpp`, one per format, indexed by opcode.
 
 ## Offline test strategy
 
