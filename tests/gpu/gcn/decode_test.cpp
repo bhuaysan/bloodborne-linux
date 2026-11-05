@@ -22,6 +22,20 @@ Instruction one(const std::vector<std::uint32_t>& words) {
     return insts.at(0);
 }
 
+Operand reg(unsigned c, unsigned dwords = 1) {
+    return {OperandKind::scalar, static_cast<std::uint8_t>(dwords), static_cast<std::uint16_t>(c),
+            0};
+}
+
+Operand constant(unsigned c, std::uint32_t value, unsigned dwords = 1) {
+    return {OperandKind::constant, static_cast<std::uint8_t>(dwords),
+            static_cast<std::uint16_t>(c), value};
+}
+
+Operand literal(std::uint32_t value, unsigned dwords = 1) {
+    return {OperandKind::literal, static_cast<std::uint8_t>(dwords), code::literal, value};
+}
+
 Operand imm(OperandKind kind, std::uint32_t value) {
     return {kind, 0, 0, value};
 }
@@ -35,6 +49,144 @@ GcnError error(const std::vector<std::uint32_t>& words, Until until = Until::cod
     }
     ADD_FAILURE() << "no GcnError";
     return GcnError("none", 0, 0);
+}
+
+TEST(GcnDecode, Sop2) {
+    auto inst = one({sop2(0, 0, 1, 2)});
+    EXPECT_EQ(inst.format, Format::sop2);
+    EXPECT_EQ(inst.opcode, 0);
+    EXPECT_EQ(inst.name, "s_add_u32");
+    ASSERT_EQ(inst.num_dst, 1);
+    ASSERT_EQ(inst.num_src, 2);
+    EXPECT_EQ(inst.dst[0], reg(0));
+    EXPECT_EQ(inst.src[0], reg(1));
+    EXPECT_EQ(inst.src[1], reg(2));
+
+    // 64-bit shifts take a 32-bit shift amount.
+    inst = one({sop2(31, 2, 4, 6)});
+    EXPECT_EQ(inst.name, "s_lshl_b64");
+    EXPECT_EQ(inst.dst[0], reg(2, 2));
+    EXPECT_EQ(inst.src[0], reg(4, 2));
+    EXPECT_EQ(inst.src[1], reg(6));
+
+    inst = one({sop2(43, 0, 4, 8)});
+    EXPECT_EQ(inst.name, "s_cbranch_g_fork");
+    EXPECT_EQ(inst.num_dst, 0);
+    EXPECT_EQ(inst.src[1], reg(8, 2));
+
+    // Both sources read the same literal.
+    inst = one({sop2(2, code::m0, 255, 255), 0xfffffff0});
+    EXPECT_EQ(inst.name, "s_add_i32");
+    EXPECT_EQ(inst.dst[0], reg(code::m0));
+    EXPECT_EQ(inst.src[0], literal(0xfffffff0));
+    EXPECT_EQ(inst.src[1], literal(0xfffffff0));
+}
+
+TEST(GcnDecode, Sop1) {
+    auto inst = one({sop1(4, code::vcc, code::exec)});
+    EXPECT_EQ(inst.format, Format::sop1);
+    EXPECT_EQ(inst.name, "s_mov_b64");
+    EXPECT_EQ(inst.dst[0], reg(code::vcc, 2));
+    EXPECT_EQ(inst.src[0], reg(code::exec, 2));
+
+    // Inline constants.
+    EXPECT_EQ(one({sop1(3, 0, 128)}).src[0], constant(128, 0));
+    EXPECT_EQ(one({sop1(3, 0, 192)}).src[0], constant(192, 64));
+    EXPECT_EQ(one({sop1(3, 0, 193)}).src[0], constant(193, 0xffffffff));
+    EXPECT_EQ(one({sop1(3, 0, 208)}).src[0], constant(208, 0xfffffff0));
+    EXPECT_EQ(one({sop1(3, 0, 240)}).src[0], constant(240, 0x3f000000));     // 0.5
+    EXPECT_EQ(one({sop1(4, 0, 247)}).src[0], constant(247, 0xc0800000, 2));  // -4.0
+
+    inst = one({sop1(31, 0, 0)});
+    EXPECT_EQ(inst.name, "s_getpc_b64");
+    EXPECT_EQ(inst.num_src, 0);
+    inst = one({sop1(32, 0, 4)});
+    EXPECT_EQ(inst.name, "s_setpc_b64");
+    EXPECT_EQ(inst.num_dst, 0);
+    EXPECT_EQ(inst.src[0], reg(4, 2));
+    inst = one({sop1(16, 0, 2)});
+    EXPECT_EQ(inst.name, "s_bcnt1_i32_b64");
+    EXPECT_EQ(inst.dst[0], reg(0));
+    EXPECT_EQ(inst.src[0], reg(2, 2));
+}
+
+TEST(GcnDecode, Sopc) {
+    auto inst = one({sopc(6, 0, 242)});
+    EXPECT_EQ(inst.format, Format::sopc);
+    EXPECT_EQ(inst.name, "s_cmp_eq_u32");
+    EXPECT_EQ(inst.num_dst, 0);
+    EXPECT_EQ(inst.src[0], reg(0));
+    EXPECT_EQ(inst.src[1], constant(242, 0x3f800000));
+    inst = one({sopc(15, 4, 9)});
+    EXPECT_EQ(inst.name, "s_bitcmp1_b64");
+    EXPECT_EQ(inst.src[0], reg(4, 2));
+}
+
+TEST(GcnDecode, Sopk) {
+    auto inst = one({sopk(0, 0, 0x1234)});
+    EXPECT_EQ(inst.format, Format::sopk);
+    EXPECT_EQ(inst.name, "s_movk_i32");
+    EXPECT_EQ(inst.dst[0], reg(0));
+    EXPECT_EQ(inst.src[0], imm(OperandKind::simm, 0x1234));
+
+    // s_cmpk_* compare the register in the sdst field.
+    inst = one({sopk(10, 5, 0x8000)});
+    EXPECT_EQ(inst.name, "s_cmpk_lg_u32");
+    EXPECT_EQ(inst.num_dst, 0);
+    EXPECT_EQ(inst.src[0], reg(5));
+    EXPECT_EQ(inst.src[1], imm(OperandKind::simm, 0x8000));
+
+    inst = one({sopk(18, 0, 0xf801)});
+    EXPECT_EQ(inst.name, "s_getreg_b32");
+    EXPECT_EQ(inst.src[0], imm(OperandKind::hwreg, 0xf801));
+    inst = one({sopk(19, 3, 0xf801)});
+    EXPECT_EQ(inst.name, "s_setreg_b32");
+    EXPECT_EQ(inst.num_dst, 0);
+    EXPECT_EQ(inst.src[0], imm(OperandKind::hwreg, 0xf801));
+    EXPECT_EQ(inst.src[1], reg(3));
+    inst = one({sopk(21, 0, 0xf801), 3});
+    EXPECT_EQ(inst.name, "s_setreg_imm32_b32");
+    EXPECT_EQ(inst.src[1], literal(3));
+
+    inst = one({sopk(17, 4, 0xffff)});
+    EXPECT_EQ(inst.name, "s_cbranch_i_fork");
+    EXPECT_EQ(inst.src[0], reg(4, 2));
+    EXPECT_EQ(branch_target(inst), 0u);
+}
+
+TEST(GcnDecode, Smrd) {
+    auto inst = one({smrd(2, 0, 4, true, 0x10)});
+    EXPECT_EQ(inst.format, Format::smrd);
+    EXPECT_EQ(inst.name, "s_load_dwordx4");
+    EXPECT_EQ(inst.dst[0], reg(0, 4));
+    EXPECT_EQ(inst.src[0], reg(4, 2));
+    EXPECT_EQ(inst.src[1], imm(OperandKind::offset, 0x10));
+
+    inst = one({smrd(12, 16, 8, false, 6)});
+    EXPECT_EQ(inst.name, "s_buffer_load_dwordx16");
+    EXPECT_EQ(inst.dst[0], reg(16, 16));
+    EXPECT_EQ(inst.src[0], reg(8, 4));
+    EXPECT_EQ(inst.src[1], reg(6));
+
+    // CI: a 32-bit literal offset.
+    EXPECT_EQ(one({smrd(0, 0, 4, false, 255), 0x12345}).src[1], literal(0x12345));
+
+    inst = one({smrd(30, 2, 0, false, 0)});
+    EXPECT_EQ(inst.name, "s_memtime");
+    EXPECT_EQ(inst.dst[0], reg(2, 2));
+    EXPECT_EQ(inst.num_src, 0);
+
+    EXPECT_EQ(error({smrd(0, 0, 4, false, 128)}).word(), smrd(0, 0, 4, false, 128));
+    EXPECT_EQ(error({smrd(2, 2, 4, true, 0)}).word(), smrd(2, 2, 4, true, 0));  // s[2:5]
+
+    // Special registers as base and offset register.
+    inst = one({smrd(8, 0, code::ttmp0 + 4, false, code::m0)});
+    EXPECT_EQ(inst.src[0], reg(code::ttmp0 + 4, 4));
+    EXPECT_EQ(inst.src[1], reg(code::m0));
+    EXPECT_EQ(error({smrd(8, 0, code::ttmp0 + 2, true, 0)}).word(),
+              smrd(8, 0, code::ttmp0 + 2, true, 0));  // ttmp[2:5]
+    EXPECT_EQ(error({smrd(3, 2, 0, true, 0)}).word(), smrd(3, 2, 0, true, 0));      // s[2:9]
+    EXPECT_EQ(error({smrd(0, 0, 0, false, 255)}).word(), smrd(0, 0, 0, false, 255));  // no literal
 }
 
 TEST(GcnDecode, Sopp) {
@@ -66,6 +218,44 @@ TEST(GcnDecode, Errors) {
 
     EXPECT_EQ(error({0x00000000}).word(), 0u);  // VOP2, not decoded yet
     EXPECT_EQ(error({sopp(2, 0xfffe)}).word(), sopp(2, 0xfffe));  // before the start
+    EXPECT_NE(std::string(error({sop2(12, 0, 0, 0)}).what()).find("unknown SOP2 opcode 12"),
+              std::string::npos);
+}
+
+TEST(GcnDecode, OperandErrors) {
+    // A literal past the end of the code.
+    EXPECT_EQ(error({sop1(3, 0, 255)}).word(), sop1(3, 0, 255));
+
+    // Reserved operand codes, and LDS_DIRECT, which scalar instructions can't read.
+    for (unsigned c : {125u, 209u, 239u, 248u, 250u, 254u}) {
+        SCOPED_TRACE(c);
+        EXPECT_EQ(error({sop1(3, 0, c)}).word(), sop1(3, 0, c));
+    }
+
+    // 64-bit operands: the special registers that are 32-bit, odd halves of pairs, ranges past
+    // s103, misaligned SGPR ranges.
+    for (unsigned c : {unsigned{code::m0}, code::vcc + 1u, 103u, 5u, 113u, 123u, 251u, 253u}) {
+        SCOPED_TRACE(c);
+        EXPECT_EQ(error({sop1(4, 0, c)}).word(), sop1(4, 0, c));
+    }
+    EXPECT_EQ(error({sop1(4, 1, 0)}).word(), sop1(4, 1, 0));  // destination s[1:2]
+    EXPECT_NE(std::string(error({sop1(4, 0, 5)}).what()).find("invalid 2-dword scalar operand 5"),
+              std::string::npos);
+}
+
+TEST(GcnDecode, ScalarRegisters) {
+    // The last SGPR pair, the special register pairs and trap temporaries.
+    for (unsigned c : {102u, unsigned{code::flat_scratch}, unsigned{code::vcc}, unsigned{code::tba},
+                       unsigned{code::tma}, unsigned{code::exec}, code::ttmp0 + 10u}) {
+        SCOPED_TRACE(c);
+        EXPECT_EQ(one({sop1(4, 0, c)}).src[0], reg(c, 2));
+    }
+    EXPECT_EQ(one({sop1(3, 0, code::scc)}).src[0], reg(code::scc));
+
+    // The next instruction starts behind the literal.
+    auto insts = decode(std::vector<std::uint32_t>{sop1(3, 0, 255), 0x42, sopp(1)});
+    ASSERT_EQ(insts.size(), 2u);
+    EXPECT_EQ(insts[1].offset, 8u);
 }
 
 TEST(GcnDecode, StopsAtTheFinalEndpgm) {
