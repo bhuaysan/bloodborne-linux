@@ -1,17 +1,23 @@
-// SPIR-V builder: the word encoding, sharing of types and constants, and misuse.
+// SPIR-V builder: the word encoding, sharing of types and constants, misuse, and modules shaped
+// like the translator's output for each stage, validated by spirv-val.
 
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <spirv/unified1/GLSL.std.450.h>
 
 #include "gpu/gcn/spirv_builder.hpp"
+#include "gpu/gcn/spirv_val.hpp"
 
 namespace {
 
 using bb::gcn::spirv_word;
 using bb::gcn::SpirvBuilder;
+using bb::test::gcn::have_spirv_val;
+using bb::test::gcn::validate;
 using Id = SpirvBuilder::Id;
 using Op = spv::Op;
 using SC = spv::StorageClass;
@@ -53,6 +59,10 @@ TEST(SpirvBuilder, EncodesTheModule) {
         head(1, 56),                               // OpFunctionEnd
     };
     EXPECT_EQ(b.words(), expected);
+    if (!have_spirv_val()) {
+        GTEST_SKIP() << "spirv-val not found";
+    }
+    EXPECT_EQ(validate(b.words()), "");
 }
 
 // A function with a parameter and an instruction with a result, the vector and pointer types,
@@ -189,6 +199,138 @@ TEST(SpirvBuilder, RejectsMisuse) {
     EXPECT_THROW(b.op(Op::OpUndef, u32, {}), std::logic_error);  // after the terminator
     b.end_function();
     EXPECT_NO_THROW(b.words());
+}
+
+TEST(SpirvBuilder, ValidatorRejectsAnInvalidModule) {
+    if (!have_spirv_val()) {
+        GTEST_SKIP() << "spirv-val not found";
+    }
+    SpirvBuilder b;
+    b.capability(spv::Capability::Shader);
+    b.memory_model(spv::AddressingModel::Logical, spv::MemoryModel::GLSL450);
+    const Id void_t = b.type_void();
+    const Id main = b.begin_function(void_t, b.type_function(void_t));
+    b.begin_block(b.id());
+    // Needs the GroupNonUniform capability, which the module doesn't declare.
+    b.op(Op::OpGroupNonUniformElect, b.type_bool(),
+         {b.constant_u32(spirv_word(spv::Scope::Subgroup))});
+    b.op_void(Op::OpReturn);
+    b.end_function();
+    b.entry_point(spv::ExecutionModel::GLCompute, main, "main", {});
+    b.execution_mode(main, spv::ExecutionMode::LocalSize, {64, 1, 1});
+    const std::string message = validate(b.words());
+    EXPECT_NE(message.find("GroupNonUniform"), std::string::npos) << message;
+}
+
+// A compute shader with the pieces the translator uses: the draw block through a push constant
+// and a buffer device address, subgroup operations, LDS, registers as local variables, an
+// extended instruction, a selection and a loop with a phi.
+TEST(SpirvBuilder, ComputeModuleValidates) {
+    if (!have_spirv_val()) {
+        GTEST_SKIP() << "spirv-val not found";
+    }
+    SpirvBuilder b;
+    for (auto cap : {spv::Capability::Shader, spv::Capability::Int64,
+                     spv::Capability::PhysicalStorageBufferAddresses,
+                     spv::Capability::GroupNonUniform, spv::Capability::GroupNonUniformBallot,
+                     spv::Capability::GroupNonUniformShuffle}) {
+        b.capability(cap);
+    }
+    b.memory_model(spv::AddressingModel::PhysicalStorageBuffer64, spv::MemoryModel::GLSL450);
+    const Id glsl = b.import_extended("GLSL.std.450");
+
+    const Id void_t = b.type_void();
+    const Id bool_t = b.type_bool();
+    const Id u32 = b.type_int(32, false);
+    const Id u64 = b.type_int(64, false);
+    const Id uvec4 = b.type_vector(u32, 4);
+    const Id c0 = b.constant_u32(0);
+    const Id c1 = b.constant_u32(1);
+    const Id c4 = b.constant_u32(4);
+    const Id c63 = b.constant_u32(63);
+    const Id subgroup = b.constant_u32(spirv_word(spv::Scope::Subgroup));
+
+    const Id draw_t = b.type_struct({u64});
+    b.decorate(draw_t, spv::Decoration::Block);
+    b.member_decorate(draw_t, 0, spv::Decoration::Offset, {0});
+    const Id draw = b.variable(b.type_pointer(SC::PushConstant, draw_t), SC::PushConstant);
+    b.name(draw, "draw");
+
+    const Id words_t = b.type_runtime_array(u32);
+    b.decorate(words_t, spv::Decoration::ArrayStride, {4});
+    const Id buffer_t = b.type_struct({words_t});
+    b.decorate(buffer_t, spv::Decoration::Block);
+    b.member_decorate(buffer_t, 0, spv::Decoration::Offset, {0});
+    const Id buffer_ptr = b.type_pointer(SC::PhysicalStorageBuffer, buffer_t);
+
+    const Id index_var = b.variable(b.type_pointer(SC::Input, u32), SC::Input);
+    b.decorate(index_var, spv::Decoration::BuiltIn,
+               {spirv_word(spv::BuiltIn::LocalInvocationIndex)});
+    const Id lds = b.variable(b.type_pointer(SC::Workgroup, b.type_array(u32, b.constant_u32(64))),
+                              SC::Workgroup);
+    // A saved lane mask, as a ballot.
+    const Id mask = b.variable(b.type_pointer(SC::Private, uvec4), SC::Private,
+                               b.constant_composite(uvec4, {c0, c1, c0, c1}));
+
+    const Id main = b.begin_function(void_t, b.type_function(void_t));
+    const Id u32_fn = b.type_pointer(SC::Function, u32);
+    const Id v0 = b.local_variable(u32_fn, c0);
+    b.begin_block(b.id());
+    const Id index = b.op(Op::OpLoad, u32, {index_var});
+    const Id address_ptr = b.op(Op::OpAccessChain, b.type_pointer(SC::PushConstant, u64),
+                                {draw, c0});
+    const Id buffer = b.op(Op::OpConvertUToPtr, buffer_ptr,
+                           {b.op(Op::OpLoad, u64, {address_ptr})});
+    const Id lane = b.op(Op::OpBitwiseAnd, u32, {index, c63});
+    b.op_void(Op::OpStore, {v0, lane});
+    const Id active = b.op(Op::OpULessThan, bool_t, {lane, b.constant_u32(32)});
+    const Id ballot = b.op(Op::OpGroupNonUniformBallot, uvec4, {subgroup, active});
+    b.op_void(Op::OpStore, {mask, ballot});
+    const Id first = b.op(Op::OpGroupNonUniformBallotFindLSB, u32, {subgroup, ballot});
+    // A dynamic lane id (SPIR-V 1.5), as v_readfirstlane_b32 needs it.
+    const Id read = b.op(Op::OpGroupNonUniformBroadcast, u32, {subgroup, lane, first});
+    const Id swizzled = b.op(Op::OpGroupNonUniformShuffle, u32,
+                             {subgroup, lane, b.op(Op::OpBitwiseXor, u32, {lane, c1})});
+    b.op_void(Op::OpStore,
+              {b.op(Op::OpAccessChain, b.type_pointer(SC::Workgroup, u32), {lds, lane}), swizzled});
+    const Id lsb = b.op(Op::OpExtInst, u32, {glsl, GLSLstd450FindILsb, read});
+    // Declared late, emitted at the start of the first block.
+    const Id v1 = b.local_variable(u32_fn, b.constant_null(u32));
+    b.op_void(Op::OpStore, {v1, lsb});
+
+    const Id then_block = b.id();
+    const Id merge = b.id();
+    const Id is_lane0 = b.op(Op::OpIEqual, bool_t, {lane, c0});
+    b.op_void(Op::OpSelectionMerge, {merge, spirv_word(spv::SelectionControlMask::MaskNone)});
+    b.op_void(Op::OpBranchConditional, {is_lane0, then_block, merge});
+    b.begin_block(then_block);
+    b.op_void(Op::OpStore, {v0, read});
+    b.op_void(Op::OpBranch, {merge});
+    b.begin_block(merge);
+
+    const Id header = b.id(), body = b.id(), cont = b.id(), exit = b.id(), next = b.id();
+    b.op_void(Op::OpBranch, {header});
+    b.begin_block(header);
+    const Id i = b.op(Op::OpPhi, u32, {c0, merge, next, cont});
+    const Id more = b.op(Op::OpULessThan, bool_t, {i, c4});
+    b.op_void(Op::OpLoopMerge, {exit, cont, spirv_word(spv::LoopControlMask::MaskNone)});
+    b.op_void(Op::OpBranchConditional, {more, body, exit});
+    b.begin_block(body);
+    b.op_void(Op::OpBranch, {cont});
+    b.begin_block(cont);
+    b.op(Op::OpIAdd, u32, {i, c1}, next);
+    b.op_void(Op::OpBranch, {header});
+    b.begin_block(exit);
+    const Id out = b.op(Op::OpAccessChain, b.type_pointer(SC::PhysicalStorageBuffer, u32),
+                        {buffer, c0, index});
+    b.op_void(Op::OpStore, {out, b.op(Op::OpLoad, u32, {v0}),
+                            spirv_word(spv::MemoryAccessMask::Aligned), 4});
+    b.op_void(Op::OpReturn);
+    b.end_function();
+
+    b.entry_point(spv::ExecutionModel::GLCompute, main, "main", {draw, index_var, lds, mask});
+    b.execution_mode(main, spv::ExecutionMode::LocalSize, {64, 1, 1});
+    EXPECT_EQ(validate(b.words()), "");
 }
 
 }  // namespace
