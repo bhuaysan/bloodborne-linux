@@ -186,7 +186,7 @@ The descriptors come from user data directly, or through `s_load_*` from a point
   - The base address and the other V# fields are data, read at run time.
   - MUBUF, MTBUF and `s_buffer_load_*` check the range the way the hardware does: from `num_records`, the stride, and the `idxen`/`offen`/`addr64` modes. Out-of-range reads return 0, and out-of-range writes are dropped. The game may rely on that. `s_load_*` without a V# has no range check.
   - Typed formats (MTBUF, or the format of a V#) are converted in the shader from raw dwords.
-- **Vertex fetch** is ordinary buffer loading. PS4 vertex shaders load their attributes themselves, through a fetch subroutine called with `s_swappc_b64`. The translator inlines the fetch subroutine, which it receives as a second code input, so Vulkan's vertex input state stays empty. Where the fetch code comes from is part of the GNM survey (item 10).
+- **Vertex fetch** is ordinary buffer loading. PS4 vertex shaders load their attributes themselves, through a fetch subroutine called with `s_swappc_b64`. The translator inlines the fetch subroutine, which it receives as a second code input, so Vulkan's vertex input state stays empty. The eboot generates the fetch code at run time and puts its address into user-data dwords 0–1 of the vertex stage (VS, ES or LS), so the run time reads it from there at draw time and decodes it up to its `s_setpc_b64`. Offline, the harness can call the eboot's generator to get real fetch shaders ([gnm.md](../formats/gnm.md#fetch-shaders)).
 - **Images and samplers** need bindings. Each T# and S# source gets an index into descriptor arrays. The SPIR-V image type needs dim, arrayed, multisample and the sampled type at compile time, but these come from T# memory, not from registers. They are therefore part of the ShaderKey and checked at draw time. A mismatch means a new translation.
 - **Scratch** (private memory: swizzled MUBUF accesses through the scratch descriptor) becomes a per-invocation array. Its size comes from `SPI_TMPRING_SIZE` or `COMPUTE_TMPRING_SIZE` through the ShaderKey, because the array size is fixed at compile time. A size above a fixed limit is reported as unsupported.
 - **LDS** becomes a `Workgroup` array. That storage class exists only in compute. The translator ignores the LDS clamp in M0. **GDS and ordered append** are reported as unsupported until a shader needs them.
@@ -290,11 +290,14 @@ Committed test data is only our own: assembly sources, their assembled words, an
 
 ## Command buffers and state (later wave, sketch)
 
-- **Parsing.** The `libSceGnmDriver` submit functions hand `bbpm4` the command buffers and constant-engine buffers. Parsing runs on a GPU thread, never on the calling game thread.
+- **Parsing.** The `libSceGnmDriver` submit functions hand `bbpm4` the command buffers and constant-engine buffers. Parsing runs on a GPU thread, never on the calling game thread. What the eboot writes and submits is in [gnm.md](../formats/gnm.md).
+- **Constant engine.** The game uses it: each DCB comes with a CCB, and the two streams synchronise through the CE/DE counters, so `bbpm4` runs both.
+- **Compute queues.** The game maps compute queues on its own ring buffers and reports the write offset through an import. `bbpm4` parses those rings too.
+- **Addresses.** Packets carry the game's own virtual addresses, and command buffers hold data the GPU reads (descriptors, constants, indices). Command buffer memory is GPU-visible memory like the rest.
 - **One format.** Imports that write packets into a game buffer write standard PM4 (per the SI programming guide), so the parser sees one format.
 - **Register writes.** `SET_CONTEXT_REG`, `SET_SH_REG`, `SET_UCONFIG_REG` and `SET_CONFIG_REG` update a mirror of the register file.
 - **Draws and dispatches** take a snapshot of the state the backend needs: ShaderKey, render targets, blend, depth and raster state, and user data.
-- **Unknown packets** are logged once per opcode. `NOP` packets with a payload go to a hook list, because the driver may use them as markers.
+- **Unknown packets** are logged once per opcode; the eboot writes three opcodes that the AMD guide doesn't list (0x8A, 0x8C, 0x8D). `NOP` packets with a payload go to a hook list, because the driver may use them as markers. The GNM code tags some packets with `NOP`s whose payload starts with `0x6875xxxx`.
 - **Register names and offsets** come from the AMD register guide. The Mesa register database (code sources, category 1) may be used to generate a table, as generated data in its own PR.
 - **GPU memory.** The guest's GPU-visible memory (libkernel direct memory, M3) is imported into Vulkan with `VK_EXT_external_memory_host` where the device allows it. That gives device addresses without copies. Such memory stays host memory, so on a discrete GPU every read crosses PCIe. A device-local cache with write tracking will be needed for vertex and constant data.
 - **Textures and render targets** are cached by address and descriptor. Tiled ↔ linear conversion uses AMD's addrlib (code sources, category 1, MIT), copied into `third_party/` in its own PR.
@@ -334,7 +337,7 @@ Items 1, 3a and 10 can start at once. Items 5 and 6a wait for item 0.
 
 - Does the corpus use CI-only instructions? Item 4 answers this.
 - Does the footer follow the code in GPU memory? This is checked at run time.
-- Where do fetch shaders come from? Item 10 answers this.
+- Where do fetch shaders come from? Answered by item 10: the eboot generates them at run time ([gnm.md](../formats/gnm.md#fetch-shaders)).
 - How often do shaders depend on the wave size? Item 9 counts this.
 - Does the game use the LS/HS/ES/GS stages? The footer's stage field answers this (item 2).
 - Which clip-space conventions apply? This is decided with the backend.
