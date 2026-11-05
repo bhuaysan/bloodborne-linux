@@ -251,7 +251,7 @@ class Result {                       // true when nothing differs
 }
 ```
 
-The arena is a bump allocator that starts at offset 0 again at every restore, so a builder that makes the same calls gets the same addresses in both runs, and the layout is the same in every run of a build. `alloc` throws `std::length_error` when the arena is full. The builder returns a `std::tuple` that converts to the parameter types of `Sig`.
+The arena is a bump allocator that starts at offset 0 again at every restore, so a builder that makes the same calls gets the same addresses in both runs, and the layout is the same in every run of a build. `alloc` throws `std::length_error` when the arena is full. The builder returns a `std::tuple` that converts to the parameter types of `Sig`. Until the second part of #46, `compare` rejects floating-point and `void` return types at compile time.
 
 A report line names each difference: `return value: original 0x28, replacement 0x29`, or `memory: image 0x4100..0x4101 differs: original 15, replacement 16` (link addresses, end exclusive, up to 8 bytes of each side shown) and `memory: arena +0x4..+0x5 differs: …` (offsets). At most 8 ranges are listed, then their total. The harness core needs only a mapped and relocated `Image`, so its tests use a synthetic ELF with hand-assembled functions and run without the game.
 

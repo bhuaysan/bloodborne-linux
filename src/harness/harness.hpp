@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <format>
 #include <span>
 #include <stdexcept>
@@ -101,21 +100,18 @@ private:
     template <class R, class... A, class Build>
     Result compare_as(std::uint64_t link_addr, R (*replacement)(A...), Build& build,
                       std::type_identity<R(A...)>) {
+        // Bitwise floating-point and void returns come in the second part of #46.
+        static_assert(!std::is_void_v<R> && !std::is_floating_point_v<R>);
         auto run = [&](R (*f)(A...)) {
             restore();
             std::tuple<A...> args = build(arena_);
-            if constexpr (std::is_void_v<R>) {
-                std::apply(f, args);
-                return 0;
-            } else {
-                return std::apply(f, args);
-            }
+            return std::apply(f, args);
         };
         const auto original = run(image_.fn<R(A...)>(link_addr));
         keep_original();
         const auto replaced = run(replacement);
         Result result;
-        if (!same(original, replaced)) {
+        if (original != replaced) {
             result.add(std::format("return value: original {}, replacement {}", show(original),
                                    show(replaced)));
         }
@@ -124,22 +120,8 @@ private:
     }
 
     template <class T>
-    static bool same(const T& a, const T& b) {
-        if constexpr (std::is_floating_point_v<T>) {
-            static_assert(sizeof(T) <= 8, "long double has padding bytes");
-            return std::memcmp(&a, &b, sizeof(T)) == 0;  // bitwise: NaN payloads, -0
-        } else {
-            return a == b;
-        }
-    }
-
-    template <class T>
     static std::string show(const T& v) {
-        if constexpr (std::is_floating_point_v<T>) {
-            std::uint64_t bits = 0;
-            std::memcpy(&bits, &v, sizeof(T));
-            return std::format("{} (bits {:#x})", v, bits);
-        } else if constexpr (std::is_pointer_v<T>) {
+        if constexpr (std::is_pointer_v<T>) {
             return std::format("{}", reinterpret_cast<const void*>(v));
         } else if constexpr (std::is_integral_v<T> || std::is_enum_v<T>) {
             return std::format("{:#x}", static_cast<std::uint64_t>(v));

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstring>
 #include <stdexcept>
 #include <system_error>
 

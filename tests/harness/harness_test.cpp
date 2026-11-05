@@ -1,7 +1,6 @@
 #include "harness/harness.hpp"
 
 #include <algorithm>
-#include <bit>
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
@@ -31,7 +30,7 @@ using Bytes = std::vector<std::byte>;
 constexpr std::uintptr_t test_base = 0x32000000;  // clear of the other tests' bases
 // Link addresses: the code segment at 0 (file offset 0x1000), the data segment at 0x4000 (file
 // offset 0x2000) with a global.
-constexpr std::uint64_t global = 0x4100, read_write_at = 0x10, float_bits_at = 0x60;
+constexpr std::uint64_t global = 0x4100, read_write_at = 0x10;
 
 template <class T>
 void put(Bytes& out, std::size_t offset, T value) {
@@ -58,8 +57,6 @@ Bytes build_elf() {
     code(elf, read_write_at, {0x8b, 0x07, 0x8d, 0x48, 0x01, 0x89, 0x0d, 0, 0, 0, 0,  //
                               0xc7, 0x47, 0x04, 7, 0, 0, 0, 0x01, 0xc0, 0xc3});
     rel32(elf, 0x17, 0x1b, global);
-    // float_bits(uint32_t bits): movd xmm0, edi; ret
-    code(elf, float_bits_at, {0x66, 0x0f, 0x6e, 0xc7, 0xc3});
 
     // PT_SCE_DYNLIBDATA: the module name, then the smallest dynamic table parse_dynamic accepts.
     // The empty symbol table starts at offset 0 and holds only the null symbol.
@@ -177,23 +174,6 @@ TEST_F(HarnessTest, CatchesWrongResults) {
                   "memory: image 0x4100..0x4101 differs: original 15, replacement 16");
     expect_report(harness.compare<int(int*)>(read_write_at, &wrong_arena, two_ints),
                   "memory: arena +0x4..+0x5 differs: original 07, replacement 08");
-}
-
-// 0x60
-float float_bits(std::uint32_t bits) {
-    return std::bit_cast<float>(bits);
-}
-
-float positive_zero(std::uint32_t) {
-    return 0.0f;
-}
-
-TEST_F(HarnessTest, ComparesFloatsBitwise) {
-    auto minus_zero = [](Arena&) { return std::tuple{std::uint32_t{0x80000000}}; };
-    const Result r = harness.compare<float(std::uint32_t)>(float_bits_at, &float_bits, minus_zero);
-    EXPECT_TRUE(r) << r.report();
-    expect_report(harness.compare<float(std::uint32_t)>(float_bits_at, &positive_zero, minus_zero),
-                  "return value: original -0 (bits 0x80000000), replacement 0 (bits 0x0)");
 }
 
 TEST_F(HarnessTest, ArenaLayoutIsDeterministic) {
