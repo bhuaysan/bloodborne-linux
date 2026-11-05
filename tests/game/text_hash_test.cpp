@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <vector>
@@ -79,6 +80,13 @@ TEST_F(EbootTest, HashCharRangeMatches) {
             0x45d210, &bb::game::hash_char_range, range_of(text));
         EXPECT_TRUE(r) << "text of " << text.size() << " chars: " << r.report();
     }
+    std::string all_bytes(256, '\0');
+    for (std::size_t i = 0; i < all_bytes.size(); ++i) {
+        all_bytes[i] = static_cast<char>(i);
+    }
+    const Result all = harness().compare<std::uint64_t(const CharRange*)>(
+        0x45d210, &bb::game::hash_char_range, range_of(all_bytes));
+    EXPECT_TRUE(all) << "bytes 0x00..0xff: " << all.report();
     const Result r = harness().compare<std::uint64_t(const CharRange*)>(
         0x45d210, &bb::game::hash_char_range, range_of("abc", true));
     EXPECT_TRUE(r) << "begin > end: " << r.report();
