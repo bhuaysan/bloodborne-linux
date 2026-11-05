@@ -102,7 +102,7 @@ code ─decode─► instructions ─cfg─► blocks ─analyze─► typed pro
 - A program can end in an early `s_endpgm` before other blocks. Decoding stops at the first `s_endpgm` that lies at or beyond the furthest branch target, or at the code size from the footer when it is known.
 - The disassembler prints LLVM's assembly syntax.
 - An unknown encoding is an error that names the offset and the word. It is never skipped.
-- The opcode tables are written by hand from the ISA manual. They are code, not generated data.
+- The opcode tables are written by hand from the ISA manual. They are code, not generated data. Regular families are built in code rather than listed: VOPC names, for example, come from the base (`cmp`, `cmpx`, `cmps`, `cmpsx`) × condition × type. Table rows are kept dense.
 
 ### Execution model
 
@@ -131,24 +131,31 @@ code ─decode─► instructions ─cfg─► blocks ─analyze─► typed pro
 
 - **Branch structure.** It comes from the scalar branches and becomes structured SPIR-V control flow. The branch conditions are uniform per subgroup by construction. The structurizer handles acyclic regions and natural loops. An irreducible graph falls back to a loop around a switch on a block index.
 - **Vector results.** A VALU result is written as `select(active, new, old)`. The operation itself runs in every lane.
-- **Mask results.** A mask destination is written as `active && result`, not as a select, because GCN clears the bits of inactive lanes. This covers `v_cmp*` into VCC or SGPRs, carry-outs of VOP3 adds and subtracts, and `v_cmpx*`, which sets EXEC = `active && result`.
-- **Memory.** Every buffer and scalar memory access, load or store, runs only under `if (active && in_range)` (see Resources). An inactive lane may hold any address.
+- **Mask results.** A mask destination is written as `active && result`, not as a select, because GCN clears the bits of inactive lanes. This covers every VALU mask destination: `v_cmp*` into VCC or SGPRs, the implicit VCC of VOP2 `v_add_i32`, `v_sub_i32`, `v_addc_u32` and `v_subb_u32`, VOP3 SGPR destinations, and `v_div_scale_*`. `v_cmpx*` sets EXEC = `active && result`.
+- **Vector memory.** Every MUBUF and MTBUF access, load or store, runs only under `if (active && in_range)` (see Resources). An inactive lane may hold any address.
+- **Scalar memory** (SMRD) runs in every lane, with no `active` term. The wave executes it even when EXEC is 0, its address is uniform and really used, and skipping it would leave stale SGPRs in some lanes.
 - **Other side effects.** Exports, atomics and LDS writes run under `if (active)`.
-- **Image operations.** Sampling runs unguarded, so derivatives stay available. Other image loads run unguarded too, with `robustImageAccess` enabled. Image stores and image atomics are side effects and run under `if (active)`.
+- **Image operations.** Sampling runs unguarded, so derivatives stay available. Other image loads run unguarded too, with robust image access enabled. `robustImageAccess2` (`VK_EXT_robustness2`) returns 0 out of range like GCN. With only `robustImageAccess`, the value is undefined, which can differ for active lanes with out-of-range coordinates. Image stores and image atomics are side effects and run under `if (active)`.
 
 **Pixel shaders** need four more rules:
 
 - EXEC starts as "this fragment is covered", that is `!HelperInvocation`.
 - `s_wqm_b64` (whole quad mode) turns the helper lanes of a quad back on for derivatives, as in the table above.
-- At the final `exp … done`, a lane whose EXEC bit is false was discarded. It executes `OpDemoteToHelperInvocation` (core in Vulkan 1.3), so the fragment is not written.
+- At the final `exp … done`, a lane whose EXEC bit is false was discarded. It executes `OpDemoteToHelperInvocation` (core in SPIR-V 1.6 and Vulkan 1.3), so the fragment is not written.
 - Implicit derivatives are only defined in uniform control flow. The branch conditions are uniform per subgroup, and that works on real drivers. Where `VK_KHR_shader_quad_control` is available, the translator declares `QuadDerivativesKHR` and `RequireFullQuadsKHR`, which make it defined by the spec.
 
-**Execz skips and live-out scalars.** A forward `s_cbranch_execz`/`vccz` that skips a region in which scalars are defined and used afterwards is translated as a fall-through. The compiler emits these skips as an optimization, so executing the region with no active lane gives the same result. Without the fall-through, a subgroup whose lanes are all inactive would skip scalar work that the 64-lane wave runs.
+**Execz skips and live-out scalars.** A forward `s_cbranch_execz` that skips a region in which scalars are defined and used afterwards is translated as a fall-through. The compiler emits these skips as an optimization, so executing the region with no active lane gives the same result. Without the fall-through, a subgroup whose lanes are all inactive would skip scalar work that the 64-lane wave runs.
+
+`s_cbranch_vccz` and `s_cbranch_vccnz` are always real branches on any(VCC). On gfx7 they are also how uniform branches on float compares are made (there is no scalar float compare), and the skipped region then runs under full EXEC.
 
 **Wave size.** A GCN wave has 64 lanes, but a Vulkan subgroup may be smaller: 32 on many GPUs, 8 or 16 on lavapipe.
 
 - **Exact mode** requires a subgroup size of 64 (`VK_EXT_subgroup_size_control`, with `requireFullSubgroups`) in the stages listed in `requiredSubgroupSizeStages`. It matters mainly for compute: the PS4 doesn't define which vertices or pixels share a wave either.
-- **Lane-local mode** computes cross-lane results over the subgroup instead of the wave. In compute, ballot results keep their wave bit positions (lane ID), and the bits of lanes in other subgroups read as 0.
+- **Lane-local mode** computes cross-lane results over the subgroup instead of the wave.
+  - In compute, ballot results keep their wave bit positions, and the bits of lanes in other subgroups read as 0. The wave position of bit *i* is `subgroup_base + i`, with `subgroup_base = lane_id - SubgroupInvocationID`.
+  - `v_readfirstlane_b32` and `v_readlane_b32` convert the wave lane back to `lane - subgroup_base` before the broadcast. A lane outside the subgroup reads as 0.
+  - This assumes that a subgroup covers consecutive values of `LocalInvocationIndex`. Vulkan doesn't guarantee it, but implementations do it. The execution tests check it once (`subgroup_base` is uniform per subgroup).
+  - A device with `maxSubgroupSize` above 64 is not supported.
 
 An analysis pass marks the shaders whose results can depend on the wave width: cross-lane results that are not uniform, and `s_barrier` under control flow that depends on EXEC (a hang risk). The corpus report counts them.
 
@@ -158,8 +165,7 @@ Each draw or dispatch passes one push constant: a buffer device address pointing
 
 - `user_data[16]`, the stage's `SPI_SHADER_USER_DATA_*` or `COMPUTE_USER_DATA_*` values, which the program finds in its first SGPRs;
 - `address_bias`, so that device address = guest GPU address + bias;
-- `code_address`, the guest address of the program, for `s_getpc_b64`;
-- `scratch_size` in dwords per lane.
+- `code_address`, the guest address of the program, for `s_getpc_b64`.
 
 For the first wave, the guest's GPU-visible memory is **one contiguous imported range**, so a single bias is enough. The execution tests allocate one buffer and set the bias to match. A page table can replace the bias later without changing the shaders' view.
 
@@ -177,11 +183,11 @@ The descriptors come from user data directly, or through `s_load_*` from a point
 
 - **Buffers and scalar memory** are read and written through buffer device addresses (`VK_KHR_buffer_device_address`, `PhysicalStorageBuffer` in SPIR-V).
   - The base address and the other V# fields are data, read at run time.
-  - MUBUF, MTBUF and `s_buffer_load_*` check the range the way the hardware does: from `num_records`, the stride, and the `idxen`/`offen`/`addr64` modes. Out-of-range reads return 0, and out-of-range writes are dropped. The game may rely on that.
+  - MUBUF, MTBUF and `s_buffer_load_*` check the range the way the hardware does: from `num_records`, the stride, and the `idxen`/`offen`/`addr64` modes. Out-of-range reads return 0, and out-of-range writes are dropped. The game may rely on that. `s_load_*` without a V# has no range check.
   - Typed formats (MTBUF, or the format of a V#) are converted in the shader from raw dwords.
 - **Vertex fetch** is ordinary buffer loading. PS4 vertex shaders load their attributes themselves, through a fetch subroutine called with `s_swappc_b64`. The translator inlines the fetch subroutine, which it receives as a second code input, so Vulkan's vertex input state stays empty. Where the fetch code comes from is part of the GNM survey (item 10).
 - **Images and samplers** need bindings. Each T# and S# source gets an index into descriptor arrays. The SPIR-V image type needs dim, arrayed, multisample and the sampled type at compile time, but these come from T# memory, not from registers. They are therefore part of the ShaderKey and checked at draw time. A mismatch means a new translation.
-- **Scratch** (private memory: swizzled MUBUF accesses through the scratch descriptor) becomes a per-invocation array of `scratch_size` dwords. A size above a fixed limit is reported as unsupported.
+- **Scratch** (private memory: swizzled MUBUF accesses through the scratch descriptor) becomes a per-invocation array. Its size comes from `SPI_TMPRING_SIZE` or `COMPUTE_TMPRING_SIZE` through the ShaderKey, because the array size is fixed at compile time. A size above a fixed limit is reported as unsupported.
 - **LDS** becomes a `Workgroup` array. That storage class exists only in compute. The translator ignores the LDS clamp in M0. **GDS and ordered append** are reported as unsupported until a shader needs them.
 - **Fork and join.** `s_cbranch_*fork` and `s_cbranch_join` (SI/CI) are reported as unsupported.
 
@@ -199,7 +205,8 @@ The register state a program starts with depends on pipeline registers, and so d
 
 - the stage and the register values above;
 - the float mode bits from `SPI_SHADER_PGM_RSRC1_*` or `COMPUTE_PGM_RSRC1` (`FLOAT_MODE`, `DX10_CLAMP`, `IEEE_MODE`), which change min/max, NaN and denormal behavior;
-- the image type class of each T# source (above).
+- the image type class of each T# source (above);
+- the scratch size (`SPI_TMPRING_SIZE`, `COMPUTE_TMPRING_SIZE`).
 
 The translation cache key is code hash + fetch code hash + ShaderKey + translator version. The cache lives in `$XDG_CACHE_HOME/bloodborne-linux/shaders/`. Offline, keys come from the footer metadata where it carries them, otherwise from test defaults.
 
@@ -207,7 +214,7 @@ Other stages (LS, HS, ES, GS for tessellation and geometry shaders) wait until t
 
 ### SPIR-V builder
 
-`bbgcn` has its own small module builder that emits the word stream directly, with the enum values from the Khronos SPIR-V headers. The target is SPIR-V 1.5. Every translated module must pass `spirv-val` in the tests. An optimizer (`spirv-opt`) can come later, behind the cache.
+`bbgcn` has its own small module builder that emits the word stream directly, with the enum values from the Khronos SPIR-V headers. The baseline is Vulkan 1.3 (demote to helper invocation, `robustImageAccess`, subgroup size control are core there), and the target is SPIR-V 1.6. Every translated module must pass `spirv-val --target-env vulkan1.3` in the tests. Lavapipe supports all of it. An optimizer (`spirv-opt`) can come later, behind the cache.
 
 ### Interface
 
@@ -285,13 +292,14 @@ Each item is one issue, at most 500 lines of code and tests. Every PR that first
 | 2 | **Shader binary footer.** Format note; stage, code size and resource names in `index.json`; the eboot scan for embedded programs. | 1 |
 | 3a | **Decoder core and scalar formats.** `bbgcn` skeleton, `Instruction`, SOP1/SOP2/SOPK/SOPC/SOPP/SMRD with disassembly, and the `llvm-mc` round-trip test helper. | – |
 | 3b | **Vector ALU formats.** VOP1, VOP2, VOPC, VOP3, VINTRP. | 3a |
-| 3c | **Memory and export formats.** DS, MUBUF, MTBUF, MIMG, EXP, FLAT. | 3a |
-| 4 | **Corpus decode test.** Round trip of every program through `llvm-mc`. It also answers whether the corpus uses CI-only instructions. | 2, 3b, 3c |
+| 3c | **LDS and flat formats.** DS, FLAT. | 3a |
+| 3d | **Buffer, image and export formats.** MUBUF, MTBUF, MIMG, EXP. | 3a |
+| 4 | **Corpus decode test.** Round trip of every program through `llvm-mc`. It also answers whether the corpus uses CI-only instructions. | 2, 3b, 3c, 3d |
 | 5 | **SPIR-V builder** and `spirv-val` test support. | 0 |
 | 6a | **Lavapipe compute runner.** Device setup, buffers, the draw block, and the test program format (assembly and hex). | 0, 5 |
 | 6b | **CFG and structurizer.** Tested on synthetic graphs through `spirv-val`. | 3a, 5 |
 | 6c | **Translator core.** Mask typing, predication, the SALU and VALU subset, the compute stage, and execution tests. | 3b, 6a, 6b |
-| 7a | **Descriptor sources and untyped buffer memory.** SMRD and raw MUBUF with range checks, scratch. | 3c, 6c |
+| 7a | **Descriptor sources and untyped buffer memory.** SMRD and raw MUBUF with range checks, scratch. | 3d, 6c |
 | 7b | **Typed buffer formats.** MTBUF and formatted MUBUF. | 7a |
 | 7c | **LDS.** DS operations, `Workgroup` storage, `ds_swizzle_b32`. | 3c, 6c |
 | 8a | **Graphics stages.** VS and PS interfaces, exports, interpolation, discard and demote, and an offscreen render test on lavapipe. | 7a |
