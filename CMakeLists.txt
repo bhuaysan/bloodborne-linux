@@ -23,8 +23,8 @@ target_compile_options(bb_warnings INTERFACE -Wall -Wextra -Wpedantic $<$<BOOL:$
 if(BB_SANITIZE)
     add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        # Checks the function type of every indirect call target. Game code and stub thunks
-        # carry no clang type information (docs/design/runtime.md).
+        # Checks the type of indirect calls (part of clang's -fsanitize=undefined). Game code
+        # and stub thunks were not compiled with it (docs/design/runtime.md).
         add_compile_options(-fno-sanitize=function)
     endif()
     add_link_options(-fsanitize=address,undefined)

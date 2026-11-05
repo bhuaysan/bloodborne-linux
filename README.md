@@ -14,7 +14,7 @@ This is also a learning project. Everything here is worked out independently.
 
 ## Status
 
-Executable analysis (M1) and the loader with its test harness (M2) are done. `bb-load` maps and relocates the game executable in a Linux process, imports resolve to logging stubs, and the first game functions are replaced by C++ that passes differential tests against the original. No game code runs on its own yet; reaching the main loop is next (M3). See [docs/roadmap.md](docs/roadmap.md).
+Executable analysis (M1) and the loader with its test harness (M2) are done. `bb-load` maps and relocates the game executable in a Linux process, imports resolve to logging stubs, and the first game functions are decompiled to C++ and pass differential tests against the original. No game code runs on its own yet; reaching the main loop is next (M3). See [docs/roadmap.md](docs/roadmap.md).
 
 ## Requirements
 

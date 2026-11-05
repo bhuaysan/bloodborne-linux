@@ -15,7 +15,7 @@ src/
   tools/                small command-line programs (bb-load)
 tests/<target>/         GoogleTest unit tests, one directory per library
 tests/support/          bbtestsupport: shared test helpers (game directory lookup, BB_REQUIRE_GAME)
-tests/harness/          also bbeboottest: the EbootTest fixture for tests against the eboot
+tests/harness/          harness tests, plus bbeboottest: the EbootTest fixture (also used by tests/game/)
 ```
 
 Dependencies point one way:
@@ -25,7 +25,7 @@ common ← loader ← hle, hook ← game
           loader ← harness (and the include directories of hle)
 ```
 
-`bbharness` knows nothing of `bbgame`. Tests that call game functions through the harness depend on both, through `bbeboottest` ("Process setup").
+`bbharness` knows nothing of `bbgame`. Tests that call game functions through the harness link both: `bbharness` through `bbeboottest`, and `bbgame` directly ("Process setup").
 
 The loader resolves imports through a callback (see [Relocations](#relocations)), so it never calls into `hle`, and the loader tests can bind imports to fakes.
 
@@ -296,10 +296,10 @@ Not compared: the stack below the call, registers other than the return register
 - A crash in the original or the replacement kills the test binary. Isolating each call in a forked child can come later if it is needed.
 - The original code isn't instrumented by AddressSanitizer. Only the replacement and the harness are.
 - AddressSanitizer's stack-use-after-return detection, on by default, moves an instrumented function's locals into fake stack frames on the heap. Pointers to the replacement's locals would then not look like stack pointers and would compare unequal. The harness turns it off with `__asan_default_options()` returning `detect_stack_use_after_return=0`, defined in the harness tests' own main (`tests/harness/main.cpp`, instead of `gtest_main`) so the linker keeps it.
-- With clang, `-fsanitize=undefined` includes `-fsanitize=function`, which checks that an indirect call goes through a function pointer of the right type. The game code and the stub thunks were not built by clang, so the check has nothing to compare against; clang builds turn it off with `-fno-sanitize=function`. How clang implements the check is not documented, and no clang build has been tested yet (CI and local builds use GCC). GCC's `-fsanitize=undefined` has no such check.
+- With clang, `-fsanitize=undefined` includes `-fsanitize=function`, which checks the type of indirect calls. The game code and the stub thunks were not compiled with this check, so clang builds turn it off with `-fno-sanitize=function`. No clang build has been tested yet (CI and local builds use GCC). GCC's `-fsanitize=undefined` has no such check.
 
 ## Tools
 
 `bb-load` maps the eboot, binds every import through `bb::hle::resolve`, finalizes the protections and exits without running game code. It prints the base, the entry point, the segments (link address, memory and file size, protection), the TLS template, the `PT_SCE_PROCPARAM` address, the number of relocations by type over both tables, the numbers of function stubs and data blocks that `resolve` created (666 and 20 for the eboot), and the imports by library (functions and objects, in the order of `tools/elfimports`).
 
-The game directory comes from `--game-dir` or else `BB_GAME_DIR` in the environment. Unlike the tests, `bb-load` doesn't read `local.env`: it is a user-facing program and runs outside the repository too. A test runs it on the eboot and compares its output with expected values taken from `tools/elfimports` for `eboot.elf` (701 imports in 39 libraries). The values are copied into the test, so the test doesn't run `tools/elfimports` itself.
+The game directory comes from `--game-dir` or else `BB_GAME_DIR` in the environment. Unlike the tests, `bb-load` doesn't read `local.env`: it is a user-facing program and runs outside the repository too. A test runs it on the eboot and compares the whole output with fixed expected values. The imports by library are those of `tools/elfimports` for `eboot.elf` (701 imports in 39 libraries), copied into the test.
