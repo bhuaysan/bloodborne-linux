@@ -27,12 +27,12 @@ std::optional<UnwindTable> read_unwind_table(std::span<const std::byte> elf,
                                              std::span<const Phdr> phdrs);
 
 // The pc_range of the FDE that the search table lists for a function starting exactly at
-// `link`, nothing when no entry starts there. `segment` is the file data of the table's segment
-// (in the file or in the mapped image). Dead FDEs are never found: they are not in the table.
-// Throws LoadError when the listed FDE or its CIE is malformed, lies outside `segment`, has an
-// augmentation other than "z" followed by R, L and P, a pointer encoding other than pcrel with
-// sdata4, udata4, sdata8, udata8 or absptr size, or doesn't start at `link`.
-std::optional<std::uint64_t> fde_range(const UnwindTable& table,
-                                       std::span<const std::byte> segment, std::uint64_t link);
+// `link`, nothing when no entry starts there. Reads the table's segment in the image mapped at
+// `base` (Image::function_size). Dead FDEs are never found: they are not in the table. Throws
+// LoadError when the listed FDE or its CIE is malformed, lies outside the file data of that
+// segment, has an augmentation other than "z" followed by R, L and P, a pointer encoding other
+// than pcrel with sdata4, udata4, sdata8, udata8 or absptr size, or doesn't start at `link`.
+std::optional<std::uint64_t> fde_range(const UnwindTable& table, std::uintptr_t base,
+                                       std::uint64_t link);
 
 }  // namespace bb::loader

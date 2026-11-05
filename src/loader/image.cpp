@@ -136,9 +136,7 @@ std::optional<std::uint64_t> Image::function_size(std::uint64_t link) const {
     if (!unwind) {
         return std::nullopt;
     }
-    // read_unwind_table checked that this file data lies inside a readable segment.
-    auto* data = reinterpret_cast<const std::byte*>(base + unwind->segment_link);
-    return fde_range(*unwind, {data, unwind->segment_file_size}, link);
+    return fde_range(*unwind, base, link);
 }
 
 void Image::finalize_protection() {

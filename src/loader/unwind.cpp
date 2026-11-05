@@ -170,9 +170,10 @@ std::optional<UnwindTable> read_unwind_table(std::span<const std::byte> elf,
                                 hdr->vaddr, hdr->filesz));
 }
 
-std::optional<std::uint64_t> fde_range(const UnwindTable& table,
-                                       std::span<const std::byte> segment, std::uint64_t link) {
-    SegmentData d{segment, table.segment_link};
+std::optional<std::uint64_t> fde_range(const UnwindTable& table, std::uintptr_t base,
+                                       std::uint64_t link) {
+    const auto* data = reinterpret_cast<const std::byte*>(base + table.segment_link);
+    SegmentData d{{data, table.segment_file_size}, table.segment_link};
     // Starts are 32-bit offsets from .eh_frame_hdr, so nothing farther away can be listed.
     auto rel = static_cast<std::int64_t>(link - table.link_addr);
     if (rel < std::numeric_limits<std::int32_t>::min() ||
