@@ -124,6 +124,8 @@ A relocation against a defined symbol of the same file (`st_shndx != 0`) resolve
 
 Every import must resolve to a non-zero address. The game runtime, `bb-load` and the harness pass `bb::hle::resolve`.
 
+`relocate` (declared in `loader/relocate.hpp`) applies `DT_SCE_RELA` first, then `DT_SCE_JMPREL`. It checks the type, then the target, then resolves the symbol, so the resolver never sees an import of a rejected relocation. Each 8-byte target must lie inside the memory of a `PT_LOAD`, and inside a writable one unless the image has `DT_TEXTREL` (checked without overflow). On an error the image is partly relocated and must be discarded. Calling `relocate` after `finalize_protection` is a `std::logic_error`. In the eboot, no relocation targets the code segment, 686 of the 701 imports are referenced, and `R_X86_64_64` against imported data uses only the addends 0 and 0x10.
+
 ## Imports and stubs
 
 ### Registry

@@ -4,7 +4,10 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <map>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -14,6 +17,8 @@
 #include "common/file.hpp"
 #include "loader/bytes.hpp"
 #include "loader/elf.hpp"
+#include "loader/image.hpp"
+#include "loader/relocate.hpp"
 #include "loader/self.hpp"
 #include "support/game.hpp"
 
@@ -421,6 +426,143 @@ TEST(ParseDynamic, SurvivesCorruptBytes) {
     }
 }
 
+// Relocation tests use the Synthetic ELF above, mapped with map_elf.
+
+constexpr std::uintptr_t reloc_base = 0x31000000;  // clear of the game tests' default_base
+constexpr std::uintptr_t fake_func = 0x7e00'0000'1000, fake_object = 0x7e00'0000'2000;
+
+// `elf` with its ELF header and program headers written into the start of the code segment.
+Bytes to_file(const Elf& elf) {
+    Bytes bytes = elf.bytes;
+    std::memcpy(bytes.data(), "\x7f" "ELF\x02\x01", 6);
+    put<std::uint16_t>(bytes, 0x10, et_sce_dynamic);
+    put<std::uint16_t>(bytes, 0x12, em_x86_64);
+    put<std::uint64_t>(bytes, 0x20, elf_header_size);  // e_phoff
+    put<std::uint16_t>(bytes, 0x36, phdr_size);
+    put<std::uint16_t>(bytes, 0x38, static_cast<std::uint16_t>(elf.phdrs.size()));
+    for (std::size_t i = 0; i < elf.phdrs.size(); ++i) {
+        const Phdr& ph = elf.phdrs[i];
+        std::size_t at = elf_header_size + i * phdr_size;
+        put(bytes, at, ph.type);
+        put(bytes, at + 0x04, ph.flags);
+        put(bytes, at + 0x08, ph.offset);
+        put(bytes, at + 0x10, ph.vaddr);
+        put(bytes, at + 0x20, ph.filesz);
+        put(bytes, at + 0x28, ph.memsz);
+        put(bytes, at + 0x30, ph.align);
+    }
+    return bytes;
+}
+
+// Resolves the function import of Synthetic to fake_func and the object import to fake_object,
+// and records every call in `calls`.
+Resolver fake_resolver(std::vector<Import>& calls) {
+    return [&calls](const Import& imp) {
+        calls.push_back(imp);
+        return imp.type == stt_func ? fake_func : fake_object;
+    };
+}
+
+std::uint64_t slot(const Image& image, std::uint64_t link) {
+    std::uint64_t value;
+    std::memcpy(&value, reinterpret_cast<const void*>(image.runtime(link)), sizeof value);
+    return value;
+}
+
+TEST(Relocate, AppliesEachType) {
+    Synthetic s;
+    Synthetic::add_rela(s.rela, 0x4020, r_x86_64_glob_dat, 5, 0);    // imported object
+    Synthetic::add_rela(s.rela, 0x4028, r_x86_64_64, 5, 0x10);
+    Synthetic::add_rela(s.rela, 0x4030, r_x86_64_64, 4, 8);          // defined, exported
+    Synthetic::add_rela(s.rela, 0x4038, r_x86_64_glob_dat, 3, 0);    // defined section symbol
+    Synthetic::add_rela(s.rela, 0x4040, r_x86_64_glob_dat, 2, 0);    // module_start
+    Synthetic::add_rela(s.rela, 0x4048, r_x86_64_64, 2, 4);
+    Synthetic::add_rela(s.rela, 0x5ff8, r_x86_64_relative, 0, -0x10);  // last slot, in .bss
+    Synthetic::add_rela(s.rela, 0x800, r_x86_64_relative, 0, 0x4000);  // code, DT_TEXTREL is set
+    Synthetic::add_rela(s.jmprel, 0x4050, r_x86_64_jump_slot, 2, 0);
+    Image image = map_elf(to_file(s.build()), reloc_base);
+    std::vector<Import> calls;
+    relocate(image, fake_resolver(calls));
+
+    EXPECT_EQ(slot(image, 0x4010), reloc_base + 0x40);
+    EXPECT_EQ(slot(image, 0x4018), fake_func - 8);
+    EXPECT_EQ(slot(image, 0x4008), fake_func);
+    EXPECT_EQ(slot(image, 0x4020), fake_object);
+    EXPECT_EQ(slot(image, 0x4028), fake_object + 0x10);
+    EXPECT_EQ(slot(image, 0x4030), reloc_base + 0x4108);
+    EXPECT_EQ(slot(image, 0x4038), reloc_base);
+    EXPECT_EQ(slot(image, 0x4040), 0U);
+    EXPECT_EQ(slot(image, 0x4048), 4U);
+    EXPECT_EQ(slot(image, 0x4050), 0U);
+    EXPECT_EQ(slot(image, 0x5ff8), reloc_base - 0x10);
+    EXPECT_EQ(slot(image, 0x800), reloc_base + 0x4000);
+
+    // DT_SCE_RELA in table order, then DT_SCE_JMPREL. Defined and weak symbols need no resolver.
+    ASSERT_EQ(calls.size(), 4U);
+    EXPECT_EQ(calls[0].nid, "AAAAAAAAAAA");  // R_X86_64_64 at 0x4018
+    EXPECT_EQ(calls[0].library, "libFoo");
+    EXPECT_EQ(calls[0].module, "libFoo");
+    EXPECT_EQ(calls[0].type, stt_func);
+    EXPECT_EQ(calls[1].nid, "CCCCCCCCC+-");
+    EXPECT_EQ(calls[1].type, stt_object);
+    EXPECT_EQ(calls[2].nid, "CCCCCCCCC+-");
+    EXPECT_EQ(calls[3].nid, "AAAAAAAAAAA");  // R_X86_64_JUMP_SLOT at 0x4008
+}
+
+// Maps `s` with `edit` applied to its dynamic entries, relocates it with `resolve` and expects a
+// LoadError containing `message`.
+void expect_relocate_error(const Synthetic& s, std::string_view message,
+                           const std::function<void(std::vector<Dyn>&)>& edit = {},
+                           Resolver resolve = {}) {
+    std::vector<Import> calls;
+    Image image = map_elf(to_file(s.build(edit)), reloc_base);
+    try {
+        relocate(image, resolve ? resolve : fake_resolver(calls));
+        ADD_FAILURE() << "no error, expected: " << message;
+    } catch (const LoadError& e) {
+        EXPECT_NE(std::string_view(e.what()).find(message), std::string_view::npos)
+            << "got: " << e.what() << "\nexpected: " << message;
+    }
+}
+
+TEST(Relocate, RejectsBadRelocations) {
+    struct Case {
+        std::uint64_t offset;
+        std::uint32_t type, sym;
+        std::string_view message;
+    };
+    const Case cases[] = {
+        {0x4050, 37, 0, "relocation type 37 at 0x4050: unsupported type"},
+        {0x4050, 16, 1, "relocation type 16 at 0x4050: unsupported type"},  // DTPMOD64
+        {0x4050, r_x86_64_64, 0, "relocation type 1 at 0x4050: undefined symbol 0 ''"},
+        {0x5ffc, r_x86_64_relative, 0, "type 8 at 0x5ffc: target outside the PT_LOAD segments"},
+        {0x2000, r_x86_64_relative, 0, "type 8 at 0x2000: target outside the PT_LOAD segments"},
+        {0x6000, r_x86_64_glob_dat, 1, "type 6 at 0x6000: target outside the PT_LOAD segments"},
+        {~std::uint64_t{3}, r_x86_64_relative, 0, "target outside the PT_LOAD segments"},
+    };
+    for (const Case& c : cases) {
+        Synthetic s;
+        Synthetic::add_rela(s.rela, c.offset, c.type, c.sym, 0);
+        expect_relocate_error(s, c.message);
+    }
+    Synthetic code;
+    Synthetic::add_rela(code.jmprel, 0xff8, r_x86_64_jump_slot, 1, 0);
+    expect_relocate_error(code, "type 7 at 0xff8: target in a read-only segment without DT_TEXTREL",
+                          [](std::vector<Dyn>& dyn) {
+                              std::erase_if(dyn, [](const Dyn& d) { return d.first == 0x16; });
+                          });
+    expect_relocate_error(Synthetic{}, "type 1 at 0x4018: import AAAAAAAAAAA#A#B resolved to 0", {},
+                          [](const Import&) { return std::uintptr_t{0}; });
+}
+
+TEST(Relocate, RefusesAFinalizedImage) {
+    Image image = map_elf(to_file(Synthetic{}.build()), reloc_base);
+    image.finalize_protection();
+    std::vector<Import> calls;
+    EXPECT_THROW(relocate(image, fake_resolver(calls)), std::logic_error);
+    EXPECT_TRUE(calls.empty());
+}
+
 TEST(ParseDynamicGame, ReadsTheEboot) {
     BB_REQUIRE_GAME(game);
     auto elf = self_to_elf(bb::common::read_file(game / "eboot.bin"));
@@ -498,6 +640,32 @@ TEST(ParseDynamicGame, ReadsTheEboot) {
     EXPECT_EQ(posix->name, "libkernel");
     EXPECT_EQ(app_content->name, "libSceAppContentUtil");
     EXPECT_EQ(app_content->file, "libSceAppContent.prx");
+}
+
+TEST(RelocateGame, RelocatesTheEboot) {
+    BB_REQUIRE_GAME(game);
+    Image image = map_eboot(game);
+    std::map<std::string, std::uintptr_t> fakes;  // a distinct address per NID#library
+    relocate(image, [&](const Import& imp) {
+        std::uintptr_t next = 0x7e00'0000'0000 + 0x20 * (fakes.size() + 1);
+        return fakes.try_emplace(imp.nid + '#' + imp.library, next).first->second;
+    });
+    EXPECT_EQ(fakes.size(), 686U);  // of the 701 imports, as tools/common/ps4elf.py counts them
+
+    for (const Rela& r : image.dyn.plt_relocs) {
+        const Import& imp = image.dyn.symbols[r.sym].decoded;
+        ASSERT_EQ(slot(image, r.offset), fakes.at(imp.nid + '#' + imp.library)) << r.offset;
+    }
+    EXPECT_EQ(slot(image, 0x513b330), default_base + 0x5540528);  // the first R_X86_64_RELATIVE
+    // No target in the code segment despite DT_TEXTREL, and imported data is used at offsets
+    // 0 and 0x10 only (docs/design/runtime.md, "Data imports").
+    for (const Rela& r : image.dyn.relocs) {
+        ASSERT_GE(r.offset, image.segments[1].link_addr);
+        if (r.type == r_x86_64_64 && image.dyn.symbols[r.sym].type == stt_object) {
+            ASSERT_TRUE(r.addend == 0 || r.addend == 0x10) << r.offset;
+        }
+    }
+    image.finalize_protection();
 }
 
 }  // namespace
