@@ -82,7 +82,7 @@ void log_flush();
 
 // Creates `dirs.logs()` (RuntimeDirs::ensure) and in it `<UTC yyyymmddThhmmssZ>-<pid>.log`
 // (mode 0600, never an existing file), writes every later line there as well, and returns its
-// path. The runtime calls it once at start. A file opened before is closed. Throws
+// path. bb-run (#101) calls it once at start. A file opened before is closed. Throws
 // std::filesystem::filesystem_error when the directory or the file cannot be created.
 std::filesystem::path open_log_file(const RuntimeDirs& dirs);
 // Closes the log file, if one is open. Later lines go to stderr only.
