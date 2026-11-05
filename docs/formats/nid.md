@@ -38,6 +38,7 @@ Candidate sources and their labels in the `source` column:
 | `man2`, `man3` | page names of the installed Linux manual pages (every directory `manpath` lists) | `analysis/nids/candidates/`, written by `syscandidates.py` |
 | `glibc` | symbols defined by the system's `libc.so.6` and `libm.so.6` | same |
 | `libstdcxx` | symbols defined by the system's `libstdc++.so.6` (mangled C++ names) | same |
+| `freebsd-man2`, `freebsd-man3` | every name documented by a FreeBSD 10.4-RELEASE manual page of section 2 or 3, from the man.freebsd.org apropos index (the result pages of the query `.`, saved under `analysis/refs/`) | `analysis/nids/candidates/`, written by `freebsdman.py` |
 | `derive-posix`, `derive-words` | `sce*` names derived from names we already have, see [Derivation rules](#derivation-rules) | `analysis/nids/candidates/`, written by `derive.py` |
 | *file stem* | hand-picked names, each with a comment saying why | `symbols/candidates/*.txt`, committed |
 
@@ -52,13 +53,13 @@ A row left without a label is dropped unless the run finds the name again.
 
 ### Derivation rules
 
-Most `sce*` function names don't appear as strings anywhere in the dump. `tools/nidmatch/derive.py` builds them from names we already have, under the rules for derived candidates in [clean-room.md](../clean-room.md#derived-candidates). It needs the lists of `syscandidates.py` and takes several minutes on all cores. It writes only names whose NID matched, so `nidmatch` then records them like any other local list. Run `derive.py`, then `nidmatch.py`.
+Most `sce*` function names don't appear as strings anywhere in the dump. `tools/nidmatch/derive.py` builds them from names we already have, under the rules for derived candidates in [clean-room.md](../clean-room.md#derived-candidates). It needs the lists of `syscandidates.py` and `freebsdman.py` and takes several minutes on all cores. It writes only names whose NID matched, so `nidmatch` then records them like any other local list. Run `derive.py`, then `nidmatch.py`.
 
 **Prefixes.** A library's function names start with a prefix taken from the library's name. Our string matches show this: `libSceNet` → `sceNetSocket`, `libSceMsgDialog` → `sceMsgDialogOpen`, `libSceFios2` → `sceFiosFHOpen`. They also show that the prefix can be shorter than the library name: the `2` is dropped in Fios, and the libkernel import `scePthreadAttrSetstacksize` has only `sce`. So a library gets `sce` followed by every leading run of the words in its name, with and without trailing digits. For example, `libSceNpMatching2` gets `sceNp`, `sceNpMatching` and `sceNpMatching2`. libkernel gets only the bare `sce`: no match shows a prefix made from the name `libkernel` itself, so the rules don't make one up. Only `libSce*` libraries and libkernel get prefixes.
 
 | Label | Rule | Motivating matches |
 |---|---|---|
-| `derive-posix` | prefix + a C name from glibc or the manual pages, CamelCased at its underscores (leading underscores dropped) | `socket`, `bind`, `listen`, `accept`, `connect`, `getsockname`, `setsockopt`, `shutdown` → `sceNet…`; `pthread_attr_setstacksize` → `scePthreadAttrSetstacksize` |
+| `derive-posix` | prefix + a C name from glibc or the Linux or FreeBSD manual pages, CamelCased at its underscores (leading underscores dropped) | `socket`, `bind`, `listen`, `accept`, `connect`, `getsockname`, `setsockopt`, `shutdown` → `sceNet…`; `pthread_attr_setstacksize` → `scePthreadAttrSetstacksize` |
 | `derive-words` | prefix + 1 to 3 words from the matched `sce*` names, or prefix + 1 or 2 words from a larger vocabulary (below) | Our `sce*` matches are made of a small set of words: `sceFiosFHOpen`, `sceFiosFHOpenSync`, `sceFiosDHOpen`, `sceNetEpollCreate`, `sceNetPoolCreate`, `sceNetResolverCreate`, … |
 
 The larger vocabulary adds two sources to the words of the matched `sce*` names:

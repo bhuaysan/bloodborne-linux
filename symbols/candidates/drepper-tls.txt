@@ -1,0 +1,6 @@
+# Hand-picked from Ulrich Drepper, "ELF Handling For Thread-Local Storage" (docs/references.md).
+# libc.prx and libSceFios2.prx reach their TLS by calling one libkernel import with rdi pointing
+# to a GOT pair whose first cell has an R_X86_64_DTPMOD64 relocation, in the padded
+# general-dynamic code sequence, and use the result as a thread-local address (e.g. libc.prx
+# 0x692, libSceFios2.prx 0x1b50). The document names that helper __tls_get_addr (x86-64).
+__tls_get_addr

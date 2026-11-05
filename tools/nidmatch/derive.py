@@ -26,7 +26,8 @@ Input:
     symbols/nids.csv             matched names (rows whose only sources are derive-* are ignored)
     analysis/elf/*.elf           the pinned ELFs, loaded as for nidmatch: their NIDs per library
                                  and their identifiers
-    analysis/nids/candidates/    glibc.txt, man2.txt, man3.txt from syscandidates.py
+    analysis/nids/candidates/    glibc.txt, man2.txt, man3.txt from syscandidates.py and
+                                 freebsd-man2.txt, freebsd-man3.txt from freebsdman.py
 
 Usage:
     derive.py [--jobs N]
@@ -54,7 +55,8 @@ from nid import NID_SUFFIX, nid_digest  # noqa: E402
 
 POSIX_LABEL = "derive-posix"
 WORDS_LABEL = "derive-words"
-C_LISTS = ("glibc", "man2", "man3")  # written by syscandidates.py
+# written by syscandidates.py and freebsdman.py
+C_LISTS = ("glibc", "man2", "man3", "freebsd-man2", "freebsd-man3")
 SCE_DEPTH = 3
 ALL_DEPTH = 2
 MIN_IDENTIFIERS = 2  # a word from the ELFs must occur in this many distinct identifiers
@@ -230,7 +232,7 @@ def read_c_names(cand_dir: Path) -> set[str]:
     for stem in C_LISTS:
         path = cand_dir / f"{stem}.txt"
         if not path.is_file():
-            raise nm.MatchError(f"{path} is missing (run syscandidates.py first)")
+            raise nm.MatchError(f"{path} is missing (run syscandidates.py and freebsdman.py first)")
         nm.read_candidate_file(path, names)
     return set(names)
 

@@ -23,6 +23,7 @@ sys.path.insert(0, str(TOOLS / "common"))
 sys.path.insert(0, str(TOOLS / "elfimports"))
 import derive  # noqa: E402
 import elfimports  # noqa: E402
+import freebsdman  # noqa: E402
 import nidmatch as m  # noqa: E402
 import syscandidates  # noqa: E402
 from cli import pinned_elf_paths  # noqa: E402
@@ -426,6 +427,23 @@ class ManNamesTest(unittest.TestCase):
                 (man3 / name).touch()
             self.assertEqual(syscandidates.man_names([Path(tmp), Path(tmp) / "absent"], "3"),
                              {"pthread_create", "BIO_read", "qsort"})
+
+
+class FreebsdIndexTest(unittest.TestCase):
+    PAGE = """<dl>
+<dt><a href="/cgi/man.cgi?query=access&amp;sektion=2&amp;apropos=0&amp;manpath=FreeBSD+10.4-RELEASE">access(2), eaccess(2), faccessat(2)</a> - check access</dt>
+<dt><a href="/cgi/man.cgi?query=au_bsm_to_fcntl_cmd&amp;sektion=3&amp;apropos=0&amp;manpath=FreeBSD+10.4-RELEASE">au_bsm_to_fcntl_cmd(3), au_fcntl_cmd_to_bsm(3)</a></dt>
+<dt><a href="/cgi/man.cgi?query=_exit&amp;sektion=2&amp;apropos=0&amp;manpath=FreeBSD+10.4-RELEASE"><b>_exit</b>(2)</a></dt>
+<a href="/cgi/man.cgi?manpath=FreeBSD+10.4-RELEASE">home</a>
+</dl>"""
+
+    def test_names_of_one_section(self):
+        # Every name a link documents, but only those of the section asked for: the section 2
+        # result page also links section 3 pages.
+        self.assertEqual(freebsdman.index_names(self.PAGE, "2"),
+                         {"access", "eaccess", "faccessat", "_exit"})
+        self.assertEqual(freebsdman.index_names(self.PAGE, "3"),
+                         {"au_bsm_to_fcntl_cmd", "au_fcntl_cmd_to_bsm"})
 
 
 @unittest.skipUnless(load_game_dir()

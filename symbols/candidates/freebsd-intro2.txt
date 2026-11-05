@@ -1,0 +1,5 @@
+# Hand-picked from the FreeBSD 10.4-RELEASE intro(2) manual page (docs/references.md):
+# "#define errno (* __error())". libc.prx, libSceFios2.prx and the eboot call one libkernel
+# import without arguments and read or write an int through the returned pointer, as errno
+# (e.g. libc.prx 0x73f6 stores 9 there, libSceFios2.prx 0x2cf86 reads it).
+__error

@@ -1,0 +1,6 @@
+# Hand-picked from the GCC Internals manual, "Stack Smashing Protection" (docs/references.md):
+# "The default version of this hook creates a variable called '__stack_chk_guard'".
+# Every pinned ELF imports one libkernel data object. libc.prx's functions load its value in the
+# prologue, keep it in the frame and compare it in the epilogue, calling __stack_chk_fail (already
+# matched) on a mismatch (e.g. libc.prx 0x1046): the global stack-protector canary.
+__stack_chk_guard
