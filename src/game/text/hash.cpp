@@ -20,7 +20,8 @@ std::uint64_t hash_bytes_backward(const std::uint8_t* data, std::size_t size, st
 std::uint64_t hash_char_range(const CharRange* range) {
     std::uint64_t h = 0;
     for (const char* p = range->begin; p < range->end; ++p) {
-        // The game's char is signed: bytes from 0x80 up subtract.
+        // The game's char is signed: each byte is sign-extended to 64 bits,
+        // so bytes from 0x80 up add a negative value.
         const auto c = static_cast<std::int64_t>(static_cast<signed char>(*p));
         h = h * 31 + static_cast<std::uint64_t>(c);
     }
