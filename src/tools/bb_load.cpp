@@ -142,7 +142,7 @@ int main(int argc, char** argv) {
     }
     try {
         Image image = map_eboot(*game_dir);
-        relocate(image, bb::hle::resolve);
+        relocate(image, bb::hle::resolve, eboot_module_id);
         image.finalize_protection();
         print(image);
     } catch (const std::exception& e) {

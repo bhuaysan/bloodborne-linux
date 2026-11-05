@@ -17,12 +17,14 @@ inline constexpr std::uint8_t stt_notype = 0;
 inline constexpr std::uint8_t stt_object = 1;
 inline constexpr std::uint8_t stt_func = 2;
 inline constexpr std::uint8_t stt_section = 3;
+inline constexpr std::uint8_t stt_tls = 6;
 inline constexpr std::uint8_t stb_weak = 2;
 
 inline constexpr std::uint32_t r_x86_64_64 = 1;
 inline constexpr std::uint32_t r_x86_64_glob_dat = 6;
 inline constexpr std::uint32_t r_x86_64_jump_slot = 7;
 inline constexpr std::uint32_t r_x86_64_relative = 8;
+inline constexpr std::uint32_t r_x86_64_dtpmod64 = 16;
 
 // A loadable file (the eboot, a .prx) as a module record names it.
 struct Module {

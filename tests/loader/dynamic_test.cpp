@@ -480,9 +480,12 @@ TEST(Relocate, AppliesEachType) {
     Synthetic::add_rela(s.rela, 0x5ff8, r_x86_64_relative, 0, -0x10);  // last slot, in .bss
     Synthetic::add_rela(s.rela, 0x800, r_x86_64_relative, 0, 0x4000);  // code, DT_TEXTREL is set
     Synthetic::add_rela(s.jmprel, 0x4050, r_x86_64_jump_slot, 2, 0);
+    s.add_symbol(0, 0x03, 0, 0);  // 6: unnamed local section symbol, undefined, as in the PRXs
+    Synthetic::add_rela(s.rela, 0x4058, r_x86_64_dtpmod64, 6, 0);
+    Synthetic::add_rela(s.rela, 0x4060, r_x86_64_dtpmod64, 1, 0);  // the symbol is ignored
     Image image = map_elf(to_file(s.build()), reloc_base);
     std::vector<Import> calls;
-    relocate(image, fake_resolver(calls));
+    relocate(image, fake_resolver(calls), 3);
 
     EXPECT_EQ(slot(image, 0x4010), reloc_base + 0x40);
     EXPECT_EQ(slot(image, 0x4018), fake_func - 8);
@@ -496,6 +499,8 @@ TEST(Relocate, AppliesEachType) {
     EXPECT_EQ(slot(image, 0x4050), 0U);
     EXPECT_EQ(slot(image, 0x5ff8), reloc_base - 0x10);
     EXPECT_EQ(slot(image, 0x800), reloc_base + 0x4000);
+    EXPECT_EQ(slot(image, 0x4058), 3U);  // the module id
+    EXPECT_EQ(slot(image, 0x4060), 3U);
 
     // DT_SCE_RELA in table order, then DT_SCE_JMPREL. Defined and weak symbols need no resolver.
     ASSERT_EQ(calls.size(), 4U);
@@ -517,7 +522,7 @@ std::vector<Import> expect_relocate_error(const Synthetic& s, std::string_view m
     std::vector<Import> calls;
     Image image = map_elf(to_file(s.build(edit)), reloc_base);
     try {
-        relocate(image, resolve ? resolve : fake_resolver(calls));
+        relocate(image, resolve ? resolve : fake_resolver(calls), eboot_module_id);
         ADD_FAILURE() << "no error, expected: " << message;
     } catch (const LoadError& e) {
         EXPECT_NE(std::string_view(e.what()).find(message), std::string_view::npos)
@@ -545,7 +550,7 @@ TEST(Relocate, RejectsBadRelocations) {
     };
     const Case cases[] = {
         {0x4050, 37, 0, "relocation type 37 at 0x4050: unsupported type"},
-        {0x4050, 16, 1, "relocation type 16 at 0x4050: unsupported type"},  // DTPMOD64
+        {0x4050, 17, 1, "relocation type 17 at 0x4050: unsupported type"},  // DTPOFF64
         {0x4050, r_x86_64_64, 0, "relocation type 1 at 0x4050: undefined symbol 0 ''"},
         {0x5ffc, r_x86_64_relative, 0, "type 8 at 0x5ffc: target outside the PT_LOAD segments"},
         {0x2000, r_x86_64_relative, 0, "type 8 at 0x2000: target outside the PT_LOAD segments"},
@@ -574,7 +579,7 @@ TEST(Relocate, RefusesAFinalizedImage) {
     Image image = map_elf(to_file(Synthetic{}.build()), reloc_base);
     image.finalize_protection();
     std::vector<Import> calls;
-    EXPECT_THROW(relocate(image, fake_resolver(calls)), std::logic_error);
+    EXPECT_THROW(relocate(image, fake_resolver(calls), eboot_module_id), std::logic_error);
     EXPECT_TRUE(calls.empty());
 }
 
@@ -664,7 +669,7 @@ TEST(RelocateGame, RelocatesTheEboot) {
     relocate(image, [&](const Import& imp) {
         std::uintptr_t next = 0x7e00'0000'0000 + 0x20 * (fakes.size() + 1);
         return fakes.try_emplace(imp.nid + '#' + imp.library, next).first->second;
-    });
+    }, eboot_module_id);
     EXPECT_EQ(fakes.size(), 686U);  // of the 701 imports, as tools/common/ps4elf.py counts them
 
     for (const Rela& r : image.dyn.plt_relocs) {
