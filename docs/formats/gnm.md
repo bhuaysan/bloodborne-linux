@@ -28,7 +28,7 @@ Addresses are eboot link addresses. Register names are those of the register ref
 | 0x1072870–0x1078833 | Graphics packet writers, one function per packet or packet group |
 | 0x1078930–0x1084807 | Performance counter writers (only reached when profiling is on) |
 | 0x10877c0, 0x1087450–0x1087710 | Fetch shader generator and its input builders |
-| 0x1089c50–0x108bc3e | Compute-side packet writers. Many set the shader-type bit as a constant (`SET_SH_REG`, `SET_QUEUE_REG`, `DISPATCH_DIRECT`, `INDIRECT_BUFFER`, `RELEASE_MEM`, 0x8D); others leave it clear or take it from the object's header bits (0x8C, `SET_UCONFIG_REG`, `WRITE_DATA`, `EVENT_WRITE`, `NOP`). Some write bodies that differ from the graphics writer of the same opcode (0x8C, 0x8D) |
+| 0x1089c50–0x108bc3e | Compute-side packet writers. Many set the shader-type bit as a constant (for example `SET_SH_REG`, `SET_QUEUE_REG`, `DISPATCH_DIRECT`, `INDIRECT_BUFFER`, `RELEASE_MEM`, `EVENT_WRITE_EOS`, `REWIND`, 0x8D); others leave it clear or take it from the object's header bits (for example 0x8C, `SET_UCONFIG_REG`, `SET_CONFIG_REG`, `WRITE_DATA`, `EVENT_WRITE`, `NOP`, `DMA_DATA`, `WAIT_REG_MEM`, `ACQUIRE_MEM`, 0x39, 0x86). Neither list is complete. Some write bodies that differ from the graphics writer of the same opcode (0x8C, 0x8D) |
 | 0x108c7b0–0x108ca00 | Compute queue object: map, unmap, submit to ring |
 | 0x108d000–0x1092000 | State cache layer: per-stage shader binding, resource tables, constant engine use |
 | 0x11fa000–0x11fc400 | Submit layer: builds the address and size arrays from recorded chunks |
@@ -265,7 +265,7 @@ What this means for the translator:
 | `bX5IbRvECXk` | thunk 0x1089b20 | see above | Report compute ring write offset |
 | `ArSg-TGinhk` | thunk 0x1089b10 | see above | Unmap compute queue |
 | `iBt3Oe00Kvc` | thunk 0x1089b30 (11 callers) | no arguments set up, result ignored | Called after an `mfence` and before setting the valid bit of a `REWIND` whose reserved space was just written (0x1078610, 0x1078630, 0x10786f0 and their CCB and compute twins), and in the destructors 0x33e910/0x33e9b0. Probably a CPU→GPU write-ordering or cache flush hint. A no-op returning 0 fits every caller |
-| `jg33rEKLfVs` | wrapper 0x1089c40 → bool (139 callers) | `()` → int | "GPU profiling on": guards the thread-trace marker after every draw and all performance counter programming. The HLE returns 0 |
+| `jg33rEKLfVs` | wrapper 0x1089c40 → bool (139 callers) | `()` → int | "GPU profiling on": guards the event-0x35 trailer after every draw and dispatch (see [draw trailer](#draw-trailer)) and all performance counter programming. The HLE returns 0 |
 | `26PM5Mzl8zc` | thunk 0x10899f0 (12 callers, all performance counter writers) | `(u32 0..1, u32 0..8)` → u8 | Maps a logical shader-engine/instance index to the value the performance counter writers put into uconfig register 0x200 (for example at 0x108281c; the same writer later writes 0xE0000000 there). The register reference doesn't list that register. Only reached when `jg33rEKLfVs` is true |
 | `RU74kek-N0c` | thunk 0x1089a00 (2 callers, performance counter writers) | `(u32, u16 mask)` → u16 mask | Maps a logical instance mask to the hardware mask; same guard |
 | `TLV4mswiZ4A` | wrapper 0x1089c30 → bool (0x21982f0, 0x21c1e60) | `()` → int | Not yet understood. The result is ORed into the game flag byte at 0x55406d1; no other RIP-relative reference to that byte was found. Returning 0 leaves the flag alone |
