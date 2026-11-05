@@ -50,9 +50,9 @@ std::uint64_t symbol_value(const Image& image, const Rela& r, const Resolver& re
     }
 }
 
-void apply(Image& image, const Rela& r, const Resolver& resolve) {
+void apply(Image& image, const Rela& r, const Resolver& resolve, std::uint64_t module_id) {
     if (r.type != r_x86_64_relative && r.type != r_x86_64_64 && r.type != r_x86_64_glob_dat &&
-        r.type != r_x86_64_jump_slot) {
+        r.type != r_x86_64_jump_slot && r.type != r_x86_64_dtpmod64) {
         fail(r, "unsupported type");
     }
     std::uintptr_t addr = target(image, r);  // before the resolver sees the import
@@ -64,6 +64,9 @@ void apply(Image& image, const Rela& r, const Resolver& resolve) {
     case r_x86_64_64:
         value = symbol_value(image, r, resolve) + static_cast<std::uint64_t>(r.addend);
         break;
+    case r_x86_64_dtpmod64:
+        value = module_id;
+        break;
     default:  // R_X86_64_GLOB_DAT, R_X86_64_JUMP_SLOT
         value = symbol_value(image, r, resolve);
         break;
@@ -73,15 +76,15 @@ void apply(Image& image, const Rela& r, const Resolver& resolve) {
 
 }  // namespace
 
-void relocate(Image& image, const Resolver& resolve) {
+void relocate(Image& image, const Resolver& resolve, std::uint64_t module_id) {
     if (image.finalized()) {
         throw std::logic_error("relocate after finalize_protection");
     }
     for (const Rela& r : image.dyn.relocs) {
-        apply(image, r, resolve);
+        apply(image, r, resolve, module_id);
     }
     for (const Rela& r : image.dyn.plt_relocs) {
-        apply(image, r, resolve);
+        apply(image, r, resolve, module_id);
     }
 }
 

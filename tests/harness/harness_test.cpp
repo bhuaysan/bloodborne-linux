@@ -143,7 +143,7 @@ Image* loaded = nullptr;  // the image of the running test, for the replacements
 
 Image load() {
     Image image = map_elf(build_elf(), test_base);
-    relocate(image, bb::hle::resolve);
+    relocate(image, bb::hle::resolve, eboot_module_id);
     image.finalize_protection();
     return image;
 }

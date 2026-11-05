@@ -13,7 +13,7 @@ namespace {
 
 loader::Image load(const std::filesystem::path& game) {
     loader::Image image = loader::map_eboot(game, loader::default_base);
-    loader::relocate(image, hle::resolve);
+    loader::relocate(image, hle::resolve, loader::eboot_module_id);
     image.finalize_protection();
     return image;
 }

@@ -150,7 +150,7 @@ TEST(HleGame, RelocatesTheEbootWithStubs) {
     BB_REQUIRE_GAME(game);
     const Counts before = counts();
     bb::loader::Image image = bb::loader::map_eboot(game);
-    bb::loader::relocate(image, resolve);
+    bb::loader::relocate(image, resolve, bb::loader::eboot_module_id);
     image.finalize_protection();
     EXPECT_EQ(counts().stubs - before.stubs, 666U);
     EXPECT_EQ(counts().data_blocks - before.data_blocks, 20U);
