@@ -85,7 +85,10 @@ Offline, with no host networking. The init calls on the start-up path (`sceNetIn
 
 ## Logging
 
-One logger in `bbcommon`: levels, channels (`loader`, `hle.<library>`, `game`), the thread name on every line, output to stderr and to `$XDG_STATE_HOME/bloodborne-linux/logs/<UTC time>-<pid>.log`. `BB_LOG=<channel>=<level>,…` filters. In the `debug` preset every HLE call is logged at trace level. Stub logging follows runtime.md.
+One logger in `bbcommon` (`src/common/log.hpp`): levels, channels (`loader`, `hle.<library>`, `game`), the thread name on every line, output to stderr and to `$XDG_STATE_HOME/bloodborne-linux/logs/<UTC time>-<pid>.log`. `BB_LOG=<channel>=<level>,…` filters. In the `debug` preset every HLE call is logged at trace level. Stub logging follows runtime.md.
+
+- **Lines.** `<UTC hh:mm:ss.mmm> <level> [<thread>] <channel>: <message>`. Levels are `trace`, `debug`, `info`, `warn`, `error`, `fatal` (always shown) and `off`. The thread is the name `bb::common::set_thread_name` gave it (which also sets the host name, cut to 15 bytes), else its host thread id. Each line is one `write(2)` per output under one lock, so lines never interleave and nothing is buffered in the process. That is what "flushed on `_exit` and on a fatal error" rests on: `log_flush()` only waits for a line in progress (and syncs the file). `log_fatal` logs, flushes and aborts. The logger is not async-signal-safe.
+- **Filter.** `BB_LOG` entries are `<channel>=<level>` or a bare `<level>` for the default (`info`). An entry covers its channel and the channels below it (`hle` covers `hle.libkernel`), the longest match wins, and an unknown level or an empty channel is an error. The runtime reads it with `set_log_filter_from_environment()` at start.
 
 ## Naming
 
