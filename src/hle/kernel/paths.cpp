@@ -20,7 +20,7 @@ namespace {
 constexpr std::size_t guest_path_max = 1024;
 constexpr std::size_t guest_name_max = 255;
 
-// Guest debug output, /hostapp/%s in the eboot (0x47e412c). It has no host counterpart.
+// Guest debug output, /hostapp/%s in the eboot (0x47e012c). It has no host counterpart.
 constexpr std::string_view hostapp = "hostapp";
 
 Resolved fail(int host_errno) {
