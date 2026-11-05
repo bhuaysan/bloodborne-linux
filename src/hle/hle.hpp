@@ -43,8 +43,9 @@ std::uintptr_t resolve(const loader::Import& imp);
 // What resolve() returned for this import. Aborts if it was never resolved.
 std::uintptr_t import_address(std::string_view library, std::string_view nid);
 
-// nullptr restores logging. The observer must outlive its installation.
-void set_stub_observer(StubObserver* observer);
+// Installs `observer` and returns the one it replaces. nullptr restores logging. The observer
+// must outlive its installation.
+StubObserver* set_stub_observer(StubObserver* observer);
 
 // Called by stub_entry (stub_entry.S, through the mangled name) with the integer argument
 // registers rdi, rsi, rdx, rcx, r8, r9.

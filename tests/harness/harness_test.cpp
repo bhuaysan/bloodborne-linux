@@ -271,6 +271,13 @@ TEST_F(HarnessTest, ComparesStubCallsWithNormalizedPointers) {
     EXPECT_TRUE(harness.log().empty());
 }
 
+TEST_F(HarnessTest, RefusesASecondHarness) {
+    EXPECT_THROW(Harness second{image}, std::logic_error);
+    // The first harness still records the stub calls.
+    EXPECT_TRUE(harness.compare<TwoArgs>(calls_at, &calls, arena_and_global));
+    EXPECT_EQ(harness.log().size(), 2U);
+}
+
 TEST_F(HarnessTest, CatchesADifferentImportOrder) {
     const Result r = harness.compare<TwoArgs>(calls_at, &swapped, arena_and_global);
     expect_report(r, "stub log: differs at call 1 (original 2 calls, replacement 2)\n"

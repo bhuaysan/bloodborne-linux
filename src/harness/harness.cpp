@@ -119,7 +119,10 @@ Harness::Harness(loader::Image& image) : image_(image) {
     for (const Region& r : regions_) {
         baseline_.emplace_back(r.data, r.data + r.size);
     }
-    hle::set_stub_observer(this);
+    if (hle::StubObserver* previous = hle::set_stub_observer(this)) {
+        hle::set_stub_observer(previous);
+        throw std::logic_error("harness: another stub observer is installed");
+    }
 }
 
 Harness::~Harness() {

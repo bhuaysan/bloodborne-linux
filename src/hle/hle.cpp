@@ -150,8 +150,8 @@ std::uintptr_t import_address(std::string_view library, std::string_view nid) {
     std::abort();
 }
 
-void set_stub_observer(StubObserver* observer) {
-    registry().observer = observer;
+StubObserver* set_stub_observer(StubObserver* observer) {
+    return registry().observer.exchange(observer);
 }
 
 void on_stub_call(const StubInfo* stub, const std::uint64_t args[6]) {

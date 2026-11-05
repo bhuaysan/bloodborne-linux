@@ -90,7 +90,8 @@ struct StubCall {
 
 // Takes the baseline of `image` (mapped and relocated) on construction: its writable segments,
 // the data blocks that bb::hle::resolve created so far, and the arena. Applies no hooks and runs
-// no init code. Records the stub calls while it exists, so only one harness may exist at a time.
+// no init code. Records the stub calls while it exists, so only one harness may exist at a time:
+// throws std::logic_error if another stub observer (such as another harness) is installed.
 class Harness : private hle::StubObserver {
 public:
     explicit Harness(loader::Image& image);
