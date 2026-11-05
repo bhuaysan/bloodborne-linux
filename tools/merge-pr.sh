@@ -118,11 +118,16 @@ count="$(git rev-list --count "$main_base..HEAD")"
 
 # shellcheck disable=SC2086  # PROTECTED is a list of pathspecs
 touched="$(git diff --name-only "$main_base" HEAD -- $PROTECTED)"
-# changed lines of code: everything except docs/, symbols/ and copied third_party/ code
+# changed lines of code: everything except docs/ and symbols/. Copied third_party/ code
+# doesn't count either, but only in a PR that changes nothing else.
+skip_tp=yes
+if [ -n "$(git diff --name-only "$main_base" HEAD -- . ':!docs' ':!symbols' ':!third_party')" ]; then
+    skip_tp=
+fi
 # Counted from the patch with --text: --numstat shows a file marked -diff
 # in a .gitattributes as "-" and so would not count it. Real binaries
 # count by their line breaks, which sends large ones to the maintainer.
-lines="$(git diff -U0 --text --no-textconv --no-ext-diff --no-color "$main_base" HEAD -- . ':!docs' ':!symbols' ':!third_party' |
+lines="$(git diff -U0 --text --no-textconv --no-ext-diff --no-color "$main_base" HEAD -- . ':!docs' ':!symbols' ${skip_tp:+':!third_party'} |
     awk '/^diff --git / { h = 0; next } /^@@/ { h = 1; next } h && /^[-+]/ { n++ } END { print n + 0 }')"
 if [ "$maintainer" -eq 0 ]; then
     [ -z "$touched" ] || {
