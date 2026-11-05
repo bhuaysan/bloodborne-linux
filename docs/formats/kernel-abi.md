@@ -248,3 +248,12 @@ Header `sys/sys/sysctl.h`. libc.prx passes one MIB to `sysctl` (`DFmMT80xcNI`), 
 | 2 | `KERN_PROC_VMMAP` | 32 | libc 0x52f2e |
 
 `kern.proc.vmmap` returns the memory map of a process as variable-length records. libc reads the record length at +0 and compares the start and end address at +8 and +0x10 with the address it looks for (0x53040, 0x53049). The runtime reports an empty map (length 0), so the record layout needs no translation.
+
+## Path limits
+
+Header `sys/sys/syslimits.h`. The path resolver (`src/hle/kernel/paths.cpp`) checks both before it maps a path.
+
+| Value | Name | Meaning | Use |
+|---|---|---|---|
+| 1024 | PATH_MAX | bytes in a path, including the NUL: a path of 1024 bytes or more fails with ENAMETOOLONG | no use found |
+| 255 | NAME_MAX | bytes in one path component, without the NUL: a longer component fails with ENAMETOOLONG | no use found; it matches `d_name`'s 256 bytes in the [getdirentries record](#getdirentries-record) |

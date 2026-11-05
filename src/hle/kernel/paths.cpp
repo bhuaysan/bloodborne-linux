@@ -16,7 +16,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// The guest's PATH_MAX (including the NUL) and NAME_MAX, docs/formats/kernel-abi.md.
+// The guest's PATH_MAX (including the NUL) and NAME_MAX (docs/formats/kernel-abi.md).
 constexpr std::size_t guest_path_max = 1024;
 constexpr std::size_t guest_name_max = 255;
 
