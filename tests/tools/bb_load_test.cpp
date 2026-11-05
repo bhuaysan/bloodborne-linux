@@ -109,6 +109,8 @@ TEST(BbLoadGame, PrintsTheEboot) {
     while (std::getline(lines, line) && !line.starts_with("imports")) {
         header.push_back(line);
     }
+    // The relocation counts are those of the tables that tools/common/ps4elf.py reads; 686 of
+    // the 701 imports are referenced, 20 of them data.
     EXPECT_EQ(header, (std::vector<std::string>{
                           "base       0x10000000",
                           "entry      0xa0",
@@ -116,6 +118,11 @@ TEST(BbLoadGame, PrintsTheEboot) {
                           "segment    0x50dc000 size 0x5f70f4 file 0x309b38 rw-",
                           "tls        0x50dc040 file 0x0 mem 0x750 align 0x10",
                           "procparam  0x50dc000",
+                          "reloc      R_X86_64_64 2838",
+                          "reloc      R_X86_64_GLOB_DAT 23",
+                          "reloc      R_X86_64_JUMP_SLOT 661",
+                          "reloc      R_X86_64_RELATIVE 231478",
+                          "hle        666 stubs, 20 data blocks",
                       }));
     EXPECT_EQ(line, "imports    701 in 39 libraries");
 

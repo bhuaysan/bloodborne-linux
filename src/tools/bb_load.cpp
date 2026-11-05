@@ -1,5 +1,5 @@
-// bb-load: maps the eboot, sets its final protections and prints its layout and imports. Runs no
-// game code (docs/design/runtime.md, "Tools").
+// bb-load: maps the eboot, relocates it with the HLE stubs, sets its final protections and prints
+// its layout, relocations and imports. Runs no game code (docs/design/runtime.md, "Tools").
 
 #include <sys/mman.h>
 
@@ -18,7 +18,9 @@
 #include <utility>
 #include <vector>
 
+#include "hle/hle.hpp"
 #include "loader/image.hpp"
+#include "loader/relocate.hpp"
 
 namespace {
 
@@ -26,12 +28,41 @@ using namespace bb::loader;
 
 constexpr std::string_view usage =
     "usage: bb-load [--game-dir DIR]\n"
-    "Maps eboot.bin of the game in DIR (default: $BB_GAME_DIR) and prints its layout and\n"
-    "imports. Runs no game code.\n";
+    "Maps and relocates eboot.bin of the game in DIR (default: $BB_GAME_DIR) and prints its\n"
+    "layout, relocations and imports. Runs no game code.\n";
 
 std::string prot_string(int prot) {
     return {(prot & PROT_READ) ? 'r' : '-', (prot & PROT_WRITE) ? 'w' : '-',
             (prot & PROT_EXEC) ? 'x' : '-'};
+}
+
+std::string_view reloc_name(std::uint32_t type) {
+    switch (type) {
+    case r_x86_64_64:
+        return "R_X86_64_64";
+    case r_x86_64_glob_dat:
+        return "R_X86_64_GLOB_DAT";
+    case r_x86_64_jump_slot:
+        return "R_X86_64_JUMP_SLOT";
+    case r_x86_64_relative:
+        return "R_X86_64_RELATIVE";
+    }
+    return "?";  // relocate() accepts no other type
+}
+
+// The relocations of both tables by type, and what bb::hle::resolve created for the imports.
+void print_relocations(const DynamicInfo& dyn) {
+    std::map<std::uint32_t, std::size_t> by_type;
+    for (const auto* table : {&dyn.relocs, &dyn.plt_relocs}) {
+        for (const Rela& r : *table) {
+            ++by_type[r.type];
+        }
+    }
+    for (const auto& [type, count] : by_type) {
+        std::cout << std::format("reloc      {} {}\n", reloc_name(type), count);
+    }
+    const bb::hle::Counts hle = bb::hle::counts();
+    std::cout << std::format("hle        {} stubs, {} data blocks\n", hle.stubs, hle.data_blocks);
 }
 
 struct ImportCounts {
@@ -82,6 +113,7 @@ void print(const Image& image) {
     } else {
         std::cout << "procparam  none\n";
     }
+    print_relocations(image.dyn);
     print_imports(image.dyn);
 }
 
@@ -110,6 +142,7 @@ int main(int argc, char** argv) {
     }
     try {
         Image image = map_eboot(*game_dir);
+        relocate(image, bb::hle::resolve);
         image.finalize_protection();
         print(image);
     } catch (const std::exception& e) {
