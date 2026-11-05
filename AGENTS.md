@@ -4,7 +4,7 @@ Guidance for coding agents working on this repository. Humans should start with 
 
 ## Goal
 
-Reverse engineer Bloodborne (PS4, CUSA03173, patch 1.09) **from scratch** and run it **natively on Linux x86-64**, with **no emulation**.
+Reverse engineer Bloodborne (PS4, CUSA03173, patch 1.09) **with our own code** and run it **natively on Linux x86-64**, with **no emulation**.
 
 ## Architecture: incremental hybrid
 
@@ -23,8 +23,9 @@ See `docs/architecture.md` and `docs/roadmap.md`.
 
 ### Clean room / references
 **Read [`docs/clean-room.md`](docs/clean-room.md) before using any external source.** In short:
-- **Never** look at other Bloodborne or FromSoftware decomp, recomp or modding projects, the source of PS4 emulators, recomp tools or disassembler loader plugins, or leaked Sony SDK material.
-- Public format and hardware docs are allowed. Log every source in `docs/references.md` in the same change that uses it.
+- **Never** look at leaked Sony SDK material (also when it is copied into another project), Bloodborne or FromSoftware decomp or recomp projects and their symbol, struct or param dumps, or the source of PS4 recomp tools or disassembler loader plugins.
+- Public format and hardware docs are allowed. So are some code sources (AMD GPU code, Mesa, FromSoftware file-format material, PS4 emulators), under the license rules in `docs/clean-room.md`: code is reused only from permissive licenses and keeps its notice; copyleft and unlicensed sources give facts only.
+- Log every source in `docs/references.md` in the same change that uses it.
 - Import names are recovered only by matching hashes of candidate names we can justify ourselves (see the NID section in `docs/clean-room.md`).
 - If you're unsure whether a source is allowed, don't open it. Ask the maintainer.
 

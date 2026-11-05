@@ -1,6 +1,6 @@
 # References and credits
 
-Every external source consulted for this project is listed here. Off-limits sources (other game decomp projects, PS4 emulator source code, leaked SDKs) are never used. See `AGENTS.md`.
+Every external source consulted for this project is listed here. What may be used, and how code sources are handled, is in [clean-room.md](clean-room.md).
 
 ## Tools
 
@@ -41,3 +41,21 @@ Every external source consulted for this project is listed here. Off-limits sour
 | FreeBSD open(2), mmap(2), stat(2), clock_gettime(2), getdirentries(2), pthread_condattr(3), [man.freebsd.org](https://man.freebsd.org/), 10.4-RELEASE | That these pages name the flags but give no numeric values, so the headers are needed (`docs/design/m3-core-os.md`, Errors) | 2026-11-04 |
 | [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/latest/) 0.8 | Data, config, cache and state directories and their defaults; logs in the state directory (`docs/design/m3-core-os.md`) | 2026-11-04 |
 | [Using FS and GS segments in user space applications](https://docs.kernel.org/arch/x86/x86_64/fsgs.html), Linux kernel documentation | Cost and availability of `arch_prctl(ARCH_SET_FS)` and `wrfsbase`, for the rejected per-thread `fs` option (`docs/design/m3-core-os.md`) | 2026-11-04 |
+| [Sea Islands Series Instruction Set Architecture Reference Guide](https://docs.amd.com/api/khub/documents/YO8RUh~LIQ5Cx3M_Kq9qkg/content) (AMD, rev 1.3, December 2013) | Evaluated as the ISA reference for the PS4 GPU generation: encodings, opcode tables, resource descriptors, export, interpolation (M4 source evaluation, `docs/clean-room.md`) | 2026-11-05 |
+| [Radeon Sea Islands 3D/Compute Register Reference Guide](https://xorg.freedesktop.org/docs/AMD/old/CIK_3D_registers_v2.pdf) (AMD, rev 1.0, September 2012) | Evaluated its coverage of the shader, rasterizer, depth, color and vertex-grouper registers for state tracking (M4 source evaluation, `docs/clean-room.md`) | 2026-11-05 |
+| [Radeon Southern Islands Acceleration, programming guide v2](https://xorg.freedesktop.org/docs/AMD/old/si_programming_guide_v2.pdf) (AMD, rev 1.0, April 2012) | Evaluated its coverage of PM4 packet formats (M4 source evaluation, `docs/clean-room.md`) | 2026-11-05 |
+| [AMD GPU architecture programming documentation](https://gpuopen.com/amd-isa-documentation) (GPUOpen) | Which ISA manuals exist per GCN generation (M4 source evaluation) | 2026-11-05 |
+| [AMD machine-readable GPU ISA documentation](https://gpuopen.com/machine-readable-isa/) (GPUOpen) | Coverage check: RDNA and CDNA only, no GCN (M4 source evaluation) | 2026-11-05 |
+| [Graphics Core Next](https://en.wikipedia.org/wiki/Graphics_Core_Next) (Wikipedia) | GCN generation naming (Sea Islands is GCN 2) and the list of ISA manuals. Its PS4 entry is uncited, so the GPU generation still has to be confirmed from the game's shaders (`docs/clean-room.md`) | 2026-11-05 |
+| [PlayStation 4 technical specifications](https://en.wikipedia.org/wiki/PlayStation_4_technical_specifications) (Wikipedia) | PS4 GPU generation claim (GCN 2nd generation, 18 of 20 compute units); weak source, tagged "better source needed" | 2026-11-05 |
+| [AMD livestream GPU '14 Product Showcase](https://www.semiaccurate.com/2013/09/20/amd-livestream-gpu14/) (SemiAccurate, 2013) | Contemporary press mention of the PS4 using Sea Islands shaders; weak source | 2026-11-05 |
+| [License and Copyright](https://docs.mesa3d.org/license.html) and [Source Code Tree](https://docs.mesa3d.org/sourcetree.html) (Mesa documentation) | Mesa's licensing and the layout of `src/amd`, for the code source rules (`docs/clean-room.md`) | 2026-11-05 |
+| [AMDGPUUsage](https://llvm.org/docs/AMDGPUUsage.html) (LLVM documentation) | Mapping of gfx700–gfx704 to Sea Islands products (M4 source evaluation) | 2026-11-05 |
+| [AMDGPU driver documentation](https://docs.kernel.org/gpu/amdgpu/index.html) (Linux kernel) | Checked for register and PM4 documentation; none found (M4 source evaluation) | 2026-11-05 |
+
+## Code sources
+
+Third-party source code consulted under the rules in [clean-room.md](clean-room.md#code-sources). Copied files also keep their license file in `third_party/<project>/`.
+
+| Project | Release or commit | License of the files | Files consulted | Taken (facts or code) | Used in | Date |
+|---|---|---|---|---|---|---|
