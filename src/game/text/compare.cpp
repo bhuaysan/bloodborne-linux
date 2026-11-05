@@ -5,10 +5,10 @@
 namespace bb::game {
 
 // 0x0043e190
-// TODO(name): `text` is the first member of an object that callers advance through parsed
+// TODO(name): `cursor` is the first member of an object that callers advance through parsed
 // text; what the object is, is not known yet.
-int text_starts_with(const char* const* text, const char* prefix) {
-    for (const char* t = *text; *prefix != '\0'; ++t, ++prefix) {
+int text_starts_with(const char* const* cursor, const char* prefix) {
+    for (const char* t = *cursor; *prefix != '\0'; ++t, ++prefix) {
         if (*t != *prefix) {
             return 0;  // includes the text ending before the prefix
         }
