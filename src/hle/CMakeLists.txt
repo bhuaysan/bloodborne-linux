@@ -12,6 +12,7 @@ add_custom_command(
 
 # An OBJECT library because it holds static registrations: only executables link it
 # (docs/design/runtime.md, "Static registration").
-add_library(bbhle OBJECT hle.cpp stub_entry.S ${CMAKE_CURRENT_BINARY_DIR}/nid_table.cpp)
+add_library(bbhle OBJECT hle.cpp stub_entry.S ${CMAKE_CURRENT_BINARY_DIR}/nid_table.cpp
+    kernel/abi.cpp)
 target_link_libraries(bbhle PUBLIC bbloader PRIVATE bb_warnings)
 add_subdirectory(net)
