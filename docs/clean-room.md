@@ -32,14 +32,14 @@ These categories of third-party source code and documentation may be read:
 2. **Mesa's AMD driver and compiler code:** RADV, radeonsi, ACO, NIR and `src/amd/common`.
 3. **FromSoftware file formats:** documentation and the source of file-format libraries and tools (for example DCX, BND, FLVER, TPF). Only the format material. Everything else about the games stays off-limits (see above).
 4. **PS4 emulators:** their source code and documentation, including internal components such as the shader translator and the executable loader. Two parts need care:
-   - **HLE library code** registers Sony functions by NID and name. It may be read for behavior. Reading the code of a library puts that library under the same handling as the libraries in the [exposure log](#exposure-log): record it there, and a name for one of its NIDs then needs an independent, recorded candidate source. Derived candidates are not accepted for it.
-   - **Running an emulator** on our game, to observe frames or capture GPU command streams, is allowed. Its logs and debug output name Sony functions and count like its HLE code.
+   - **HLE library code** registers Sony functions by NID and name. It may be read for behavior. Reading the code of a library puts that library under the same handling as the libraries in the [exposure log](#exposure-log): record it there, and a name for one of its NIDs then needs an independent, recorded candidate source. Derived candidates are not accepted for it. Before reading the HLE code of a library that already has `derive-*` names in `symbols/nids.csv`, ask the maintainer. The change that adds a library to the exposure log also adds it to `NO_DERIVE_LIBRARIES` in `tools/nidmatch/nidmatch.py`. Names committed before the entry stay: the same change lists their NIDs as kept in `nidmatch.py`, so the tool doesn't refuse them.
+   - **Running an emulator** on our game, to observe frames or capture GPU command streams, is allowed. Run it with function-call logging off. Its logs and debug output name Sony functions and count like its HLE code: every library named in logs you read goes into the exposure log.
 
 Rules for every code source:
 
 - **Upstream only.** Use the project's own repository or release, never a copy bundled with another project. The locations named in the categories above count as upstream.
 - **Check the license of each file**, not only the project's. The file's own license header or SPDX tag decides. Without one, the nearest `LICENSE` or `COPYING` file in its directory or a parent directory of the same repository decides. Without either, the file counts as unlicensed.
-- **Permissive licenses** (MIT and X11 variants, BSD-2-Clause, BSD-3-Clause, ISC, zlib, Apache-2.0, BSL-1.0): code may be copied or adapted. Copied files go unchanged into `third_party/<project>/` together with the license text that applies to them. Adapted code keeps the original copyright line and license text in a header comment of our file. For Apache-2.0, the project's `NOTICE` goes into `third_party/<project>/NOTICE` (for adapted code too, with the header comment pointing to it), and adapted files say that they were changed. Our own code stays MIT ([LICENSE](../LICENSE)).
+- **Permissive licenses** (MIT and X11 variants, BSD-2-Clause, BSD-3-Clause, ISC, zlib, Apache-2.0, BSL-1.0): code may be copied or adapted. Copied files go unchanged into `third_party/<project>/` together with the license text that applies to them. Adapted code keeps the original copyright line and license text in a header comment of our file. For Apache-2.0, the project's `NOTICE`, if it has one, goes into `third_party/<project>/NOTICE` (for adapted code too, with the header comment pointing to it), and adapted files say that they were changed. Our own code stays MIT ([LICENSE](../LICENSE)).
 - **A file under several licenses** counts as permissive if one of them is on the permissive list. Record which one is used.
 - **All other licenses** (GPL, LGPL, AGPL, MPL, EPL, CC-BY and anything not on the permissive list) **and unlicensed files:** facts only, such as values, layouts, formats and observed behavior. Write our own code and docs in our own words and structure. Never copy code, comments or tables, and never translate code line by line.
 - **Sony names:** don't adopt Sony API, type, struct or field names from these sources. Name things after what they do, or after AMD's documentation and register databases. NID names still come only from the hash matching below. Names in code sources are not candidates, because their origin is unclear.
@@ -85,7 +85,7 @@ Changes from 2026-11-05 on.
 
 ## Exposure log
 
-Off-limits material that was seen by accident, and how it is handled. Seeing it is recorded here, not hidden.
+Off-limits material that was seen by accident, and libraries whose emulator HLE code or logs were read ([Code sources](#code-sources), category 4), and how they are handled. Seeing them is recorded here, not hidden.
 
 | Date | What was seen | Handling |
 |---|---|---|

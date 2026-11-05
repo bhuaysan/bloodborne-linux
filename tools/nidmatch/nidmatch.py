@@ -61,7 +61,7 @@ LABEL_RE = re.compile(r"[A-Za-z0-9_.+-]+")
 STRINGS_PREFIX = "strings:"
 # Labels of the lists written by derive.py.
 DERIVED_PREFIX = "derive-"
-# Libraries whose NID tables were seen by accident (exposure log in docs/clean-room.md), plus
+# Libraries in the exposure log of docs/clean-room.md, plus
 # libSceSaveDataDialog, whose names start with the libSceSaveData prefix. Derivation rules skip
 # them, and a name for one of them needs a source other than a derivation rule.
 NO_DERIVE_LIBRARIES = frozenset({"libSceRemoteplay", "libSceSaveData", "libSceRegMgr", "libSceRtc",

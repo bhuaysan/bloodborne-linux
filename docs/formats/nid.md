@@ -69,7 +69,7 @@ The game's identifiers use the same words as the API. Leaving out the `sce*` nam
 
 `derive-words` repeats until nothing new turns up. Every new match adds its words to the vocabulary, and the next round tries only combinations that contain a new word. A name is kept only if its NID belongs to a library that its prefix came from. Names from earlier runs that came only from these rules are not used as input, so a rerun gives the same lists.
 
-**Excluded libraries.** The four libraries in the exposure log of [clean-room.md](../clean-room.md#exposure-log) get no prefixes. The same goes for libSceSaveDataDialog, whose names start with the libSceSaveData prefix. No derived name may start with one of their prefixes. Their NIDs are never targets, not even when another library shares them, and the words of their names are not part of the vocabulary. As a second check, `nidmatch` refuses a name for these libraries whose only sources are `derive-*` labels. The list is `NO_DERIVE_LIBRARIES` in `nidmatch.py`.
+**Excluded libraries.** The libraries in the exposure log of [clean-room.md](../clean-room.md#exposure-log) get no prefixes. The same goes for libSceSaveDataDialog, whose names start with the libSceSaveData prefix. No derived name may start with one of their prefixes. Their NIDs are never targets, not even when another library shares them, and the words of their names are not part of the vocabulary. As a second check, `nidmatch` refuses a name for these libraries whose only sources are `derive-*` labels. The list is `NO_DERIVE_LIBRARIES` in `nidmatch.py`.
 
 ### First results
 
