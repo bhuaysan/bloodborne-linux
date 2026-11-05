@@ -78,6 +78,9 @@ constexpr Pair map_bits[] = {
     {0x400, MAP_STACK},    {0x1000, MAP_ANONYMOUS}, {0x80000, MAP_32BIT},
 };
 
+// MS_SYNC is 0 in the guest, so it isn't a bit there.
+constexpr Pair msync_bits[] = {{0x1, MS_ASYNC}, {0x2, MS_INVALIDATE}};
+
 struct Clock {
     std::int32_t guest;
     clockid_t host;
@@ -195,6 +198,14 @@ Flags host_map_flags(int guest) {
 
 Flags guest_map_flags(int host) {
     return translate(map_bits, host, false);
+}
+
+Flags host_msync_flags(int guest) {
+    Flags out = translate(msync_bits, guest, true);
+    if ((out.value & MS_ASYNC) == 0) {
+        out.value |= MS_SYNC;
+    }
+    return out;
 }
 
 std::optional<int> host_whence(int guest) {

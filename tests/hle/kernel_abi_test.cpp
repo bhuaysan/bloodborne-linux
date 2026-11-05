@@ -192,6 +192,13 @@ TEST(KernelAbi, UnknownMapFlagsAreReported) {
     }
 }
 
+TEST(KernelAbi, MsyncFlags) {
+    EXPECT_EQ(host_msync_flags(0), (Flags{MS_SYNC, 0}));
+    EXPECT_EQ(host_msync_flags(0x1), (Flags{MS_ASYNC, 0}));  // libc.prx 0x541a2
+    EXPECT_EQ(host_msync_flags(0x2), (Flags{MS_SYNC | MS_INVALIDATE, 0}));
+    EXPECT_EQ(host_msync_flags(0x5), (Flags{MS_ASYNC, 0x4}));
+}
+
 TEST(KernelAbi, Whence) {
     for (int whence = 0; whence <= 4; ++whence) {
         EXPECT_EQ(host_whence(whence), whence);
