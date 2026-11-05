@@ -23,13 +23,6 @@ std::string show_bytes(const std::byte* p, std::size_t n) {
     return n > max_shown_bytes ? out + " ..." : out;
 }
 
-std::string arity_key(std::string_view library, std::string_view nid) {
-    std::string k(library);
-    k += '\0';
-    k += nid;
-    return k;
-}
-
 // The start and end of the calling thread's stack.
 std::pair<std::uintptr_t, std::uintptr_t> thread_stack() {
     pthread_attr_t attr;
@@ -133,7 +126,7 @@ void Harness::declare_arity(std::string_view library, std::string_view nid, int 
     if (n < 0 || n > 6) {
         throw std::invalid_argument(std::format("harness: arity {} is not 0 to 6", n));
     }
-    arity_[arity_key(library, nid)] = n;
+    arity_[hle::import_key(library, nid)] = n;
 }
 
 void Harness::on_call(const hle::StubInfo& stub, const std::uint64_t args[6]) {
@@ -217,7 +210,7 @@ void Harness::compare_log(Result& result) const {
         if (a.stub != b.stub) {
             return false;
         }
-        const auto it = arity_.find(arity_key(a.stub->library, a.stub->nid));
+        const auto it = arity_.find(hle::import_key(a.stub->library, a.stub->nid));
         const int arity = it == arity_.end() ? 0 : it->second;
         for (int i = 0; i < arity; ++i) {
             if (normalize(a.args[i]) != normalize(b.args[i])) {

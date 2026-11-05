@@ -181,7 +181,7 @@ private:
     std::vector<Region> regions_;
     std::vector<std::vector<std::byte>> baseline_, after_original_;
     std::vector<StubCall> log_, original_log_;
-    std::unordered_map<std::string, int> arity_;  // by library + '\0' + nid
+    std::unordered_map<std::string, int> arity_;  // by hle::import_key
     // The start and end of the stack of the thread that last ran compare_log, and that thread.
     mutable std::thread::id stack_thread_;
     mutable std::pair<std::uintptr_t, std::uintptr_t> stack_{};
