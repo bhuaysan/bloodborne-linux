@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include "common/macros.hpp"
 #include "loader/dynamic.hpp"
 
 namespace bb::hle {
@@ -90,12 +91,11 @@ struct Registration {
 
 }  // namespace bb::hle
 
-#define BB_HLE_CONCAT_(a, b) a##b
-#define BB_HLE_CONCAT(a, b) BB_HLE_CONCAT_(a, b)
-
 // BB_HLE_FUNCTION("libkernel", "AAAAAAAAAAA", my_function); at namespace scope in a source file
-// of an OBJECT library.
-#define BB_HLE_FUNCTION(library, nid, function)                                         \
-    [[maybe_unused]] static const ::bb::hle::Registration BB_HLE_CONCAT(bb_hle_reg_, __LINE__) { \
-        library, nid, reinterpret_cast<void*>(&function)                                \
-    }
+// of an OBJECT library. The trailing static_assert takes the semicolon.
+#define BB_HLE_FUNCTION(library, nid, function)                          \
+    namespace {                                                          \
+    const ::bb::hle::Registration BB_CONCAT(bb_hle_reg_, __COUNTER__){   \
+        library, nid, reinterpret_cast<void*>(&(function))};             \
+    }                                                                    \
+    static_assert(true)
