@@ -201,14 +201,17 @@ The original 14 bytes of each patched entry live in a registry in `bbhook`, keye
 **Calling the game.** A replacement calls a game function that isn't replaced yet through its link address, using the image accessor in `bbgame`:
 
 ```cpp
-namespace bb::game {
+namespace bb::game {                  // src/game/image.hpp
 loader::Image& image();               // the loaded eboot; aborts if none is set
 void set_image(loader::Image* image); // called by the game runtime and the harness after loading
+template <class F> F* fn(uint64_t link);  // image().fn<F>(link)
 }
 // in a replacement:
-bb::game::image().fn<void(Foo*)>(0x123450)(foo);
+bb::game::fn<void(Foo*)>(0x123450)(foo);
 auto* flags = reinterpret_cast<uint32_t*>(bb::game::image().runtime(0x5100000));
 ```
+
+`image()` without an image prints `game: no image is loaded (bb::game::set_image was not called)` and aborts: a replacement that runs before loading is a bug, not an error to handle. `set_image(nullptr)` unsets it. `fn` throws `std::out_of_range` unless the address lies inside an executable segment, like `Image::fn`. `bbgame` is an `OBJECT` library that links `bbhook` and only the compile-time requirements of `bbhle`; executables link `bbgame` and `bbhle` themselves.
 
 The game code and our code use the same System V calling convention, so a call needs no glue as long as no TLS is involved. From M3 the game uses `%fs` for its own TLS while our code uses glibc's, so transitions between the two will need glue. That is open until M3 sets up TLS.
 
@@ -218,7 +221,7 @@ The game code and our code use the same System V calling convention, so a call n
 
 ### Process setup
 
-One GoogleTest environment per test binary loads the eboot once: the default base, `relocate` with `bb::hle::resolve`, `finalize_protection`, and `bb::game::set_image`. Imports with a registered HLE implementation call it; all others go to stubs, and the harness installs a stub observer that records those calls. **Hooks are never applied in the harness.** It calls the original at its runtime address and the replacement as a C++ function.
+One GoogleTest fixture, `bb::test::EbootTest` (`tests/harness/eboot.hpp`), loads the eboot once per test binary, in the `SetUp` of the first test that uses it: `map_eboot` at the default base, `relocate` with `bb::hle::resolve`, `finalize_protection`, and `bb::game::set_image`. The image and one harness on it (`image()`, `harness()`) then live in a function-local static until the process exits, and every `SetUp` restores the baseline. Without the game, `SetUp` skips the test as `BB_REQUIRE_GAME` does. Because the fixture's harness lives as long as the process and only one harness may exist at a time, tests that use `EbootTest` go into a binary of their own (`harness_eboot_test`, with the same `main.cpp`), apart from the synthetic-ELF tests with their per-test harness. Imports with a registered HLE implementation call it; all others go to stubs, and the harness installs a stub observer that records those calls. **Hooks are never applied in the harness.** It calls the original at its runtime address and the replacement as a C++ function.
 
 No game initialization code runs: not `DT_INIT`, `DT_PREINIT_ARRAY`, `DT_INIT_ARRAY` nor the entry point. The baseline is the static image right after relocation. A function that depends on state set up by init code needs that state built by its test's input builder.
 
