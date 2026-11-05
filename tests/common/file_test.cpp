@@ -42,6 +42,19 @@ TEST_F(ReadFileTest, ReadsWholeFile) {
     EXPECT_EQ(std::string(reinterpret_cast<const char*>(data.data()), data.size()), text);
 }
 
+TEST_F(ReadFileTest, ReadsAnEmptyFile) {
+    std::ofstream(dir_ / "empty").close();
+    EXPECT_TRUE(bb::common::read_file(dir_ / "empty").empty());
+}
+
+// Files in /proc report size 0 but have contents: read_file reads them until EOF.
+TEST(ReadFile, ReadsPastTheReportedSize) {
+    auto data = bb::common::read_file("/proc/self/status");
+    std::string text(reinterpret_cast<const char*>(data.data()), data.size());
+    EXPECT_TRUE(text.starts_with("Name:")) << text;
+    EXPECT_NE(text.find("\nPid:"), std::string::npos);
+}
+
 TEST(ReadFile, NamesTheMissingFile) {
     try {
         bb::common::read_file("/nonexistent/bb-file-test");
