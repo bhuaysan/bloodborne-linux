@@ -130,7 +130,7 @@ libc's file mapping is `mmap(0, st_size, PROT_READ, MAP_PRIVATE, fd, 0)` after `
 | 0x1 | MS_ASYNC | MS_ASYNC | libc 0x541a2 |
 | 0x2 | MS_INVALIDATE | MS_INVALIDATE | no use found |
 
-Other bits are reported as unknown and refused with `EINVAL`. So is MS_ASYNC together with MS_INVALIDATE (3), which the guest kernel's `msync` refuses with `EINVAL` although Linux allows it.
+Other bits are reported as unknown and refused with `EINVAL`. So is MS_ASYNC together with MS_INVALIDATE (3), which the guest kernel's `msync` refuses with `EINVAL` although Linux allows it (FreeBSD [msync(2)](https://man.freebsd.org/cgi/man.cgi?query=msync&sektion=2&manpath=FreeBSD+10.4-RELEASE), 10.4-RELEASE, ERRORS; logged in [references.md](../references.md)).
 
 ## Clock ids
 
