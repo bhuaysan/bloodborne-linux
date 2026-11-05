@@ -260,16 +260,9 @@ TEST_F(SystemTest, PlayGoReportsEverythingInstalled) {
     });
     EXPECT_EQ(states,
               (std::array<std::int8_t, 3>{playgo_chunk_installed, playgo_chunk_installed, -1}));
-    // The game's fold (0x1fdeb40 to 0x1fdeb6d): only a result of 2 counts as done.
-    std::int32_t fold = 2;
-    for (std::size_t i = 0; i < 2; ++i) {
-        if (states[i] == 2) {
-            fold = 1;
-        } else if (states[i] == 0) {
-            fold = 0;
-        }
-    }
-    EXPECT_EQ(fold, 2);
+    // The game's fold (0x1fdeb40 to 0x1fdeb6d) counts the chunks as done only when
+    // no state is 0 (missing) or 2 (pending), so the reported state must be neither.
+    static_assert(playgo_chunk_installed != 0 && playgo_chunk_installed != 2);
     EXPECT_TRUE(contains(log, "chunk states: unknown chunk id 5 (caller 0x")) << log;
     EXPECT_EQ(playgo_set_mode(handle, 1), 0);
 }
