@@ -102,6 +102,7 @@ struct Image {
     std::optional<TlsTemplate> tls;           // PT_TLS: link addr, file size, mem size, align
     std::optional<uint64_t> proc_param;       // link address of PT_SCE_PROCPARAM, eboot only
     DynamicInfo dyn;                          // init/fini arrays, symbols, relocations, records
+    std::optional<UnwindTable> unwind;        // PT_GNU_EH_FRAME search table, see Hooks
     uintptr_t runtime(uint64_t link) const;   // base + link, checked against the segments
     template <class F> F* fn(uint64_t link) const;
     std::optional<uint64_t> function_size(uint64_t link) const;  // see Hooks
@@ -182,6 +183,10 @@ void remove(loader::Image&, std::span<const Replacement>);
 The patch at a function entry is 14 bytes: `jmp [rip+0]` (`FF 25 00000000`) followed by the absolute address of the replacement.
 
 **Size check.** `apply` asks `Image::function_size(link)`, which looks the address up in the binary search table of `PT_GNU_EH_FRAME` (`docs/formats/eh-frame.md`, dead FDEs excluded) and returns the FDE's range length only when an FDE starts exactly at that address. `apply` refuses an address that is not an FDE start and a function shorter than 14 bytes. `symbols/functions.csv` has no size column, so the FDE is the only source. #45 adds `function_size` to the loader.
+
+The table is untrusted input, checked in two places:
+- **At map time** (`read_unwind_table`, before the range is reserved): at most one `PT_GNU_EH_FRAME`, inside the file data of a readable `PT_LOAD`; the header encodings of every pinned file (version 1, `eh_frame_ptr` pcrel|sdata4, `fde_count` udata4, table datarel|sdata4); the table fits `p_filesz` and its starts ascend strictly. Anything else is a `LoadError`, so an image with an unreadable table never maps. An image without `PT_GNU_EH_FRAME` maps, and `function_size` returns nothing for it.
+- **At lookup** (`fde_range`): a binary search over the table. No entry that starts exactly at the address gives `nullopt`. An entry whose FDE or CIE is malformed, lies outside that segment's file data, uses an augmentation other than `z` + `R`/`L`/`P`, an FDE pointer encoding other than pcrel with a 4- or 8-byte format, or whose decoded `pc_begin` differs from the table's start, throws `LoadError`: the table points at broken data, which is not the same as "no function here".
 
 **Protection.** In the runtime, hooks are applied before `finalize_protection`, while the code is still writable. When the image is already finalized (tests, `remove`), `apply` and `remove` make the affected pages writable themselves and restore `r-x` afterwards. Each patched entry keeps its original bytes for `remove`.
 
