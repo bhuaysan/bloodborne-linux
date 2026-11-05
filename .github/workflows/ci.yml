@@ -35,6 +35,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libgtest-dev \
               spirv-headers spirv-tools libvulkan-dev mesa-vulkan-drivers
 
+      - name: Check the graphics packages
+        run: |
+          test -f /usr/include/spirv/unified1/spirv.hpp11
+          command -v spirv-val
+          test -f /usr/include/vulkan/vulkan.h
+          ls /usr/share/vulkan/icd.d/lvp_icd*.json
+
       - name: Configure
         run: cmake --preset "${{ matrix.preset }}" -DBB_WERROR=ON
 

@@ -77,7 +77,7 @@ src/                 the runtime, C++20 (see docs/design/runtime.md)
   harness/           differential test harness (tests only)
   gpu/               GCN shader translator (gcn/), later PM4 state (pm4/) and the Vulkan backend (vk/)
   tools/             bb-load, bb-gcn
-tests/               GoogleTest unit and differential tests, one directory per target, plus support/
+tests/               GoogleTest unit and differential tests, one directory per target (gpu/gcn/ for bbgcn), plus support/ and gpu/programs/
 symbols/             our analysis as text: functions.csv, nids.csv, types/
 third_party/         copied third-party code with its license (see docs/clean-room.md)
 tools/
