@@ -77,7 +77,7 @@ Paths are normalised, and `..` cannot leave a mount. When an exact lookup under 
 
 ## Runtime directories
 
-`$XDG_DATA_HOME` (profiles, save data), `$XDG_CACHE_HOME` (temp, later the shader cache), `$XDG_CONFIG_HOME` (config, later) and `$XDG_STATE_HOME` (logs), each with the XDG default when unset, each under `bloodborne-linux/`. `--profile <name>` (`[A-Za-z0-9_-]{1,32}`, default `default`) selects the profile directories. Directories are created with mode 0700 when first used. Nothing is ever written to the game or repository directory.
+`$XDG_DATA_HOME` (profiles, save data), `$XDG_CACHE_HOME` (temp, later the shader cache), `$XDG_CONFIG_HOME` (config, later) and `$XDG_STATE_HOME` (logs), each with the XDG default when unset, each under `bloodborne-linux/`. `--profile <name>` (`[A-Za-z0-9_-]{1,32}`, default `default`) selects the profile directories. A variable that is empty or relative counts as unset, as the XDG spec says; the defaults need `HOME`. Directories are created with mode 0700 when first used, missing parents included (existing ones keep their mode). Nothing is ever written to the game or repository directory: `bb::common::RuntimeDirs` (`src/common/runtime_dirs.hpp`) refuses to start when one of its four directories and the game directory or the source checkout the binary was built from lie inside one another, and it creates directories only inside its own four.
 
 ## Logging
 
