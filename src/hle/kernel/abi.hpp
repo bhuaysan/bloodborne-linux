@@ -76,7 +76,8 @@ Flags guest_prot(int host);
 Flags host_map_flags(int guest);
 Flags guest_map_flags(int host);
 
-// msync(2) flags. Without MS_ASYNC the host gets MS_SYNC, the guest's 0.
+// msync(2) flags. Without MS_ASYNC the host gets MS_SYNC, the guest's 0. MS_ASYNC together with
+// MS_INVALIDATE is reported as unknown, since the guest kernel refuses it.
 Flags host_msync_flags(int guest);
 
 // lseek(2) whence, or std::nullopt if it is not one.

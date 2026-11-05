@@ -202,6 +202,10 @@ Flags guest_map_flags(int host) {
 
 Flags host_msync_flags(int guest) {
     Flags out = translate(msync_bits, guest, true);
+    // FreeBSD refuses MS_ASYNC with MS_INVALIDATE, so the pair counts as unknown.
+    if ((guest & 0x3) == 0x3) {
+        out.unknown |= 0x3;
+    }
     if ((out.value & MS_ASYNC) == 0) {
         out.value |= MS_SYNC;
     }

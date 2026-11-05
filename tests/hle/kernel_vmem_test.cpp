@@ -320,6 +320,8 @@ TEST(KernelVmem, MsyncProbesHostPages) {
     EXPECT_EQ(take_errno(), 12);
     EXPECT_EQ(guest_msync(page, sizeof page, 4), -1);
     EXPECT_EQ(take_errno(), 22);
+    EXPECT_EQ(guest_msync(page, sizeof page, 3), -1);  // MS_ASYNC | MS_INVALIDATE
+    EXPECT_EQ(take_errno(), 22);
 }
 
 TEST(KernelVmem, DirectMemoryTypeFailsWithoutDirectMemory) {

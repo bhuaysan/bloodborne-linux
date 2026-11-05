@@ -197,6 +197,9 @@ TEST(KernelAbi, MsyncFlags) {
     EXPECT_EQ(host_msync_flags(0x1), (Flags{MS_ASYNC, 0}));  // libc.prx 0x541a2
     EXPECT_EQ(host_msync_flags(0x2), (Flags{MS_SYNC | MS_INVALIDATE, 0}));
     EXPECT_EQ(host_msync_flags(0x5), (Flags{MS_ASYNC, 0x4}));
+    // FreeBSD refuses MS_ASYNC | MS_INVALIDATE with EINVAL.
+    EXPECT_EQ(host_msync_flags(0x3), (Flags{MS_ASYNC | MS_INVALIDATE, 0x3}));
+    EXPECT_EQ(host_msync_flags(0x7), (Flags{MS_ASYNC | MS_INVALIDATE, 0x7}));
 }
 
 TEST(KernelAbi, Whence) {

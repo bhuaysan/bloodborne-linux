@@ -301,7 +301,7 @@ int guest_munmap(void* address, std::uint64_t length) {
 int guest_msync(void* address, std::uint64_t length, int flags) {
     const Flags host = host_msync_flags(flags);
     if (host.unknown != 0) {
-        log("msync: unknown flags {:#x}", host.unknown);
+        log("msync: unknown or refused flags {:#x}", host.unknown);
         return posix_fail(EINVAL);
     }
     return ::msync(address, length, host.value) == 0 ? 0 : posix_fail(errno);
