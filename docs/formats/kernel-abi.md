@@ -257,3 +257,38 @@ Header `sys/sys/syslimits.h`. The path resolver (`src/hle/kernel/paths.cpp`) che
 |---|---|---|---|
 | 1024 | PATH_MAX | bytes in a path, including the NUL: a path of 1024 bytes or more fails with ENAMETOOLONG | no use found |
 | 255 | NAME_MAX | bytes in one path component, without the NUL: a longer component fails with ENAMETOOLONG | no use found; it matches `d_name`'s 256 bytes in the [getdirentries record](#getdirentries-record) |
+
+## Mutexes and rwlocks
+
+The libkernel mutex, mutex attribute and rwlock imports and the libScePosix `pthread_mutex*` imports (issue #86), implemented in `src/hle/kernel/sync.cpp`. Its first part has the mutexes and mutex attributes; the protocol setter, the timed lock and the rwlocks follow in a second part, so for those this section records the call sites ahead of the code. The values below are from the call sites of the three files of the load set. Where a value has no use, its meaning is our assumption and says so.
+
+**Object size.** A mutex, a mutex attribute and an rwlock are each one 8-byte cell:
+
+| Object | Use |
+|---|---|
+| mutex | libc 0x64da (`+0x8` of libc's 0x28-byte lock object, the condition variable that libc waits on with it follows at `+0x10`, 0x6630); libc bss cells 0xc28f0 and 0xc28f8, two mutexes 8 bytes apart (0x52980, 0x53f90); Fios 0x2e558 (`+0x0` of its wrapper, owner at `+0x8`, 0x2e505) |
+| mutex attribute | libc 0xf355 (`rbp-0x58`, the name buffer starts at `rbp-0x50`); Fios 0x2e515 (`rbp-0x30`, the stack guard at `rbp-0x28`); eboot static attribute 0x53e9928 with a flag byte at 0x53e9930 (0x115d0) |
+| rwlock | eboot 0x207f401 (`+0x8` of its wrapper object); Fios 0x2e720 (the wrapper's own pointer is passed through) |
+
+The mutex and rwlock cells hold a pointer to our object (a tag and the glibc primitive). The attribute cell holds the values themselves, tagged in its upper half, so an attribute needs no object of ours and its destruction frees nothing.
+
+**Static initialiser.** 0, for mutexes: libc locks bss cells that nothing initialises (0xc28f0 at 0x52980, 0xc28f8 at 0x53f90, 0xcd3e0 at 0x57752, 0xd5c70 at 0x600e8), and so does the eboot through `pthread_mutex_lock` (bss 0x54b91e0 at 0x29f35ed). No mutex cell with another initial value was found, and every rwlock that the eboot and libSceFios2 use is initialised first (eboot 0x207f2d3, Fios 0x2e72d). A cell holding 0 gets an object of the default type on first use, created under a global lock. Destroying a mutex or rwlock resets its cell to 0. Any other value that is not one of our objects is refused with `EINVAL` (values below 0x10000 without reading through them).
+
+**Initialisation.** `scePthreadMutexInit(mutex, attr, name)` and `scePthreadRwlockInit(rwlock, attr, name)` take a name as a third argument: libc passes a formatted buffer (0x64e1), the eboot passes null (0xd1ac41). The name is not kept. `attr` may be null, which means the default attributes (libc 0x64e5, Fios 0x2e72b for an rwlock). No rwlock attribute function is imported, so the rwlock `attr` is ignored.
+
+**Types.** The type setter's second argument:
+
+| Value | Type | Host | Use |
+|---|---|---|---|
+| 1 | error-checking | `PTHREAD_MUTEX_ERRORCHECK` | no use found |
+| 2 | recursive | `PTHREAD_MUTEX_RECURSIVE` | Fios 0x2e52b: the wrapper picks 2 when its recursion flag is 1, and then starts its own count at 0 instead of -1 (0x2e509); eboot 0xd1ac2f, 0x208400a and all 39 `pthread_mutexattr_settype` calls (e.g. 0x110ba); libc 0xf36b |
+| 3 | normal | `PTHREAD_MUTEX_NORMAL` | no use found |
+| 4 | adaptive | `PTHREAD_MUTEX_ERRORCHECK` | Fios 0x2e52b, its non-recursive mutexes |
+
+The default type (attribute just initialised, null attribute, static initialiser) is error-checking: libc's lock at 0x65e1 tells `EDEADLK` (0x8002000b) apart from other failures on a mutex made with a null attribute (0x64e7). The eboot's wrapper prints "Deadlock. Mutex is locked from owner thread.(EDEADLK)" on that result (0x2084130). The adaptive type spins before it sleeps; here it is error-checking, which suits its only user, whose non-recursive wrapper never relocks. The names of 1 and 3 and the default come from the FreeBSD convention that the numbering follows. They are not yet confirmed against `include/pthread.h` and not logged in [references.md](../references.md); nothing in the load set uses 1 or 3. Other values are refused with `EINVAL`.
+
+**Protocol.** `scePthreadMutexattrSetprotocol` takes 0, 1 or 2; libSceFios2 passes 1 (0x2e540). The value is accepted and not applied (issue #86, out of scope: priority inheritance). Others give `EINVAL`.
+
+**Timeouts.** The timed variants take a 32-bit timeout as their second argument (eboot 0x2084114, 0x207f408, 0x207f678). Every caller of the eboot's wrappers that passes a constant passes -1, and for -1 the wrappers call the untimed variant instead (0x2084117, 0x207f40c, 0x207f67c). The remaining callers reach them through virtual calls. So no value reaches a timed import in the paths we read, and the unit is not confirmed. We take microseconds, relative, like `sceKernelUsleep`, and measure them on `CLOCK_MONOTONIC`. A timeout gives `ETIMEDOUT`, which the eboot compares as 0x8002003c (0x2084150).
+
+**Results.** The sce entry points return `0x80020000 | errno`, the POSIX ones the errno number. The eboot and libraries compare: `EDEADLK` (libc 0x65ea, eboot 0x2084130, 0x207f421), `EBUSY` from trylock and destroy (libc 0x66fb, Fios 0x2e5e3, 0x2e7ae, eboot 0x20840be), `EINVAL` (eboot 0x2084137), `EAGAIN` for too many recursive locks (eboot 0x208413e), `ENOMEM` from init (eboot 0x2084037). `EPERM` comes from unlocking a mutex the thread doesn't own (error-checking and recursive types). A held rwlock is not destroyed and gives `EBUSY`, as a mutex does; glibc itself doesn't check this. Unlocking an rwlock that isn't held is not detected.
