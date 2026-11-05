@@ -93,8 +93,14 @@ TEST(HleVideo, CallsOnUnknownPortsFail) {
 TEST(HleVideo, FlipWakesAWaiterWithTheFlipEvent) {
     const Port port;
     EXPECT_EQ(flip_count(port.handle), 0u);
+    const auto queue = bb::hle::EventQueue::find(port.queue);
+    ASSERT_NE(queue, nullptr);
     WaitOutcome outcome;
     std::thread waiter([&] { outcome = wait_for(port.queue, nullptr); });  // as at 0x11e41b6
+    // Submit only once the waiter is blocked, so the flip has to wake it.
+    while (queue->waiting() == 0) {
+        std::this_thread::yield();
+    }
     const auto start = std::chrono::steady_clock::now();
     EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 1, 2, 77), 0);
     waiter.join();
