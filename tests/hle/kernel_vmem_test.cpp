@@ -106,16 +106,18 @@ TEST(KernelVmem, ProtectAndUnmapSplitRegions) {
     EXPECT_EQ(region->prot, 3);
     static_cast<char*>(ptr(base))[0] = 1;  // still writable
 
-    // libc.prx trims arenas from the inside (0x24f6d): unmap the first two pages, then the last.
-    EXPECT_EQ(sceKernelMunmap(ptr(base), 2 * page_size), 0);
-    EXPECT_FALSE(vmem::find(base));
+    // libc.prx releases the tail of an arena segment (0x24f6d): munmap(base + size - n, n), n a
+    // multiple of its granularity. Here the tail spans two regions, and the head stays.
+    EXPECT_EQ(sceKernelMunmap(ptr(base + page_size), 2 * page_size), 0);
     EXPECT_FALSE(vmem::find(base + page_size));
-    region = vmem::find(base + 2 * page_size + 1);
-    ASSERT_TRUE(region);
-    EXPECT_EQ(region->start, base + 2 * page_size);
-    EXPECT_EQ(region->prot, 3);
-    EXPECT_EQ(sceKernelMunmap(ptr(base + 2 * page_size), page_size), 0);
     EXPECT_FALSE(vmem::find(base + 2 * page_size));
+    region = vmem::find(base);
+    ASSERT_TRUE(region);
+    EXPECT_EQ(region->start, base);
+    EXPECT_EQ(region->end, base + page_size);
+    EXPECT_EQ(region->prot, 3);
+    EXPECT_EQ(sceKernelMunmap(ptr(base), page_size), 0);
+    EXPECT_FALSE(vmem::find(base));
 }
 
 TEST(KernelVmem, DirectRegionsKeepTheirOffsetWhenSplit) {
