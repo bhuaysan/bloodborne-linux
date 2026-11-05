@@ -3,10 +3,12 @@
 #include <array>
 #include <cstdint>
 #include <cstddef>
+#include <regex>
 #include <string>
 
 #include <gtest/gtest.h>
 
+#include "common/log.hpp"
 #include "hle/hle.hpp"
 #include "loader/dynamic.hpp"
 
@@ -88,6 +90,21 @@ TEST_F(SystemTest, SysmoduleTracksLoadedIds) {
     EXPECT_EQ(sysmodule_unload_module(0xb4), 0);
     EXPECT_EQ(sysmodule_is_loaded(0xb4), sysmodule_error_not_loaded);
     EXPECT_EQ(sysmodule_unload_module(0xb4), sysmodule_error_not_loaded);
+}
+
+// The service log goes through the logger: info on hle.<library>, with the thread name, and the
+// filter can silence it.
+TEST_F(SystemTest, ServiceLogGoesThroughTheLogger) {
+    bb::common::set_thread_name("system-test");
+    const std::string log = stderr_of([] { EXPECT_EQ(sysmodule_load_module(0xb4), 0); });
+    EXPECT_TRUE(std::regex_match(
+        log, std::regex("[0-9:.]{12} info \\[system-test\\] hle\\.libSceSysmodule: load module "
+                        "0xb4 \\(libSceAppContent\\) \\(caller 0x[0-9a-f]+\\)\n")))
+        << log;
+    bb::common::set_log_filter(bb::common::LogFilter::parse("hle.libSceSysmodule=warn"));
+    const std::string silenced = stderr_of([] { EXPECT_EQ(sysmodule_unload_module(0xb4), 0); });
+    bb::common::set_log_filter(bb::common::LogFilter{});
+    EXPECT_EQ(silenced, "");
 }
 
 TEST_F(SystemTest, SysmoduleLoadsAndLogsUnknownIds) {
