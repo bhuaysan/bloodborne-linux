@@ -397,7 +397,8 @@ TEST(HleTrace, OnlyWhenTheFilterShowsTraceAtResolve) {
 }
 
 // Every import of the eboot gets a stub or a data block, and a call through a GOT slot reaches
-// the stub of the slot's import. 686 of the 701 imports are referenced, 20 of them data.
+// the stub of the slot's import. 686 of the 701 imports are referenced, 20 of them data. The
+// HLE modules implement some of the function imports, so those get no stub.
 TEST(HleGame, RelocatesTheEbootWithStubs) {
     BB_REQUIRE_GAME(game);
     const Counts before = counts();
@@ -405,7 +406,7 @@ TEST(HleGame, RelocatesTheEbootWithStubs) {
     bb::loader::relocate(image, resolve, bb::loader::eboot_module_id);
     image.finalize_protection();
     // The HLE modules implement some of the function imports, so those get no stub.
-    EXPECT_EQ(counts().stubs - before.stubs, 645U);
+    EXPECT_EQ(counts().stubs - before.stubs, 643U);
     EXPECT_EQ(counts().data_blocks - before.data_blocks, 20U);
 
     const bb::loader::Rela& rela = image.dyn.plt_relocs.at(0);
