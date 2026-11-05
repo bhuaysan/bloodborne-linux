@@ -116,6 +116,18 @@ std::uint64_t fde_link(Bytes& elf, std::size_t i) {
     return eh_hdr_link + rel;
 }
 
+// Replaces the FDE of entry 0 (function 0x10, size 0x20) by one at 0x1100 with 8-byte pointers
+// and switches its "zR" CIE to pointer encoding `enc`.
+void use_eight_byte_fde(Bytes& elf, std::uint8_t enc) {
+    code_at(elf, eh_frame_link + 16) = std::byte{enc};
+    put<std::uint32_t>(elf, 0x1000 + 0x1100, 24);  // CIE pointer, pc_begin, pc_range, aug length
+    put<std::uint32_t>(elf, 0x1000 + 0x1104, 0x1104 - eh_frame_link);
+    put<std::int64_t>(elf, 0x1000 + 0x1108, std::int64_t{0x10} - 0x1108);
+    put<std::uint64_t>(elf, 0x1000 + 0x1110, 0x20);
+    code_at(elf, 0x1118) = std::byte{0};
+    put<std::int32_t>(elf, 0x1000 + eh_hdr_link + 16, -0x100);  // 0x1100, from eh_hdr_link
+}
+
 // A PS4 ELF with a code segment at link address 0, a data segment at data_link whose memory
 // extends past its file data (.bss), the smallest dynamic table parse_dynamic accepts, and
 // PT_TLS and PT_SCE_PROCPARAM inside the data segment, and unwind tables in the code segment.
@@ -424,6 +436,13 @@ TEST(Image, FindsFunctionSizes) {
     Image none = map_elf(build_elf([](auto& p) { p.pop_back(); }), test_base + 0x100000);
     EXPECT_FALSE(none.unwind);
     EXPECT_FALSE(none.function_size(0x10));
+
+    for (std::uint8_t enc : {0x10, 0x14, 0x1c}) {  // pcrel with absptr, udata8 and sdata8
+        Bytes elf = build_elf();
+        use_eight_byte_fde(elf, enc);
+        Image wide = map_elf(elf, test_base + 0x200000);
+        EXPECT_EQ(wide.function_size(0x10), 0x20U) << enc;
+    }
 }
 
 // Maps the ELF with `edit` applied to its bytes and expects map_elf or, when `lookup` is set,
@@ -483,6 +502,17 @@ TEST(Image, RefusesBadFdes) {
                         "unsupported personality encoding at 0x1014", 0x40);
     expect_unwind_error([](Bytes& e) { code_at(e, eh_frame_link) = std::byte{8}; },
                         "CIE at 0x1000 overruns its length", 0x10);
+    expect_unwind_error([](Bytes& e) { put<std::uint32_t>(e, 0x1000 + eh_frame_link, 0x1000); },
+                        "CIE at 0x1000 + 0x1004 lies outside its segment's file data", 0x10);
+    expect_unwind_error(
+        [](Bytes& e) { put<std::uint32_t>(e, 0x1000 + fde_link(e, 0), 0xffffffff); },
+        "no supported FDE at 0x1030 for 0x10", 0x10);
+    // The FDE of 0x10 holds two 4-byte pointers: too short for 8-byte ones.
+    expect_unwind_error([](Bytes& e) { code_at(e, eh_frame_link + 16) = std::byte{0x1c}; },
+                        "FDE at 0x1030 is too short", 0x10);
+    // pcrel|udata4 doesn't sign-extend, so the backward offset to 0x10 lands above 4 GiB.
+    expect_unwind_error([](Bytes& e) { code_at(e, eh_frame_link + 16) = std::byte{0x13}; },
+                        "FDE at 0x1030 starts at 0x100000010, the search table says 0x10", 0x10);
 }
 
 TEST(MapEbootGame, FindsFunctionSizes) {
