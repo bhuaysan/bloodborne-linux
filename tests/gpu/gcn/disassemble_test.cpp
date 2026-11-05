@@ -2,6 +2,7 @@
 // With llvm-mc installed, every line is also assembled back to its words.
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,7 @@ const std::vector<Case> cases = {
     {{sop2(15, code::exec, code::vcc, 193)}, "s_and_b64 exec, vcc, -1"},
     {{sop2(31, 2, 4, 6)}, "s_lshl_b64 s[2:3], s[4:5], s6"},
     {{sop2(43, 0, 4, 8)}, "s_cbranch_g_fork s[4:5], s[8:9]"},
+    {{sop2(43, 0, 193, 8)}, "s_cbranch_g_fork -1, s[8:9]"},  // inline constants, but no literal
     {{sop2(2, code::m0, 255, 255), 0x12345}, "s_add_i32 m0, 0x12345, 0x12345"},
     // Literals with an inline value keep their encoding through lit().
     {{sop2(2, 0, 255, 255), 0xfffffff0}, "s_add_i32 s0, lit(0xfffffff0), lit(0xfffffff0)"},
@@ -64,6 +66,8 @@ const std::vector<Case> cases = {
     {{sop1(36, 2, code::vcc)}, "s_and_saveexec_b64 s[2:3], vcc"},
     {{sop1(31, 0, 0)}, "s_getpc_b64 s[0:1]"},
     {{sop1(32, 0, 4)}, "s_setpc_b64 s[4:5]"},
+    {{sop1(32, 0, code::vcc)}, "s_setpc_b64 vcc"},
+    {{sop1(50, 0, code::scc)}, "s_cbranch_join src_scc"},
     {{sop1(16, 0, 2)}, "s_bcnt1_i32_b64 s0, s[2:3]"},
     // SOPC.
     {{sopc(6, 0, 242)}, "s_cmp_eq_u32 s0, 1.0"},
@@ -140,6 +144,27 @@ TEST(GcnDisassemble, EncodingsLlvmCannotExpress) {
     // Opcodes with no gfx7 syntax in LLVM.
     EXPECT_EQ(text({sop1(51, 0, 1)}), "s_mov_regrd_b32 s0, s1");
     EXPECT_EQ(text({sopk(20, 0, 0xf801)}), "s_getreg_regrd_b32 s0, hwreg(HW_REG_MODE)");
+}
+
+// Sources that LLVM takes only as a register, or for s_cbranch_g_fork not as a literal. The operand
+// field allows any source, so the decoder accepts these and llvm-mc rejects the text.
+TEST(GcnDisassemble, SourcesLlvmTakesOnlyAsRegisters) {
+    const std::vector<Case> rejected = {
+        {{sop1(32, 0, 128)}, "s_setpc_b64 0"},
+        {{sop1(34, 0, 255), 0}, "s_rfe_b64 lit(0x0)"},
+        {{sop1(50, 0, 255), 0x12345}, "s_cbranch_join 0x12345"},
+        {{sop1(46, 0, 242)}, "s_movrels_b32 s0, 1.0"},
+        {{sop1(47, 0, 193)}, "s_movrels_b64 s[0:1], -1"},
+        {{sop2(43, 0, 255, 8), 0}, "s_cbranch_g_fork lit(0x0), s[8:9]"},
+        {{sop2(43, 0, 4, 255), 0x12345}, "s_cbranch_g_fork s[4:5], 0x12345"},
+    };
+    for (const Case& c : rejected) {
+        SCOPED_TRACE(c.text);
+        EXPECT_EQ(text(c.words), c.text);
+        if (have_llvm_mc()) {
+            EXPECT_THROW(assemble({c.text}), std::runtime_error);
+        }
+    }
 }
 
 }  // namespace
