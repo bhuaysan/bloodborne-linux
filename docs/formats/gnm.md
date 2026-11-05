@@ -16,7 +16,7 @@ Addresses are eboot link addresses. Register names are those of the register ref
 - **Compute queues are used.** The game maps compute queues on its own ring buffers, writes `INDIRECT_BUFFER` packets into the ring and reports the write pointer through an import.
 - **Fetch shaders are generated at run time** by eboot code (0x10877c0), from the vertex shader's input-usage table. The address goes into the first two user-data SGPRs of the vertex stage (VS, or ES/LS when those run the vertex shader), where the shader's `s_swappc_b64 s[0:1], s[0:1]` finds it.
 - **Of the 50 imports, 30 are reachable** from game code, 20 are not (their wrappers have no callers). Two of the reachable ones only matter when GPU profiling is on, which the HLE reports as off.
-- **Three packet opcodes have no name yet** (0x8A, 0x8C, 0x8D). The parser has to log them until their meaning is known.
+- **Two packet opcodes have no name yet** (0x8C, 0x8D). The parser has to log them until their meaning is known.
 
 ## Where the code lives
 
@@ -56,6 +56,8 @@ A writer checks `(end - cursor) / 4` against the number of dwords it needs. If t
 ## PM4 packets
 
 All packets are type 3 (`0xC0000000 | (count - 1) << 16 | opcode << 8 | bits`), except a single-dword filler `0x80000000` (type 2) that the NOP writer 0x10783c0 emits when asked for one dword. Register offsets in `SET_*_REG` packets are relative to a base per register space (dword indices): config 0x2000, SH 0x2C00 and context 0xA000 from the SI guide, and uconfig 0xC000. The SI guide has no uconfig space; its base follows from the game and the register reference: 0x1073fe0 writes a 6-bit value to uconfig offset 0x242, and the register reference puts `VGT_PRIMITIVE_TYPE` (field `PRIM_TYPE`, bits 5:0) at byte address 0x30908, dword 0xC242.
+
+A header found by a byte scan counts only once a writer is found that stores it: the scan also matches bytes that span several instructions. For example, `0xC00B8A00` at 0x107255f is the end of a `movl $4, …`, a `mov (%rbx), %cl` and the first byte of a `shr`, inside a function that returns a size and writes no packet.
 
 | Opcode | Name (unverified) | Example writer | Notes |
 |---|---|---|---|
@@ -103,7 +105,6 @@ All packets are type 3 (`0xC0000000 | (count - 1) << 16 | opcode << 8 | bits`), 
 | 0x85 | `INCREMENT_DE_COUNTER` | 0x1078220 | DCB |
 | 0x86 | `WAIT_ON_CE_COUNTER` | 0x10781d0 | DCB |
 | 0x88 | `WAIT_ON_DE_COUNTER_DIFF` | 0x11fd230 | CCB |
-| 0x8A | none | 0x1072490 | 12-dword body; 2 callers |
 | 0x8C | none | 0x1074a90 | 5-dword body: one dword of three bitfields (bits 0–9, 10–19, 20–30), the constant 0x420, then a 40-bit address; 1 caller. The compute-side writer 0x108a590 writes only the bitfield dword (1-dword body) and no shader-type bit, then the 3-dword profiling slot (below) |
 | 0x8D | none | 0x1074b50 | 3-dword body, followed by the draw trailer like a draw; 4 callers. The compute-side writer 0x108a680 writes a different 5-dword body (four argument dwords, then `(arg & 3) << 3 | 1`) with the shader-type bit set, after the profiling slot and before the draw trailer |
 
@@ -287,7 +288,7 @@ The HLE registers these as logging stubs.
 ## Open questions and next steps
 
 - **Register blocks of the stage writers.** Which register each dword of the blocks at shader object +0x8 holds. Next step: item 2 parses the footer; compare its values with the bitfields of `SPI_SHADER_PGM_RSRC1/2_*` and the context registers in the register guide. Until then the HLE can write `SPI_SHADER_PGM_LO/HI` and `RSRC1/2` from the first four dwords and fill the rest with a `NOP`.
-- **Opcodes 0x8A, 0x8C, 0x8D.** No name yet. 0x8C/0x8D come in pairs with compute-side writers whose bodies differ from the graphics ones, and 0x8D sits where a draw sits; they may belong to a draw path that uses a compute command buffer. The header check above may name them. Next step: count them in captured streams once the game runs, and log each opcode once as the design says.
+- **Opcodes 0x8C, 0x8D.** No name yet. 0x8C/0x8D come in pairs with compute-side writers whose bodies differ from the graphics ones, and 0x8D sits where a draw sits; they may belong to a draw path that uses a compute command buffer. The header check above may name them. Next step: count them in captured streams once the game runs, and log each opcode once as the design says.
 - **Packet names and field layouts.** Every opcode-to-name pairing in the packet table, and the field layouts of the packets the SI guide doesn't describe (`RELEASE_MEM`, `DMA_DATA`, `ACQUIRE_MEM`, `REWIND`, `SET_QUEUE_REG`, `SET_UCONFIG_REG`, the two `*_MULTI` draws), need checking against an AMD PM4 header (Linux `amdgpu`/`radeon` or Mesa, code-source category 1) before the parser hard-codes them. The check is logged as a code-source row in references.md; the request goes to the clean-room researcher. The same check can name event type 0x35 and uconfig register 0x200.
 - **`iCO804ZgzdA`'s start-up probe.** Find what the renderer flag at +0x121 (set at 0x216b1b3) switches before choosing the HLE result. Returning `0x80d13fff` keeps the feature off, which is the safer first choice.
 - **`1qXLHIpROPE`, `TLV4mswiZ4A`, `ln33zjBrfjk`.** Roles above are partial. Each is called once or twice; a runtime log of their arguments once the renderer starts will settle them.
