@@ -50,4 +50,9 @@ std::vector<Phdr> read_phdrs(std::span<const std::byte> data, const ElfHeader& h
 // when there are several.
 const Phdr* single_phdr(std::span<const Phdr> phdrs, std::uint32_t type, std::string_view what);
 
+// The first PT_LOAD with all of `flags` whose memory holds the link addresses [addr, addr + size),
+// or nullptr. An empty range may start at the end of a segment.
+const Phdr* find_load(std::span<const Phdr> phdrs, std::uint64_t addr, std::uint64_t size,
+                      std::uint32_t flags = 0);
+
 }  // namespace bb::loader

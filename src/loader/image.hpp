@@ -56,6 +56,9 @@ struct Image {
     DynamicInfo dyn;
     std::optional<UnwindTable> unwind;  // PT_GNU_EH_FRAME, checked at map time
 
+    // The first segment with all of `prot` whose memory holds [link, link + size), or nullptr.
+    const Segment* segment_at(std::uint64_t link, std::uint64_t size = 1, int prot = 0) const;
+
     // base + link. Throws std::out_of_range unless `link` lies inside a segment's memory.
     std::uintptr_t runtime(std::uint64_t link) const;
 

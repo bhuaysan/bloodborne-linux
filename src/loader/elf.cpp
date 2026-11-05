@@ -53,4 +53,15 @@ const Phdr* single_phdr(std::span<const Phdr> phdrs, std::uint32_t type, std::st
     return found;
 }
 
+const Phdr* find_load(std::span<const Phdr> phdrs, std::uint64_t addr, std::uint64_t size,
+                      std::uint32_t flags) {
+    for (const Phdr& ph : phdrs) {
+        if (ph.type == pt_load && (ph.flags & flags) == flags && addr >= ph.vaddr &&
+            in_bounds(addr - ph.vaddr, size, ph.memsz)) {
+            return &ph;
+        }
+    }
+    return nullptr;
+}
+
 }  // namespace bb::loader

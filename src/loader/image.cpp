@@ -88,13 +88,10 @@ std::vector<Segment> read_segments(std::span<const std::byte> elf, std::span<con
 // Throws LoadError unless [link, link + size) lies inside the memory of one PT_LOAD.
 void need_in_load(std::span<const Phdr> phdrs, std::uint64_t link, std::uint64_t size,
                   std::string_view what) {
-    for (const Phdr& ph : phdrs) {
-        if (ph.type == pt_load && link >= ph.vaddr && in_bounds(link - ph.vaddr, size, ph.memsz)) {
-            return;
-        }
+    if (!find_load(phdrs, link, size)) {
+        throw LoadError(std::format("{} at {:#x} + {:#x} lies outside the PT_LOAD segments",
+                                    what, link, size));
     }
-    throw LoadError(std::format("{} at {:#x} + {:#x} lies outside the PT_LOAD segments", what,
-                                link, size));
 }
 
 // `err` is errno saved right after the failing call, before formatting `what` can change it.
@@ -129,20 +126,26 @@ Reservation::~Reservation() {
     }
 }
 
-std::uintptr_t Image::runtime(std::uint64_t link) const {
+const Segment* Image::segment_at(std::uint64_t link, std::uint64_t size, int prot) const {
     for (const Segment& s : segments) {
-        if (link >= s.link_addr && link - s.link_addr < s.mem_size) {
-            return base + link;
+        if ((s.prot & prot) == prot && link >= s.link_addr &&
+            in_bounds(link - s.link_addr, size, s.mem_size)) {
+            return &s;
         }
+    }
+    return nullptr;
+}
+
+std::uintptr_t Image::runtime(std::uint64_t link) const {
+    if (segment_at(link)) {
+        return base + link;
     }
     throw std::out_of_range(std::format("link address {:#x} lies outside the image", link));
 }
 
 std::uintptr_t Image::code(std::uint64_t link) const {
-    for (const Segment& s : segments) {
-        if (link >= s.link_addr && link - s.link_addr < s.mem_size && (s.prot & PROT_EXEC)) {
-            return base + link;
-        }
+    if (segment_at(link, 1, PROT_EXEC)) {
+        return base + link;
     }
     throw std::out_of_range(
         std::format("link address {:#x} lies outside the executable segments", link));

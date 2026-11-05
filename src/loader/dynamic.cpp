@@ -58,16 +58,6 @@ constexpr std::size_t nid_length = 11;
 constexpr std::string_view base64_digits =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-";
 
-// Whether the memory of a PT_LOAD with all of `flags` holds the link addresses addr..addr+size.
-// An empty range may start at the end of the segment.
-bool in_load(std::span<const Phdr> phdrs, std::uint64_t addr, std::uint64_t size,
-             std::uint32_t flags) {
-    return std::any_of(phdrs.begin(), phdrs.end(), [&](const Phdr& ph) {
-        return ph.type == pt_load && (ph.flags & flags) == flags && addr >= ph.vaddr &&
-               in_bounds(addr - ph.vaddr, size, ph.memsz);
-    });
-}
-
 // The NUL-terminated ASCII string at `offset` in the string table.
 std::string read_string(std::span<const std::byte> strtab, std::uint64_t offset,
                         std::string_view what) {
@@ -360,7 +350,7 @@ DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> 
     // DT_INIT and DT_FINI point at code.
     auto entry_point = [&](const Tag& tag) {
         auto addr = optional_tag(tag);
-        if (addr && !in_load(phdrs, *addr, 1, pf_x)) {
+        if (addr && !find_load(phdrs, *addr, 1, pf_x)) {
             throw LoadError(
                 std::format("{} {:#x} outside the executable PT_LOADs", tag.name, *addr));
         }
@@ -381,7 +371,7 @@ DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> 
         if (*size % 8 != 0) {
             throw LoadError(std::format("{} {:#x} is not a multiple of 8", size_tag.name, *size));
         }
-        if (!in_load(phdrs, *addr, *size, 0)) {
+        if (!find_load(phdrs, *addr, *size)) {
             throw LoadError(std::format("{} {:#x} + {:#x} outside the PT_LOADs", addr_tag.name,
                                         *addr, *size));
         }

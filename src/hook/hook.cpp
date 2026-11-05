@@ -57,13 +57,7 @@ Bytes read(const loader::Image& image, std::uint64_t link) {
 
 // The executable segment that holds the whole patch at `link`, if any.
 const loader::Segment* code_segment(const loader::Image& image, std::uint64_t link) {
-    for (const loader::Segment& s : image.segments) {
-        if ((s.prot & PROT_EXEC) && link >= s.link_addr && link - s.link_addr < s.mem_size &&
-            s.mem_size - (link - s.link_addr) >= patch_size) {
-            return &s;
-        }
-    }
-    return nullptr;
+    return image.segment_at(link, patch_size, PROT_EXEC);
 }
 
 // The live hook at `link` of `image`. An entry whose patch is gone, or no longer lies in a code

@@ -19,15 +19,14 @@ namespace {
 
 // The runtime address of the 8-byte target of `r`. Checks it as relocate() describes.
 std::uintptr_t target(const Image& image, const Rela& r) {
-    for (const Segment& s : image.segments) {
-        if (r.offset >= s.link_addr && in_bounds(r.offset - s.link_addr, 8, s.mem_size)) {
-            if (!(s.prot & PROT_WRITE) && !image.dyn.textrel) {
-                fail(r, "target in a read-only segment without DT_TEXTREL");
-            }
-            return image.base + r.offset;
-        }
+    const Segment* s = image.segment_at(r.offset, 8);
+    if (!s) {
+        fail(r, "target outside the PT_LOAD segments");
     }
-    fail(r, "target outside the PT_LOAD segments");
+    if (!(s->prot & PROT_WRITE) && !image.dyn.textrel) {
+        fail(r, "target in a read-only segment without DT_TEXTREL");
+    }
+    return image.base + r.offset;
 }
 
 // The value S of the symbol of `r`.
