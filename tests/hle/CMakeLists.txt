@@ -1,6 +1,7 @@
 bb_add_test(hle_test SOURCES hle_test.cpp LIBS bbhle)
 bb_add_test(hle_net_test SOURCES net_test.cpp LIBS bbhlenet bbhle)
 bb_add_test(hle_system_test SOURCES system_test.cpp LIBS bbhle bbhlesystem)
+bb_add_test(hle_video_test SOURCES video_test.cpp LIBS bbhle bbhlevideo)
 
 # One test executable per kernel module: kernel_<module>_test.cpp becomes the test
 # kernel_<module>_test, so that new kernel modules don't all edit this list.
