@@ -35,6 +35,8 @@ TEST_F(EbootTest, TextStartsWithMatches) {
         {"", ""},           {"abc", ""},     {"", "a"},         {"Skin 1", "Skin "},
         {"Skin", "Skin "},  {"Skin ", "Skin "}, {"skin 1", "Skin "}, {"abc", "abd"},
         {"\x80x", "\x80"},  {"\x7f", "\x80"},  {"b", "a"},
+        // Prefixes longer than the text that differ before the text ends.
+        {"ab", "xbc"},      {"ab", "axc"},
     };
     for (const auto& [text, prefix] : cases) {
         const Result r = harness().compare<StartsWithFn>(0x43e190, &bb::game::text_starts_with,
