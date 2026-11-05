@@ -4,4 +4,6 @@ add_library(bbcomputerunner STATIC compute_runner.cpp)
 target_include_directories(bbcomputerunner PUBLIC ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(bbcomputerunner PUBLIC Vulkan::Vulkan PRIVATE bb_warnings)
 
-bb_add_test(compute_runner_test SOURCES compute_runner_test.cpp LIBS bbcomputerunner)
+bb_add_test(compute_runner_test
+    SOURCES compute_runner_test.cpp
+    LIBS bbcomputerunner bbgcn bbgcntest)
