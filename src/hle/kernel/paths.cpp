@@ -4,7 +4,6 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
-#include <system_error>
 #include <vector>
 
 #include "common/runtime_dirs.hpp"
@@ -25,27 +24,6 @@ constexpr std::string_view hostapp = "hostapp";
 
 Resolved fail(int host_errno) {
     return {{}, guest_errno(host_errno).value()};
-}
-
-char lower(char c) {
-    return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
-}
-
-bool equal_ignoring_case(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        if (lower(a[i]) != lower(b[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool host_exists(const fs::path& path) {
-    std::error_code ec;
-    return fs::symlink_status(path, ec).type() != fs::file_type::not_found && !ec;
 }
 
 // "/name" with one component that is neither "." nor "..". Returns the name.
@@ -74,12 +52,8 @@ fs::path temp_dir(const common::RuntimeDirs& dirs) {
 }
 
 void PathMap::mount_game(const fs::path& game_dir) {
-    {
-        std::unique_lock lock(mounts_lock_);
-        mounts_[std::string(game_mount.substr(1))] = Mount{game_dir, false};
-    }
-    std::lock_guard lock(cache_lock_);
-    case_cache_.clear();
+    std::unique_lock lock(mounts_lock_);
+    mounts_[std::string(game_mount.substr(1))] = Mount{game_dir, false};
 }
 
 bool PathMap::mount(std::string_view guest_point, const fs::path& host_dir) {
@@ -169,58 +143,12 @@ Resolved PathMap::resolve(std::string_view guest, Access access) {
         return fail(EROFS);
     }
     fs::path host = relative.empty() ? mount.host : mount.host / relative;
-    if (!mount.writable && !relative.empty() && !host_exists(host)) {
-        host = find_case_insensitive(mount.host, relative);
-    }
     // A trailing "/" or "/." names a directory: keep the "/" so the host call fails with ENOTDIR
     // on a file, as it does on the guest.
     if (!relative.empty() && (guest.ends_with('/') || guest.ends_with("/."))) {
         host += "/";
     }
     return {std::move(host), 0};
-}
-
-// Walks `relative` below `root` one component at a time. A component that doesn't exist exactly
-// is replaced by the first directory entry (in name order) that matches it ignoring ASCII case.
-// The first component without a match ends the walk; it and the rest are appended as given.
-fs::path PathMap::find_case_insensitive(const fs::path& root, const std::string& relative) {
-    {
-        std::lock_guard lock(cache_lock_);
-        if (const auto it = case_cache_.find(relative); it != case_cache_.end()) {
-            return it->second;
-        }
-    }
-    fs::path current = root;
-    bool found = true;
-    for (const fs::path& part : fs::path(relative)) {
-        if (found && !host_exists(current / part)) {
-            std::string best;
-            std::error_code ec;
-            for (fs::directory_iterator it(current, ec), end; !ec && it != end;
-                 it.increment(ec)) {
-                const std::string name = it->path().filename().string();
-                if (!is_junk_name(name) && equal_ignoring_case(name, part.string()) &&
-                    (best.empty() || name < best)) {
-                    best = name;
-                }
-            }
-            if (best.empty()) {
-                found = false;
-            } else {
-                current /= best;
-                continue;
-            }
-        }
-        current /= part;
-    }
-    if (found) {
-        std::lock_guard lock(cache_lock_);
-        if (case_cache_.emplace(relative, current).second) {
-            std::fprintf(stderr, "hle.kernel: %s/%s found as %s (case-insensitive)\n",
-                         game_mount.data(), relative.c_str(), current.c_str());
-        }
-    }
-    return current;
 }
 
 void PathMap::log_refused(const std::string& first, std::string_view why) {

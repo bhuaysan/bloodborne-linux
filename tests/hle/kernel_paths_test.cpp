@@ -88,7 +88,7 @@ TEST_F(PathMapTest, Normalisation) {
 TEST_F(PathMapTest, TrailingSlashNamesADirectory) {
     EXPECT_EQ(map_.resolve("/app0/dvdroot_ps4/Map/", Access::read).host,
               game_ / "dvdroot_ps4" / "Map" / "");
-    EXPECT_EQ(map_.resolve("/app0/DVDROOT_PS4/.", Access::read).host, game_ / "dvdroot_ps4" / "");
+    EXPECT_EQ(map_.resolve("/app0/dvdroot_ps4/.", Access::read).host, game_ / "dvdroot_ps4" / "");
     // On a file the host call fails with ENOTDIR, as on the guest.
     const Resolved r = map_.resolve("/app0/eboot.bin/", Access::read);
     ASSERT_TRUE(r);
@@ -107,25 +107,8 @@ TEST_F(PathMapTest, DotDotNeverLeavesTheMount) {
     EXPECT_EQ(map_.resolve("/savedata0/../../etc/passwd", Access::write).error, guest(ENOENT));
 }
 
-TEST_F(PathMapTest, CaseInsensitiveFallbackUnderTheGameMount) {
-    testing::internal::CaptureStderr();
-    Resolved r = map_.resolve("/app0/DVDROOT_PS4/map/M10_00.TXT", Access::read);
-    ASSERT_TRUE(r);
-    EXPECT_EQ(r.host, game_ / "dvdroot_ps4" / "Map" / "m10_00.txt");
-    // The second lookup comes from the cache and is not logged again.
-    r = map_.resolve("/app0/DVDROOT_PS4/map/M10_00.TXT", Access::read);
-    EXPECT_EQ(r.host, game_ / "dvdroot_ps4" / "Map" / "m10_00.txt");
-    const std::string log = testing::internal::GetCapturedStderr();
-    EXPECT_NE(log.find("case-insensitive"), std::string::npos) << log;
-    EXPECT_EQ(log.find("case-insensitive"), log.rfind("case-insensitive")) << log;
-    // The first component without a match ends the walk; the rest is kept as given.
-    EXPECT_EQ(map_.resolve("/app0/DVDROOT_PS4/nothing/Here", Access::read).host,
-              game_ / "dvdroot_ps4" / "nothing" / "Here");
-}
-
-TEST_F(PathMapTest, CaseFallbackIgnoresJunkFiles) {
-    // "._MAP" would match the junk directory "._map" ignoring case: junk names never resolve.
-    EXPECT_EQ(map_.resolve("/app0/dvdroot_ps4/._MAP/m10_00.txt", Access::read).error,
+TEST_F(PathMapTest, JunkFilesNeverResolve) {
+    EXPECT_EQ(map_.resolve("/app0/dvdroot_ps4/._map/m10_00.txt", Access::read).error,
               guest(ENOENT));
     EXPECT_EQ(map_.resolve("/app0/._eboot.bin", Access::read).error, guest(ENOENT));
     EXPECT_EQ(map_.resolve("/app0/.DS_Store", Access::read).error, guest(ENOENT));
@@ -137,9 +120,6 @@ TEST_F(PathMapTest, WritableMountsAndUnmount) {
     Resolved r = map_.resolve("/savedata0/sub/userdata0010", Access::write);
     ASSERT_TRUE(r);
     EXPECT_EQ(r.host, save_ / "sub" / "userdata0010");
-    // No case-insensitive fallback in writable mounts.
-    touch(save_ / "UserData");
-    EXPECT_EQ(map_.resolve("/savedata0/userdata", Access::read).host, save_ / "userdata");
     EXPECT_TRUE(map_.unmount("/savedata0"));
     EXPECT_FALSE(map_.unmount("/savedata0"));
     EXPECT_FALSE(map_.unmount("/app0"));

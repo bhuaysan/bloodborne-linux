@@ -41,8 +41,7 @@ std::filesystem::path temp_dir(const common::RuntimeDirs& dirs);
 
 class PathMap {
 public:
-    // Mounts `game_dir` read-only at /app0, replacing an earlier game mount, and forgets the
-    // case-insensitive lookups made under it.
+    // Mounts `game_dir` read-only at /app0, replacing an earlier game mount.
     void mount_game(const std::filesystem::path& game_dir);
 
     // Mounts `host_dir` read-write at `guest_point`, a single component such as "/savedata0".
@@ -61,8 +60,7 @@ public:
     // - EROFS: `write` under /app0;
     // - ENAMETOOLONG: 1024 bytes or more, or a component of more than 255 bytes.
     // A path that doesn't exist on the host still resolves (the host call then fails, or creates
-    // it). Under /app0 a path that doesn't exist exactly is looked up case-insensitively, one
-    // component at a time, ignoring junk files; a full hit is cached and logged once.
+    // it).
     Resolved resolve(std::string_view guest, Access access);
 
 private:
@@ -70,14 +68,10 @@ private:
         std::filesystem::path host;
         bool writable = false;
     };
-    std::filesystem::path find_case_insensitive(const std::filesystem::path& root,
-                                                const std::string& relative);
     void log_refused(const std::string& first, std::string_view why);
 
     std::shared_mutex mounts_lock_;
     std::map<std::string, Mount, std::less<>> mounts_;  // first component, without "/"
-    std::mutex cache_lock_;
-    std::map<std::string, std::filesystem::path> case_cache_;  // relative guest -> host path
     std::mutex log_lock_;
     std::set<std::string> logged_;
 };
