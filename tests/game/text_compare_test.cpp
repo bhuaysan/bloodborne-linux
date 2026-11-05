@@ -4,7 +4,6 @@
 #include <optional>
 #include <string_view>
 #include <tuple>
-#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -34,7 +33,7 @@ TEST_F(EbootTest, TextStartsWithMatches) {
     const std::pair<std::string_view, std::string_view> cases[] = {
         {"", ""},           {"abc", ""},     {"", "a"},         {"Skin 1", "Skin "},
         {"Skin", "Skin "},  {"Skin ", "Skin "}, {"skin 1", "Skin "}, {"abc", "abd"},
-        {"\x80x", "\x80"},  {"\x7f", "\x80"},
+        {"\x80x", "\x80"},  {"\x7f", "\x80"},  {"b", "a"},
     };
     for (const auto& [text, prefix] : cases) {
         const Result r = harness().compare<StartsWithFn>(0x43e190, &bb::game::text_starts_with,
@@ -59,10 +58,13 @@ auto wide_and_narrow(std::u16string_view wide, std::string_view narrow) {
 
 TEST_F(EbootTest, Utf16RangeEqualsMatches) {
     EXPECT_EQ(image().function_size(0x40e9e0), std::optional<std::uint64_t>{79});
+    using namespace std::string_view_literals;
+    // The embedded zero units need the literal suffix, or the views would stop at them.
     const std::pair<std::u16string_view, std::string_view> cases[] = {
         {u"", ""},       {u"", "a"},       {u"a", ""},        {u"abc", "abc"},
         {u"ab", "abc"},  {u"abc", "ab"},   {u"abc", "abd"},   {u"Ł", "A"},
         {u"é", "\xe9"}, {u"é", "\xc3\xa9"}, {u"䄀", "A"}, {u"ab", "abx"},
+        {u"a\0"sv, "a"}, {u"\0"sv, ""},
     };
     for (const auto& [wide, narrow] : cases) {
         const Result r = harness().compare<Utf16EqualsFn>(
