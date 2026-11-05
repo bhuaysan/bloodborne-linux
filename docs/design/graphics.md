@@ -276,6 +276,13 @@ Decoder (`src/gpu/gcn/gcn.hpp`, #115):
 - Register ranges of more than one dword must be aligned, to 2 dwords for pairs and to 4 above, as LLVM requires. A misaligned range is a `GcnError`, as is a reserved operand code or an operand code that the instruction can't use (a 64-bit `m0`, a constant as SMRD offset register). Choices that LLVM restricts per instruction but the operand field allows, such as `m0` as an SMRD destination, are decoded.
 - An SMRD offset field of 255 with the immediate bit clear is a 32-bit literal offset (CI).
 
+Disassembler (`src/gpu/gcn/disassemble.cpp`, #115):
+
+- `disassemble()` prints one line in LLVM's gfx7 syntax, checked by assembling it with `llvm-mc`. Literals, SOPK immediates and SMRD offsets print in hex, counts in decimal, branch offsets as signed dwords.
+- A SOP2, SOP1 or SOPC literal whose value LLVM would encode as an inline constant prints as `lit(0x…)`: 0 to 64, −16 to −1 and the float constants on 32-bit operands, and only 0 to 64 on 64-bit operands, where LLVM reads the literal as a 64-bit integer.
+- `hwreg()`, `sendmsg()` and the `s_waitcnt` counters print in LLVM's named form where it has one. Other values print as the raw number, which LLVM accepts: `s_waitcnt` with bit 7 or bits 12–15 set (gfx7 has a 4-bit lgkmcnt), and messages LLVM has no name for, such as `MSG_GS` with `GS_OP_NOP`.
+- Known differences, for the corpus round trip's list: LLVM rejects `m0` as an SMRD destination, it encodes an SMRD literal offset of 255 or less in the immediate form (also with `lit()`), it has no gfx7 syntax for `s_mov_regrd_b32`, `s_mov_fed_b32` and `s_getreg_regrd_b32`, and fields that an instruction doesn't use (the immediate of `s_endpgm`, the base of `s_memtime`) don't appear in the text.
+
 SPIR-V builder (`src/gpu/gcn/spirv_builder.hpp`, #122):
 
 - `SpirvBuilder` collects one module and returns its words. Each call appends to the section of the logical layout it belongs to, so callers may declare a type or a decoration in the middle of a function.
