@@ -98,11 +98,17 @@ The records end exactly where the name pool starts in every entry.
 
 | Record | Size | Fields |
 |---|---|---|
-| resource | 0x18 | u32 slot, u32 size (of a constant buffer, else 0), 4 kind bytes, u32 0, u32 0, name. Kinds seen: `16 04 6A 00` constant buffers (`cbParam`), `02 05 03 00` and `04 05 03 00` textures (`g_Texture0`, `g_IBLTex…`), `1A 06 00 00` and others; not interpreted further |
+| resource | 0x18 | u32 slot, u32 size, 4 kind bytes, u32 members, u32 first member, name. See below |
 | constant | 0x24 | members of the constant buffers: 4 kind bytes, u32 offset, u32 size, three u32, name, and a second name (`(no_name)` or a struct name such as `PerInstanceData`). Not read by the tool |
 | sampler | 0x10 | u32 slot, u32 0, u32 not interpreted (0–12), name (`SS_ClampLinear`) |
 | input, output | 0x10 | 4 kind bytes (byte 2 is the semantic index), u32 0, name (`IN.tex0`), semantic (`TEXCOORD`, or `(no_name)`). Bytes 0, 1 and 3 are not interpreted |
 | stream-out | 0x10 | only in 10 `_SO` geometry shaders. Not interpreted |
+
+Resource records, by field:
+
+- **Kind bytes** (0x08). Seen: `16 04 6A 00` constant buffers (`cbParam`, 75,211 records), `02 05 03 00` and `04 05 03 00` textures (`g_Texture0`, `g_IBLTex…`), `1A 06 00 00` (1,690), and 21 rarer kinds. Not interpreted further.
+- **Members** (0x0C) and **first member** (0x10). Nonzero only in the 5 kinds whose byte 2 is `6A` (`16 04 6A 00`, `0A 01 6A 00`, `12 00 6A 00`, `14 00 6A 00`, `15 00 6A 00`), 0 in both fields in every other kind. In the `6A` kinds they select a range of the constant records: members is at least 1; in record order the first range starts at index 0, the ranges don't overlap and all of them fit into the constant records. The gaps between two ranges are probably the members of struct-typed members; not checked. An entry has constant records exactly when it has a `6A` resource. Example: `Lightprepass0\Decal_Blood_DifSpcBump.ppo` in `gxdecal.shaderbnd` has 59 constant records, and `cbDecalParam` (20, 0), `cbLight` (16, 20), `cbModelParam` (22, 36) and `cbCubeEnvSH1` (1, 58).
+- **Size** (0x04). In the `6A` kinds it equals the largest offset plus size of the constant records in the resource's range (u32 at 0x04 and 0x08 of those records), in every record, so it is the size in bytes. Nonzero, not interpreted, in the other kinds whose byte 1 is not `05` (`0A 01 0C 00`, `0E 00 00 00`, `0F 00 03 00`, `12 00 0C 00`, `13 00 0C 00`, `18 06 00 00`, `1A 06 00 00` and others). 0 in the kinds whose byte 1 is `05`, which include the textures.
 
 There is no separate entry point field. The entry point name shows up only as the name of the outputs: `PixelShader_Color` for a pixel shader's return value, `VertexShader_Tex1.position` for the members of a vertex shader's output struct. Compute shaders have no outputs, so their entry point name is not in the file.
 
@@ -110,7 +116,7 @@ There is no separate entry point field. The entry point name shows up only as th
 
 Program *k* starts at its code: `code_0` for the first one, the end of the previous footer block for the others. It ends where the next program starts, and the last one at the end of the entry. So each program file holds its code, its footer data and block and, for the last program, the data rows and the metadata too. The entry header belongs to no program; the tool keeps every entry as stored as well.
 
-From the footer block the tool writes the program type, stage, code size and code hash (SHA-256 of the code bytes) into each program's row in `index.json`. From the metadata it writes the names, slots and kind bytes of the resources and samplers, and the names, semantics, semantic indexes and kind bytes of the inputs and outputs, once per entry under `metadata`. It refuses entries whose fields have values not listed here as seen (version, the fixed bits of the type field, zero fields, the entry hash), whose code size does not end after an `s_endpgm`, or whose metadata records don't line up with the name pool.
+From the footer block the tool writes the program type, stage, code size and code hash (SHA-256 of the code bytes) into each program's row in `index.json`. From the metadata it writes the names, slots and kind bytes of the resources and samplers, and the names, semantics, semantic indexes and kind bytes of the inputs and outputs, once per entry under `metadata`. It refuses entries whose checked fields have values not listed here as seen, whose code size does not end after an `s_endpgm`, or whose metadata records don't line up with the name pool. The checked fields are: the entry header at 0x00, 0x08, 0x0E, 0x28, 0x2E and 0x40 and the `Shdr` tag; the footer block's version, the fixed bits of its type field, its zero u32 and its entry hash; the two zero fields of the metadata header; the members and first member of every resource record (0 in both, or a range that fits into the constant records for the `6A` kinds); and the zero u32 of the sampler, input and output records. All other fields are read as they come or skipped.
 
 The marker is found by a byte search. In all 8 archives the number of markers equals the number of `s_endpgm`, so the search does not hit code by chance there.
 
