@@ -10,9 +10,13 @@ gtest_discover_tests(harness_test)
 # process, and only one harness may exist at a time. One ctest entry runs the whole binary, so the
 # eboot is loaded once per binary rather than once per test (gtest_discover_tests would start a
 # process for each test).
-add_executable(harness_eboot_test eboot.cpp eboot_test.cpp main.cpp)
-target_link_libraries(harness_eboot_test PRIVATE bbharness bbgame bbhle bbtestsupport GTest::gtest
-                                                 bb_warnings)
+# The EbootTest fixture, also used by the decomp tests in tests/game.
+add_library(bbeboottest STATIC eboot.cpp)
+target_link_libraries(bbeboottest PUBLIC bbharness bbtestsupport GTest::gtest
+                                  PRIVATE $<COMPILE_ONLY:bbgame> $<COMPILE_ONLY:bbhle> bb_warnings)
+
+add_executable(harness_eboot_test eboot_test.cpp main.cpp)
+target_link_libraries(harness_eboot_test PRIVATE bbeboottest bbgame bbhle bb_warnings)
 add_test(NAME harness_eboot_test COMMAND harness_eboot_test)
 # gtest_discover_tests sets this on its entries; without it a run without the game (all cases
 # skipped, gtest exits 0) would show as Passed instead of Skipped.
