@@ -50,6 +50,9 @@ TEST(KernelTime, ClockIdsTranslate) {
     EXPECT_LT(std::abs(ns(t) - host_ns(CLOCK_REALTIME)), 1'000'000'000LL);
     ASSERT_EQ(guest_clock_gettime(4, &t), 0);  // CLOCK_MONOTONIC
     EXPECT_LT(std::abs(ns(t) - host_ns(CLOCK_MONOTONIC)), 1'000'000'000LL);
+    ASSERT_EQ(clock_gettime_sce(4, &t), 0);  // QBi7HCK03hw, always clock 4 in the game
+    EXPECT_LT(std::abs(ns(t) - host_ns(CLOCK_MONOTONIC)), 1'000'000'000LL);
+    EXPECT_EQ(clock_gettime_sce(4, nullptr), sce_error(14));
 }
 
 TEST(KernelTime, UnknownClockIdsFail) {
@@ -58,18 +61,38 @@ TEST(KernelTime, UnknownClockIdsFail) {
         *guest_errno_location() = 0;
         EXPECT_EQ(guest_clock_gettime(id, &t), -1) << id;
         EXPECT_EQ(*guest_errno_location(), guest_einval) << id;
+        EXPECT_EQ(clock_gettime_sce(id, &t), sce_error(guest_einval)) << id;
     }
 }
 
-TEST(KernelTime, MonotonicClockNeverGoesBackwards) {
+TEST(KernelTime, CountersNeverGoBackwards) {
     GuestTimespec last{};
     ASSERT_EQ(guest_clock_gettime(4, &last), 0);
+    std::uint64_t usec = process_time_usec(), nsec = process_counter_nsec();
     for (int i = 0; i < 10000; ++i) {
         GuestTimespec t{};
         ASSERT_EQ(guest_clock_gettime(4, &t), 0);
+        const std::uint64_t u = process_time_usec(), n = process_counter_nsec();
         ASSERT_GE(ns(t), ns(last));
-        last = t;
+        ASSERT_GE(u, usec);
+        ASSERT_GE(n, nsec);
+        last = t, usec = u, nsec = n;
     }
+}
+
+// 4J2sUJmuHZQ counts microseconds (libc's clock), -2IRUCO--PM nanoseconds.
+TEST(KernelTime, CounterUnits) {
+    const std::uint64_t usec = process_time_usec(), nsec = process_counter_nsec();
+    std::this_thread::sleep_for(20ms);
+    const std::uint64_t du = process_time_usec() - usec, dn = process_counter_nsec() - nsec;
+    EXPECT_GE(du, 20'000u);
+    EXPECT_LT(du, 2'000'000u);
+    EXPECT_GE(dn, 20'000'000u);
+    EXPECT_LT(dn, 2'000'000'000u);
+    // Both count from the same origin.
+    const std::uint64_t n = process_counter_nsec(), u = process_time_usec();
+    EXPECT_LE(n / 1000, u);
+    EXPECT_LT(u - n / 1000, 1'000'000u);
 }
 
 TEST(KernelTime, SleepsLastAtLeastTheRequestedTime) {
@@ -156,6 +179,22 @@ TEST(KernelTime, WallClockAndTimezone) {
     // The eboot's bias in ms (0x1a3866): (minuteswest - (dsttime ? 60 : 0)) * -60000.
     EXPECT_EQ(tz.minuteswest * -60'000, 330 * 60'000);
 
+    // kOcnerypnQA: libc adds both values and multiplies by 60 (libc.prx 0x1944).
+    std::int32_t offsets[2] = {-1, -1};
+    EXPECT_EQ(local_time_offsets(offsets), 0);
+    EXPECT_EQ(offsets[0], 330);
+    EXPECT_EQ(offsets[1], 0);
+
+    // Daylight saving time all year: 1 h east in standard time, 2 h in daylight saving time.
+    setenv("TZ", "XST-1XDT,0/0,J365/25", 1);
+    tzset();
+    ASSERT_EQ(guest_gettimeofday(nullptr, &tz), 0);
+    EXPECT_EQ(tz.minuteswest, -60);
+    EXPECT_EQ(tz.dsttime, 1);
+    EXPECT_EQ(local_time_offsets(offsets), 0);
+    EXPECT_EQ(offsets[0], 60);
+    EXPECT_EQ(offsets[1], 60);
+
     tv = {};
     ASSERT_EQ(sceKernelGettimeofday(&tv), 0);
     EXPECT_GT(tv.tv_sec, 0);
@@ -167,6 +206,26 @@ TEST(KernelTime, WallClockAndTimezone) {
         unsetenv("TZ");
     }
     tzset();
+}
+
+TEST(KernelTime, Getrusage) {
+    GuestRusage usage{};
+    std::memset(&usage, 0xff, sizeof usage);
+    ASSERT_EQ(guest_getrusage(0, &usage), 0);
+    EXPECT_GE(usage.utime.tv_sec, 0);
+    EXPECT_GE(usage.utime.tv_usec, 0);
+    EXPECT_LT(usage.utime.tv_usec, 1'000'000);
+    EXPECT_GE(usage.stime.tv_sec, 0);
+    EXPECT_GE(usage.stime.tv_usec, 0);
+    EXPECT_LT(usage.stime.tv_usec, 1'000'000);
+    for (const std::int64_t field : usage.other) {
+        EXPECT_EQ(field, 0);
+    }
+    for (const std::int32_t who : {1, -1}) {
+        *guest_errno_location() = 0;
+        EXPECT_EQ(guest_getrusage(who, &usage), -1) << who;
+        EXPECT_EQ(*guest_errno_location(), guest_einval) << who;
+    }
 }
 
 std::atomic<std::uintptr_t> observed{0};
@@ -235,9 +294,10 @@ TEST(KernelTime, ObserverSeesTheCallersReturnAddress) {
 
 TEST(KernelTime, EveryTimeImportIsImplemented) {
     const std::pair<const char*, const char*> imports[] = {
-        {"libkernel", "lLMT9vJAck0"}, {"libkernel", "yS8U2TGCe1A"}, {"libkernel", "ejekcaNQNq0"},
-        {"libkernel", "1jfXLRVzisc"}, {"libScePosix", "0wu33hunNdE"},
-        {"libScePosix", "QcteRwbsnV0"}};
+        {"libkernel", "lLMT9vJAck0"}, {"libkernel", "yS8U2TGCe1A"}, {"libkernel", "hHlZQUnlxSM"},
+        {"libkernel", "ejekcaNQNq0"}, {"libkernel", "1jfXLRVzisc"}, {"libkernel", "4J2sUJmuHZQ"},
+        {"libkernel", "-2IRUCO--PM"}, {"libkernel", "QBi7HCK03hw"}, {"libkernel", "kOcnerypnQA"},
+        {"libScePosix", "0wu33hunNdE"}, {"libScePosix", "QcteRwbsnV0"}};
     for (const auto& [library, nid] : imports) {
         bb::hle::resolve(function_import(library, nid));
         EXPECT_EQ(bb::hle::binding(library, nid), bb::hle::Binding::implemented) << nid;
