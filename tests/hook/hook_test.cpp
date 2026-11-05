@@ -244,8 +244,21 @@ TEST(Hook, RefusesBadEntries) {
     expect_refusal([&] { apply({{0x10, a, "second"}}); },
                    "hook second at 0x10: double hook: the patch overlaps the hook at 0x10");
     expect_refusal([&] { apply({{0x18, a, "near"}}); }, "the patch overlaps the hook at 0x10");
+    // A refused remove restores nothing, not even its hooked entries.
+    expect_refusal([&] { bb::hook::remove(image, std::array{Replacement{0x10, a, "first"},
+                                                            Replacement{0xff8, a, "b"}}); },
+                   "hook b at 0xff8: not hooked");
     EXPECT_EQ(image.fn<int()>(0x10)(), 1001);
     bb::hook::remove(image, std::array{Replacement{0x10, a, "first"}});
+}
+
+TEST(Hook, RefusesABrokenFde) {
+    // The FDE of 0x10 (the first one, after the 20-byte CIE) gets a pc_begin of 0.
+    Bytes elf = build_elf();
+    put<std::int32_t>(elf, 0x1000 + eh_frame_link + 20 + 8, 0);
+    Image image = map_elf(elf, test_base);
+    const Replacement hook[] = {{0x10, reinterpret_cast<void*>(&replacement_a), "a"}};
+    expect_refusal([&] { bb::hook::apply(image, hook); }, "hook a at 0x10: FDE at 0x1814");
 }
 
 TEST(Hook, ForgetsTheHooksOfAnUnmappedImage) {
