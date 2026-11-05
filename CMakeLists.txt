@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# The kernel puts the heap of a non-PIE program at a random address up to 1 GiB above it, which
+# can overlap the image range at loader::default_base. A PIE program and its heap go far higher.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+include(CheckPIESupported)
+check_pie_supported()
+
 option(BB_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(BB_WERROR "Treat compiler warnings as errors" OFF)
 option(BB_BUILD_TESTS "Build the unit tests" ON)

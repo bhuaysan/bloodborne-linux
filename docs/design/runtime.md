@@ -50,6 +50,8 @@ The game directory comes from `BB_GAME_DIR` in the environment. Tests also read 
 
 Default base: **0x10000000**. The eboot spans about 87 MiB (code segment at link address 0, data segment at 0x50dc000, `.bss` up to 0x56d30f4), so it ends well below 0x7fff8000. That matters for the `debug` preset: AddressSanitizer on x86-64 Linux keeps its shadow memory from 0x7fff8000 up to about 0x10007fff8000, so a mapping must lie either below 0x7fff8000 or above that range. The bundled PRXs (M3) go after the eboot, in the same low range.
 
+Every executable is built as PIE (`CMAKE_POSITION_INDEPENDENT_CODE` in the top-level `CMakeLists.txt`). The kernel puts the heap (`brk`) of a non-PIE program at a random address up to 1 GiB above the program at 0x400000, so some runs found the eboot's range taken. A PIE program and its heap lie far above 0x7fff8000.
+
 The base is a parameter. It must be aligned to the largest `p_align` of the `PT_LOAD` segments (0x4000 in the eboot). The loader reserves the whole span with one `mmap(PROT_NONE, MAP_FIXED_NOREPLACE)` and checks that the returned address equals the requested one (kernels before 4.17 treat the flag as a hint). If the range is taken, loading fails with an error naming the range. It never moves silently. The segments are then made usable inside the reservation with `mprotect`. A second `MAP_FIXED_NOREPLACE` mapping there would fail, because the range is already mapped.
 
 ### API and steps
