@@ -56,16 +56,25 @@ std::string_view nid_name(std::string_view nid);
 // implementation or was already resolved. Logged if an export shadows it.
 void register_function(std::string_view library, std::string_view nid, void* impl);
 
+// Fills the zero-filled data block of a data import (STT_OBJECT) when resolve() creates it, so
+// before any code that imports it runs. The block is data_block_size bytes. Runs under the
+// registry lock, so it must not call into bb::hle.
+using DataInit = void (*)(std::byte* block);
+
+// Registers `init` for a data import. Throws std::logic_error if the import already has one or
+// was already resolved. An export of the same import wins, and `init` is then never called.
+void register_data(std::string_view library, std::string_view nid, DataInit init);
+
 // Registers `address`, the runtime address of an export of a loaded module, for an import. An
 // implementation it shadows is logged. Throws std::logic_error if the import already has an export
 // or was already resolved.
 void register_export(std::string_view library, std::string_view nid, std::uintptr_t address);
 
 // The registered export of `imp`, else its registered implementation, else its function stub
-// (STT_FUNC) or its zero-filled 4 KiB data block (STT_OBJECT). Chosen on the first call per
-// (library, NID), then cached. In builds without NDEBUG, an implementation is handed out as a
-// trace thunk instead if the log filter shows trace for hle.<library> at that first call
-// (docs/design/m3-core-os.md, "Logging").
+// (STT_FUNC) or its 4 KiB data block (STT_OBJECT, zero-filled, then passed to its registered
+// DataInit if there is one). Chosen on the first call per (library, NID), then cached. In builds
+// without NDEBUG, an implementation is handed out as a trace thunk instead if the log filter
+// shows trace for hle.<library> at that first call (docs/design/m3-core-os.md, "Logging").
 std::uintptr_t resolve(const loader::Import& imp);
 
 // What resolve() bound an import to.
@@ -118,6 +127,13 @@ struct Registration {
     }
 };
 
+// Registers a data initializer at static initialization. Use BB_HLE_DATA.
+struct DataRegistration {
+    DataRegistration(std::string_view library, std::string_view nid, DataInit init) {
+        register_data(library, nid, init);
+    }
+};
+
 }  // namespace bb::hle
 
 // BB_HLE_FUNCTION("libkernel", "AAAAAAAAAAA", my_function); at namespace scope in a source file
@@ -127,4 +143,12 @@ struct Registration {
     const ::bb::hle::Registration BB_CONCAT(bb_hle_reg_, __COUNTER__){   \
         library, nid, reinterpret_cast<void*>(&(function))};             \
     }                                                                    \
+    static_assert(true)
+
+// BB_HLE_DATA("libkernel", "AAAAAAAAAAA", fill_block); like BB_HLE_FUNCTION, for a data import.
+#define BB_HLE_DATA(library, nid, init)                                       \
+    namespace {                                                               \
+    const ::bb::hle::DataRegistration BB_CONCAT(bb_hle_data_, __COUNTER__){   \
+        library, nid, init};                                                  \
+    }                                                                         \
     static_assert(true)

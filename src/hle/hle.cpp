@@ -74,6 +74,7 @@ struct Registry {
     // All keyed by import_key(library, nid).
     std::unordered_map<std::string, void*> impls;
     std::unordered_map<std::string, std::uintptr_t> exports;
+    std::unordered_map<std::string, DataInit> data_inits;
     std::unordered_map<std::string, Resolved> resolved;
     std::deque<StubInfo> stubs;                                // stable addresses
     std::deque<TraceInfo> traces;                              // stable addresses
@@ -133,6 +134,16 @@ void register_function(std::string_view library, std::string_view nid, void* imp
     }
 }
 
+void register_data(std::string_view library, std::string_view nid, DataInit init) {
+    Registry& r = registry();
+    const std::lock_guard lock(r.mutex);
+    const std::string k = import_key(library, nid);
+    if (r.resolved.contains(k) || !r.data_inits.emplace(k, init).second) {
+        throw std::logic_error(std::format(
+            "hle: data {} {} registered twice or after it was resolved", library, nid));
+    }
+}
+
 void register_export(std::string_view library, std::string_view nid, std::uintptr_t address) {
     Registry& r = registry();
     const std::lock_guard lock(r.mutex);
@@ -161,6 +172,9 @@ std::uintptr_t resolve(const loader::Import& imp) {
     } else if (imp.type == loader::stt_object) {
         auto* block = static_cast<std::byte*>(
             common::map_anonymous(data_block_size, PROT_READ | PROT_WRITE, "hle: mmap"));
+        if (auto init = r.data_inits.find(k); init != r.data_inits.end()) {
+            init->second(block);
+        }
         r.data_blocks.push_back({imp.library, imp.nid, block});
         out = {reinterpret_cast<std::uintptr_t>(block), Binding::data_block};
     } else {

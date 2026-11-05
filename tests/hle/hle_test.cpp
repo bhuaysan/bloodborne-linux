@@ -131,6 +131,24 @@ TEST(Hle, RegisteredFunctionWinsOverStub) {
     EXPECT_THROW(register_function("libTest", "registeredB", nullptr), std::logic_error);
 }
 
+void fill_data(std::byte* block) {
+    block[0] = std::byte{0x5a};
+    block[data_block_size - 1] = std::byte{0xa5};
+}
+BB_HLE_DATA("libTest", "dataInitA", fill_data);
+
+TEST(Hle, RegisteredDataInitFillsTheBlock) {
+    const auto* block = reinterpret_cast<const std::byte*>(resolve(object("dataInitA")));
+    EXPECT_EQ(block[0], std::byte{0x5a});
+    EXPECT_EQ(block[1], std::byte{0});
+    EXPECT_EQ(block[data_block_size - 1], std::byte{0xa5});
+    EXPECT_EQ(binding("libTest", "dataInitA"), Binding::data_block);
+    EXPECT_EQ(data_blocks().back().nid, "dataInitA");
+    EXPECT_THROW(register_data("libTest", "dataInitA", fill_data), std::logic_error);
+    resolve(object("dataInitB"));
+    EXPECT_THROW(register_data("libTest", "dataInitB", fill_data), std::logic_error);
+}
+
 TEST(Hle, LogsFirstTenThenEveryThousandth) {
     for (std::uint64_t call = 1; call <= 10; ++call) {
         EXPECT_TRUE(should_log(call)) << call;

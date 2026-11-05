@@ -160,6 +160,7 @@ M3 registers the PRXs' exports with `bb::hle` before relocating, so `resolve` bi
 namespace bb::hle {
 void register_function(std::string_view library, std::string_view nid, void* impl);
 void register_export(std::string_view library, std::string_view nid, uintptr_t address);  // M3
+void register_data(std::string_view library, std::string_view nid, DataInit init);   // M3, see Data imports
 uintptr_t resolve(const loader::Import& imp);  // export, else impl, else stub
 uintptr_t import_address(std::string_view library, std::string_view nid);  // cached result of resolve
 enum class Binding : uint8_t { exported, implemented, stub, data_block };
@@ -170,6 +171,7 @@ StubObserver* set_stub_observer(StubObserver* observer); // returns the previous
 Counts counts();                                // stubs and data blocks created so far
 }
 #define BB_HLE_FUNCTION(library, nid, function) …  // static registration
+#define BB_HLE_DATA(library, nid, init) …          // the same for a data initializer
 ```
 
 Implementations register by library name and NID, through `BB_HLE_FUNCTION` at namespace scope in each module's source file. Registering an import twice, or after it was resolved, is a `std::logic_error`. The exports of the loaded PRXs (M3) register the same way through `register_export`, under the same rules, and win over an implementation, which is then logged once. `resolve` returns the registered export, else the registered implementation, else a stub; `binding` says which, or nothing for an import never resolved. `link` registers every export of a load set (libc.prx's a second time under `libSceLibcInternal`, unless a module exports that NID there itself) and then relocates each module with `resolve` and its module id ([m3-core-os.md](m3-core-os.md#loading-the-bundled-prxs)). `resolve` is idempotent: each (library, NID) gets exactly one stub thunk or data block, created on the first call and cached. The eboot has thousands of relocations against a few hundred imports, and function-pointer equality and the per-import call counters depend on getting the same address every time.
@@ -196,7 +198,7 @@ The NID name table is generated at build time from `symbols/nids.csv` by a small
 
 ### Data imports
 
-Each unresolved data import (`STT_OBJECT`) gets its own zero-filled 4 KiB block, also cached per (library, NID). `R_X86_64_64` relocations against imported data use small offsets (`symbol + 0x10`, see `docs/formats/elf-dynamic.md`), which stay inside the block. The harness compares these blocks like the data segment. It finds them through `bb::hle::data_blocks()`, a copy of the list of `DataBlock{library, nid, data}` in creation order, each `bb::hle::data_block_size` (4096) bytes.
+Each unresolved data import (`STT_OBJECT`) gets its own zero-filled 4 KiB block, also cached per (library, NID). An HLE module that has to give a data import a value registers an initializer for it (`bb::hle::register_data(library, nid, init)`, statically through `BB_HLE_DATA`, the same rules as for `register_function`). `resolve` calls it on the zero-filled block right after creating it, so before any code that imports it runs, and the block stays an ordinary data block (binding `data_block`, listed by `data_blocks()`), which the harness snapshots like the others. M3 uses this for the stack guard and `__progname` ([m3-core-os.md](m3-core-os.md#process)). An export of the same import wins, as for functions. `R_X86_64_64` relocations against imported data use small offsets (`symbol + 0x10`, see `docs/formats/elf-dynamic.md`), which stay inside the block. The harness compares these blocks like the data segment. It finds them through `bb::hle::data_blocks()`, a copy of the list of `DataBlock{library, nid, data}` in creation order, each `bb::hle::data_block_size` (4096) bytes.
 
 ## Hooks
 
