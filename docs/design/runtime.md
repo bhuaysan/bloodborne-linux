@@ -174,6 +174,7 @@ Each unresolved data import (`STT_OBJECT`) gets its own zero-filled 4 KiB block,
 namespace bb::hook {
 struct Replacement { uint64_t link_addr; void* impl; const char* name; };
 std::span<const Replacement> replacements();                    // all registered
+void register_replacement(const Replacement&);                  // used by BB_REPLACE
 void apply(loader::Image&, std::span<const Replacement>);
 void remove(loader::Image&, std::span<const Replacement>);
 }
@@ -193,6 +194,8 @@ The table is untrusted input, checked in two places:
 **Checks and saved bytes.** `apply` and `remove` check every entry of the span before they write anything, and throw `bb::hook::HookError` naming the replacement, the link address and the reason; a refused span patches nothing. Besides the size check, `apply` refuses a null `impl`, a patch that doesn't lie inside an executable segment, and a patch whose 14 bytes overlap those of another entry in the span or of a live hook (double hook). FDE ranges may overlap in untrusted unwind data, so a distinct FDE start alone doesn't rule this out. `remove` refuses an entry that isn't hooked; a refused span restores nothing.
 
 The original 14 bytes of each patched entry live in a registry in `bbhook`, keyed by (image base, link address), next to the patch that was written. `Image` stays free of hook state, and the loader doesn't depend on `bbhook`. An image that is destroyed with hooks still applied leaves its entries behind, and a later image may be mapped at the same base. So an entry counts as hooked only while its patch is still in memory; one whose patch is gone is dropped. `apply` and `remove` are not thread-safe: they run while no other thread executes game code.
+
+**Registration.** `BB_REPLACE(0x123450, my_function);` at namespace scope defines a static `bb::hook::Registrar` in an anonymous namespace, whose constructor calls `register_replacement` with the link address, `&my_function` and the name `"my_function"`. The registry behind `replacements()` is a function-local static vector in `bbhook`, in registration order; it checks nothing, `apply` does. `bbhook` is a `STATIC` library because it owns the registry but registers nothing itself ("Static registration").
 
 **Calling the game.** A replacement calls a game function that isn't replaced yet through its link address, using the image accessor in `bbgame`:
 
