@@ -22,18 +22,16 @@ Instruction one(const std::vector<std::uint32_t>& words) {
     return insts.at(0);
 }
 
-Operand reg(unsigned c, unsigned dwords = 1) {
-    return {OperandKind::scalar, static_cast<std::uint8_t>(dwords), static_cast<std::uint16_t>(c),
-            0};
+Operand reg(std::uint16_t c, std::uint8_t dwords = 1) {
+    return {OperandKind::scalar, dwords, c, 0};
 }
 
-Operand constant(unsigned c, std::uint32_t value, unsigned dwords = 1) {
-    return {OperandKind::constant, static_cast<std::uint8_t>(dwords),
-            static_cast<std::uint16_t>(c), value};
+Operand constant(std::uint16_t c, std::uint32_t value, std::uint8_t dwords = 1) {
+    return {OperandKind::constant, dwords, c, value};
 }
 
-Operand literal(std::uint32_t value, unsigned dwords = 1) {
-    return {OperandKind::literal, static_cast<std::uint8_t>(dwords), code::literal, value};
+Operand literal(std::uint32_t value, std::uint8_t dwords = 1) {
+    return {OperandKind::literal, dwords, code::literal, value};
 }
 
 Operand imm(OperandKind kind, std::uint32_t value) {
