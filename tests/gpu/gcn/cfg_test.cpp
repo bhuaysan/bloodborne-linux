@@ -16,8 +16,8 @@ using namespace bb::gcn;
 using bb::test::gcn::sopp;
 
 // SOPP opcodes.
-constexpr unsigned nop = 0, endpgm = 1, branch = 2, scc0 = 4, scc1 = 5, vccz = 6, execz = 8,
-                   execnz = 9;
+constexpr unsigned nop = 0, endpgm = 1, branch = 2, scc0 = 4, scc1 = 5, vccz = 6, vccnz = 7,
+                   execz = 8, execnz = 9;
 
 // A SOPP branch at instruction `at` to instruction `to`, all instructions one dword long.
 std::uint32_t br(unsigned op, int at, int to) {
@@ -112,9 +112,10 @@ TEST(GcnCfg, ExeczSkipOverScalarWritesFallsThrough) {
     EXPECT_EQ(cfg.blocks[0].exit, Exit::next);
     EXPECT_EQ(successors(cfg.blocks[0]), (std::vector<std::uint32_t>{1}));
     EXPECT_EQ(cfg.blocks[0].taken, 2u);  // still recorded
-    // Without scalar writes the skip stays a branch, and vccz always does.
+    // Without scalar writes the skip stays a branch, and vccz and vccnz always do.
     EXPECT_EQ(skip(execz, false).blocks[0].exit, Exit::conditional);
     EXPECT_EQ(skip(vccz, true).blocks[0].exit, Exit::conditional);
+    EXPECT_EQ(skip(vccnz, true).blocks[0].exit, Exit::conditional);
 }
 
 TEST(GcnCfg, ExeczSkipStaysABranchWhenTheRegionIsOpen) {
