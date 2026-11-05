@@ -33,7 +33,9 @@ class PinnedHashesTest(unittest.TestCase):
         rows = re.findall(rf"^\| `([^`]+)`[^|]*\| `({HEX})` \|$", read("docs/clean-room.md"),
                           re.MULTILINE)
         self.assertTrue(rows, "no hash table in docs/clean-room.md")
-        self.assertEqual(dict(rows), by_name(self2elf.KNOWN_FILES))
+        # Compare the rows as a list, so a duplicate or extra row fails instead of being merged.
+        known = [(name, digest) for digest, name in self2elf.KNOWN_FILES.items()]
+        self.assertEqual(sorted(rows), sorted(known))
 
     def test_eboot_bin_in_loader(self):
         found = re.findall(rf'eboot_bin_sha256 =\s*"({HEX})"', read("src/loader/self.hpp"))
