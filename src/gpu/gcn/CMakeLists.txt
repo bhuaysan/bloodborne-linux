@@ -6,6 +6,7 @@ add_library(bbgcn STATIC
     cfg.cpp
     decode.cpp
     opcodes.cpp
-    spirv_builder.cpp)
+    spirv_builder.cpp
+    structurize.cpp)
 target_include_directories(bbgcn SYSTEM PUBLIC ${BB_SPIRV_INCLUDE_DIR})
 target_link_libraries(bbgcn PUBLIC bbcommon PRIVATE bb_warnings)
