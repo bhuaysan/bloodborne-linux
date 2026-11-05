@@ -1,4 +1,11 @@
 bb_add_test(hle_test SOURCES hle_test.cpp LIBS bbhle)
 bb_add_test(hle_net_test SOURCES net_test.cpp LIBS bbhlenet bbhle)
-bb_add_test(kernel_abi_test SOURCES kernel_abi_test.cpp LIBS bbhle)
 bb_add_test(hle_system_test SOURCES system_test.cpp LIBS bbhle bbhlesystem)
+
+# One test executable per kernel module: kernel_<module>_test.cpp becomes the test
+# kernel_<module>_test, so that new kernel modules don't all edit this list.
+file(GLOB kernel_tests CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/kernel_*_test.cpp)
+foreach(source IN LISTS kernel_tests)
+    get_filename_component(name ${source} NAME_WE)
+    bb_add_test(${name} SOURCES ${source} LIBS bbhle)
+endforeach()
