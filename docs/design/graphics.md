@@ -67,7 +67,7 @@ What a first look shows, to be worked out and documented in `docs/formats/`:
 
 - **DCX** (`docs/formats/dcx.md`): a big-endian header with the sizes (`DCS` chunk) and a `DFLT` method tag, followed by a zlib stream.
 - **BND4** (`docs/formats/bnd4.md`): an archive with a file table, names and data offsets. The shader set has no nested archives.
-- **Shader program** (`docs/formats/shader-binary.md`): GCN code first, then a footer that starts with the `OrbShdr` marker. The footer holds the metadata:
+- **Shader program** (`docs/formats/shader-binary.md`): each archive entry starts with a header (tag `Shdr`) that gives the offset of the first program's code. A program is GCN code, then a footer that ends in a 0x1C-byte block starting with the `OrbShdr` marker. The footer, together with the data after the last block, holds the metadata:
   - resource names (`g_Texture0`, `SS_ClampLinear`),
   - input semantics (`IN.tex0`, `TEXCOORD`),
   - the entry point name.
@@ -78,8 +78,9 @@ Material on these formats from category 3 of the code sources may be used under 
 
 `tools/shaderbnd` checks each archive's SHA-256 against a pinned table in a new file in `tools/common/`. It refuses other files. It writes to `analysis/shaders/<archive>/`:
 
-- one file per program: code plus footer, as stored;
-- `index.json`, with entry name, program index, stage, code size and the SHA-256 of the code (the **code hash**).
+- one file per program under `programs/`: code plus footer, as stored. The last program of an entry also holds the data after its footer block;
+- every entry as stored under `entries/`, so the entry header and the trailing data stay available;
+- `index.json`, with entry name, program index, offset in the entry and size (#114), and later stage, code size and the SHA-256 of the code (the **code hash**, #117).
 
 Nothing it writes is committed.
 
