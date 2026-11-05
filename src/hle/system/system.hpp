@@ -140,10 +140,12 @@ inline constexpr std::int32_t playgo_bb_error_invalid_argument =
 inline constexpr std::int32_t playgo_handle = 1;
 // The one chunk we report.
 inline constexpr std::uint16_t playgo_chunk_id = 0;
-// The per-chunk state the game counts as "all there": when every entry is 2, it sets its own
-// state to 2 and skips the progress callback (0x1fdeb50 to 0x1fdeb77), the same state as for no
-// chunks at all.
-inline constexpr std::int8_t playgo_chunk_installed = 2;
+// The per-chunk state byte we report. The game folds the bytes into its own state, starting at 2:
+// a byte of 0 sets 0, a byte of 2 sets 1, any other value keeps the state (init 0x1fdeb40 to
+// 0x1fdeb6d, per-frame poll 0x1fde8ea to 0x1fde90d). Only state 2 means done: init then skips
+// the progress callback (0x1fdeb77) and the poll stops (0x1fde917); no chunks at all also give
+// state 2 (0x1fdeb94, 0x1fde91b). So the byte must be neither 0 nor 2.
+inline constexpr std::int8_t playgo_chunk_installed = 3;
 
 std::int32_t playgo_initialize(const void* params);
 std::int32_t playgo_open(std::int32_t* handle, const void* params);

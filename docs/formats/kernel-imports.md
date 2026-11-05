@@ -119,5 +119,5 @@ All call sites are in one eboot class (0x1fde730–0x1fdec3d) that keeps a handl
 | NID | Callers | Behaviour |
 |---|---|---|
 | `73fF1MFU8hA` | 0x1fdeb0f | `(handle, u16 ids[], 100, &count)`: fills up to 100 ids. Result ignored; a count of 0 sets the class's state to 2 |
-| `uWIYLFkkwqk` | 0x1fde8d6 (per-frame poll), 0x1fdeb30 (init) | `(handle, ids, count, status bytes[])`: one status byte per id (0, 1 or 2 seen). Non-zero result sets state 2. Otherwise the bytes are folded into a state that starts at 2: per byte, 0 gives 0, 2 gives 1, other values keep the previous state. What each state means for the game is left to #90 |
+| `uWIYLFkkwqk` | 0x1fde8d6 (per-frame poll), 0x1fdeb30 (init) | `(handle, ids, count, status bytes[])`: one status byte per id (0, 1 or 2 seen). Non-zero result sets state 2. Otherwise the bytes are folded into a state that starts at 2: per byte, 0 gives 0, 2 gives 1, other values keep the previous state. State 2 means done: init skips the progress callback (`*0x28(vtable)(1)`, 0x1fdeb8f) and the poll stops; any other state makes the poll set +0x160 = 1 every frame (0x1fde89b) |
 | `4AAcTU9R3XM` | 0x1fdec3d (tail jump from a setter) | `(handle, mode)` with mode 0, 1 or 2; the caller caches the last mode and skips repeats |
