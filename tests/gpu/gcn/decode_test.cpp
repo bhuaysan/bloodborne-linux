@@ -46,6 +46,7 @@ TEST(GcnDecode, Sopp) {
     EXPECT_EQ(one({sopp(12, 0x007f)}).src[0], imm(OperandKind::waitcnt, 0x007f));
     EXPECT_EQ(one({sopp(16, 0x0003)}).src[0], imm(OperandKind::sendmsg, 0x0003));
     EXPECT_FALSE(is_endpgm(one({sopp(10)})));
+    EXPECT_EQ(one({sopp(11, 1)}).name, "s_setkill");
 
     // The branch offset counts dwords from the next instruction.
     std::vector<std::uint32_t> words = {sopp(1), sopp(4, 0xfffe)};
@@ -57,10 +58,10 @@ TEST(GcnDecode, Sopp) {
 }
 
 TEST(GcnDecode, Errors) {
-    auto e = error({sopp(1), sopp(11)});
+    auto e = error({sopp(1), sopp(3)});  // 3 is reserved
     EXPECT_EQ(e.offset(), 4u);
-    EXPECT_EQ(e.word(), sopp(11));
-    EXPECT_NE(std::string(e.what()).find("unknown SOPP opcode 11 at offset 0x4 (word 0xbf8b0000)"),
+    EXPECT_EQ(e.word(), sopp(3));
+    EXPECT_NE(std::string(e.what()).find("unknown SOPP opcode 3 at offset 0x4 (word 0xbf830000)"),
               std::string::npos);
 
     EXPECT_EQ(error({0x00000000}).word(), 0u);  // VOP2, not decoded yet
@@ -74,7 +75,7 @@ TEST(GcnDecode, StopsAtTheFinalEndpgm) {
         sopp(1),     // 0x04: s_endpgm, before the branch target
         sopp(0, 1),  // 0x08: s_nop 1
         sopp(1),     // 0x0c: s_endpgm
-        sopp(11),    // not an instruction
+        sopp(27),    // not an instruction
     };
     auto insts = decode(code);
     ASSERT_EQ(insts.size(), 4u);

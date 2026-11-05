@@ -33,6 +33,7 @@ Table make_sopp() {
         set(t, 4 + i, std::string("s_cbranch_") + branches[i], 0, 0, 0, Imm::branch);
     }
     set(t, 10, "s_barrier", 0, 0);
+    set(t, 11, "s_setkill", 0, 0, 0, Imm::count);
     set(t, 12, "s_waitcnt", 0, 0, 0, Imm::waitcnt);
     set(t, 13, "s_sethalt", 0, 0, 0, Imm::count);
     set(t, 14, "s_sleep", 0, 0, 0, Imm::count);
