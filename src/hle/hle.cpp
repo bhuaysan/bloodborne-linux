@@ -76,8 +76,10 @@ struct Registry {
     std::atomic<StubObserver*> observer = nullptr;
 };
 
+// Leaked on purpose: thunks point into `stubs`, and a thread or atexit handler can
+// still call a stub while the process exits, so the registry is never destroyed.
 Registry& registry() {
-    static Registry r;
+    static Registry& r = *new Registry;
     return r;
 }
 
