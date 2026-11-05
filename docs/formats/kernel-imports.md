@@ -35,7 +35,7 @@ The other NIDs stay unnamed. The FreeBSD manual page lists and the derivation ru
 | `kbw4UHHSYy0` | libc.prx 0x2f506 | `rdi` = the same module-info record. Releases it. Called only when the fill succeeded and the import is bound (libc tests its GOT cell 0xb85b8 for non-zero at 0x2f4f7, a weak import) |
 | `crb5j7mkk1c` | libc.prx 0x54530 (function 0x54510) | `rdi` = a 64-bit value from an object's +0x18. Result 2 and 1 select object states 3 and 2, anything else 0. Classifies a handle |
 | `OjWstbIRPUo` | libc.prx 0x55810 (tail jump from a libc export) | `rdi` = an object's resource pointer (+0x148). Result ignored. Releases it on the object's failure path |
-| `f7KBOafysXo` | libc.prx | `(path, 1 or 2, 0x118-byte result)`, possibly a file or module query. The unwinder may need module information from it (design note, open question 3) *(survey)* |
+| `f7KBOafysXo` | libc.prx 0x2f327 (exit-handler runner, flag 2), 0x61d34 (function 0x61c00, flag 1) | `(address, flag, record)`: fills a module-info record for the module that contains an address, not a file query. At 0x61d34 the address is the function's second argument and the record starts at rsp+0x118 (0x61d24; the survey read that offset as a size); the caller then loads a pointer from rsp+0x260, which is record+0x148 (0x61d46), and parses an `.eh_frame_hdr` there (version byte 1, table encoding 0x3b at 0x61dfe), so this is the unwinder's lookup (design note, open question 3). A negative result fails the lookup. Not part of file I/O |
 | `6xVpy0Fdq+I` | libc.prx 0x2fcc6 (`setjmp`), 0x2fd17 (`longjmp`) | Takes the arguments of `sigprocmask`: `(1, NULL, jmp_buf + 0x48)` saves the mask, `(3, jmp_buf + 0x48, NULL)` restores it. The 16 bytes at +0x48 hold the signal set |
 
 ### Threads

@@ -77,7 +77,7 @@ Header `sys/sys/fcntl.h`. Linux values are those of glibc's `<fcntl.h>` on x86-6
 
 Going from host to guest, the x86-64 kernel's `__O_LARGEFILE` (0x8000) is dropped. The kernel sets it in every `fcntl(F_GETFL)` result, but glibc defines `O_LARGEFILE` as 0 for 64-bit code, so it can't be matched by name. It is not guest `O_NOCTTY` (host `O_NOCTTY` is 0x100).
 
-`O_DIRECT` translates faithfully, but Linux requires aligned buffers and offsets for it. The file I/O implementation has to drop it.
+`O_DIRECT` translates faithfully, but Linux requires aligned buffers and offsets for it. The file I/O implementation drops it.
 
 ## lseek whence
 
