@@ -22,7 +22,7 @@
 namespace bb::loader {
 namespace {
 
-constexpr std::uint32_t pf_x = 1, pf_w = 2, pf_r = 4;
+constexpr std::uint32_t pf_w = 2;
 
 std::uint64_t page_size() {
     return static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
@@ -162,6 +162,15 @@ std::uintptr_t Image::code(std::uint64_t link) const {
         std::format("link address {:#x} lies outside the executable segments", link));
 }
 
+std::optional<std::uint64_t> Image::function_size(std::uint64_t link) const {
+    if (!unwind) {
+        return std::nullopt;
+    }
+    // read_unwind_table checked that this file data lies inside a readable segment.
+    auto* data = reinterpret_cast<const std::byte*>(base + unwind->segment_link);
+    return fde_range(*unwind, {data, unwind->segment_file_size}, link);
+}
+
 void Image::finalize_protection() {
     for (const Segment& s : segments) {
         protect(base, s, s.prot);
@@ -208,6 +217,7 @@ Image map_elf(std::span<const std::byte> elf, std::uintptr_t base) {
     std::vector<Segment> segments = read_segments(elf, phdrs, align);
     std::optional<TlsTemplate> tls = read_tls(phdrs);
     std::optional<std::uint64_t> proc_param = read_proc_param(phdrs);
+    std::optional<UnwindTable> unwind = read_unwind_table(elf, phdrs);
     if (base % align != 0) {
         throw LoadError(std::format("base {:#x} is not aligned to {:#x}", base, align));
     }
@@ -238,6 +248,7 @@ Image map_elf(std::span<const std::byte> elf, std::uintptr_t base) {
     image.entry = header.entry;
     image.tls = tls;
     image.proc_param = proc_param;
+    image.unwind = unwind;
 
     // Anonymous pages start out zero, so the memory after the file data needs no clearing.
     for (const Segment& s : image.segments) {

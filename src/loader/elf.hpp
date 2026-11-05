@@ -18,11 +18,13 @@ inline constexpr std::uint16_t em_x86_64 = 62;
 inline constexpr std::uint32_t pt_load = 1;
 inline constexpr std::uint32_t pt_dynamic = 2;
 inline constexpr std::uint32_t pt_tls = 7;
+inline constexpr std::uint32_t pt_gnu_eh_frame = 0x6474E550;
 inline constexpr std::uint32_t pt_sce_dynlibdata = 0x61000000;
 inline constexpr std::uint32_t pt_sce_procparam = 0x61000001;
 inline constexpr std::uint32_t pt_sce_libversion = 0x6FFFFF01;
 
 inline constexpr std::uint32_t pf_x = 1;  // Phdr::flags: executable
+inline constexpr std::uint32_t pf_r = 4;  // Phdr::flags: readable
 
 struct ElfHeader {
     std::uint16_t type, machine;
