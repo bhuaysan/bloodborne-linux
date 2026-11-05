@@ -30,9 +30,9 @@ public:
 // Patches the entry of each replaced function in `image` to jump to its replacement, and keeps
 // the original bytes for remove. Checks every entry first and throws HookError, patching
 // nothing, when an address is not the start of an FDE (Image::function_size), the function is
-// shorter than patch_size, the address is listed twice or already hooked, or impl is null. On a
-// finalized image the affected pages are made writable for the write and get their segment's
-// protection back afterwards; throws std::system_error when mprotect fails.
+// shorter than patch_size, its patch overlaps the patch of another entry or of a live hook, or
+// impl is null. On a finalized image the affected pages are made writable for the write and
+// get their segment's protection back afterwards; throws std::system_error when mprotect fails.
 //
 // The original bytes live in a registry in bbhook keyed by (image base, link address), so an
 // Image doesn't need to know about hooks. An entry whose patch is no longer in memory, because

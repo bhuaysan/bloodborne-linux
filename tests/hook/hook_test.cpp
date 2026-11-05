@@ -31,8 +31,10 @@ struct Function {
     std::uint64_t start, size;
     std::uint8_t value;
 };
-// 0x40 is one byte shorter than a patch, the patch at 0xff8 crosses a page boundary.
-constexpr Function functions[] = {{0x10, 0x20, 42}, {0x40, 0xd, 13}, {0xff8, 0x20, 7}};
+// 0x18 lies inside 0x10, as with overlapping FDEs, 0x40 is one byte shorter than a patch, and the
+// patch at 0xff8 crosses a page boundary.
+constexpr Function functions[] = {
+    {0x10, 0x20, 42}, {0x18, 0x18, 9}, {0x40, 0xd, 13}, {0xff8, 0x20, 7}};
 
 template <class T>
 void put(Bytes& out, std::size_t offset, T value) {
@@ -228,7 +230,8 @@ TEST(Hook, RefusesBadEntries) {
     expect_refusal([&] { apply({{0x1'0000'0000, a, "far"}}); },
                    "the patch lies outside the executable segments");
     expect_refusal([&] { apply({{0xff8, a, "one"}, {0xff8, a, "two"}}); },
-                   "hook two at 0xff8: double hook: the address is listed twice");
+                   "hook two at 0xff8: double hook: the patch overlaps another entry of the list");
+    expect_refusal([&] { apply({{0x10, a, "one"}, {0x18, a, "two"}}); }, "hook two at 0x18");
     expect_refusal([&] { bb::hook::remove(image, std::array{Replacement{0x10, a, "a"}}); },
                    "hook a at 0x10: not hooked");
 
@@ -239,7 +242,8 @@ TEST(Hook, RefusesBadEntries) {
 
     apply({{0x10, a, "first"}});
     expect_refusal([&] { apply({{0x10, a, "second"}}); },
-                   "hook second at 0x10: double hook: the address is already hooked");
+                   "hook second at 0x10: double hook: the patch overlaps the hook at 0x10");
+    expect_refusal([&] { apply({{0x18, a, "near"}}); }, "the patch overlaps the hook at 0x10");
     EXPECT_EQ(image.fn<int()>(0x10)(), 1001);
     bb::hook::remove(image, std::array{Replacement{0x10, a, "first"}});
 }
