@@ -83,7 +83,7 @@ Who runs which steps:
 |---|---|
 | `bb-load` (M2) | 1, 2 with `bb::hle::resolve`, 4 |
 | differential harness (M2) | 1, 2 with `bb::hle::resolve`, 4 |
-| game runtime (M3) | 1, 2 with `bb::hle::resolve`, 3 with all registered replacements, 4, then TLS setup and the entry point |
+| game runtime (M3) | 1 for the eboot and the bundled PRXs, their exports registered with `bb::hle`, 2 with `bb::hle::resolve` for all three, 3 with all registered replacements, 4, the TLS check, then PRX init and the entry point on the game's main thread ([m3-core-os.md](m3-core-os.md)) |
 | loader unit tests | 1, 2 with a fake resolver, 4 |
 
 ### Loaded image
@@ -128,6 +128,8 @@ Supported: `R_X86_64_RELATIVE` (base + addend), `R_X86_64_64` (symbol + addend),
 A relocation against a defined symbol of the same file (`st_shndx != 0`) resolves to base + `st_value` without calling the resolver. The eboot has none, but the PRXs (M3) and synthetic test ELFs do. Undefined symbols with a `NID#library#module` name are imports and go to the resolver. The weak, untyped, undefined `module_start` and `module_stop` of the PRXs (`docs/formats/elf-dynamic.md`) are not imports: relocations against them resolve to 0, as for any unresolved weak symbol. Any other plain-named undefined symbol is an error.
 
 Every import must resolve to a non-zero address. The game runtime, `bb-load` and the harness pass `bb::hle::resolve`.
+
+M3 adds `R_X86_64_DTPMOD64` for the PRXs and a module id parameter for it, and registers the PRXs' exports with `bb::hle` before relocating, so `resolve` binds imports to them first ([m3-core-os.md](m3-core-os.md#loading-the-bundled-prxs)).
 
 `relocate` (declared in `loader/relocate.hpp`) applies `DT_SCE_RELA` first, then `DT_SCE_JMPREL`. It checks the type, then the target, then resolves the symbol, so the resolver never sees an import of a rejected relocation. Each 8-byte target must lie inside the memory of a `PT_LOAD`, and inside a writable one unless the image has `DT_TEXTREL` (checked without overflow). On an error the image is partly relocated and must be discarded. Calling `relocate` after `finalize_protection` is a `std::logic_error`. In the eboot, no relocation targets the code segment, 686 of the 701 imports are referenced, and `R_X86_64_64` against imported data uses only the addends 0 and 0x10.
 
@@ -217,7 +219,7 @@ auto* flags = reinterpret_cast<uint32_t*>(bb::game::image().runtime(0x5100000));
 
 `image()` without an image prints `game: no image is loaded (bb::game::set_image was not called)` and aborts: a replacement that runs before loading is a bug, not an error to handle. `set_image(nullptr)` unsets it. `fn` throws `std::out_of_range` unless the address lies inside an executable segment, like `Image::fn`. `bbgame` is an `OBJECT` library that links `bbhook` and only the compile-time requirements of `bbhle`; executables link `bbgame` and `bbhle` themselves.
 
-The game code and our code use the same System V calling convention, so a call needs no glue as long as no TLS is involved. From M3 the game uses `%fs` for its own TLS while our code uses glibc's, so transitions between the two will need glue. That is open until M3 sets up TLS.
+The game code and our code use the same System V calling convention, so a call needs no glue as long as no TLS is involved. From M3 the game uses `%fs` for its own TLS while our code uses glibc's, so transitions between the two would need glue. [m3-core-os.md](m3-core-os.md#tls-one-thread-pointer-for-game-and-runtime) avoids that: game and runtime share glibc's thread pointer.
 
 **Calling imports.** A replacement calls an imported function through `bb::hle::import_address(library, nid)`, which returns the cached address that `resolve` handed out for that import (the same address the loader wrote into the image's GOT slot) and aborts if the import was never resolved. It never calls an HLE C++ function directly. Then the original and the replacement reach the same stub or implementation, and the stub logs compare.
 

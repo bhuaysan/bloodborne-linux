@@ -20,7 +20,7 @@
 
 ## Components
 
-The interfaces between the runtime parts (loader, import stubs, hooks, differential harness) are fixed in [design/runtime.md](design/runtime.md).
+The interfaces between the runtime parts (loader, import stubs, hooks, differential harness) are fixed in [design/runtime.md](design/runtime.md). How the runtime brings up the OS layer (bundled PRXs, TLS, threads, memory, files, runtime directories) is in [design/m3-core-os.md](design/m3-core-os.md).
 
 ### Executable extraction
 `eboot.bin` is a SELF container. The dump used here stores its segments unencrypted and uncompressed (a "fake-signed" SELF), so a plain ELF can be rebuilt from the container. `tools/self2elf` rebuilds it into a local analysis directory, never into the repo (format in `docs/formats/self.md`).
