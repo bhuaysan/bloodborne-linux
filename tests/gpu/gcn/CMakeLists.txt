@@ -19,5 +19,5 @@ target_link_libraries(bbgcntest PRIVATE bb_warnings)
 
 bb_add_test(gcn_test
     SOURCES cfg_test.cpp decode_test.cpp programs_test.cpp roundtrip_test.cpp
-            spirv_builder_test.cpp
+            spirv_builder_test.cpp structurize_test.cpp
     LIBS bbgcn bbgcntest)
