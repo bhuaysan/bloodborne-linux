@@ -1,6 +1,6 @@
 # Kernel ABI values
 
-The values of the guest kernel ABI (FreeBSD 10, amd64) that differ from Linux or that the runtime must check, and how `src/hle/kernel/abi.hpp` translates them. Every HLE module uses those tables. The struct sections (timespec, timeval, stat, getdirentries record) fix the layouts and how the conversion from the host fills each field; the conversion functions themselves are the second part of issue #80. The error conventions per call family are in [m3-core-os.md](../design/m3-core-os.md#errors).
+The values of the guest kernel ABI (FreeBSD 10, amd64) that differ from Linux or that the runtime must check, and how `src/hle/kernel/abi.hpp` translates them. Every HLE module uses those tables. The struct sections (timespec, timeval, stat, getdirentries record) fix the layouts and how the conversion from the host fills each field. The error conventions per call family are in [m3-core-os.md](../design/m3-core-os.md#errors).
 
 ## Sources
 
@@ -158,6 +158,8 @@ Headers `sys/sys/_timespec.h`, `sys/sys/_timeval.h`, `sys/x86/include/_types.h`.
 | timeval | tv_sec | 0 | int64 | libc 0x6c82 (`gettimeofday` × 1000000) |
 | timeval | tv_usec | 8 | int64 | libc 0x6c8a; libc 0x2ef29 (`clock` adds the two `ru_utime`/`ru_stime` timevals of `struct rusage` at offsets 0 and 16) |
 
+`GuestTimespec` and `GuestTimeval` hold them. `guest_timespec` and `guest_timeval` copy the host fields, `host_timespec` converts back (for a guest `nanosleep` or `clock_settime` argument).
+
 ## struct stat
 
 Header `sys/sys/stat.h` (the layout before 64-bit inode numbers), 120 bytes on amd64. The eboot's `stat` buffer at eboot 0x6542a is 120 bytes below its stack guard.
@@ -182,18 +184,22 @@ Header `sys/sys/stat.h` (the layout before 64-bit inode numbers), 120 bytes on a
 | st_lspare | 100 | int32 | 0 |
 | st_birthtim | 104 | timespec | no use found; 0, Linux's `stat` has no birth time |
 
-The file type bits (`S_IFMT` 0170000, `S_IFDIR` 0040000, `S_IFREG` 0100000, …) and permission bits are the same as on Linux, so `st_mode` is copied.
+The file type bits (`S_IFMT` 0170000, `S_IFIFO` 0010000, `S_IFCHR` 0020000, `S_IFDIR` 0040000, `S_IFBLK` 0060000, `S_IFREG` 0100000, `S_IFLNK` 0120000, `S_IFSOCK` 0140000) and permission bits are the same as on Linux, so `st_mode` is copied. A `static_assert` in `abi.cpp` checks the type bits against the host headers.
+
+`GuestStat` is the guest layout, `guest_stat(host)` fills it from a Linux `struct stat` as the table says: the wider host fields are truncated, `st_nlink` is clamped, `st_flags`, `st_gen`, `st_lspare` and `st_birthtim` are 0.
 
 ## getdirentries record
 
 Header `sys/sys/dirent.h`. `sceKernelGetdirentries(fd, buf, nbytes, basep)` fills `buf` with records. `basep` is a pointer to a 64-bit offset (eboot 0x20725a6), or null (Fios 0x2d425).
 
-| Field | Offset | Type | Use |
-|---|---|---|---|
-| d_fileno | 0 | uint32 | Fios 0x2d453 skips records with 0 |
-| d_reclen | 4 | uint16 | eboot 0x2072587; Fios 0x2d447 (the step to the next record) |
-| d_type | 6 | uint8 | no use found |
-| d_namlen | 7 | uint8 | no use found |
-| d_name | 8 | char[256] | eboot 0x2072560, Fios 0x2d45a (compared with `.` and `..`) |
+| Field | `GuestDirent` | Offset | Type | Use |
+|---|---|---|---|---|
+| d_fileno | fileno | 0 | uint32 | Fios 0x2d453 skips records with 0 |
+| d_reclen | reclen | 4 | uint16 | eboot 0x2072587; Fios 0x2d447 (the step to the next record) |
+| d_type | type | 6 | uint8 | no use found |
+| d_namlen | namlen | 7 | uint8 | no use found |
+| d_name | name | 8 | char[256] | eboot 0x2072560, Fios 0x2d45a (compared with `.` and `..`) |
 
-A full record is 264 bytes (Fios 0x2d475 copies 0x108 bytes per entry). A record's length is `8 + ((d_namlen + 1 + 3) & ~3)`: the name is NUL-terminated and padded with NULs to a multiple of 4 (header). The `d_type` values (`DT_UNKNOWN` 0, `DT_FIFO` 1, `DT_CHR` 2, `DT_DIR` 4, `DT_BLK` 6, `DT_REG` 8, `DT_LNK` 10, `DT_SOCK` 12, `DT_WHT` 14) are the same as on Linux.
+A full record is 264 bytes (Fios 0x2d475 copies 0x108 bytes per entry). A record's length is `8 + ((d_namlen + 1 + 3) & ~3)`: the name is NUL-terminated and padded with NULs to a multiple of 4 (header). The `d_type` values (`DT_UNKNOWN` 0, `DT_FIFO` 1, `DT_CHR` 2, `DT_DIR` 4, `DT_BLK` 6, `DT_REG` 8, `DT_LNK` 10, `DT_SOCK` 12, `DT_WHT` 14) are the same as on Linux. A `static_assert` in `abi.cpp` checks them, so a host `d_type` is passed through.
+
+`GuestDirent` names its fields without the `d_` prefix because glibc's `<dirent.h>` defines `d_fileno` as a macro. `dirent_length(n)` is the record length for an `n`-byte name. `put_dirent(out, fileno, type, name)` writes one record to the start of `out` with `memcpy`, since a guest buffer need not be aligned, and returns its length. It writes nothing and returns 0 if the record doesn't fit or the name is empty or longer than 255 bytes. Bytes after the record's padding are left alone.
