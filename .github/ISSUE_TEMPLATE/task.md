@@ -18,4 +18,4 @@ labels: []
 
 ## Sources consulted
 
-<!-- External docs used (also add them to docs/references.md). Off-limits: other game decomp projects, PS4 emulator source, leaked SDKs. -->
+<!-- External docs used (also add them to docs/references.md). Off-limits and code-source rules: docs/clean-room.md (leaked SDK material, NID name tables and FromSoftware decomp, recomp and modding material stay off-limits). -->

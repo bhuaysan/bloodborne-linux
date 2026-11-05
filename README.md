@@ -10,7 +10,7 @@ The PS4 runs x86-64 code, so the game's own machine code can run directly on a L
 
 On top of that, game functions are gradually decompiled into readable C++ until the original executable is no longer needed.
 
-This is also a learning project. Everything here is worked out independently.
+This is also a learning project. Third-party code and facts are used only under the rules in [docs/clean-room.md](docs/clean-room.md) and credited in [docs/references.md](docs/references.md).
 
 ## Status
 

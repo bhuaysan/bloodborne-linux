@@ -4,7 +4,7 @@ Guidance for coding agents working on this repository. Humans should start with 
 
 ## Goal
 
-Reverse engineer Bloodborne (PS4, CUSA03173, patch 1.09) **with our own code** and run it **natively on Linux x86-64**, with **no emulation**.
+Reverse engineer Bloodborne (PS4, CUSA03173, patch 1.09) **with our own code** (plus credited third-party code where licenses allow) and run it **natively on Linux x86-64**, with **no emulation**.
 
 ## Architecture: incremental hybrid
 
@@ -23,7 +23,7 @@ See `docs/architecture.md` and `docs/roadmap.md`.
 
 ### Clean room / references
 **Read [`docs/clean-room.md`](docs/clean-room.md) before using any external source.** In short:
-- **Never** look at leaked Sony SDK material (also when it is copied into another project), Bloodborne or FromSoftware decomp or recomp projects and their symbol, struct or param dumps, or the source of PS4 recomp tools or disassembler loader plugins.
+- **Never** look at leaked Sony SDK material (also when it is copied into another project), NID name tables from any source, reverse-engineering, decomp, recomp or modding material for Bloodborne or other FromSoftware games (only file-format material is allowed), or standalone PS4 recomp tools and disassembler loader plugins (neither source nor running them).
 - Public format and hardware docs are allowed. So are some code sources (AMD GPU code, Mesa, FromSoftware file-format material, PS4 emulators), under the license rules in `docs/clean-room.md`: code is reused only from permissive licenses and keeps its notice; copyleft and unlicensed sources give facts only.
 - Log every source in `docs/references.md` in the same change that uses it.
 - Import names are recovered only by matching hashes of candidate names we can justify ourselves (see the NID section in `docs/clean-room.md`).
@@ -39,7 +39,7 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 - Never hard-code absolute paths in code, scripts or docs.
 
 ### Privacy and repository hygiene
-- No personal information in commits, issues, PRs or files: no real names, email addresses, usernames in paths, or home-directory paths.
+- No personal information in commits, issues, PRs or files: no real names, email addresses, usernames in paths, or home-directory paths. Exception: third-party copyright and license notices kept under `docs/clean-room.md` (in `third_party/` and in header comments of adapted code). They never contain the maintainer's own data.
 - Commits use the repository-local identity, the GitHub noreply address. Check with `git config user.email` before committing.
 - Agent or AI tool files are never committed. `AGENTS.md` is the only exception.
 - The git hooks in `tools/githooks/` enforce part of this. Never bypass them (`--no-verify`).
@@ -78,6 +78,7 @@ src/                 the runtime, C++20 (see docs/design/runtime.md)
   tools/             bb-load
 tests/               GoogleTest unit and differential tests, one directory per target, plus support/
 symbols/             our analysis as text: functions.csv, nids.csv, types/
+third_party/         copied third-party code with its license (see docs/clean-room.md)
 tools/
   self2elf/          rebuilds the ELFs from eboot.bin and the bundled .prx files
   elf2std/           rewrites a PS4 ELF into a standard ELF for stock tools
@@ -109,7 +110,7 @@ Code is never reviewed only in the session that wrote it.
 
 1. **Automatic:** git hooks on every commit. From M2, CI (build with sanitizers, unit and differential tests, privacy check, and formatting and lint once there is code).
 2. **Per decompiled function:** a differential test, plus an independent review that compares the C++ against the original disassembly without seeing the author's reasoning.
-3. **Per PR:** every change goes through a PR. Before merging, an independent review runs on the PR diff in a fresh context. Use high effort for loader, ABI and graphics code. Fix review findings in the same PR unless they need their own design work. Keep PRs to at most 500 changed lines of code and tests (docs and `symbols/` don't count), and put generated data in a PR of its own.
+3. **Per PR:** every change goes through a PR. Before merging, an independent review runs on the PR diff in a fresh context. Use high effort for loader, ABI and graphics code. Fix review findings in the same PR unless they need their own design work. Keep PRs to at most 500 changed lines of code and tests (docs and `symbols/` don't count), and put generated data and copied `third_party/` files in a PR of their own (they don't count either).
    **Merging:** an agent may merge a PR once it passes every part of the gate:
    - `tools/run-tests.sh` passes, locally with the game where tests need it, and in CI once it exists. `tools/merge-pr.sh` runs it again on the rebased commits, so what lands on `main` is what was tested.
    - `tools/privacy-check.sh` is clean. `tools/merge-pr.sh` runs it too.
@@ -117,7 +118,7 @@ Code is never reviewed only in the session that wrote it.
    - Every function the PR marks `replaced` in `symbols/functions.csv` passed its differential test and its disassembly review (item 2).
    - The PR stays within the 500-line limit above.
    - The PR doesn't change the guardrails: `AGENTS.md`, `docs/clean-room.md`, `.gitignore`, any `.gitattributes`, `.github/`, `tools/githooks/`, `tools/merge-pr.sh`, `tools/privacy-check.sh`, `tools/run-tests.sh` or `tools/common/toolenv.py` (it finds the game for the tests).
-   - Each new source in `docs/references.md` falls clearly into a category that `docs/clean-room.md` allows, as checked by the independent review.
+   - Each new source in `docs/references.md` falls clearly into a category that `docs/clean-room.md` allows, as checked by the independent review. For code sources the review also checks that the license column matches the files, that copied or adapted code keeps its notices, and that nothing was copied from a non-permissive file.
 
    Anything that fails the gate goes to the maintainer. `tools/merge-pr.sh` refuses guardrail changes and oversized PRs unless the maintainer runs it with `--maintainer`. Agents never pass that flag. Agents always pass `--sha <commit>`, the PR head the independent review saw; the script refuses the merge if the branch has moved since.
    **Never use GitHub's merge button or `gh pr merge`**: GitHub writes the account's display name into the commit. Merge with `tools/merge-pr.sh --sha <reviewed head> <N>` instead. It rebases locally, runs the tests and the privacy check (which includes authorship) on the rebased commits, and fast-forwards `main`.
@@ -125,7 +126,7 @@ Code is never reviewed only in the session that wrote it.
    - a walkthrough of the new code
    - code health and an architecture check
    - a sample check of `symbols/` quality
-   - a clean-room audit (`docs/references.md` complete, no names of unclear origin)
+   - a clean-room audit (`docs/references.md` complete, code sources and `third_party/` match their licenses, no names of unclear origin)
    - a privacy audit of the history
    
    Small fixes go into a follow-up PR. Bigger findings become issues labeled `review`. Then the maintainer tags the milestone.
