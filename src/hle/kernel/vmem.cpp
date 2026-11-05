@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <format>
 #include <iterator>
 #include <map>
@@ -124,7 +125,8 @@ int map(const Mapping& m, std::uintptr_t& out) {
         const auto host_page = static_cast<std::uint64_t>(::sysconf(_SC_PAGESIZE));
         const std::uint64_t reserved = m.length + page_size - host_page;
         void* const base =
-            ::mmap(hint, reserved, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+            ::mmap(hint, reserved, PROT_NONE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | (m.host_flags & MAP_32BIT), -1, 0);
         if (base == MAP_FAILED) {
             return errno;
         }
@@ -191,6 +193,11 @@ int protect(std::uintptr_t start, std::uint64_t length, int prot) {
     return 0;
 }
 
+bool mapped(std::uintptr_t start, std::uintptr_t end) {
+    const std::scoped_lock lock(table_mutex);
+    return start < end && covered(start, end);
+}
+
 std::optional<Region> find(std::uintptr_t address) {
     const std::scoped_lock lock(table_mutex);
     auto it = table.upper_bound(address);
@@ -200,9 +207,109 @@ std::optional<Region> find(std::uintptr_t address) {
     return std::prev(it)->second;
 }
 
+std::vector<Region> regions() {
+    const std::scoped_lock lock(table_mutex);
+    std::vector<Region> out;
+    out.reserve(table.size());
+    for (const auto& [start, region] : table) {
+        out.push_back(region);
+    }
+    return out;
+}
+
 }  // namespace bb::hle::kernel::vmem
 
 namespace bb::hle::kernel {
+namespace {
+
+using vmem::log;
+
+constexpr int guest_map_shared = 0x1;
+constexpr int guest_map_private = 0x2;
+constexpr int guest_map_anon = 0x1000;
+
+void* const map_failed = MAP_FAILED;
+
+// The anonymous map calls: *address is a hint in and the mapping out. Every call site passes
+// flags 0 (libc.prx 0x23eb8, 0x23ff4, 0x24926; eboot 0x2081db9).
+std::int32_t map_anonymous_named(void** address, std::uint64_t length, int prot, int flags,
+                                 std::string name) {
+    if (address == nullptr || flags != 0) {
+        if (flags != 0) {
+            log("anonymous map: flags {:#x} refused", flags);
+        }
+        return sce_error(22);
+    }
+    vmem::Mapping m;
+    m.address = reinterpret_cast<std::uintptr_t>(*address);
+    m.length = length;
+    m.prot = prot;
+    m.host_flags = MAP_PRIVATE | MAP_ANONYMOUS;
+    m.name = std::move(name);
+    std::uintptr_t out = 0;
+    if (const int error = vmem::map(m, out)) {
+        return sce_fail(error);
+    }
+    *address = reinterpret_cast<void*>(out);
+    return 0;
+}
+
+}  // namespace
+
+// The offset of an anonymous mapping is ignored.
+void* guest_mmap(void* address, std::uint64_t length, int prot, int flags, int fd,
+                 std::int64_t /*offset*/) {
+    const Flags host = host_map_flags(flags);
+    const int sharing = flags & (guest_map_shared | guest_map_private);
+    if (host.unknown != 0) {
+        log("mmap: unknown flags {:#x}", host.unknown);
+        posix_fail(EINVAL);
+        return map_failed;
+    }
+    if (length == 0 || length > (std::uint64_t{1} << 47) ||
+        sharing == (guest_map_shared | guest_map_private)) {
+        posix_fail(EINVAL);
+        return map_failed;
+    }
+    if ((flags & guest_map_anon) == 0) {
+        // Guest descriptors don't exist yet (#98): no file can be mapped.
+        log("mmap: file mapping of guest descriptor {} refused", fd);
+        posix_fail(EBADF);
+        return map_failed;
+    }
+    vmem::Mapping m;
+    m.address = reinterpret_cast<std::uintptr_t>(address);
+    m.length = (length + vmem::page_size - 1) & ~(vmem::page_size - 1);
+    m.prot = prot;
+    m.host_flags = (host.value & ~MAP_FIXED) | (sharing == 0 ? MAP_PRIVATE : 0);
+    m.fixed = (host.value & MAP_FIXED) != 0;
+    std::uintptr_t out = 0;
+    if (const int error = vmem::map(m, out)) {
+        posix_fail(error);
+        return map_failed;
+    }
+    return reinterpret_cast<void*>(out);
+}
+
+int guest_munmap(void* address, std::uint64_t length) {
+    const int error = vmem::unmap(reinterpret_cast<std::uintptr_t>(address), length);
+    return error == 0 ? 0 : posix_fail(error);
+}
+
+// libc.prx's only call (0x541a5) probes whether a 4 KiB page is mapped with MS_ASYNC, so it goes
+// to the host for any address, not only guest mappings.
+int guest_msync(void* address, std::uint64_t length, int flags) {
+    const Flags host = host_msync_flags(flags);
+    if (host.unknown != 0) {
+        log("msync: unknown flags {:#x}", host.unknown);
+        return posix_fail(EINVAL);
+    }
+    return ::msync(address, length, host.value) == 0 ? 0 : posix_fail(errno);
+}
+
+int guest_getpagesize() {
+    return static_cast<int>(vmem::page_size);
+}
 
 std::int32_t sceKernelMunmap(void* address, std::uint64_t length) {
     return sce_fail(vmem::unmap(reinterpret_cast<std::uintptr_t>(address), length));
@@ -212,7 +319,89 @@ std::int32_t sceKernelMprotect(const void* address, std::uint64_t length, int pr
     return sce_fail(vmem::protect(reinterpret_cast<std::uintptr_t>(address), length, prot));
 }
 
+// Checked, not applied: the host's RLIMIT_MEMLOCK would make libc's arena growth fail, which
+// unmaps the arena when this call fails (libc.prx 0x23ed9).
+std::int32_t sceKernelMlock(const void* address, std::uint64_t length) {
+    const auto start = reinterpret_cast<std::uintptr_t>(address);
+    if (length == 0) {
+        return 0;
+    }
+    return vmem::mapped(start, start + length) ? 0 : sce_error(12);
+}
+
+std::int32_t map_named_anonymous(void** address, std::uint64_t length, int prot, int flags,
+                                 const char* name) {
+    std::string copy;
+    if (name != nullptr) {
+        copy.assign(name, ::strnlen(name, 255));
+    }
+    return map_anonymous_named(address, length, prot, flags, std::move(copy));
+}
+
+std::int32_t map_anonymous(void** address, std::uint64_t length, int prot, int flags) {
+    return map_anonymous_named(address, length, prot, flags, {});
+}
+
+std::int32_t release_anonymous(void* address, std::uint64_t length) {
+    return sceKernelMunmap(address, length);
+}
+
+// Every call site passes flags 0 and size 0x48.
+std::int32_t query_mapping(const void* address, int flags, void* record, std::uint64_t size) {
+    if (flags != 0 || record == nullptr || size < sizeof(QueryRecord)) {
+        return sce_error(22);
+    }
+    const auto region = vmem::find(reinterpret_cast<std::uintptr_t>(address));
+    if (!region) {
+        return sce_error(13);  // ours: the callers test for non-zero
+    }
+    QueryRecord r{};
+    r.start = region->start;
+    r.end = region->end;
+    r.offset = region->offset;
+    r.flags = static_cast<std::uint8_t>(region->flags);
+    std::memcpy(record, &r, sizeof r);
+    return 0;
+}
+
+std::int32_t direct_memory_type(std::uint64_t, std::int32_t*, std::uint64_t*, std::uint64_t*) {
+    return sce_error(2);  // ours: the only caller (0x26bae74) tests for non-zero
+}
+
+std::int32_t mapping_protection(const void* address, std::uint64_t* start, std::uint64_t* end,
+                                std::uint32_t* prot) {
+    const auto region = vmem::find(reinterpret_cast<std::uintptr_t>(address));
+    if (!region) {
+        return sce_error(13);  // ours: the callers test for non-zero
+    }
+    if (start != nullptr) {
+        *start = region->start;
+    }
+    if (end != nullptr) {
+        *end = region->end;
+    }
+    if (prot != nullptr) {
+        *prot = static_cast<std::uint32_t>(region->prot);
+    }
+    return 0;
+}
+
+BB_HLE_FUNCTION("libkernel", "BPE9s9vQQXo", guest_mmap);
+BB_HLE_FUNCTION("libkernel", "UqDGjXA5yUM", guest_munmap);
+BB_HLE_FUNCTION("libkernel", "tZY4+SZNFhA", guest_msync);
+BB_HLE_FUNCTION("libkernel", "k+AXqu2-eBc", guest_getpagesize);
+BB_HLE_FUNCTION("libScePosix", "BPE9s9vQQXo", guest_mmap);
+BB_HLE_FUNCTION("libScePosix", "UqDGjXA5yUM", guest_munmap);
+BB_HLE_FUNCTION("libScePosix", "tZY4+SZNFhA", guest_msync);
+BB_HLE_FUNCTION("libScePosix", "k+AXqu2-eBc", guest_getpagesize);
 BB_HLE_FUNCTION("libkernel", "cQke9UuBQOk", sceKernelMunmap);
 BB_HLE_FUNCTION("libkernel", "vSMAm3cxYTY", sceKernelMprotect);
+BB_HLE_FUNCTION("libkernel", "3k6kx-zOOSQ", sceKernelMlock);
+BB_HLE_FUNCTION("libkernel", "mL8NDH86iQI", map_named_anonymous);  // name unknown
+BB_HLE_FUNCTION("libkernel", "IWIBBdTHit4", map_anonymous);        // name unknown
+BB_HLE_FUNCTION("libkernel", "teiItL2boFw", release_anonymous);    // name unknown
+BB_HLE_FUNCTION("libkernel", "rVjRvHJ0X6c", query_mapping);        // name unknown
+BB_HLE_FUNCTION("libkernel", "BC+OG5m9+bw", direct_memory_type);   // name unknown
+BB_HLE_FUNCTION("libkernel", "WFcfL2lzido", mapping_protection);   // name unknown
 
 }  // namespace bb::hle::kernel
