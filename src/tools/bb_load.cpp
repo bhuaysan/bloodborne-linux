@@ -1,5 +1,6 @@
-// bb-load: maps the eboot, relocates it with the HLE stubs, sets its final protections and prints
-// its layout, relocations and imports. Runs no game code (docs/design/runtime.md, "Tools").
+// bb-load: maps the load set (the eboot and the bundled PRXs), binds and relocates it through the
+// HLE layer, sets the final protections and prints each module's layout, relocations and imports.
+// Runs no game code (docs/design/runtime.md, "Tools").
 
 #include <sys/mman.h>
 
@@ -19,8 +20,9 @@
 #include <vector>
 
 #include "hle/hle.hpp"
+#include "hle/link.hpp"
 #include "loader/image.hpp"
-#include "loader/relocate.hpp"
+#include "loader/load_set.hpp"
 
 namespace {
 
@@ -28,8 +30,8 @@ using namespace bb::loader;
 
 constexpr std::string_view usage =
     "usage: bb-load [--game-dir DIR]\n"
-    "Maps and relocates eboot.bin of the game in DIR (default: $BB_GAME_DIR) and prints its\n"
-    "layout, relocations and imports. Runs no game code.\n";
+    "Maps and relocates eboot.bin and the bundled PRXs it loads of the game in DIR (default:\n"
+    "$BB_GAME_DIR) and prints their layout, relocations and imports. Runs no game code.\n";
 
 std::string prot_string(int prot) {
     return {(prot & PROT_READ) ? 'r' : '-', (prot & PROT_WRITE) ? 'w' : '-',
@@ -46,11 +48,13 @@ std::string_view reloc_name(std::uint32_t type) {
         return "R_X86_64_JUMP_SLOT";
     case r_x86_64_relative:
         return "R_X86_64_RELATIVE";
+    case r_x86_64_dtpmod64:
+        return "R_X86_64_DTPMOD64";
     }
     return "?";  // relocate() accepts no other type
 }
 
-// The relocations of both tables by type, and what bb::hle::resolve created for the imports.
+// The relocations of both tables by type.
 void print_relocations(const DynamicInfo& dyn) {
     std::map<std::uint32_t, std::size_t> by_type;
     for (const auto* table : {&dyn.relocs, &dyn.plt_relocs}) {
@@ -61,14 +65,27 @@ void print_relocations(const DynamicInfo& dyn) {
     for (const auto& [type, count] : by_type) {
         std::cout << std::format("reloc      {} {}\n", reloc_name(type), count);
     }
-    const bb::hle::Counts hle = bb::hle::counts();
-    std::cout << std::format("hle        {} stubs, {} data blocks\n", hle.stubs, hle.data_blocks);
 }
 
 struct ImportCounts {
     std::size_t func = 0, object = 0;
+    // What bb::hle::resolve bound them to. Stubs include data blocks; unused are never resolved.
+    std::size_t exported = 0, implemented = 0, stub = 0, unused = 0;
     std::size_t total() const { return func + object; }
 };
+
+void count_binding(ImportCounts& counts, const Import& imp) {
+    const std::optional<bb::hle::Binding> b = bb::hle::binding(imp.library, imp.nid);
+    if (!b) {
+        ++counts.unused;
+    } else if (*b == bb::hle::Binding::exported) {
+        ++counts.exported;
+    } else if (*b == bb::hle::Binding::implemented) {
+        ++counts.implemented;
+    } else {
+        ++counts.stub;
+    }
+}
 
 void print_imports(const DynamicInfo& dyn) {
     std::map<std::string, ImportCounts> by_library;
@@ -76,6 +93,7 @@ void print_imports(const DynamicInfo& dyn) {
         if (sym.kind == Symbol::Kind::import) {
             ImportCounts& counts = by_library[sym.decoded.library];
             ++(sym.type == stt_func ? counts.func : counts.object);
+            count_binding(counts, sym.decoded);
         }
     }
     // The order of tools/elfimports: most imports first, then by name.
@@ -89,12 +107,16 @@ void print_imports(const DynamicInfo& dyn) {
     }
     std::cout << std::format("imports    {} in {} libraries\n", total, sorted.size());
     for (const auto& [library, counts] : sorted) {
-        std::cout << std::format("  {:<24} {:>4}  {} func, {} object\n", library, counts.total(),
-                                 counts.func, counts.object);
+        std::cout << std::format("  {:<24} {:>4}  {} func, {} object; {} export, {} hle, {} stub, "
+                                 "{} unused\n",
+                                 library, counts.total(), counts.func, counts.object,
+                                 counts.exported, counts.implemented, counts.stub, counts.unused);
     }
 }
 
-void print(const Image& image) {
+void print(const LoadedModule& module) {
+    const Image& image = module.image;
+    std::cout << std::format("module     {} id {}\n", module.file, module.id);
     std::cout << std::format("base       {:#x}\n", image.base);
     std::cout << std::format("entry      {:#x}\n", image.entry);
     for (const Segment& s : image.segments) {
@@ -141,10 +163,17 @@ int main(int argc, char** argv) {
         return 2;
     }
     try {
-        Image image = map_eboot(*game_dir);
-        relocate(image, bb::hle::resolve, eboot_module_id);
-        image.finalize_protection();
-        print(image);
+        LoadSet set = map_load_set(*game_dir);
+        bb::hle::link(set);
+        for (LoadedModule& module : set.modules) {
+            module.image.finalize_protection();
+        }
+        for (const LoadedModule& module : set.modules) {
+            print(module);
+        }
+        const bb::hle::Counts hle = bb::hle::counts();
+        std::cout << std::format("hle        {} stubs, {} data blocks\n", hle.stubs,
+                                 hle.data_blocks);
     } catch (const std::exception& e) {
         std::cerr << "bb-load: " << e.what() << '\n';
         return 1;

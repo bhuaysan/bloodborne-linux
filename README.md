@@ -45,7 +45,7 @@ ctest --preset debug
 
 Each preset builds into `build/<preset>/`. Tests that need the game skip when `BB_GAME_DIR` is not set.
 
-`bb-load` checks that your dump loads: it maps the game executable, then prints its segments, TLS template and imports, without running any game code. It takes the game from `BB_GAME_DIR` or `--game-dir`:
+`bb-load` checks that your dump loads: it maps the game executable and the two bundled PRXs it loads at start (`libSceFios2.prx`, `libc.prx`), binds their imports, then prints their segments, TLS templates and imports, without running any game code. It takes the game from `BB_GAME_DIR` or `--game-dir`:
 
 ```sh
 build/debug/src/tools/bb-load --game-dir /path/to/your/CUSA03173
