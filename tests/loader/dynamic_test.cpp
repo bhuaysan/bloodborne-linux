@@ -510,10 +510,10 @@ TEST(Relocate, AppliesEachType) {
 }
 
 // Maps `s` with `edit` applied to its dynamic entries, relocates it with `resolve` and expects a
-// LoadError containing `message`.
-void expect_relocate_error(const Synthetic& s, std::string_view message,
-                           const std::function<void(std::vector<Dyn>&)>& edit = {},
-                           Resolver resolve = {}) {
+// LoadError containing `message`. Without `resolve`, returns the calls fake_resolver recorded.
+std::vector<Import> expect_relocate_error(const Synthetic& s, std::string_view message,
+                                          const std::function<void(std::vector<Dyn>&)>& edit = {},
+                                          Resolver resolve = {}) {
     std::vector<Import> calls;
     Image image = map_elf(to_file(s.build(edit)), reloc_base);
     try {
@@ -522,6 +522,18 @@ void expect_relocate_error(const Synthetic& s, std::string_view message,
     } catch (const LoadError& e) {
         EXPECT_NE(std::string_view(e.what()).find(message), std::string_view::npos)
             << "got: " << e.what() << "\nexpected: " << message;
+    }
+    return calls;
+}
+
+// Synthetic's own entries resolve import 1 before an appended entry runs: R_X86_64_64 at 0x4018
+// ahead of a DT_SCE_RELA entry, and also R_X86_64_JUMP_SLOT at 0x4008 ahead of a DT_SCE_JMPREL one.
+// A rejected entry must not reach the resolver, even when it names import 1 too.
+void expect_default_imports_only(const std::vector<Import>& calls, std::size_t count,
+                                 std::string_view message) {
+    ASSERT_EQ(calls.size(), count) << message;
+    for (const Import& imp : calls) {
+        EXPECT_EQ(imp.nid, "AAAAAAAAAAA") << message;
     }
 }
 
@@ -543,14 +555,17 @@ TEST(Relocate, RejectsBadRelocations) {
     for (const Case& c : cases) {
         Synthetic s;
         Synthetic::add_rela(s.rela, c.offset, c.type, c.sym, 0);
-        expect_relocate_error(s, c.message);
+        expect_default_imports_only(expect_relocate_error(s, c.message), 1, c.message);
     }
     Synthetic code;
     Synthetic::add_rela(code.jmprel, 0xff8, r_x86_64_jump_slot, 1, 0);
-    expect_relocate_error(code, "type 7 at 0xff8: target in a read-only segment without DT_TEXTREL",
-                          [](std::vector<Dyn>& dyn) {
-                              std::erase_if(dyn, [](const Dyn& d) { return d.first == 0x16; });
-                          });
+    expect_default_imports_only(
+        expect_relocate_error(code,
+                              "type 7 at 0xff8: target in a read-only segment without DT_TEXTREL",
+                              [](std::vector<Dyn>& dyn) {
+                                  std::erase_if(dyn, [](const Dyn& d) { return d.first == 0x16; });
+                              }),
+        2, "read-only target");
     expect_relocate_error(Synthetic{}, "type 1 at 0x4018: import AAAAAAAAAAA#A#B resolved to 0", {},
                           [](const Import&) { return std::uintptr_t{0}; });
 }
