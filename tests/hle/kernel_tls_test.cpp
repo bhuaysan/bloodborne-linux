@@ -1,12 +1,18 @@
 #include "hle/kernel/tls.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
+
+#include "hle/hle.hpp"
+#include "loader/relocate.hpp"
 
 namespace {
 
@@ -56,6 +62,97 @@ TEST(EbootTls, EachThreadHasItsOwnZeroFilledBlock) {
 
 TEST(EbootTls, ReservationIsSetOnce) {
     EXPECT_THROW(set_eboot_tls_reservation(+[] { return std::uintptr_t{0}; }), std::logic_error);
+}
+
+// ---- the TLS helper ----------------------------------------------------------------------------
+
+// A template of 8 file bytes in a 0x40-byte block with alignment 16, linked at 8 mod 16.
+constexpr std::uint64_t synthetic_id = 100;
+constexpr std::array<std::byte, 8> synthetic_init = {std::byte{1}, std::byte{2}, std::byte{3},
+                                                     std::byte{4}, std::byte{5}, std::byte{6},
+                                                     std::byte{7}, std::byte{8}};
+constexpr bb::loader::TlsTemplate synthetic_tls{0x1008, 8, 0x40, 16};
+
+void register_synthetic() {
+    static const bool registered =
+        (register_tls_module(synthetic_id, synthetic_init.data(), synthetic_tls), true);
+    (void)registered;
+}
+
+std::byte* helper(std::uint64_t module, std::uint64_t offset) {
+    const std::array<std::uint64_t, 2> pair = {module, offset};
+    return static_cast<std::byte*>(__tls_get_addr(pair.data()));
+}
+
+// The block holds the template's file bytes followed by zeros and keeps its link alignment.
+void expect_fresh_block(const std::byte* block) {
+    EXPECT_EQ(reinterpret_cast<std::uintptr_t>(block) % 16, 8U);
+    EXPECT_EQ(std::memcmp(block, synthetic_init.data(), synthetic_init.size()), 0);
+    EXPECT_TRUE(
+        std::all_of(block + 8, block + 0x40, [](std::byte b) { return b == std::byte{0}; }));
+}
+
+TEST(TlsHelper, TwoThreadsGetDifferentBlocksFromTheTemplate) {
+    register_synthetic();
+    std::byte* first = nullptr;
+    std::byte* second = nullptr;
+    std::thread([&] {
+        first = helper(synthetic_id, 0);
+        expect_fresh_block(first);
+        EXPECT_EQ(helper(synthetic_id, 0x10), first + 0x10);  // the same block again
+        first[0] = std::byte{0xaa};  // not seen by the other thread
+        std::thread([&] {
+            second = helper(synthetic_id, 0);
+            expect_fresh_block(second);
+        }).join();
+    }).join();
+    EXPECT_NE(first, nullptr);
+    EXPECT_NE(first, second);
+}
+
+TEST(TlsHelper, BlocksAreFreedAtThreadExit) {
+    register_synthetic();
+    const std::size_t before = live_tls_blocks();
+    std::thread([&] {
+        helper(synthetic_id, 0);
+        helper(synthetic_id, 0x3f);
+        EXPECT_EQ(live_tls_blocks(), before + 1);
+    }).join();
+    EXPECT_EQ(live_tls_blocks(), before);
+}
+
+// libSceFios2 passes pairs that are only 4-byte aligned.
+TEST(TlsHelper, ReadsAMisalignedPair) {
+    register_synthetic();
+    alignas(8) std::array<std::byte, 20> buffer{};
+    const std::uint64_t pair[2] = {synthetic_id, 0x20};
+    std::memcpy(buffer.data() + 4, pair, sizeof pair);
+    EXPECT_EQ(static_cast<std::byte*>(__tls_get_addr(buffer.data() + 4)),
+              helper(synthetic_id, 0) + 0x20);
+}
+
+TEST(TlsHelper, RegisteringThrowsForADuplicateOrABadTemplate) {
+    register_synthetic();
+    EXPECT_THROW(register_tls_module(synthetic_id, synthetic_init.data(), synthetic_tls),
+                 std::logic_error);
+    EXPECT_THROW(register_tls_module(bb::loader::eboot_module_id, nullptr, synthetic_tls),
+                 std::invalid_argument);
+    EXPECT_THROW(register_tls_module(101, nullptr, {0, 0, 0x40, 12}), std::invalid_argument);
+    EXPECT_THROW(register_tls_module(101, nullptr, {0, 0x41, 0x40, 16}), std::invalid_argument);
+}
+
+TEST(TlsHelperDeathTest, AbortsForAnUnknownModule) {
+    EXPECT_DEATH(helper(99, 0), "no TLS template registered for the module \\(module 99");
+}
+
+TEST(TlsHelperDeathTest, AbortsForAnOffsetOutsideTheBlock) {
+    register_synthetic();
+    EXPECT_DEATH(helper(synthetic_id, 0x40), "offset outside the module's block");
+}
+
+TEST(TlsHelper, IsTheLibkernelImplementation) {
+    const bb::loader::Import imp{"vNe1w4diLCs", "libkernel", "libkernel", 2 /* STT_FUNC */};
+    EXPECT_EQ(bb::hle::resolve(imp), reinterpret_cast<std::uintptr_t>(&__tls_get_addr));
 }
 
 }  // namespace
