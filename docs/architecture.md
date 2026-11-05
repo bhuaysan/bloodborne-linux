@@ -26,10 +26,10 @@ The interfaces between the runtime parts (loader, import stubs, hooks, different
 `eboot.bin` is a SELF container. The dump used here stores its segments unencrypted and uncompressed (a "fake-signed" SELF), so a plain ELF can be rebuilt from the container. `tools/self2elf` rebuilds it into a local analysis directory, never into the repo (format in `docs/formats/self.md`).
 
 ### Loader
-- Maps the ELF `PT_LOAD` segments at their expected addresses, or rebases them.
+- Maps the ELF `PT_LOAD` segments into one reserved range at a chosen base (the eboot links at 0).
 - Parses the PS4-specific dynamic section: imported libraries, modules and symbol NIDs.
-- Applies relocations and fills the import tables with our implementations.
-- Sets up TLS, the stack and the process parameters, then jumps to the entry point.
+- Applies relocations and fills the import tables with our implementations, or with logging stubs.
+- (M3) Sets up TLS, the stack and the process parameters, then jumps to the entry point.
 
 ### HLE system libraries
 Each imported Sony library becomes a module in our runtime. Every function is identified by its NID. Unimplemented functions resolve to a stub that logs the call, which shows us what to implement next. Two of the game's bundled PRX files, `libc.prx` and `libSceFios2.prx`, are needed at startup and are loaded the same way as the eboot (or later replaced by our code). The other five bundled PRXs are camera-image libraries that the game most likely never loads (see `docs/formats/imports.md`).

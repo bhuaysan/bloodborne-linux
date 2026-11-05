@@ -6,7 +6,7 @@ The interfaces that the loader, the import stubs, the hooks and the differential
 
 ```
 src/
-  common/    bbcommon   logging, errors, file reading, SHA-256, game directory lookup
+  common/    bbcommon   file reading, SHA-256, game directory lookup
   loader/    bbloader   SELF → ELF, ELF parsing, mapping, relocation, eh_frame lookup
   hle/       bbhle      HLE module registry, import stubs, NID name table
   hook/      bbhook     function-entry patches
@@ -15,13 +15,17 @@ src/
   tools/                small command-line programs (bb-load)
 tests/<target>/         GoogleTest unit tests, one directory per library
 tests/support/          bbtestsupport: shared test helpers (game directory lookup, BB_REQUIRE_GAME)
+tests/harness/          also bbeboottest: the EbootTest fixture for tests against the eboot
 ```
 
 Dependencies point one way:
 
 ```
-common ← loader ← hle, hook ← game ← harness
+common ← loader ← hle, hook ← game
+          loader ← harness (and the include directories of hle)
 ```
+
+`bbharness` knows nothing of `bbgame`. Tests that call game functions through the harness depend on both, through `bbeboottest` ("Process setup").
 
 The loader resolves imports through a callback (see [Relocations](#relocations)), so it never calls into `hle`, and the loader tests can bind imports to fakes.
 
@@ -29,7 +33,7 @@ All code is in namespace `bb` with a nested namespace per library (`bb::loader`,
 
 ### Static registration
 
-HLE implementations (`bbhle` and later modules) and replacements (`bbgame`) register themselves into registries owned by `bbhle` and `bbhook`, through static objects in their source files. A static archive would drop object files that nothing references, and their registrations with them. Targets that contain registrations are therefore CMake `OBJECT` libraries, and only executables link them, directly. `bbharness` is a `STATIC` library that takes only the compile-time usage requirements (include directories) of `bbgame` and `bbhle`, through `$<COMPILE_ONLY:…>` (which needs CMake 3.27, the project's minimum), never their objects; each test executable links `bbgame` and `bbhle` itself. A `STATIC` library that links an `OBJECT` library puts its objects into the archive again, where the final link would drop them silently. Every registry is a function-local static (construct on first use), so the order of static initialization across files doesn't matter.
+HLE implementations (`bbhle` and later modules) and replacements (`bbgame`) register themselves into registries owned by `bbhle` and `bbhook`, through static objects in their source files. A static archive would drop object files that nothing references, and their registrations with them. Targets that contain registrations are therefore CMake `OBJECT` libraries, and only executables link them, directly. `bbharness` and `bbeboottest` are `STATIC` libraries that take only the compile-time usage requirements (include directories) of `bbhle`, and for `bbeboottest` also of `bbgame`, through `$<COMPILE_ONLY:…>` (which needs CMake 3.27, the project's minimum), never their objects; each test executable links `bbgame` and `bbhle` itself. A `STATIC` library that links an `OBJECT` library puts its objects into the archive again, where the final link would drop them silently. Every registry is a function-local static (construct on first use), so the order of static initialization across files doesn't matter.
 
 ## Addresses
 
@@ -184,7 +188,7 @@ void remove(loader::Image&, std::span<const Replacement>);
 
 The patch at a function entry is 14 bytes: `jmp [rip+0]` (`FF 25 00000000`) followed by the absolute address of the replacement.
 
-**Size check.** `apply` asks `Image::function_size(link)`, which looks the address up in the binary search table of `PT_GNU_EH_FRAME` (`docs/formats/eh-frame.md`, dead FDEs excluded) and returns the FDE's range length only when an FDE starts exactly at that address. `apply` refuses an address that is not an FDE start and a function shorter than 14 bytes. `symbols/functions.csv` has no size column, so the FDE is the only source. #45 adds `function_size` to the loader.
+**Size check.** `apply` asks `Image::function_size(link)`, which looks the address up in the binary search table of `PT_GNU_EH_FRAME` (`docs/formats/eh-frame.md`, dead FDEs excluded) and returns the FDE's range length only when an FDE starts exactly at that address. `apply` refuses an address that is not an FDE start and a function shorter than 14 bytes. `symbols/functions.csv` has no size column, so the FDE is the only source.
 
 The table is untrusted input, checked in two places:
 - **At map time** (`read_unwind_table`, before the range is reserved): at most one `PT_GNU_EH_FRAME`, inside the file data of a readable `PT_LOAD`; the header encodings of every pinned file (version 1, `eh_frame_ptr` pcrel|sdata4, `fde_count` udata4, table datarel|sdata4); the table fits `p_filesz` and its starts ascend strictly. Anything else is a `LoadError`, so an image with an unreadable table never maps. An image without `PT_GNU_EH_FRAME` maps, and `function_size` returns nothing for it.
@@ -296,6 +300,6 @@ Not compared: the stack below the call, registers other than the return register
 
 ## Tools
 
-`bb-load` maps the eboot, binds every import through `bb::hle::resolve`, prints the base, the segments, the number of relocations by type and the number of imports by library, and exits without running game code. Its output is checked against `tools/elfimports`.
+`bb-load` maps the eboot, binds every import through `bb::hle::resolve`, finalizes the protections and exits without running game code. It prints the base, the entry point, the segments (link address, memory and file size, protection), the TLS template, the `PT_SCE_PROCPARAM` address, the number of relocations by type over both tables, the numbers of function stubs and data blocks that `resolve` created (666 and 20 for the eboot), and the imports by library (functions and objects, in the order of `tools/elfimports`).
 
-The game directory comes from `--game-dir` or else `BB_GAME_DIR` in the environment. Unlike the tests, `bb-load` doesn't read `local.env`: it is a user-facing program and runs outside the repository too. The #43 version maps and finalizes the eboot and prints the base, the entry point, the segments (link address, memory and file size, protection), the TLS template, the `PT_SCE_PROCPARAM` address and the imports by library (functions and objects, in the order of `tools/elfimports`). #44 adds the relocation step with `bb::hle::resolve`: `bb-load` also prints the number of relocations by type over both tables and the numbers of function stubs and data blocks that `resolve` created (666 and 20 for the eboot). A test runs it on the eboot and compares the counts with those of `tools/elfimports` for `eboot.elf`: 701 imports in 39 libraries.
+The game directory comes from `--game-dir` or else `BB_GAME_DIR` in the environment. Unlike the tests, `bb-load` doesn't read `local.env`: it is a user-facing program and runs outside the repository too. A test runs it on the eboot and compares its output with expected values taken from `tools/elfimports` for `eboot.elf` (701 imports in 39 libraries). The values are copied into the test, so the test doesn't run `tools/elfimports` itself.
