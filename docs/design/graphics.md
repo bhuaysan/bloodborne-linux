@@ -255,6 +255,8 @@ Decoder (`src/gpu/gcn/gcn.hpp`, #115):
 - An `Instruction` holds its byte offset, its size in dwords (with the literal), the format, the format's opcode field, LLVM's mnemonic, and up to 2 destination and 4 source `Operand`s in the order of LLVM's syntax.
 - An `Operand` has a kind, its size in dwords, the 8-bit operand code and a 32-bit value. The kinds so far: scalar register (by operand code, so the special registers keep their codes), inline constant (with its 32-bit pattern), literal, and the immediates of SOPK, SOPP and SMRD (hex value, count, branch offset, hardware register, wait counters, message, dword offset). The vector formats add their kinds and modifiers.
 - The opcode tables are in `opcodes.cpp`, one per format, indexed by opcode.
+- Register ranges of more than one dword must be aligned, to 2 dwords for pairs and to 4 above, as LLVM requires. A misaligned range is a `GcnError`, as is a reserved operand code or an operand code that the instruction can't use (a 64-bit `m0`, a constant as SMRD offset register). Choices that LLVM restricts per instruction but the operand field allows, such as `m0` as an SMRD destination, are decoded.
+- An SMRD offset field of 255 with the immediate bit clear is a 32-bit literal offset (CI).
 
 SPIR-V builder (`src/gpu/gcn/spirv_builder.hpp`, #122):
 
