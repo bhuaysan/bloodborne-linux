@@ -21,3 +21,4 @@ add_library(bbhle OBJECT hle.cpp link.cpp stub_entry.S ${CMAKE_CURRENT_BINARY_DI
 target_link_libraries(bbhle PUBLIC bbloader PRIVATE bb_warnings)
 add_subdirectory(net)
 add_subdirectory(system)
+add_subdirectory(eboot_tls)

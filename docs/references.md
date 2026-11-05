@@ -10,7 +10,7 @@ Every external source consulted for this project is listed here. What may be use
 | [REA](https://github.com/morluto/rea) 6.8.0 | MIT | Agent-driven reverse engineering workflow on top of Ghidra |
 | PyGhidra 3.1.0 and JPype 1.5.2 (bundled with Ghidra) | Apache-2.0 | Running headless Ghidra scripts in Python 3 (`tools/ghidra-sync`) |
 | [actions/checkout](https://github.com/actions/checkout) v7.0.1 (pinned by commit SHA) | MIT | Checking out the repository in the GitHub Actions CI (`.github/workflows/ci.yml`) |
-| GNU binutils (`objdump`, `readelf`) | GPL-3.0 | Quick inspection of ELF files; `objdump` 2.46 over byte ranges of the eboot for the GNM survey (`docs/formats/gnm.md`) |
+| GNU binutils (`objdump`, `readelf`, `ld --verbose`) | GPL-3.0 | Quick inspection of ELF files; `objdump` 2.46 over byte ranges of the eboot for the GNM survey (`docs/formats/gnm.md`); the order of the TLS input sections in ld's default linker script, for the eboot's TLS reservation (`src/hle/eboot_tls/eboot_tls.S`, 2026-11-05) |
 | [CMake](https://cmake.org/cmake/help/latest/) 4.3 (installed) and its documentation | BSD-3-Clause | Build system; `OBJECT` and `STATIC` library semantics, `$<COMPILE_ONLY:…>` (3.27), `add_test` and the `GoogleTest` module's `gtest_discover_tests` (the `CMakeLists.txt` files, `docs/design/runtime.md`) |
 | [Ninja](https://ninja-build.org/) 1.13 (installed) | Apache-2.0 | Build backend of the CMake presets |
 | [GoogleTest](https://github.com/google/googletest) 1.17 (installed `gtest-devel`) | BSD-3-Clause | Unit test framework; `GTEST_SKIP()`, fixtures and `gtest_main` (`tests/`, `docs/design/runtime.md`) |

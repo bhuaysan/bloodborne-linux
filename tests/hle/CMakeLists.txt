@@ -9,3 +9,5 @@ foreach(source IN LISTS kernel_tests)
     get_filename_component(name ${source} NAME_WE)
     bb_add_test(${name} SOURCES ${source} LIBS bbhle)
 endforeach()
+# The TLS tests check the eboot's reservation too (docs/design/m3-core-os.md, "TLS").
+target_link_libraries(kernel_tls_test PRIVATE bbeboottls)
