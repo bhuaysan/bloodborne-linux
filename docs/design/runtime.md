@@ -82,7 +82,7 @@ Who runs which steps:
 
 | Caller | Steps |
 |---|---|
-| `bb-load` (M2) | 1, 2 with `bb::hle::resolve`, 4 |
+| `bb-load` | 1 for the load set, 2 through `bb::hle::link`, 4 |
 | differential harness (M2) | 1, 2 with `bb::hle::resolve`, 4 |
 | game runtime (M3) | 1 for the eboot and the bundled PRXs, their exports registered with `bb::hle`, 2 with `bb::hle::resolve` for all three, 3 with all registered replacements, 4, the TLS check, then PRX init and the entry point on the game's main thread ([m3-core-os.md](m3-core-os.md)) |
 | loader unit tests | 1, 2 with a fake resolver, 4 |
@@ -159,8 +159,12 @@ M3 registers the PRXs' exports with `bb::hle` before relocating, so `resolve` bi
 ```cpp
 namespace bb::hle {
 void register_function(std::string_view library, std::string_view nid, void* impl);
-uintptr_t resolve(const loader::Import& imp);  // impl, else stub
+void register_export(std::string_view library, std::string_view nid, uintptr_t address);  // M3
+uintptr_t resolve(const loader::Import& imp);  // export, else impl, else stub
 uintptr_t import_address(std::string_view library, std::string_view nid);  // cached result of resolve
+enum class Binding : uint8_t { exported, implemented, stub, data_block };
+std::optional<Binding> binding(std::string_view library, std::string_view nid);  // of resolve
+void link(loader::LoadSet& set);  // hle/link.hpp: register the exports, relocate (M3)
 StubObserver* set_stub_observer(StubObserver* observer); // returns the previous one;
                                                         // nullptr restores logging
 Counts counts();                                // stubs and data blocks created so far
@@ -168,7 +172,7 @@ Counts counts();                                // stubs and data blocks created
 #define BB_HLE_FUNCTION(library, nid, function) …  // static registration
 ```
 
-Implementations register by library name and NID, through `BB_HLE_FUNCTION` at namespace scope in each module's source file. Registering an import twice, or after it was resolved, is a `std::logic_error`. `resolve` returns the registered implementation, or else a stub. It is idempotent: each (library, NID) gets exactly one stub thunk or data block, created on the first call and cached. The eboot has thousands of relocations against a few hundred imports, and function-pointer equality and the per-import call counters depend on getting the same address every time.
+Implementations register by library name and NID, through `BB_HLE_FUNCTION` at namespace scope in each module's source file. Registering an import twice, or after it was resolved, is a `std::logic_error`. The exports of the loaded PRXs (M3) register the same way through `register_export`, under the same rules, and win over an implementation, which is then logged once. `resolve` returns the registered export, else the registered implementation, else a stub; `binding` says which, or nothing for an import never resolved. `link` registers every export of a load set (libc.prx's a second time under `libSceLibcInternal`, unless a module exports that NID there itself) and then relocates each module with `resolve` and its module id ([m3-core-os.md](m3-core-os.md#loading-the-bundled-prxs)). It is idempotent: each (library, NID) gets exactly one stub thunk or data block, created on the first call and cached. The eboot has thousands of relocations against a few hundred imports, and function-pointer equality and the per-import call counters depend on getting the same address every time.
 
 ### Function stubs
 
@@ -321,6 +325,6 @@ Not compared: the stack below the call, registers other than the return register
 
 ## Tools
 
-`bb-load` maps the eboot, binds every import through `bb::hle::resolve`, finalizes the protections and exits without running game code. It prints the base, the entry point, the segments (link address, memory and file size, protection), the TLS template, the `PT_SCE_PROCPARAM` address, the number of relocations by type over both tables, the numbers of function stubs and data blocks that `resolve` created (666 and 20 for the eboot), and the imports by library (functions and objects, in the order of `tools/elfimports`).
+`bb-load` maps the load set, binds and relocates it through `bb::hle::link`, finalizes the protections and exits without running game code. For each module (file and module id) it prints the base, the entry point, the segments (link address, memory and file size, protection), the TLS template, the `PT_SCE_PROCPARAM` address, the number of relocations by type over both tables, and the imports by library (functions and objects, in the order of `tools/elfimports`, and how many of them `resolve` bound to a bundled export, an HLE implementation or a stub or data block, or never resolved because nothing references them). Last come the numbers of function stubs and data blocks that `resolve` created over the whole load set (521 and 3).
 
-The game directory comes from `--game-dir` or else `BB_GAME_DIR` in the environment. Unlike the tests, `bb-load` doesn't read `local.env`: it is a user-facing program and runs outside the repository too. A test runs it on the eboot and compares the whole output with fixed expected values. The imports by library are those of `tools/elfimports` for `eboot.elf` (701 imports in 39 libraries), copied into the test.
+The game directory comes from `--game-dir` or else `BB_GAME_DIR` in the environment. Unlike the tests, `bb-load` doesn't read `local.env`: it is a user-facing program and runs outside the repository too. A test runs it on the game and compares the eboot's output with fixed expected values, and the bases, DTPMOD64 counts and bindings of the PRXs. The imports by library are those of `tools/elfimports` for `eboot.elf` (701 imports in 39 libraries), copied into the test.

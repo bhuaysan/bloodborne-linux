@@ -60,10 +60,17 @@ private:
     std::size_t used_ = 0;
 };
 
+struct Resolved {
+    std::uintptr_t address;
+    Binding binding;
+};
+
 struct Registry {
     std::mutex mutex;
-    std::unordered_map<std::string, void*> impls;              // import_key(library, nid)
-    std::unordered_map<std::string, std::uintptr_t> resolved;  // import_key(library, nid)
+    // All keyed by import_key(library, nid).
+    std::unordered_map<std::string, void*> impls;
+    std::unordered_map<std::string, std::uintptr_t> exports;
+    std::unordered_map<std::string, Resolved> resolved;
     std::deque<StubInfo> stubs;                                // stable addresses
     ThunkPages thunks;
     std::vector<DataBlock> data_blocks;
@@ -75,6 +82,12 @@ struct Registry {
 Registry& registry() {
     static Registry& r = *new Registry;
     return r;
+}
+
+void log_shadowed(std::string_view library, std::string_view nid) {
+    std::fprintf(stderr, "hle: an export of %.*s %.*s shadows its implementation\n",
+                 static_cast<int>(library.size()), library.data(), static_cast<int>(nid.size()),
+                 nid.data());
 }
 
 }  // namespace
@@ -93,6 +106,22 @@ void register_function(std::string_view library, std::string_view nid, void* imp
         throw std::logic_error(std::format("hle: {} {} registered twice or after it was resolved",
                                            library, nid));
     }
+    if (r.exports.contains(k)) {
+        log_shadowed(library, nid);
+    }
+}
+
+void register_export(std::string_view library, std::string_view nid, std::uintptr_t address) {
+    Registry& r = registry();
+    const std::lock_guard lock(r.mutex);
+    const std::string k = import_key(library, nid);
+    if (r.resolved.contains(k) || !r.exports.emplace(k, address).second) {
+        throw std::logic_error(std::format(
+            "hle: export {} {} registered twice or after the import was resolved", library, nid));
+    }
+    if (r.impls.contains(k)) {
+        log_shadowed(library, nid);
+    }
 }
 
 std::uintptr_t resolve(const loader::Import& imp) {
@@ -100,23 +129,32 @@ std::uintptr_t resolve(const loader::Import& imp) {
     const std::lock_guard lock(r.mutex);
     const std::string k = import_key(imp.library, imp.nid);
     if (auto it = r.resolved.find(k); it != r.resolved.end()) {
-        return it->second;
+        return it->second.address;
     }
-    std::uintptr_t address;
-    if (auto it = r.impls.find(k); it != r.impls.end()) {
-        address = reinterpret_cast<std::uintptr_t>(it->second);
+    Resolved out;
+    if (auto it = r.exports.find(k); it != r.exports.end()) {
+        out = {it->second, Binding::exported};
+    } else if (auto it = r.impls.find(k); it != r.impls.end()) {
+        out = {reinterpret_cast<std::uintptr_t>(it->second), Binding::implemented};
     } else if (imp.type == loader::stt_object) {
         auto* block = static_cast<std::byte*>(
             common::map_anonymous(data_block_size, PROT_READ | PROT_WRITE, "hle: mmap"));
         r.data_blocks.push_back({imp.library, imp.nid, block});
-        address = reinterpret_cast<std::uintptr_t>(block);
+        out = {reinterpret_cast<std::uintptr_t>(block), Binding::data_block};
     } else {
         const StubInfo& stub =
             r.stubs.emplace_back(imp.library, imp.module, imp.nid, nid_name(imp.nid));
-        address = r.thunks.add(&stub);
+        out = {r.thunks.add(&stub), Binding::stub};
     }
-    r.resolved.emplace(k, address);
-    return address;
+    r.resolved.emplace(k, out);
+    return out.address;
+}
+
+std::optional<Binding> binding(std::string_view library, std::string_view nid) {
+    Registry& r = registry();
+    const std::lock_guard lock(r.mutex);
+    auto it = r.resolved.find(import_key(library, nid));
+    return it == r.resolved.end() ? std::nullopt : std::optional(it->second.binding);
 }
 
 std::uintptr_t import_address(std::string_view library, std::string_view nid) {
@@ -124,7 +162,7 @@ std::uintptr_t import_address(std::string_view library, std::string_view nid) {
     const std::lock_guard lock(r.mutex);
     const std::string k = import_key(library, nid);
     if (auto it = r.resolved.find(k); it != r.resolved.end()) {
-        return it->second;
+        return it->second.address;
     }
     std::fprintf(stderr, "hle: import %.*s %.*s was never resolved\n",
                  static_cast<int>(library.size()), library.data(), static_cast<int>(nid.size()),

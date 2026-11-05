@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -43,12 +44,24 @@ inline std::string import_key(std::string_view library, std::string_view nid) {
 std::string_view nid_name(std::string_view nid);
 
 // Registers `impl` for an import. Throws std::logic_error if the import already has an
-// implementation or was already resolved.
+// implementation or was already resolved. Logged if an export shadows it.
 void register_function(std::string_view library, std::string_view nid, void* impl);
 
-// The registered implementation of `imp`, else its function stub (STT_FUNC) or its zero-filled
-// 4 KiB data block (STT_OBJECT). Created on the first call per (library, NID), then cached.
+// Registers `address`, the runtime address of an export of a loaded module, for an import. An
+// implementation it shadows is logged. Throws std::logic_error if the import already has an export
+// or was already resolved.
+void register_export(std::string_view library, std::string_view nid, std::uintptr_t address);
+
+// The registered export of `imp`, else its registered implementation, else its function stub
+// (STT_FUNC) or its zero-filled 4 KiB data block (STT_OBJECT). Chosen on the first call per
+// (library, NID), then cached.
 std::uintptr_t resolve(const loader::Import& imp);
+
+// What resolve() bound an import to.
+enum class Binding : std::uint8_t { exported, implemented, stub, data_block };
+
+// How resolve() bound this import, or nothing if it was never resolved.
+std::optional<Binding> binding(std::string_view library, std::string_view nid);
 
 // What resolve() returned for this import. Aborts if it was never resolved.
 std::uintptr_t import_address(std::string_view library, std::string_view nid);

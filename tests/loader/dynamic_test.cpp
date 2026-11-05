@@ -6,6 +6,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -15,6 +16,8 @@
 #include <gtest/gtest.h>
 
 #include "common/file.hpp"
+#include "hle/hle.hpp"
+#include "hle/link.hpp"
 #include "loader/bytes.hpp"
 #include "loader/elf.hpp"
 #include "loader/image.hpp"
@@ -603,6 +606,80 @@ TEST(Exports, ListsTheDefinedSymbols) {
     EXPECT_THROW(exports(bad), LoadError);
 }
 
+// Gives the record of `tag` with id `id` the name `name`.
+void rename(Synthetic& s, std::uint64_t tag, std::uint64_t id, std::string_view name) {
+    for (auto& [t, value] : s.records) {
+        if (t == tag && value >> 48 == id) {
+            value = (value & ~std::uint64_t{0xffffffff}) | s.str(name);
+        }
+    }
+}
+
+std::uint64_t forty_two() {
+    return 42;
+}
+
+// A consumer (module id 1) and a provider named libc (module id 2), linked through bb::hle.
+TEST(Link, BindsImportsToExportsFirst) {
+    Synthetic p;
+    rename(p, dt_sce_module_info, 0, "libc");
+    rename(p, dt_sce_export_lib, 0, "libc");
+    p.records.emplace_back(dt_sce_export_lib, record(1, 1, p.str("libSceLibcInternal")));
+    p.add_symbol(p.str("EEEEEEEEEEE#A#A"), 0x12, 1, 0x200);  // 6: libc
+    p.add_symbol(p.str("FFFFFFFFFFF#A#A"), 0x12, 1, 0x210);  // 7: libc
+    p.add_symbol(p.str("FFFFFFFFFFF#B#A"), 0x12, 1, 0x220);  // 8: libSceLibcInternal itself
+    p.add_symbol(p.str("HHHHHHHHHHH#A#A"), 0x12, 1, 0x230);  // 9: shadows an implementation
+    Synthetic::add_rela(p.rela, 0x4060, r_x86_64_dtpmod64, 3, 0);
+    Synthetic::add_rela(p.rela, 0x4068, r_x86_64_64, 6, 4);  // own export, not through bb::hle
+
+    Synthetic c;
+    rename(c, dt_sce_import_lib, 0, "libc");
+    rename(c, dt_sce_import_lib, 1, "libSceLibcInternal");
+    c.add_symbol(c.str("EEEEEEEEEEE#A#B"), 0x12, 0, 0);  // 6: libc, exported
+    c.add_symbol(c.str("EEEEEEEEEEE#B#C"), 0x12, 0, 0);  // 7: libSceLibcInternal, libc's
+    c.add_symbol(c.str("FFFFFFFFFFF#B#C"), 0x12, 0, 0);  // 8: libSceLibcInternal, its own
+    c.add_symbol(c.str("GGGGGGGGGGG#B#C"), 0x12, 0, 0);  // 9: no export, implemented
+    for (std::uint32_t sym = 6; sym <= 9; ++sym) {
+        Synthetic::add_rela(c.jmprel, 0x4060 + 8 * (sym - 6), r_x86_64_jump_slot, sym, 0);
+    }
+    Synthetic::add_rela(c.rela, 0x4050, r_x86_64_glob_dat, 5, 0);  // libc data, not exported
+    Synthetic::add_rela(c.rela, 0x4058, r_x86_64_dtpmod64, 3, 0);
+
+    bb::hle::register_function("libSceLibcInternal", "GGGGGGGGGGG",
+                               reinterpret_cast<void*>(&forty_two));
+    bb::hle::register_function("libc", "HHHHHHHHHHH", reinterpret_cast<void*>(&forty_two));
+    LoadSet set;
+    set.modules.push_back({"consumer", 1, map_elf(to_file(c.build()), reloc_base)});
+    set.modules.push_back({"libc", 2, map_elf(to_file(p.build()), reloc_base + 0x100000)});
+    testing::internal::CaptureStderr();
+    bb::hle::link(set);
+    const std::string log = testing::internal::GetCapturedStderr();
+    EXPECT_NE(log.find("export of libc HHHHHHHHHHH shadows"), std::string::npos) << log;
+
+    const Image& consumer = set.modules[0].image;
+    const std::uintptr_t libc = set.modules[1].image.base;
+    EXPECT_EQ(slot(consumer, 0x4060), libc + 0x200);
+    EXPECT_EQ(slot(consumer, 0x4068), libc + 0x200);
+    EXPECT_EQ(slot(consumer, 0x4070), libc + 0x220);
+    EXPECT_EQ(slot(consumer, 0x4078), reinterpret_cast<std::uintptr_t>(&forty_two));
+    EXPECT_EQ(slot(consumer, 0x4058), 1U);
+    EXPECT_EQ(slot(set.modules[1].image, 0x4060), 2U);
+    EXPECT_EQ(slot(set.modules[1].image, 0x4068), libc + 0x204);
+    EXPECT_EQ(bb::hle::import_address("libc", "EEEEEEEEEEE"), slot(consumer, 0x4060));
+    EXPECT_EQ(bb::hle::import_address("libSceLibcInternal", "EEEEEEEEEEE"), libc + 0x200);
+    using bb::hle::Binding;
+    EXPECT_EQ(bb::hle::binding("libSceLibcInternal", "FFFFFFFFFFF"), Binding::exported);
+    EXPECT_EQ(bb::hle::binding("libSceLibcInternal", "GGGGGGGGGGG"), Binding::implemented);
+    EXPECT_EQ(bb::hle::binding("libc", "AAAAAAAAAAA"), Binding::stub);
+    EXPECT_EQ(bb::hle::binding("libc", "CCCCCCCCC+-"), Binding::data_block);
+    EXPECT_EQ(bb::hle::binding("libc", "HHHHHHHHHHH"), std::nullopt);  // never referenced
+
+    // Too late: resolved already, and exported twice.
+    EXPECT_THROW(bb::hle::register_export("libc", "EEEEEEEEEEE", libc), std::logic_error);
+    EXPECT_THROW(bb::hle::register_export("libc", "AAAAAAAAAAA", libc), std::logic_error);
+    EXPECT_THROW(bb::hle::register_export("libc", "FFFFFFFFFFF", libc), std::logic_error);
+}
+
 TEST(ParseDynamicGame, ReadsTheEboot) {
     BB_REQUIRE_GAME(game);
     auto elf = self_to_elf(bb::common::read_file(game / "eboot.bin"));
@@ -746,6 +823,53 @@ TEST(LoadSetGame, MapsAndRelocatesTheLoadSet) {
         }
     }
     EXPECT_EQ(dtpmod, 17U);
+}
+
+// The bound counts are those of tools/elfimports: the eboot uses 216 libc NIDs, the eboot and
+// libc.prx 21 libSceFios2 NIDs, and libSceFios2.prx 15 libSceLibcInternal NIDs that libc.prx
+// exports, all 16 of them imported, one of them data.
+TEST(LinkGame, BindsTheLoadSet) {
+    BB_REQUIRE_GAME(game);
+    LoadSet set = map_load_set(game);
+    ASSERT_EQ(set.modules.size(), 3U);
+    bb::hle::link(set);  // throws for any import that can't be bound or relocation not applied
+    for (LoadedModule& m : set.modules) {
+        m.image.finalize_protection();
+    }
+    const LoadedModule& libc = set.modules[2];
+
+    // Resolves the imports nothing references, too, and counts each NID once per library.
+    std::map<std::string, std::set<std::string>> exported, other;
+    for (const LoadedModule& m : set.modules) {
+        for (const Symbol& sym : m.image.dyn.symbols) {
+            if (sym.kind == Symbol::Kind::import) {
+                bb::hle::resolve(sym.decoded);
+                auto& to = bb::hle::binding(sym.decoded.library, sym.decoded.nid) ==
+                                   bb::hle::Binding::exported
+                               ? exported
+                               : other;
+                to[sym.decoded.library].insert(sym.decoded.nid);
+            }
+        }
+    }
+    EXPECT_EQ(exported.size(), 3U);
+    EXPECT_EQ(exported["libc"].size(), 216U);
+    EXPECT_EQ(exported["libSceFios2"].size(), 21U);
+    EXPECT_EQ(exported["libSceLibcInternal"].size(), 15U);
+    EXPECT_FALSE(other.contains("libc"));
+    EXPECT_FALSE(other.contains("libSceFios2"));
+    EXPECT_EQ(other["libSceLibcInternal"].size(), 1U);
+
+    // A GOT slot of an eboot libc import holds the export.
+    const Image& eboot = set.modules[0].image;
+    for (const Rela& r : eboot.dyn.plt_relocs) {
+        const Import& imp = eboot.dyn.symbols[r.sym].decoded;
+        if (imp.library == "libc") {
+            EXPECT_EQ(slot(eboot, r.offset), bb::hle::import_address("libc", imp.nid));
+            EXPECT_GE(slot(eboot, r.offset), libc.image.base);
+            EXPECT_LT(slot(eboot, r.offset), libc.image.base + 0xb7924);  // its code segment
+        }
+    }
 }
 
 }  // namespace
