@@ -59,12 +59,23 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 ```
 AGENTS.md            this file
 README.md            project overview for humans
+CMakeLists.txt       C++ build (CMakePresets.json: debug, relwithdebinfo, release)
 docs/
   architecture.md    system design
   roadmap.md         milestones and tracks
   clean-room.md      reference policy, NID naming, game version hash
   references.md      credit log for every external source
   formats/           our own notes on PS4 and game file formats
+  design/            design notes (runtime.md: loader, stubs, hooks, harness)
+src/                 the runtime, C++20 (see docs/design/runtime.md)
+  common/            file reading, SHA-256, game directory lookup
+  loader/            SELF to ELF, ELF parsing, mapping, relocation
+  hle/               HLE module registry, import stubs, NID name table
+  hook/              function-entry patches and the replacement registry
+  game/              decompiled game functions
+  harness/           differential test harness (tests only)
+  tools/             bb-load
+tests/               GoogleTest unit tests, one directory per library
 symbols/             our analysis as text: functions.csv, nids.csv, types/
 tools/
   self2elf/          rebuilds the ELFs from eboot.bin and the bundled .prx files
@@ -72,16 +83,15 @@ tools/
   elfimports/        lists modules, libraries, imports and exports of the ELFs
   nidmatch/          recovers NID names by hashing candidate names
   noreturn/          finds imports that never return, for Ghidra's analysis
+  nidtable/          generates the runtime's NID name table from symbols/nids.csv
   ghidra-sync/       syncs Ghidra annotations with symbols/
   common/            shared Python helpers (paths, pinned files, PS4 ELF reader)
   githooks/          privacy checks (enabled via core.hooksPath)
   merge-pr.sh        merges a PR locally after the gate (see Reviews)
   privacy-check.sh   privacy checks over a branch's commits
   run-tests.sh       runs every unit test
-.github/             issue templates
+.github/             issue templates, CI workflow
 ```
-
-`src/` (the runtime) will be added as work begins.
 
 ## Workflow: decompiling one function
 
