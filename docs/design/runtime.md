@@ -136,10 +136,12 @@ void register_function(std::string_view library, std::string_view nid, void* imp
 uintptr_t resolve(const loader::Import& imp);  // impl, else stub
 uintptr_t import_address(std::string_view library, std::string_view nid);  // cached result of resolve
 void set_stub_observer(StubObserver* observer); // nullptr restores logging
+Counts counts();                                // stubs and data blocks created so far
 }
+#define BB_HLE_FUNCTION(library, nid, function) …  // static registration
 ```
 
-Implementations register by library name and NID, through a static-registration macro in each module's source file. `resolve` returns the registered implementation, or else a stub. It is idempotent: each (library, NID) gets exactly one stub thunk or data block, created on the first call and cached. The eboot has thousands of relocations against a few hundred imports, and function-pointer equality and the per-import call counters depend on getting the same address every time.
+Implementations register by library name and NID, through `BB_HLE_FUNCTION` at namespace scope in each module's source file. Registering an import twice, or after it was resolved, is a `std::logic_error`. `resolve` returns the registered implementation, or else a stub. It is idempotent: each (library, NID) gets exactly one stub thunk or data block, created on the first call and cached. The eboot has thousands of relocations against a few hundred imports, and function-pointer equality and the per-import call counters depend on getting the same address every time.
 
 ### Function stubs
 
@@ -153,9 +155,13 @@ jmp  [rip+0]         ; FF 25 00000000: absolute jump through the next 8 bytes
 
 That is 24 bytes per thunk. `r11` is a scratch register in the System V ABI and never carries an argument. `stub_entry` (assembly) saves the six integer argument registers, keeps the stack 16-byte aligned, calls `bb::hle::on_stub_call(const StubInfo*, const uint64_t args[6])`, and returns with `rax = 0`, `xmm0 = 0`.
 
-`StubInfo` holds the library, the module, the NID, the name from `symbols/nids.csv` (or `?`) and a call counter. `on_stub_call` logs all of these plus the six integer arguments. It logs the first 10 calls per import and then every 1000th. When an observer is set, it receives the call instead of the log.
+`StubInfo` holds the library, the module, the NID, the name from `symbols/nids.csv` (or `?`) and a call counter (atomic, incremented before the observer or the log sees the call). `StubObserver` is an interface with `virtual void on_call(const StubInfo&, const uint64_t args[6])`, so an observer can keep its own state, as the harness's recorder does. `on_stub_call` has C++ linkage: `stub_entry.S` calls it by its mangled name, so a change of its signature fails at link time instead of passing arguments wrongly. Only `bb_hle_stub_entry` itself, an assembly symbol, is declared `extern "C"`.
 
-The NID name table is generated at build time from `symbols/nids.csv` by a small Python script into a sorted array that is searched with binary search. CMake reruns the script when the CSV changes.
+`on_stub_call` logs all of these plus the six integer arguments. It logs the first 10 calls per import and then every 1000th. When an observer is set, it receives the call instead of the log.
+
+The thunks live in anonymous pages of `bbhle`. A thunk is written while its page is `rw-`, and the page goes back to `r-x` right after. That is safe as long as `resolve` runs before game code; resolving while game threads may execute an earlier thunk of the same page (lazy PRX loading in M3) needs another scheme, for example a second, writable mapping of the same pages. Thunks, `StubInfo` objects and data blocks are never freed.
+
+The NID name table is generated at build time from `symbols/nids.csv` by a small Python script into a sorted array that is searched with binary search. CMake reruns the script when the CSV changes. Until it lands (the last part of #44), every `StubInfo` name is `?`.
 
 ### Data imports
 

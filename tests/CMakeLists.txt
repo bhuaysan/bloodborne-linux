@@ -32,6 +32,7 @@ function(bb_add_test name)
 endfunction()
 
 add_subdirectory(common)
+add_subdirectory(hle)
 add_subdirectory(loader)
 add_subdirectory(tools)
 bb_add_test(support_test SOURCES support/game_test.cpp)
