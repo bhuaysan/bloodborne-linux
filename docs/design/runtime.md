@@ -84,7 +84,7 @@ Who runs which steps:
 |---|---|
 | `bb-load` | 1 for the load set, 2 through `bb::hle::link`, 4 |
 | differential harness (M2) | 1, 2 with `bb::hle::resolve`, 4 |
-| game runtime (M3) | 1 for the eboot and the bundled PRXs, their exports registered with `bb::hle`, 2 with `bb::hle::resolve` for all three, 3 with all registered replacements, 4, the TLS check, then PRX init and the entry point on the game's main thread ([m3-core-os.md](m3-core-os.md)) |
+| game runtime (M3) | 1 for the eboot and the bundled PRXs, 2 through `bb::hle::link` (their exports registered with `bb::hle`, `bb::hle::resolve` for all three, then the PRXs' TLS templates registered with the TLS helper), 3 with all registered replacements, 4, the TLS check, then PRX init and the entry point on the game's main thread ([m3-core-os.md](m3-core-os.md)) |
 | loader unit tests | 1, 2 with a fake resolver, 4 |
 
 ### Load set
@@ -165,7 +165,7 @@ uintptr_t resolve(const loader::Import& imp);  // export, else impl, else stub
 uintptr_t import_address(std::string_view library, std::string_view nid);  // cached result of resolve
 enum class Binding : uint8_t { exported, implemented, stub, data_block };
 std::optional<Binding> binding(std::string_view library, std::string_view nid);  // of resolve
-void link(loader::LoadSet& set);  // hle/link.hpp: register the exports, relocate (M3)
+void link(loader::LoadSet& set);  // hle/link.hpp: register the exports, relocate, register the TLS templates (M3)
 StubObserver* set_stub_observer(StubObserver* observer); // returns the previous one;
                                                         // nullptr restores logging
 Counts counts();                                // stubs and data blocks created so far
@@ -327,6 +327,6 @@ Not compared: the stack below the call, registers other than the return register
 
 ## Tools
 
-`bb-load` maps the load set, binds and relocates it through `bb::hle::link`, finalizes the protections and exits without running game code. For each module (file and module id) it prints the base, the entry point, the segments (link address, memory and file size, protection), the TLS template, the `PT_SCE_PROCPARAM` address, the number of relocations by type over both tables, and the imports by library (functions and objects, in the order of `tools/elfimports`, and how many of them `resolve` bound to a bundled export, an HLE implementation or a stub or data block, or never resolved because nothing references them). Last come the numbers of function stubs and data blocks that `resolve` created over the whole load set (501 and 3). It links `bbhlenet`, so the network imports that module implements count as HLE, not as stubs.
+`bb-load` maps the load set, binds and relocates it through `bb::hle::link`, finalizes the protections and exits without running game code. For each module (file and module id) it prints the base, the entry point, the segments (link address, memory and file size, protection), the TLS template, the `PT_SCE_PROCPARAM` address, the number of relocations by type over both tables, and the imports by library (functions and objects, in the order of `tools/elfimports`, and how many of them `resolve` bound to a bundled export, an HLE implementation or a stub or data block, or never resolved because nothing references them). Last come the numbers of function stubs and data blocks that `resolve` created over the whole load set. The test checks the 3 data blocks exactly and the number of stubs only against an upper bound, so that a new HLE function doesn't have to edit it. It links `bbhlenet`, so the network imports that module implements count as HLE, not as stubs.
 
 The game directory comes from `--game-dir` or else `BB_GAME_DIR` in the environment. Unlike the tests, `bb-load` doesn't read `local.env`: it is a user-facing program and runs outside the repository too. A test runs it on the game and compares the eboot's output with fixed expected values, and the bases, DTPMOD64 counts and bindings of the PRXs. The imports by library are those of `tools/elfimports` for `eboot.elf` (701 imports in 39 libraries), copied into the test.
