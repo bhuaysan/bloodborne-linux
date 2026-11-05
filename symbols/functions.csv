@@ -1,3 +1,5 @@
 address,name,signature,status,file
+0x003233c0,hash_bytes_backward,"uint64_t hash_bytes_backward(const uint8_t* data, size_t size, uint64_t seed)",replaced,src/game/text/hash.cpp
 0x0040e9e0,utf16_range_equals,"int utf16_range_equals(const void* self, const char16_t* begin, const char16_t* end, const char* narrow)",replaced,src/game/text/compare.cpp
 0x0043e190,text_starts_with,"int text_starts_with(const char* const* text, const char* prefix)",replaced,src/game/text/compare.cpp
+0x0045d210,hash_char_range,"uint64_t hash_char_range(const CharRange* range)",replaced,src/game/text/hash.cpp
