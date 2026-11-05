@@ -40,6 +40,8 @@ struct Port {
     std::uint64_t submitted = 0;
     Clock::time_point last_due;  // of the newest flip, pending or not
     std::vector<Registration> registrations;
+    std::uint64_t buffers[max_buffers] = {};
+    BufferAttribute attribute{};
 };
 
 // The first tick strictly after `t`. A tick is no whole number of clock units, so it is rounded
@@ -63,6 +65,11 @@ public:
         return ports_.erase(handle) != 0;
     }
 
+    bool is_open(std::int32_t handle) {
+        const std::lock_guard lock(mutex_);
+        return ports_.contains(handle);
+    }
+
     bool add_flip_event(std::int32_t handle, std::uint64_t equeue, std::uint64_t user_data) {
         const std::lock_guard lock(mutex_);
         Port* port = find(handle);
@@ -75,6 +82,18 @@ public:
         } else {
             port->registrations.push_back({equeue, user_data});
         }
+        return true;
+    }
+
+    bool register_buffers(std::int32_t handle, std::int32_t start, const std::uint64_t* addresses,
+                          std::int32_t count, const BufferAttribute& attribute) {
+        const std::lock_guard lock(mutex_);
+        Port* port = find(handle);
+        if (port == nullptr) {
+            return false;
+        }
+        std::memcpy(port->buffers + start, addresses, sizeof(std::uint64_t) * count);
+        port->attribute = attribute;
         return true;
     }
 
@@ -186,12 +205,44 @@ std::int32_t sceVideoOutClose(std::int32_t handle) {
     return video_out().close(handle) ? 0 : video_out_error;
 }
 
+std::int32_t video_out_configure(std::int32_t handle, std::int32_t) {
+    return video_out().is_open(handle) ? 0 : video_out_error;
+}
+
 std::int32_t sceVideoOutAddFlipEvent(std::uint64_t equeue, std::int32_t handle,
                                      std::uint64_t user_data) {
     if (!EventQueue::find(equeue)) {
         return video_out_error;
     }
     return video_out().add_flip_event(handle, equeue, user_data) ? 0 : video_out_error;
+}
+
+std::int32_t sceVideoOutSetBufferAttribute(void* attr, std::uint32_t format, std::uint32_t tiling,
+                                           std::uint32_t aspect, std::uint32_t width,
+                                           std::uint32_t height, std::uint32_t pitch) {
+    if (attr == nullptr) {
+        return video_out_error;
+    }
+    const BufferAttribute a{format, tiling, aspect, width, height, pitch, 0};
+    std::memcpy(attr, &a, sizeof a);  // the guest block need not be aligned
+    return 0;
+}
+
+std::int32_t sceVideoOutRegisterBuffers(std::int32_t handle, std::int32_t start,
+                                        const std::uint64_t* addresses, std::int32_t count,
+                                        const void* attr) {
+    if (addresses == nullptr || attr == nullptr || start < 0 || count < 1 ||
+        count > max_buffers - start) {
+        return video_out_error;
+    }
+    BufferAttribute a;
+    std::memcpy(&a, attr, sizeof a);
+    if (!video_out().register_buffers(handle, start, addresses, count, a)) {
+        return video_out_error;
+    }
+    common::log(common::LogLevel::info, channel, "port {}: buffers {}..{}, {}x{} pitch {}",
+                handle, start, start + count - 1, a.width, a.height, a.pitch);
+    return 0;
 }
 
 std::int32_t sceVideoOutSubmitFlip(std::int32_t handle, std::int32_t index, std::int32_t mode,
@@ -217,7 +268,10 @@ std::int32_t sceVideoOutGetFlipStatus(std::int32_t handle, void* status) {
 
 BB_HLE_FUNCTION("libSceVideoOut", "Up36PTk687E", sceVideoOutOpen);
 BB_HLE_FUNCTION("libSceVideoOut", "uquVH4-Du78", sceVideoOutClose);
+BB_HLE_FUNCTION("libSceVideoOut", "CBiu4mCE1DA", video_out_configure);  // name unknown
 BB_HLE_FUNCTION("libSceVideoOut", "HXzjK9yI30k", sceVideoOutAddFlipEvent);
+BB_HLE_FUNCTION("libSceVideoOut", "i6-sR91Wt-4", sceVideoOutSetBufferAttribute);
+BB_HLE_FUNCTION("libSceVideoOut", "w3BY+tAEiQY", sceVideoOutRegisterBuffers);
 BB_HLE_FUNCTION("libSceVideoOut", "U46NwOiJpys", sceVideoOutSubmitFlip);
 BB_HLE_FUNCTION("libSceVideoOut", "SbU3dwp80lQ", sceVideoOutGetFlipStatus);
 

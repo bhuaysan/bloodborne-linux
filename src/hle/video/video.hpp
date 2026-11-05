@@ -1,6 +1,8 @@
-// Headless video out (docs/design/m3-core-os.md, "Video out without a GPU"). Ports open, and a
-// submitted flip completes at the next 1/60 s tick: its flip count goes up and every queue
-// registered for the port's flip event gets an event. Nothing is presented (M4).
+// Headless video out and GPU submission (docs/design/m3-core-os.md, "Video out without a GPU").
+// Ports open and take buffers, and a submitted flip completes at the next 1/60 s tick: its flip
+// count goes up and every queue registered for the port's flip event gets an event. The GPU
+// submit calls succeed at once and run nothing. M4 replaces the submit side with command buffer
+// translation and presents the registered buffers.
 //
 // Addresses in the comments are the eboot call sites whose use fixed each result. Two code paths
 // drive video out: 0x11e488e..0x11e4915 (open, flip event, two 1920x1080 buffers) with flips
@@ -39,11 +41,36 @@ std::int32_t sceVideoOutOpen(std::int32_t user_id, std::int32_t type, std::int32
 // (0x26d636b..0x26d6a9b) ignore the result.
 std::int32_t sceVideoOutClose(std::int32_t handle);
 
+// NID CBiu4mCE1DA, name unknown. 0x26d61ee calls it as (handle, 0) right after the open and
+// fails on a negative result. Returns 0 for an open port.
+std::int32_t video_out_configure(std::int32_t handle, std::int32_t value);
+
 // Registers queue `equeue` for the port's flip events, with `user_data` for the events.
 // 0x11e48bb and 0x26d6234 pass 0 and fail on a negative result (0x26d6239). A second
 // registration of the same queue replaces the first.
 std::int32_t sceVideoOutAddFlipEvent(std::uint64_t equeue, std::int32_t handle,
                                      std::uint64_t user_data);
+
+// Fills the buffer attribute block at `attr` that sceVideoOutRegisterBuffers then takes. The
+// game never reads it back, so the layout is ours (BufferAttribute). The callers reserve 0x78
+// (0x11e48f8) and 0x40 bytes (0x26d6261) and pass 0x80000000, a flag, 0, the width, the height
+// and the width again (1920, 1080, 1920 at 0x11e48d4..0x11e48ef).
+std::int32_t sceVideoOutSetBufferAttribute(void* attr, std::uint32_t format, std::uint32_t tiling,
+                                           std::uint32_t aspect, std::uint32_t width,
+                                           std::uint32_t height, std::uint32_t pitch);
+
+// Our layout of the attribute block, 28 bytes.
+struct BufferAttribute {
+    std::uint32_t format, tiling, aspect, width, height, pitch, reserved;
+};
+
+// Records `count` buffer addresses from `addresses` for indices start..start+count-1 of the
+// port, with a copy of `*attr`, and returns 0. 0x11e4915 registers 2 from index 0 and ignores
+// the result, 0x26d65f3 fails on a negative one. At most max_buffers per port.
+std::int32_t sceVideoOutRegisterBuffers(std::int32_t handle, std::int32_t start,
+                                        const std::uint64_t* addresses, std::int32_t count,
+                                        const void* attr);
+inline constexpr std::int32_t max_buffers = 16;
 
 // Queues a flip to buffer `index`. It completes at the first 1/60 s tick after the port's
 // previous flip (or after now), so at most one flip completes per tick. Mode and argument are
@@ -55,5 +82,31 @@ std::int32_t sceVideoOutSubmitFlip(std::int32_t handle, std::int32_t index, std:
 // 0x26d6f06 reads only that field; the rest of the block is left alone.
 std::int32_t sceVideoOutGetFlipStatus(std::int32_t handle, void* status);
 inline constexpr std::size_t flip_count_offset = 0x18;
+
+// libSceGnmDriver. Each call reports success and nothing runs: command buffers are M4.
+
+// NID zwY0YV91TTI, name unknown. Submits `count` draw command buffers (addresses and sizes in
+// bytes) and as many optional second buffers (null at 0x26b0c23). Called from 12 sites, e.g.
+// 0x1094a02 and 0x26b0c23. Returns 0.
+std::int32_t gnm_submit(std::uint32_t count, const std::uint64_t* draw,
+                        const std::uint32_t* draw_sizes, const std::uint64_t* second,
+                        const std::uint32_t* second_sizes);
+
+// NID iCO804ZgzdA, name unknown. The same arguments as gnm_submit (0x1094c2f, 0x26bb94b).
+// 0x26bb950 treats every result but 0x80d13fff as success. Returns 0.
+std::int32_t gnm_submit_other(std::uint32_t count, const std::uint64_t* draw,
+                              const std::uint32_t* draw_sizes, const std::uint64_t* second,
+                              const std::uint32_t* second_sizes);
+
+// NID xbxNatawohc, name unknown. gnm_submit followed by sceVideoOutSubmitFlip(handle, index,
+// mode, arg): 0x26b0dd5..0x26b0dff and 0x26b0eba..0x26b0ee2 pass the port handle in r9 and the
+// rest on the stack, and call sceGnmSubmitDone right after. Returns the flip's result.
+std::int32_t gnm_submit_and_flip(std::uint32_t count, const std::uint64_t* draw,
+                                 const std::uint32_t* draw_sizes, const std::uint64_t* second,
+                                 const std::uint32_t* second_sizes, std::int32_t handle,
+                                 std::int32_t index, std::int32_t mode, std::int64_t arg);
+
+// Returns 0. Called after each submit-and-flip (0x26b0e04, 0x26b0ee7) through 0x1089b50.
+std::int32_t sceGnmSubmitDone();
 
 }  // namespace bb::hle::video
