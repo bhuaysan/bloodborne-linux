@@ -4,10 +4,15 @@ How the game's GPU work reaches Vulkan: the shader translator (GCN → SPIR-V), 
 
 ## Starting point
 
-- **GPU generation.** The base PS4 GPU is GCN 2nd generation ("Sea Islands", gfx7). The game's shader code confirms the SI/CI encodings: exports are encoded as `0xF8……` (gfx8 uses `0xC4……`), interpolation as `0xC8……` (gfx8: `0xD4……`), and `v_cvt_pkrtz_f16_f32` appears as a VOP2 instruction, which gfx8 only has as VOP3. Whether any gfx7-only instruction (FLAT, the CI additions) occurs is still open. References: the AMD documents in [clean-room.md](../clean-room.md#allowed-with-credit).
+- **GPU generation.** The base PS4 GPU is GCN 2nd generation ("Sea Islands", gfx7). The game's shader code uses the SI/CI encodings. Three instructions from a game shader show it:
+  - `v_interp_p1_f32` (`0xC8080000`), `image_sample` and `exp mrt0 … done compr vm` (`0xF800…`), assembled with LLVM's assembler for `bonaire` (gfx7), give the same bytes as the game.
+  - LLVM's gfx8 (`tonga`) decoder rejects them as invalid encodings.
+  - `v_cvt_pkrtz_f16_f32` appears as a VOP2 instruction, which gfx8 only has as VOP3.
+  
+  Whether the corpus uses CI-only instructions (FLAT, the CI additions) is still open. References: the AMD documents in [clean-room.md](../clean-room.md#allowed-with-credit).
 - **Command buffers** are built by GNM code that is statically linked into the eboot. Only the driver boundary is imported: `libSceGnmDriver` has 50 imported functions, two of them named so far. The game hands us finished PM4 streams at submission time.
 - **Shaders live in the game files** (below). Each one can be found again at run time by the hash of its code.
-- **M3 doesn't reach the main loop yet.** The first wave therefore works on the game files only: extraction, decoding, translation and execution tests on our own GCN programs.
+- **M3 doesn't reach the main loop yet.** The first wave therefore works on the game files only: extraction, decoding, translation, and execution tests on our own GCN programs.
 
 ## Source layout
 
@@ -18,12 +23,28 @@ src/gpu/
   vk/      bbvk     Vulkan backend: device, memory, pipelines, presentation (later wave)
 src/tools/bb-gcn    command line: disassemble or translate one shader binary
 tools/shaderbnd/    Python: extracts the shaders from the game's archives into analysis/
-tests/gpu/          unit, corpus and execution tests
+tests/gpu/gcn/      bbgcn unit, corpus and execution tests (one directory per target, as in runtime.md)
+tests/gpu/programs/ our GCN test programs: assembly source plus assembled words as hex text
 ```
 
-`bbgcn` depends only on `bbcommon`, so it builds and tests without Vulkan. `bbvk` depends on `bbgcn` and `bbpm4`. The HLE side (`libSceGnmDriver`, `libSceVideoOut`) depends on `bbvk` and lives in `src/hle/` like the other modules. Namespaces: `bb::gcn`, `bb::pm4`, `bb::vk`.
+Dependencies:
+- `bbgcn` depends only on `bbcommon`, so it builds and tests without Vulkan.
+- `bbvk` depends on `bbgcn` and `bbpm4`.
+- The HLE modules for `libSceGnmDriver` and `libSceVideoOut` (later wave) get their own `OBJECT` library on top of `bbvk`, so the harness test binaries that link `bbhle` don't pull in Vulkan.
 
-Build requirements: Vulkan headers and loader (installed), SPIR-V headers (`spirv-headers-devel`) for the enum values. Test tools, run as programs: `llvm-mc` and `llvm-objdump` from the `llvm` package (GCN assembler and disassembler for gfx7), `spirv-val` from `spirv-tools`, and lavapipe (Mesa's CPU Vulkan driver, installed with `mesa-vulkan-drivers`). Tests that need a missing tool skip with a message, like tests that need the game.
+Namespaces: `bb::gcn`, `bb::pm4`, `bb::vk`.
+
+Build and test requirements:
+
+| Need | Package (Fedora / Ubuntu) | Used for |
+|---|---|---|
+| SPIR-V headers | `spirv-headers-devel` / `spirv-headers` | enum values for the SPIR-V builder (build dependency of `bbgcn`) |
+| Vulkan headers and loader | `vulkan-headers`, `vulkan-loader-devel` / `libvulkan-dev` | execution tests; the targets that need it are built only when `find_package(Vulkan)` finds it |
+| lavapipe | `mesa-vulkan-drivers` | Mesa's CPU Vulkan driver, for execution tests |
+| SPIR-V validator | `spirv-tools` | `spirv-val` |
+| LLVM | `llvm` | `llvm-mc`, used as GCN assembler for gfx7 |
+
+All of these are run as programs or used as headers. A test that needs a missing tool skips with a message, like tests that need the game. CI needs the packages installed, which is a change to `.github/` and so belongs to the maintainer (item 0).
 
 ## Shader extraction
 
@@ -40,24 +61,31 @@ The 8 archives in `dvdroot_ps4/shader/` hold about 20,300 shader programs:
 | `gxshader.shaderbnd.dcx` | 15 | 15 |
 | `gxgui.shaderbnd.dcx` | 13 | 13 |
 
-Programs are counted by their `OrbShdr` marker, which matches the count of `s_endpgm` in every archive.
+Programs are counted by their `OrbShdr` marker. In every archive that count matches the count of `s_endpgm`.
 
-What our first look shows (to be worked out and documented in `docs/formats/`):
+What a first look shows, to be worked out and documented in `docs/formats/`:
 
-- **DCX**: a big-endian header with the sizes (`DCS` chunk) and a `DFLT` method tag, followed by a zlib stream. `docs/formats/dcx.md`.
-- **BND4**: an archive with a file table, names and data offsets. No nested archives in the shader set. `docs/formats/bnd4.md`.
-- **Shader program**: GCN code first, ending in `s_endpgm`, then a footer that starts with the `OrbShdr` marker. The footer holds the metadata: resource names (`g_Texture0`, `SS_ClampLinear`), input semantics (`IN.tex0`, `TEXCOORD`) and the entry point name. Some files hold more than one program. `docs/formats/shader-binary.md`.
+- **DCX** (`docs/formats/dcx.md`): a big-endian header with the sizes (`DCS` chunk) and a `DFLT` method tag, followed by a zlib stream.
+- **BND4** (`docs/formats/bnd4.md`): an archive with a file table, names and data offsets. The shader set has no nested archives.
+- **Shader program** (`docs/formats/shader-binary.md`): GCN code first, then a footer that starts with the `OrbShdr` marker. The footer holds the metadata:
+  - resource names (`g_Texture0`, `SS_ClampLinear`),
+  - input semantics (`IN.tex0`, `TEXCOORD`),
+  - the entry point name.
+  
+  Some files hold more than one program.
 
 Material on these formats from category 3 of the code sources may be used under its rules. Everything gets checked against the files.
 
-`tools/shaderbnd` checks each archive's SHA-256 against a pinned table in `tools/common/` and refuses other files. It writes to `analysis/shaders/<archive>/`:
+`tools/shaderbnd` checks each archive's SHA-256 against a pinned table in a new file in `tools/common/`. It refuses other files. It writes to `analysis/shaders/<archive>/`:
 
 - one file per program: code plus footer, as stored;
-- `index.json` with entry name, program index, stage, code size and the SHA-256 of the code (the **code hash**).
+- `index.json`, with entry name, program index, stage, code size and the SHA-256 of the code (the **code hash**).
 
-Nothing it writes is committed. The code hash is the shader's identity everywhere: corpus reports, the translation cache, and later at run time, where the game gives us only the code address (`SPI_SHADER_PGM_LO_*`). Whether the footer follows the code in GPU memory, so the run time can find the code size the same way, is checked once the game boots. Until then the run time decodes up to `s_endpgm`.
+Nothing it writes is committed.
 
-The eboot may contain shaders of its own (GNM's internal clear and copy shaders, fetch shaders). The extractor also scans the eboot's data for the `OrbShdr` marker and reports what it finds.
+The code hash is the shader's identity everywhere: in corpus reports, in the translation cache, and later at run time, where the game gives us only the code address (`SPI_SHADER_PGM_LO_*`). Whether the footer follows the code in GPU memory, so the run time can find the code size the same way, is checked once the game boots. Until then the run time decodes as described below.
+
+The eboot may contain shaders of its own, such as GNM's internal clear and copy shaders, or fetch shaders. The extractor also scans the eboot's data for the `OrbShdr` marker and reports what it finds.
 
 ## Shader translator
 
@@ -69,32 +97,71 @@ code ─decode─► instructions ─cfg─► blocks ─analyze─► typed pro
 
 ### Decoder and disassembler
 
-- Table-driven decoding of every Sea Islands microcode format: SOP2, SOPK, SOP1, SOPC, SOPP, SMRD, VOP2, VOP1, VOPC, VOP3, VINTRP, DS, MUBUF, MTBUF, MIMG, EXP, FLAT. Literal constants and inline constants are handled.
-- The result is a list of `Instruction` values (opcode, format, operands, modifiers, size), stopping after `s_endpgm`.
-- The disassembler prints LLVM's assembly syntax, so its output can be compared line by line with `llvm-objdump` on the whole corpus.
+- Decoding is table-driven, for every Sea Islands microcode format: SOP2, SOPK, SOP1, SOPC, SOPP, SMRD, VOP2, VOP1, VOPC, VOP3, VINTRP, DS, MUBUF, MTBUF, MIMG, EXP and FLAT. It handles literal constants and inline constants.
+- The result is a list of `Instruction` values (opcode, format, operands, modifiers, size).
+- A program can end in an early `s_endpgm` before other blocks. Decoding stops at the first `s_endpgm` that lies at or beyond the furthest branch target, or at the code size from the footer when it is known.
+- The disassembler prints LLVM's assembly syntax.
 - An unknown encoding is an error that names the offset and the word. It is never skipped.
+- The opcode tables are written by hand from the ISA manual. They are code, not generated data.
 
 ### Execution model
 
 **One SPIR-V invocation is one GCN lane.** The registers of the wave become per-invocation variables:
 
-- **VGPRs** are the lane's own values.
-- **SGPRs** are copied into every lane. They are uniform in the hardware, and every lane computing the same scalar value gives the same result.
-- **Lane masks** (EXEC, VCC, and SGPR pairs that hold compare results or saved masks) are stored per lane as **this lane's bit**: a bool. The bitwise operations on masks (`s_and_b64`, `s_or_b64`, `s_andn2_b64`, `s_and_saveexec_b64`, …) then become boolean operations on that bit. A type pass over the program decides which SGPRs hold masks and which hold values. An SGPR used as both is reported as an error until a shader needs it.
-- **Cross-lane operations** need the whole mask: SCC after a mask operation, `s_cbranch_execz` and `s_cbranch_vccz`, `s_bcnt1`/`s_ff1` on masks, `v_readfirstlane_b32`, and DS swizzle and permute operations. They use subgroup operations (ballot, any, broadcast first).
+- **VGPRs** are the lane's own values. When the program uses relative indexing (`v_movrel*`, `s_movrel*`, with the index in M0), they become an indexable array.
+- **SGPRs** are copied into every lane. They are uniform in the hardware, and every lane computing the same scalar value gives the same result. M0 is an SGPR like the others.
+- **Lane masks** (EXEC, VCC, and SGPR pairs that hold compare results or saved masks) are stored per lane as **this lane's bit**, a bool. A type pass decides which SGPRs hold masks and which hold values. An SGPR used as both is reported as an error until a shader needs it.
+  - Bitwise operations on masks (`s_and_b64`, `s_or_b64`, `s_andn2_b64`, `s_and_saveexec_b64`, …) become boolean operations on that bit.
+  - Mask constants other than 0 and −1, and 32-bit writes to `exec_lo`/`exec_hi`, take the bit at the lane ID.
+- **The lane ID** is `LocalInvocationIndex & 63` in compute, and `SubgroupInvocationID` in the graphics stages.
+- **Cross-lane operations** need the whole mask and use subgroup operations:
+
+  | Operation | Translation |
+  |---|---|
+  | SCC after a mask operation; `s_cbranch_execz`/`execnz`/`vccz`/`vccnz` | any or all over the lane bits |
+  | `s_bcnt1`, `s_ff1` and the other scalar operations on masks | ballot of the lane bits |
+  | `v_readfirstlane_b32` | find the lowest lane whose EXEC bit is set (ballot, then lowest set bit), then broadcast from it with a dynamic lane ID (SPIR-V 1.5) |
+  | `v_readlane_b32` | broadcast from lane *n* (ignores EXEC) |
+  | `v_writelane_b32` | `lane_id == n ? s : v` (ignores EXEC) |
+  | `v_mbcnt_lo_u32_b32`, `v_mbcnt_hi_u32_b32` | count of mask bits below the lane ID |
+  | `s_wqm_b64` | any over the quad (quad broadcasts, or `OpGroupNonUniformQuadAnyKHR` with `SPV_KHR_quad_control`) |
+  | `ds_swizzle_b32` | subgroup shuffle (gfx7 has no `ds_permute`/`ds_bpermute`) |
 
 **Divergence is predication.** A GCN program's control flow is scalar, so the whole wave takes every branch together. Lanes diverge only through EXEC. The translator mirrors that:
 
-- The branch structure comes from the scalar branches, which are uniform, and becomes structured SPIR-V control flow. The structurizer handles acyclic regions and natural loops. An irreducible graph falls back to a loop around a switch on a block index.
-- A VALU result is written as `select(active, new, old)`. The operation itself runs in every lane. This keeps implicit derivatives in pixel shaders defined, because image sampling is never placed under non-uniform control flow.
-- Side effects (memory stores, atomics, exports, LDS writes) run under `if (active)`.
+- **Branch structure.** It comes from the scalar branches and becomes structured SPIR-V control flow. The branch conditions are uniform per subgroup by construction. The structurizer handles acyclic regions and natural loops. An irreducible graph falls back to a loop around a switch on a block index.
+- **Vector results.** A VALU result is written as `select(active, new, old)`. The operation itself runs in every lane.
+- **Mask results.** A mask destination is written as `active && result`, not as a select, because GCN clears the bits of inactive lanes. This covers `v_cmp*` into VCC or SGPRs, carry-outs of VOP3 adds and subtracts, and `v_cmpx*`, which sets EXEC = `active && result`.
+- **Memory.** Every buffer and scalar memory access, load or store, runs only under `if (active && in_range)` (see Resources). An inactive lane may hold any address.
+- **Other side effects.** Exports, atomics and LDS writes run under `if (active)`.
+- **Image operations.** Sampling runs unguarded, so derivatives stay available. Other image loads run unguarded too, with `robustImageAccess` enabled. Image stores and image atomics are side effects and run under `if (active)`.
 
-**Wave size.** A GCN wave has 64 lanes, but a Vulkan subgroup may be smaller (32 on many GPUs, less on lavapipe). Two modes:
+**Pixel shaders** need four more rules:
 
-- **Exact:** the device can require a subgroup size of 64 (`VK_EXT_subgroup_size_control`). AMD RDNA GPUs can.
-- **Lane-local:** cross-lane results are computed over the subgroup instead of the wave. That is exact for uniform values and for "is any lane active" skips. It differs only when a value really depends on lanes in another subgroup.
+- EXEC starts as "this fragment is covered", that is `!HelperInvocation`.
+- `s_wqm_b64` (whole quad mode) turns the helper lanes of a quad back on for derivatives, as in the table above.
+- At the final `exp … done`, a lane whose EXEC bit is false was discarded. It executes `OpDemoteToHelperInvocation` (core in Vulkan 1.3), so the fragment is not written.
+- Implicit derivatives are only defined in uniform control flow. The branch conditions are uniform per subgroup, and that works on real drivers. Where `VK_KHR_shader_quad_control` is available, the translator declares `QuadDerivativesKHR` and `RequireFullQuadsKHR`, which make it defined by the spec.
 
-An analysis pass marks the shaders whose results can depend on the wave width, so the corpus report shows how many are affected.
+**Execz skips and live-out scalars.** A forward `s_cbranch_execz`/`vccz` that skips a region in which scalars are defined and used afterwards is translated as a fall-through. The compiler emits these skips as an optimization, so executing the region with no active lane gives the same result. Without the fall-through, a subgroup whose lanes are all inactive would skip scalar work that the 64-lane wave runs.
+
+**Wave size.** A GCN wave has 64 lanes, but a Vulkan subgroup may be smaller: 32 on many GPUs, 8 or 16 on lavapipe.
+
+- **Exact mode** requires a subgroup size of 64 (`VK_EXT_subgroup_size_control`, with `requireFullSubgroups`) in the stages listed in `requiredSubgroupSizeStages`. It matters mainly for compute: the PS4 doesn't define which vertices or pixels share a wave either.
+- **Lane-local mode** computes cross-lane results over the subgroup instead of the wave. In compute, ballot results keep their wave bit positions (lane ID), and the bits of lanes in other subgroups read as 0.
+
+An analysis pass marks the shaders whose results can depend on the wave width: cross-lane results that are not uniform, and `s_barrier` under control flow that depends on EXEC (a hang risk). The corpus report counts them.
+
+### Per-draw data
+
+Each draw or dispatch passes one push constant: a buffer device address pointing to the **draw block**. It holds:
+
+- `user_data[16]`, the stage's `SPI_SHADER_USER_DATA_*` or `COMPUTE_USER_DATA_*` values, which the program finds in its first SGPRs;
+- `address_bias`, so that device address = guest GPU address + bias;
+- `code_address`, the guest address of the program, for `s_getpc_b64`;
+- `scratch_size` in dwords per lane.
+
+For the first wave, the guest's GPU-visible memory is **one contiguous imported range**, so a single bias is enough. The execution tests allocate one buffer and set the bias to match. A page table can replace the bias later without changing the shaders' view.
 
 ### Resources and memory
 
@@ -106,30 +173,41 @@ GCN shaders get their resources as descriptors in SGPRs:
 | T# | image |
 | S# | sampler |
 
-The descriptors come either directly from user-data registers or through `s_load_*` from a pointer that itself comes from user data. A dataflow pass records the **source** of every descriptor that a memory instruction uses: user-data slot *k*, or a load at offset *o* through the pointer in slot *k*, nested as deep as needed. The list of sources is part of the shader's interface.
+The descriptors come from user data directly, or through `s_load_*` from a pointer that itself comes from user data. A dataflow pass records the **source** of every descriptor that a memory instruction uses: user-data slot *k*, or a load at offset *o* through the pointer in slot *k*, nested as deep as needed. The list of sources is part of the shader's interface.
 
-- **Buffers and scalar memory** are read and written through buffer device addresses (`VK_KHR_buffer_device_address`, `PhysicalStorageBuffer` in SPIR-V). The base address comes from the V# at run time, as data. A per-draw uniform maps guest GPU addresses to device addresses. So buffers need no static bindings. Typed buffer formats (MTBUF, or the V# format) are converted in the shader from raw dwords.
-- **Vertex fetch** is ordinary buffer loading. PS4 vertex shaders load their attributes themselves, through a fetch subroutine called with `s_swappc_b64`. The translator inlines the fetch subroutine, which it receives as a second code input. Vulkan vertex input state stays empty. Where the fetch code comes from (eboot, generated at run time, or the shader archives) is part of the GNM survey issue.
-- **Images and samplers** need bindings. Each T# and S# source gets an index into descriptor arrays. The backend reads the descriptor contents at draw time and supplies matching views and samplers.
-- **LDS** becomes a `Workgroup` array. **GDS and ordered append** are reported as unsupported until a shader needs them.
+- **Buffers and scalar memory** are read and written through buffer device addresses (`VK_KHR_buffer_device_address`, `PhysicalStorageBuffer` in SPIR-V).
+  - The base address and the other V# fields are data, read at run time.
+  - MUBUF, MTBUF and `s_buffer_load_*` check the range the way the hardware does: from `num_records`, the stride, and the `idxen`/`offen`/`addr64` modes. Out-of-range reads return 0, and out-of-range writes are dropped. The game may rely on that.
+  - Typed formats (MTBUF, or the format of a V#) are converted in the shader from raw dwords.
+- **Vertex fetch** is ordinary buffer loading. PS4 vertex shaders load their attributes themselves, through a fetch subroutine called with `s_swappc_b64`. The translator inlines the fetch subroutine, which it receives as a second code input, so Vulkan's vertex input state stays empty. Where the fetch code comes from is part of the GNM survey (item 10).
+- **Images and samplers** need bindings. Each T# and S# source gets an index into descriptor arrays. The SPIR-V image type needs dim, arrayed, multisample and the sampled type at compile time, but these come from T# memory, not from registers. They are therefore part of the ShaderKey and checked at draw time. A mismatch means a new translation.
+- **Scratch** (private memory: swizzled MUBUF accesses through the scratch descriptor) becomes a per-invocation array of `scratch_size` dwords. A size above a fixed limit is reported as unsupported.
+- **LDS** becomes a `Workgroup` array. That storage class exists only in compute. The translator ignores the LDS clamp in M0. **GDS and ordered append** are reported as unsupported until a shader needs them.
+- **Fork and join.** `s_cbranch_*fork` and `s_cbranch_join` (SI/CI) are reported as unsupported.
 
 ### Stage interfaces and ShaderKey
 
-The register state a program starts with depends on pipeline registers. That covers which SGPRs hold user data and which VGPRs hold the vertex index, the instance ID, barycentrics or the position. So do the stage's inputs and outputs:
+The register state a program starts with depends on pipeline registers, and so do the stage's inputs and outputs:
 
 | Stage | Inputs | Outputs |
 |---|---|---|
-| VS | vertex and instance index in VGPRs (`SPI_SHADER_PGM_RSRC*`, `VGT_*`) | `exp pos0` → `Position`, `exp param<n>` → `Location n` |
-| PS | `v_interp_*` attribute *n* → location through `SPI_PS_INPUT_CNTL_n`; `SPI_PS_INPUT_ENA/ADDR` decide which VGPRs are set | `exp mrt<n>` → output *n*, converted per `SPI_SHADER_COL_FORMAT`; `exp mrtz` → `FragDepth` |
-| CS | thread and group IDs per `COMPUTE_PGM_RSRC2` and `COMPUTE_NUM_THREAD_*` | memory only |
+| VS | user data in SGPRs; vertex and instance index in VGPRs, per `SPI_SHADER_PGM_RSRC*` (`VGPR_COMP_CNT`) | `exp pos0` → `Position`, `exp param<n>` → `Location n` |
+| PS | `SPI_PS_INPUT_ENA/ADDR` decide which VGPRs are set; `v_interp_p1`/`p2` pairs on attribute *n* → an interpolated input at the location from `SPI_PS_INPUT_CNTL_n`, its qualifier taken from the barycentrics it reads; `v_interp_mov` → `Flat` | `exp mrt<n>` → output *n*, converted per `SPI_SHADER_COL_FORMAT`; `exp mrtz` → `FragDepth`, plus stencil and sample mask per `SPI_SHADER_Z_FORMAT` |
+| CS | user data; thread and group IDs per `COMPUTE_PGM_RSRC2` and `COMPUTE_NUM_THREAD_*` | memory only |
 
-`ShaderKey` holds the values of these registers that the translation depends on, and nothing else. Same code hash plus same key gives the same SPIR-V. The translation cache is keyed by both and lives in `$XDG_CACHE_HOME/bloodborne-linux/shaders/`. Offline, keys come from the footer metadata where it carries them, otherwise from test defaults.
+`ShaderKey` holds everything the generated SPIR-V depends on besides the code:
+
+- the stage and the register values above;
+- the float mode bits from `SPI_SHADER_PGM_RSRC1_*` or `COMPUTE_PGM_RSRC1` (`FLOAT_MODE`, `DX10_CLAMP`, `IEEE_MODE`), which change min/max, NaN and denormal behavior;
+- the image type class of each T# source (above).
+
+The translation cache key is code hash + fetch code hash + ShaderKey + translator version. The cache lives in `$XDG_CACHE_HOME/bloodborne-linux/shaders/`. Offline, keys come from the footer metadata where it carries them, otherwise from test defaults.
 
 Other stages (LS, HS, ES, GS for tessellation and geometry shaders) wait until the corpus shows that the game uses them.
 
 ### SPIR-V builder
 
-`bbgcn` has its own small module builder that emits the word stream directly. The enum values come from the Khronos SPIR-V headers. Every translated module must pass `spirv-val` in the tests. An optimizer (`spirv-opt`) can come later, behind the cache.
+`bbgcn` has its own small module builder that emits the word stream directly, with the enum values from the Khronos SPIR-V headers. The target is SPIR-V 1.5. Every translated module must pass `spirv-val` in the tests. An optimizer (`spirv-opt`) can come later, behind the cache.
 
 ### Interface
 
@@ -143,7 +221,7 @@ class GcnError : public std::runtime_error { /* offset and word of the failing i
 std::vector<Instruction> decode(std::span<const std::uint32_t> code);   // throws GcnError
 std::string disassemble(const Instruction& inst);    // LLVM syntax, one line
 
-struct ShaderKey { Stage stage; /* register values the translation depends on */ };
+struct ShaderKey { Stage stage; /* see "Stage interfaces and ShaderKey" */ };
 
 struct ShaderInterface {
     std::vector<ResourceSource> images, samplers;     // binding index = position
@@ -164,56 +242,71 @@ Errors are exceptions, as in the loader and hooks (C++20, no `std::expected`). T
 
 Four levels. The first three need neither a running game nor a GPU.
 
-1. **Unit tests** (CI):
-   - the decoder, per microcode format, with words encoded by hand from the ISA manual;
-   - the disassembler text;
-   - the SPIR-V builder, through `spirv-val`.
-2. **Corpus tests** (local, need the game; skip without `BB_GAME_DIR`). Over every program that `tools/shaderbnd` extracted:
-   - it decodes completely, ends at `s_endpgm`, and its size matches the footer;
-   - our disassembly equals `llvm-objdump --mcpu=bonaire` (gfx7) line by line, after normalizing whitespace;
-   - it translates with the default key, and the module passes `spirv-val`;
-   - a report counts opcodes, untranslated instructions and wave-size-dependent shaders. It goes to `analysis/`, not into the repo.
+1. **Unit tests** (CI): the decoder per microcode format, with words encoded by hand from the ISA manual; the disassembler text; the SPIR-V builder through `spirv-val`. The extractor gets synthetic DCX and BND4 files, so CI covers it too.
+2. **Corpus tests** (local, need the game). They skip without `BB_GAME_DIR`, and with "run `tools/shaderbnd`" when `analysis/shaders/` is missing. Over every extracted program:
+   - It decodes completely, has exactly one final `s_endpgm`, and its size matches the footer.
+   - **Round trip through LLVM:** our disassembly of each instruction, assembled by `llvm-mc -triple=amdgcn -mcpu=bonaire -show-encoding`, gives the original words. LLVM's disassembler doesn't support gfx6/7, so the round trip goes through its assembler. Instructions whose LLVM syntax can't express an encoding exactly (unused fields, alternative encodings) go on a short, reviewed list of known differences.
+   - It translates with the default key, and the module passes `spirv-val`.
+   - A report counts opcodes, untranslated instructions and wave-size-dependent shaders. It goes to `analysis/`, not into the repo.
 3. **Execution tests** (CI with lavapipe):
-   - Small GCN programs are written in assembly by us, under `tests/gpu/programs/`. `llvm-mc` assembles them into binaries, which are committed next to the source so that CI doesn't need LLVM. A test checks that the binaries match the source when `llvm-mc` is installed.
-   - Each program is translated and run as a compute shader on lavapipe, with input buffers. The output is compared with values we work out by hand from the ISA manual. This covers ALU semantics (output modifiers, clamping, denormals, 24-bit multiplies), EXEC predication and loops, scalar and buffer memory, and LDS.
-   - One graphics test renders a VS and PS pair into an offscreen image.
-   - Lavapipe's subgroups are smaller than 64, so these tests cover the lane-local mode. The exact mode runs locally on an AMD GPU.
+   - Small GCN programs are written in assembly by us under `tests/gpu/programs/`. `llvm-mc` assembles them, and the words are committed next to the source as hex text (`.hex`, one instruction per line). That way CI doesn't need LLVM, and the hooks don't mistake the files for game binaries. When `llvm-mc` is installed, a test checks that the hex matches the source. The programs stay small, because they count toward the PR line limit.
+   - Each program is translated and run on lavapipe with input buffers. Its output is compared with values worked out by hand from the ISA manual. Cross-lane results are worked out for the device's subgroup size, not for 64.
+   - They cover ALU semantics (output modifiers, clamping, 24-bit multiplies), EXEC predication and loops, scalar and buffer memory with range checks, and LDS.
+   - Denormal tests run only where the driver's float-controls properties allow GCN's mode, otherwise they skip. Transcendental results are compared with a tolerance in ULPs.
+   - A graphics test renders a VS and PS pair into an offscreen image.
+   - The exact wave-64 mode runs locally on an AMD GPU.
 4. **Replays** (later wave, after M3):
-   - Captures of real frames go to `analysis/captures/`: PM4 streams plus the memory they reference. They come from our runtime, or as reference frames from an emulator run on the game with call logging off (see [clean-room.md](../clean-room.md#code-sources)).
+   - Captures of real frames, as PM4 streams plus the memory they reference, go to `analysis/captures/`. They come from our runtime, or as reference frames from an emulator run on the game with call logging off (see [clean-room.md](../clean-room.md#code-sources)).
    - The captures are replayed through `bbpm4` and `bbvk`, and the images are compared.
 
-Committed test data is only our own: assembly sources, their assembled binaries, and expected values. Nothing extracted from the game is committed.
+Committed test data is only our own: assembly sources, their assembled words, and expected values. Nothing extracted from the game is committed.
 
 ## Command buffers and state (later wave, sketch)
 
-- **Submission.** The `libSceGnmDriver` submit functions hand `bbpm4` the command buffers and the constant-engine buffers. Parsing happens on a GPU thread, never on the calling game thread. Imports that write packets into a game buffer write standard PM4 (per the SI programming guide), so the parser sees one format.
-- **Register state.** `SET_CONTEXT_REG`, `SET_SH_REG`, `SET_UCONFIG_REG` and `SET_CONFIG_REG` update a mirror of the register file.
-- **Work packets.** Draw and dispatch packets take a snapshot of the state that the backend needs: ShaderKey, render targets, blend, depth and raster state, user data.
-- **Unknown packets** are logged once per opcode. `NOP` packets with a payload are passed to a hook list, because the driver may use them as markers.
-- **Register names and offsets** come from the AMD register guide. The Mesa register database (code sources category 1) may be used to generate a table, as generated data in its own PR.
-- **Memory.** The guest's GPU-visible memory (libkernel direct memory, M3) is imported into Vulkan with `VK_EXT_external_memory_host` where the device allows it, giving device addresses for buffers without copies.
-- **Textures and render targets** are cached by address and descriptor. Tiled ↔ linear conversion uses AMD's addrlib (code sources category 1, MIT), copied into `third_party/` in its own PR.
+- **Parsing.** The `libSceGnmDriver` submit functions hand `bbpm4` the command buffers and constant-engine buffers. Parsing runs on a GPU thread, never on the calling game thread.
+- **One format.** Imports that write packets into a game buffer write standard PM4 (per the SI programming guide), so the parser sees one format.
+- **Register writes.** `SET_CONTEXT_REG`, `SET_SH_REG`, `SET_UCONFIG_REG` and `SET_CONFIG_REG` update a mirror of the register file.
+- **Draws and dispatches** take a snapshot of the state the backend needs: ShaderKey, render targets, blend, depth and raster state, and user data.
+- **Unknown packets** are logged once per opcode. `NOP` packets with a payload go to a hook list, because the driver may use them as markers.
+- **Register names and offsets** come from the AMD register guide. The Mesa register database (code sources, category 1) may be used to generate a table, as generated data in its own PR.
+- **GPU memory.** The guest's GPU-visible memory (libkernel direct memory, M3) is imported into Vulkan with `VK_EXT_external_memory_host` where the device allows it. That gives device addresses without copies. Such memory stays host memory, so on a discrete GPU every read crosses PCIe. A device-local cache with write tracking will be needed for vertex and constant data.
+- **Textures and render targets** are cached by address and descriptor. Tiled ↔ linear conversion uses AMD's addrlib (code sources, category 1, MIT), copied into `third_party/` in its own PR.
+- **Clip space.** Clip-space conventions (`PA_CL_CLIP_CNTL`, depth range, viewport orientation) are decided with the backend.
 - **Flip.** `libSceVideoOut` flips present through a Vulkan swapchain.
 
 ## First wave (offline)
 
-Each item is one issue, at most 500 lines of code and tests. Items 1–3 and 5 can start at once.
+Each item is one issue, at most 500 lines of code and tests. Every PR that first uses a tool or header adds its row to `docs/references.md`: LLVM (`llvm-mc`), SPIRV-Tools, SPIRV-Headers, Mesa's lavapipe, the Vulkan loader.
 
-1. **DCX and BND4 formats and `tools/shaderbnd`.** Covers the format notes, pinned archive hashes and extraction into `analysis/shaders/`.
-2. **Shader binary footer.** The format note, plus stage, code size and resource names in `index.json`. Includes the eboot scan for embedded programs. Depends on 1.
-3. **`bbgcn` decoder and disassembler.** Covers all Sea Islands formats, with unit tests per format.
-4. **Corpus decode test against LLVM.** Decode every program, compare with `llvm-objdump`, and answer the open SI/CI question. Depends on 2 and 3.
-5. **SPIR-V builder and `spirv-val` test support.**
-6. **Translator core.** CFG, mask typing, structurizer, predication, the SALU and VALU subset, the compute stage, and the lavapipe execution harness with `llvm-mc`-assembled test programs. Depends on 3 and 5.
-7. **Memory instructions.** Descriptor source analysis, SMRD, MUBUF and MTBUF through device addresses, and LDS. Depends on 6.
-8. **Graphics stages.** VS exports, PS interpolation and MRT exports, MIMG sampling with bindings, and the offscreen render test. Depends on 7.
-9. **Corpus translation report.** Translate everything, run `spirv-val` and record coverage. Depends on 8. It can start as a partial report after 6.
-10. **GNM survey (research).** How the eboot builds and submits command buffers, what the `libSceGnmDriver` imports do (behavior only, named by role), and where fetch shaders come from. Written up in `docs/formats/gnm.md`. Read-only, and needed for the second wave.
+| # | Item | Depends on |
+|---|---|---|
+| 0 | **Maintainer: CI packages and layout.** Install `spirv-headers`, `spirv-tools`, `libvulkan-dev` and `mesa-vulkan-drivers` in `.github/workflows/ci.yml`, and add `src/gpu/` and `tools/shaderbnd/` to the layout in `AGENTS.md`. Both are guardrails. | – |
+| 1 | **DCX and BND4 formats and `tools/shaderbnd`.** Format notes, pinned archive hashes in a new `tools/common` file, extraction into `analysis/shaders/`, synthetic unit tests. | – |
+| 2 | **Shader binary footer.** Format note; stage, code size and resource names in `index.json`; the eboot scan for embedded programs. | 1 |
+| 3a | **Decoder core and scalar formats.** `bbgcn` skeleton, `Instruction`, SOP1/SOP2/SOPK/SOPC/SOPP/SMRD with disassembly, and the `llvm-mc` round-trip test helper. | – |
+| 3b | **Vector ALU formats.** VOP1, VOP2, VOPC, VOP3, VINTRP. | 3a |
+| 3c | **Memory and export formats.** DS, MUBUF, MTBUF, MIMG, EXP, FLAT. | 3a |
+| 4 | **Corpus decode test.** Round trip of every program through `llvm-mc`. It also answers whether the corpus uses CI-only instructions. | 2, 3b, 3c |
+| 5 | **SPIR-V builder** and `spirv-val` test support. | 0 |
+| 6a | **Lavapipe compute runner.** Device setup, buffers, the draw block, and the test program format (assembly and hex). | 0, 5 |
+| 6b | **CFG and structurizer.** Tested on synthetic graphs through `spirv-val`. | 3a, 5 |
+| 6c | **Translator core.** Mask typing, predication, the SALU and VALU subset, the compute stage, and execution tests. | 3b, 6a, 6b |
+| 7a | **Descriptor sources and untyped buffer memory.** SMRD and raw MUBUF with range checks, scratch. | 3c, 6c |
+| 7b | **Typed buffer formats.** MTBUF and formatted MUBUF. | 7a |
+| 7c | **LDS.** DS operations, `Workgroup` storage, `ds_swizzle_b32`. | 3c, 6c |
+| 8a | **Graphics stages.** VS and PS interfaces, exports, interpolation, discard and demote, and an offscreen render test on lavapipe. | 7a |
+| 8b | **Image sampling.** MIMG sample operations, image and sampler bindings, the image type class in the key. | 8a |
+| 8c | **Other image operations.** Loads, stores, gather and atomics. | 8b |
+| 9 | **Corpus translation report.** Translate everything, run `spirv-val`, record coverage. It grows as later items land. | 4, 6c |
+| 10 | **GNM survey (research).** Covers how the eboot builds and submits command buffers, what the `libSceGnmDriver` imports do (behavior only, named by role), and where fetch shaders come from. Written up in `docs/formats/gnm.md`. It works from the eboot and the AMD documents only. Reading an emulator's GnmDriver HLE code would put `libSceGnmDriver` into the exposure log, so ask the maintainer first. | – |
+
+Items 1, 3a and 10 can start at once. Items 5 and 6a wait for item 0.
 
 ## Open questions
 
-- Is the code gfx7 or gfx6? The corpus test answers this (item 4).
+- Does the corpus use CI-only instructions? Item 4 answers this.
 - Does the footer follow the code in GPU memory? This is checked at run time.
 - Where do fetch shaders come from? Item 10 answers this.
 - How often do shaders depend on the wave size? Item 9 counts this.
-- Does the game use LS/HS/ES/GS stages? The footer stage field answers this (item 2).
+- Does the game use the LS/HS/ES/GS stages? The footer's stage field answers this (item 2).
+- Which clip-space conventions apply? This is decided with the backend.
