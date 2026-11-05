@@ -1,8 +1,8 @@
 """Checks that every copy of the pinned SHA-256 hashes agrees.
 
 The hashes of eboot.bin and of the PRXs the runtime loads are in docs/clean-room.md,
-tools/self2elf/self2elf.py and src/loader/self.hpp. The hash of the eboot.elf that self2elf rebuilds is in tools/common/ps4elf.py
-and tests/loader/self_test.cpp. Needs no game files.
+tools/self2elf/self2elf.py and src/loader/self.hpp. The hash of the eboot.elf that self2elf
+rebuilds is in tools/common/ps4elf.py and tests/loader/self_test.cpp. Needs no game files.
 """
 
 import re
