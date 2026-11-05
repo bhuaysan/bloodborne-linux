@@ -3,12 +3,14 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <regex>
 #include <set>
 #include <string>
 #include <string_view>
 
 #include <gtest/gtest.h>
 
+#include "common/log.hpp"
 #include "hle/hle.hpp"
 #include "loader/image.hpp"
 #include "loader/relocate.hpp"
@@ -97,9 +99,14 @@ TEST(HleNet, NpSizedRequestSucceeds) {
     Block block{0x18, 2, 3, 0};
     EXPECT_EQ(np_manager_sized_request(&block), 0);
     block.size = 0x20;
+    bb::common::set_thread_name("np-test");
     testing::internal::CaptureStderr();
     EXPECT_EQ(np_manager_sized_request(&block), 0);
-    EXPECT_NE(testing::internal::GetCapturedStderr().find("block size 0x20"), std::string::npos);
+    const std::string log = testing::internal::GetCapturedStderr();
+    EXPECT_TRUE(std::regex_match(
+        log, std::regex("[0-9:.]{12} warn \\[np-test\\] hle\\.libSceNpManager: A2CQ3kgSopQ: "
+                        "block size 0x20, expected 0x18\n")))
+        << log;
 }
 
 // The eboot imports each of them under the library it is registered for, so relocating it puts

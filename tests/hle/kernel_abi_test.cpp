@@ -9,12 +9,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <regex>
 #include <set>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
+
+#include "common/log.hpp"
 
 namespace {
 
@@ -74,6 +77,22 @@ TEST(KernelAbi, PosixFamilySetsGuestErrno) {
     EXPECT_EQ(*guest_errno_location(), 35);
     EXPECT_EQ(posix_fail(ENOMEDIUM), -1);
     EXPECT_EQ(*guest_errno_location(), 5);
+}
+
+// A host errno without a guest counterpart is reported once, at warn on hle.libkernel, through
+// the logger.
+TEST(KernelAbi, UnmappedHostErrnoGoesThroughTheLogger) {
+    ASSERT_FALSE(guest_errno(EMEDIUMTYPE));
+    bb::common::set_thread_name("errno-test");
+    testing::internal::CaptureStderr();
+    EXPECT_EQ(pthread_error(EMEDIUMTYPE), 5);
+    EXPECT_EQ(pthread_error(EMEDIUMTYPE), 5);
+    const std::string log = testing::internal::GetCapturedStderr();
+    EXPECT_TRUE(std::regex_match(
+        log, std::regex("[0-9:.]{12} warn \\[errno-test\\] hle\\.libkernel: host errno " +
+                        std::to_string(EMEDIUMTYPE) +
+                        " has no guest counterpart, using EIO\n")))
+        << log;
 }
 
 TEST(KernelAbi, PthreadAndSceFamiliesLeaveGuestErrnoAlone) {

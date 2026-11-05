@@ -8,9 +8,10 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
-#include <cstdio>
 #include <cstring>
 #include <span>
+
+#include "common/log.hpp"
 
 namespace bb::hle::kernel {
 namespace {
@@ -122,8 +123,8 @@ int guest_errno_or_eio(int host) {
     const auto bit = std::uint64_t{1} << (static_cast<unsigned>(host) % 64);
     const bool tracked = host >= 0 && host < 256;
     if (!tracked || (reported[host / 64].fetch_or(bit) & bit) == 0) {
-        std::fprintf(stderr, "hle.kernel: host errno %d has no guest counterpart, using EIO\n",
-                     host);
+        common::log(common::LogLevel::warn, "hle.libkernel",
+                    "host errno {} has no guest counterpart, using EIO", host);
     }
     return 5;
 }

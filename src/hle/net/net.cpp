@@ -1,9 +1,9 @@
 #include "hle/net/net.hpp"
 
 #include <atomic>
-#include <cstdio>
 #include <cstring>
 
+#include "common/log.hpp"
 #include "hle/hle.hpp"
 
 namespace bb::hle::net {
@@ -77,9 +77,8 @@ std::int32_t np_manager_sized_request(const void* block) {
     std::uint64_t size = 0;
     std::memcpy(&size, block, sizeof size);
     if (size != np_block_size) {
-        std::fprintf(stderr, "hle: libSceNpManager A2CQ3kgSopQ: block size %#llx, expected %#llx\n",
-                     static_cast<unsigned long long>(size),
-                     static_cast<unsigned long long>(np_block_size));
+        common::log(common::LogLevel::warn, "hle.libSceNpManager",
+                    "A2CQ3kgSopQ: block size {:#x}, expected {:#x}", size, np_block_size);
     }
     return 0;
 }
