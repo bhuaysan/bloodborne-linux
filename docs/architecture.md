@@ -43,6 +43,8 @@ GNM builds AMD GCN command buffers (PM4 packets). The plan:
 3. Translate GCN shader binaries to SPIR-V with our own translator.
 4. Record and submit the equivalent Vulkan work.
 
+The translator, its offline tests and the shader extraction are designed in [design/graphics.md](design/graphics.md).
+
 ### Function replacement
 Decompiled functions are compiled into the runtime. At startup, a table of `{original_address, replacement}` pairs is applied. Each original function entry is patched to jump to the replacement. Replacements call other game functions through their original addresses until those are replaced too.
 

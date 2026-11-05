@@ -55,6 +55,8 @@ Every external source consulted for this project is listed here. What may be use
 | [License and Copyright](https://docs.mesa3d.org/license.html) and [Source Code Tree](https://docs.mesa3d.org/sourcetree.html) (Mesa documentation) | Mesa's licensing and the layout of `src/amd`, for the code source rules (`docs/clean-room.md`) | 2026-11-05 |
 | [AMDGPUUsage](https://llvm.org/docs/AMDGPUUsage.html) (LLVM documentation) | Mapping of gfx700–gfx704 to Sea Islands products (M4 source evaluation, #107) | 2026-11-05 |
 | [AMDGPU driver documentation](https://docs.kernel.org/gpu/amdgpu/index.html) (Linux kernel) | Checked for register and PM4 documentation; none found (M4 source evaluation, #107) | 2026-11-05 |
+| [Vulkan specification](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html) (Khronos, latest) | Buffer device addresses, `VK_EXT_subgroup_size_control`, `VK_EXT_external_memory_host` and subgroup operations as building blocks of the translator and backend design (`docs/design/graphics.md`) | 2026-11-05 |
+| [SPIR-V specification, unified](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html) (Khronos) | Structured control flow rules, `PhysicalStorageBuffer` and `Workgroup` storage classes (`docs/design/graphics.md`) | 2026-11-05 |
 
 ## Code sources
 
