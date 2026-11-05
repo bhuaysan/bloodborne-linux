@@ -96,6 +96,9 @@ enum class Until {
 std::vector<Instruction> decode(std::span<const std::uint32_t> code,
                                 Until until = Until::program_end);
 
+// One line of LLVM's assembly syntax for gfx7, without the offset or the encoding.
+std::string disassemble(const Instruction& inst);
+
 // Byte offset of the target of a direct branch, nothing for other instructions.
 std::optional<std::uint32_t> branch_target(const Instruction& inst);
 
