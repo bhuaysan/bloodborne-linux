@@ -16,8 +16,10 @@ inline constexpr int guest_mutex_recursive = 2;
 inline constexpr int guest_mutex_normal = 3;
 inline constexpr int guest_mutex_adaptive = 4;
 
-// The priority protocol of a new attribute (protocols are accepted, not applied).
+// Priority protocols (accepted, not applied). A new attribute has guest_prio_none.
 inline constexpr int guest_prio_none = 0;
+inline constexpr int guest_prio_inherit = 1;
+inline constexpr int guest_prio_protect = 2;
 
 // The host mutex behind the guest mutex cell `mutex`. A cell that still holds the static
 // initialiser gets an error-checking mutex, created under a global lock. Returns nullptr and sets

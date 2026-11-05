@@ -1,4 +1,4 @@
-// libkernel and libScePosix mutexes and mutex attributes on glibc primitives
+// libkernel and libScePosix mutexes, mutex attributes and rwlocks on glibc primitives
 // (docs/design/m3-core-os.md, "Sync"; values in docs/formats/kernel-abi.md, "Mutexes and
 // rwlocks"). The core functions return a host errno; the sce and POSIX entry points translate it
 // into their own error form.
@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
+#include <ctime>
 #include <mutex>
 
 #include "hle/hle.hpp"
@@ -29,6 +30,14 @@ struct Mutex {
     static constexpr std::uint64_t tag_value = 0x786574756d5f6262;  // "bb_mutex"
     std::uint64_t tag = tag_value;
     pthread_mutex_t host;
+
+    static int create_default(Cell* cell);
+};
+
+struct Rwlock {
+    static constexpr std::uint64_t tag_value = 0x6b636f6c77725f62;  // "b_rwlock"
+    std::uint64_t tag = tag_value;
+    pthread_rwlock_t host;
 
     static int create_default(Cell* cell);
 };
@@ -64,6 +73,35 @@ int create_mutex(Cell* cell, int host_mutex_type) {
     }
     atomic(cell).store(reinterpret_cast<Cell>(m), std::memory_order_release);
     return 0;
+}
+
+// Stores a new rwlock in `cell`. Returns a host errno.
+int create_rwlock(Cell* cell) {
+    auto* r = new Rwlock;
+    const int error = pthread_rwlock_init(&r->host, nullptr);
+    if (error != 0) {
+        delete r;
+        return error;
+    }
+    atomic(cell).store(reinterpret_cast<Cell>(r), std::memory_order_release);
+    return 0;
+}
+
+int Rwlock::create_default(Cell* cell) {
+    return create_rwlock(cell);
+}
+
+// The absolute CLOCK_MONOTONIC time `usec` microseconds from now.
+timespec deadline_after(std::uint32_t usec) {
+    timespec t{};
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    t.tv_sec += usec / 1000000;
+    t.tv_nsec += static_cast<long>(usec % 1000000) * 1000;
+    if (t.tv_nsec >= 1000000000) {
+        t.tv_sec += 1;
+        t.tv_nsec -= 1000000000;
+    }
+    return t;
 }
 
 // The object of `cell`, created with the default attributes if the cell holds the static
@@ -161,6 +199,15 @@ int mutexattr_settype(std::uint64_t* attr, int type) {
     return 0;
 }
 
+// Accepted and not applied (docs/formats/kernel-abi.md, "Protocol").
+int mutexattr_setprotocol(std::uint64_t* attr, int protocol) {
+    if (!valid_attr(attr) || protocol < guest_prio_none || protocol > guest_prio_protect) {
+        return EINVAL;
+    }
+    *attr = pack_attr(attr_type(*attr), protocol);
+    return 0;
+}
+
 // ---- mutexes -------------------------------------------------------------------------------
 
 int Mutex::create_default(Cell* cell) {
@@ -204,10 +251,60 @@ int mutex_trylock(Cell* mutex) {
     return m != nullptr ? pthread_mutex_trylock(&m->host) : error;
 }
 
+// `usec` is relative (docs/formats/kernel-abi.md, "Timeouts").
+int mutex_timedlock(Cell* mutex, std::uint32_t usec) {
+    int error = 0;
+    Mutex* m = lookup<Mutex>(mutex, &error);
+    if (m == nullptr) {
+        return error;
+    }
+    const timespec deadline = deadline_after(usec);
+    return pthread_mutex_clocklock(&m->host, CLOCK_MONOTONIC, &deadline);
+}
+
 int mutex_unlock(Cell* mutex) {
     int error = 0;
     Mutex* m = lookup<Mutex>(mutex, &error);
     return m != nullptr ? pthread_mutex_unlock(&m->host) : error;
+}
+
+// ---- rwlocks -------------------------------------------------------------------------------
+
+// No rwlock attribute function is imported, so `attr` can only be null (libSceFios2 0x2e72b).
+int rwlock_init(Cell* rwlock, const void* /*attr*/) {
+    return rwlock == nullptr ? EINVAL : create_rwlock(rwlock);
+}
+
+// glibc destroys a held rwlock without complaint, and the next unlock then hangs. The guest gets
+// EBUSY instead, as for a mutex.
+int destroy_host_rwlock(pthread_rwlock_t* host) {
+    if (pthread_rwlock_trywrlock(host) != 0) {
+        return EBUSY;
+    }
+    pthread_rwlock_unlock(host);
+    return pthread_rwlock_destroy(host);
+}
+
+int rwlock_destroy(Cell* rwlock) {
+    return destroy<Rwlock>(rwlock, destroy_host_rwlock);
+}
+
+template <int (*Op)(pthread_rwlock_t*)>
+int rwlock_op(Cell* rwlock) {
+    int error = 0;
+    Rwlock* r = lookup<Rwlock>(rwlock, &error);
+    return r != nullptr ? Op(&r->host) : error;
+}
+
+template <int (*Op)(pthread_rwlock_t*, clockid_t, const timespec*)>
+int rwlock_timed(Cell* rwlock, std::uint32_t usec) {
+    int error = 0;
+    Rwlock* r = lookup<Rwlock>(rwlock, &error);
+    if (r == nullptr) {
+        return error;
+    }
+    const timespec deadline = deadline_after(usec);
+    return Op(&r->host, CLOCK_MONOTONIC, &deadline);
 }
 
 // ---- entry points --------------------------------------------------------------------------
@@ -232,6 +329,11 @@ std::int32_t sce_mutex_init(Cell* mutex, const std::uint64_t* attr, const char* 
     return sce_fail(mutex_init(mutex, attr));
 }
 
+// The name is not kept (the eboot passes null, 0x207f2d1).
+std::int32_t sce_rwlock_init(Cell* rwlock, const void* attr, const char* /*name*/) {
+    return sce_fail(rwlock_init(rwlock, attr));
+}
+
 }  // namespace
 
 pthread_mutex_t* host_mutex(Cell* mutex, int* host_errno) {
@@ -246,10 +348,12 @@ namespace k = bb::hle::kernel;
 BB_HLE_FUNCTION("libkernel", "F8bUHwAG284", k::Sce<k::mutexattr_init>::call);
 BB_HLE_FUNCTION("libkernel", "smWEktiyyG0", k::Sce<k::mutexattr_destroy>::call);
 BB_HLE_FUNCTION("libkernel", "iMp8QpE+XO4", k::Sce<k::mutexattr_settype>::call);
+BB_HLE_FUNCTION("libkernel", "1FGvU0i9saQ", k::Sce<k::mutexattr_setprotocol>::call);
 BB_HLE_FUNCTION("libkernel", "cmo1RIYva9o", k::sce_mutex_init);
 BB_HLE_FUNCTION("libkernel", "2Of0f+3mhhE", k::Sce<k::mutex_destroy>::call);
 BB_HLE_FUNCTION("libkernel", "9UK1vLZQft4", k::Sce<k::mutex_lock>::call);
 BB_HLE_FUNCTION("libkernel", "upoVrzMHFeE", k::Sce<k::mutex_trylock>::call);
+BB_HLE_FUNCTION("libkernel", "IafI2PxcPnQ", k::Sce<k::mutex_timedlock>::call);
 BB_HLE_FUNCTION("libkernel", "tn3VlD0hG60", k::Sce<k::mutex_unlock>::call);
 
 BB_HLE_FUNCTION("libScePosix", "dQHWEsJtoE4", k::Posix<k::mutexattr_init>::call);
@@ -260,3 +364,15 @@ BB_HLE_FUNCTION("libScePosix", "ltCfaGr2JGE", k::Posix<k::mutex_destroy>::call);
 BB_HLE_FUNCTION("libScePosix", "7H0iTOciTLo", k::Posix<k::mutex_lock>::call);
 BB_HLE_FUNCTION("libScePosix", "K-jXhbt2gn4", k::Posix<k::mutex_trylock>::call);
 BB_HLE_FUNCTION("libScePosix", "2Z+PpY6CaJg", k::Posix<k::mutex_unlock>::call);
+
+BB_HLE_FUNCTION("libkernel", "6ULAa0fq4jA", k::sce_rwlock_init);
+BB_HLE_FUNCTION("libkernel", "BB+kb08Tl9A", k::Sce<k::rwlock_destroy>::call);
+BB_HLE_FUNCTION("libkernel", "Ox9i0c7L5w0", k::Sce<k::rwlock_op<pthread_rwlock_rdlock>>::call);
+BB_HLE_FUNCTION("libkernel", "mqdNorrB+gI", k::Sce<k::rwlock_op<pthread_rwlock_wrlock>>::call);
+BB_HLE_FUNCTION("libkernel", "XD3mDeybCnk", k::Sce<k::rwlock_op<pthread_rwlock_tryrdlock>>::call);
+BB_HLE_FUNCTION("libkernel", "bIHoZCTomsI", k::Sce<k::rwlock_op<pthread_rwlock_trywrlock>>::call);
+BB_HLE_FUNCTION("libkernel", "+L98PIbGttk", k::Sce<k::rwlock_op<pthread_rwlock_unlock>>::call);
+BB_HLE_FUNCTION("libkernel", "iPtZRWICjrM",
+                k::Sce<k::rwlock_timed<pthread_rwlock_clockrdlock>>::call);
+BB_HLE_FUNCTION("libkernel", "adh--6nIqTk",
+                k::Sce<k::rwlock_timed<pthread_rwlock_clockwrlock>>::call);
