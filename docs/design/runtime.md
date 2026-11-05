@@ -226,6 +226,35 @@ After loading, the harness takes a **baseline snapshot** of all writable memory 
 - the data-import blocks,
 - the **arena**, an mmap'd region of 16 MiB that the harness owns for test inputs.
 
+### Harness and arena
+
+`src/harness/harness.hpp` (#46):
+
+```cpp
+namespace bb::harness {
+class Arena {                        // 16 MiB, mmap'd, zero in the baseline
+    void* alloc(std::size_t n, std::size_t align = 16);  // zeroed
+    template <class T> T* zeroed(std::size_t count = 1);  // trivial T only
+    char* str(std::string_view s);   // with a terminating NUL
+    std::byte* bytes(std::span<const std::byte> b);
+};
+class Harness {
+    explicit Harness(loader::Image& image);  // takes the baseline
+    Arena& arena();
+    void restore();                  // baseline back into every region, arena allocation at 0
+    template <class Sig, class Build>
+    Result compare(std::uint64_t link_addr, Sig* replacement, Build&& build);
+};
+class Result {                       // true when nothing differs
+    const std::string& report() const;  // one line per difference, empty when true
+};
+}
+```
+
+The arena is a bump allocator that starts at offset 0 again at every restore, so a builder that makes the same calls gets the same addresses in both runs, and the layout is the same in every run of a build. `alloc` throws `std::length_error` when the arena is full. The builder returns a `std::tuple` that converts to the parameter types of `Sig`.
+
+A report line names each difference: `return value: original 0x28, replacement 0x29`, or `memory: image 0x4100..0x4101 differs: original 15, replacement 16` (link addresses, end exclusive, up to 8 bytes of each side shown) and `memory: arena +0x4..+0x5 differs: …` (offsets). At most 8 ranges are listed, then their total. The harness core needs only a mapped and relocated `Image`, so its tests use a synthetic ELF with hand-assembled functions and run without the game.
+
 ### One comparison
 
 ```cpp
