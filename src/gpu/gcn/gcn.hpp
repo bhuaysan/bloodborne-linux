@@ -36,7 +36,9 @@ enum class Format : std::uint8_t {
 enum class OperandKind : std::uint8_t {
     none,
     scalar,    // SGPR or special register; `code` is the 8-bit operand code
-    constant,  // inline constant; `code` is its operand code, `value` its 32-bit pattern
+    constant,  // inline constant; `code` is its operand code, `value` its 32-bit pattern. On a
+               // 2-dword operand an integer constant is `value` sign-extended, a float constant
+               // the f64 of the same number, with `value` its high dword and 0 as low dword.
     literal,   // 32-bit literal that follows the instruction, in `value`
     offset,    // SMRD dword offset, in `value`
     simm,      // 16-bit immediate, printed in hex

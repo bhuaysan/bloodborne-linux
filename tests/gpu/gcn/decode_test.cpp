@@ -95,7 +95,10 @@ TEST(GcnDecode, Sop1) {
     EXPECT_EQ(one({sop1(3, 0, 193)}).src[0], constant(193, 0xffffffff));
     EXPECT_EQ(one({sop1(3, 0, 208)}).src[0], constant(208, 0xfffffff0));
     EXPECT_EQ(one({sop1(3, 0, 240)}).src[0], constant(240, 0x3f000000));     // 0.5
-    EXPECT_EQ(one({sop1(4, 0, 247)}).src[0], constant(247, 0xc0800000, 2));  // -4.0
+    // On a 64-bit operand a float constant is the f64 of the number: 0xc010000000000000 for -4.0.
+    EXPECT_EQ(one({sop1(4, 0, 247)}).src[0], constant(247, 0xc0100000, 2));  // -4.0
+    EXPECT_EQ(one({sop1(4, 0, 242)}).src[0], constant(242, 0x3ff00000, 2));  // 1.0
+    EXPECT_EQ(one({sop1(4, 0, 240)}).src[0], constant(240, 0x3fe00000, 2));  // 0.5
 
     inst = one({sop1(31, 0, 0)});
     EXPECT_EQ(inst.name, "s_getpc_b64");

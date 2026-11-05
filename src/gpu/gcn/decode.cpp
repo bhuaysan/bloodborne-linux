@@ -25,6 +25,16 @@ using detail::OpInfo;
 constexpr std::array<float, 8> float_constants = {0.5f, -0.5f, 1.0f, -1.0f,
                                                   2.0f, -2.0f, 4.0f, -4.0f};
 
+// `value` of the float inline constant with code `c`: the f32 pattern, or on a 64-bit operand the
+// high dword of the f64 (its low dword is 0 for every float constant).
+std::uint32_t float_constant(unsigned c, unsigned dwords) {
+    const float f = float_constants[c - 240];
+    if (dwords == 2) {
+        return static_cast<std::uint32_t>(std::bit_cast<std::uint64_t>(double{f}) >> 32);
+    }
+    return std::bit_cast<std::uint32_t>(f);
+}
+
 std::uint32_t bits(std::uint32_t word, unsigned low, unsigned count) {
     return (word >> low) & ((1u << count) - 1);
 }
@@ -121,8 +131,7 @@ private:
             return {OperandKind::constant, dwords, c16, static_cast<std::uint32_t>(value)};
         }
         if (c >= 240 && c <= 247) {
-            return {OperandKind::constant, dwords, c16,
-                    std::bit_cast<std::uint32_t>(float_constants[c - 240])};
+            return {OperandKind::constant, dwords, c16, float_constant(c, dwords)};
         }
         if (!valid_register(c, dwords)) {
             fail(std::format("invalid {}-dword scalar operand {}", dwords, c));
