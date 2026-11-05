@@ -3,30 +3,36 @@
 
 Each archive is a DCX (zlib) wrapping a BND4 archive, whose entries hold one or more shader
 programs. Only the 8 pinned archives are accepted. The formats are described in
-docs/formats/dcx.md, bnd4.md and shader-binary.md (the program split).
+docs/formats/dcx.md, bnd4.md and shader-binary.md (the program split, footer and metadata).
 
 Output, per archive, under OUT/<archive without .dcx>/:
     entries/<entry path>       each BND4 entry as stored
     programs/<entry path>.<k>  program k of that entry
-    index.json                 entry name, program index, offset in the entry and size
+    index.json                 per program: entry name, program index, offset in the entry,
+                               size, type and stage, code size and code hash (SHA-256 of the
+                               code); per entry: the resource, sampler, input and output names
 
 Usage: shaderbnd.py [-o DIR] [FILE ...]   (default: the 8 archives from BB_GAME_DIR)
+       shaderbnd.py --scan-eboot [ELF]    (report only: the OrbShdr footers in eboot.elf)
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import struct
 import sys
 import zlib
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 from cli import checked_out_dir, convert_each  # noqa: E402
+from ps4elf import ELF_DIR, PINNED_ELFS, PINNED_ELFS_HINT, PT_LOAD, ElfError, parse  # noqa: E402
 from shaderarchives import SHADER_ARCHIVES, SHADER_DIR  # noqa: E402
-from toolenv import analysis_dir, load_game_dir  # noqa: E402
+from toolenv import PinnedError, analysis_dir, load_game_dir, read_pinned  # noqa: E402
 
 
 class FormatError(Exception):
@@ -162,6 +168,101 @@ def split_programs(entry: bytes) -> list[tuple[int, int]]:
     return [(a, b - a) for a, b in zip(starts, ends)]
 
 
+# Footer block: the marker, a version byte (7), then five u32. The first holds the program
+# type in bits 2-5 and the code size in bits 8-31; bits 0-1 are 3 and bits 6-7 are 1 in every
+# program of the archives. The third is the u32 at 0x04 of the entry header, the fourth is 0.
+# The second and fifth are not interpreted.
+FOOTER = struct.Struct("<7sB5I")
+FOOTER_VERSION = 7
+FOOTER_FLAGS = (0xC3, 0x43)  # (mask, value) of the bits around the program type
+S_ENDPGM = bytes.fromhex("000081bf")
+
+# Hardware stage of each program type. Types 2 and 3 are vertex shaders that run as ES and LS,
+# 6 is the copy shader of a geometry shader and 8 a domain shader, both running as VS.
+STAGES = ("ps", "vs", "es", "ls", "cs", "gs", "vs", "hs", "vs")
+
+
+def read_footer(program: bytes, entry_hash: int) -> dict:
+    """Type, stage, code size and code hash of one program as split_programs cuts it."""
+    block = program.find(ORBSHDR)
+    if block < 0 or block + FOOTER.size > len(program):
+        raise FormatError("no complete OrbShdr footer block")
+    _, version, info, _, block_hash, zero, _ = FOOTER.unpack_from(program, block)
+    ptype, code_size = (info >> 2) & 0xF, info >> 8
+    if version != FOOTER_VERSION or info & FOOTER_FLAGS[0] != FOOTER_FLAGS[1] \
+            or ptype >= len(STAGES) or zero != 0:
+        raise FormatError(f"unsupported footer block {program[block:block + FOOTER.size].hex()}")
+    if block_hash != entry_hash:
+        raise FormatError(f"footer value {block_hash:#x} differs from the entry header")
+    if not len(S_ENDPGM) <= code_size <= block \
+            or program[code_size - len(S_ENDPGM):code_size] != S_ENDPGM:
+        raise FormatError(f"code size {code_size:#x} does not end after an s_endpgm")
+    return {"type": ptype, "stage": STAGES[ptype], "code_size": code_size,
+            "code_sha256": hashlib.sha256(program[:code_size]).hexdigest()}
+
+
+# Metadata: at 0x24 plus the u32 at 0x10 of the entry header, after the last footer block and
+# as many 16-byte data rows as the u32 at 0x38 says. A header of counts, record arrays in a
+# fixed order, then a pool of NUL-terminated names that ends the entry. Names are referenced
+# by u32 offsets relative to the field that holds them.
+META_HEADER = struct.Struct("<4IBBH2I")  # resources, 0, constants, samplers, inputs, outputs,
+#                                          stream-out records, 0, size of the name pool
+RESOURCE = struct.Struct("<II4s3I")  # slot, size (constant buffers), kind bytes, 0, 0, name
+CONSTANT_SIZE = 0x24  # skipped: the members of the constant buffers
+SAMPLER = struct.Struct("<4I")  # slot, 0, not interpreted, name
+VARYING = struct.Struct("<4sIII")  # kind bytes (byte 2: semantic index), 0, name, semantic
+STREAM_OUT_SIZE = 0x10  # skipped
+SHDR_META = 0x10
+SHDR_DATA_ROWS = 0x38
+
+
+def read_metadata(entry: bytes, after: int) -> dict:
+    """The names of an entry's resources, samplers, inputs and outputs. `after` is the end of
+    the last footer block."""
+    start = SHDR_AT + struct.unpack_from("<I", entry, SHDR_META)[0]
+    rows = struct.unpack_from("<I", entry, SHDR_DATA_ROWS)[0]
+    if start != after + 16 * rows or start > len(entry) - META_HEADER.size:
+        raise FormatError(f"metadata at {start:#x} does not follow the last footer block "
+                          f"and {rows} data rows")
+    (n_res, zero1, n_const, n_samp, n_in, n_out, n_so, zero2,
+     pool_size) = META_HEADER.unpack_from(entry, start)
+    pool = len(entry) - pool_size
+    if zero1 or zero2 or not start + META_HEADER.size <= pool:
+        raise FormatError("unsupported metadata header")
+
+    def name(field: int) -> str:
+        at = field + struct.unpack_from("<I", entry, field)[0]
+        end = entry.find(b"\0", at) if pool <= at < len(entry) else -1
+        if end < 0:
+            raise FormatError(f"name offset at {field:#x} is outside the name pool")
+        try:
+            return entry[at:end].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise FormatError(f"name at {at:#x} is not ASCII") from exc
+
+    pos = start + META_HEADER.size
+    if pos + n_res * RESOURCE.size + n_const * CONSTANT_SIZE + n_samp * SAMPLER.size \
+            + (n_in + n_out) * VARYING.size + n_so * STREAM_OUT_SIZE != pool:
+        raise FormatError("metadata records do not end where the name pool starts")
+    out: dict = {"resources": [], "samplers": [], "inputs": [], "outputs": []}
+    for _ in range(n_res):
+        slot, _, kind, *_ = RESOURCE.unpack_from(entry, pos)
+        out["resources"].append({"name": name(pos + 0x14), "slot": slot, "kind": kind.hex()})
+        pos += RESOURCE.size
+    pos += n_const * CONSTANT_SIZE
+    for _ in range(n_samp):
+        slot = SAMPLER.unpack_from(entry, pos)[0]
+        out["samplers"].append({"name": name(pos + 0xC), "slot": slot})
+        pos += SAMPLER.size
+    for i in range(n_in + n_out):
+        kind = entry[pos:pos + 4]
+        out["inputs" if i < n_in else "outputs"].append(
+            {"name": name(pos + 8), "semantic": name(pos + 0xC), "index": kind[2],
+             "kind": kind.hex()})
+        pos += VARYING.size
+    return out
+
+
 def entry_path(name: str) -> PurePosixPath:
     """The relative output path of an entry. Its backslashes become directories."""
     parts = name.split("\\")
@@ -175,22 +276,47 @@ class Archive:
     version: str
     entries: list[Entry]
     programs: list[dict]  # index.json rows
+    metadata: dict[str, dict]  # entry name: read_metadata
 
 
 def extract(dcx: bytes) -> Archive:
-    """Unpack an archive in memory and split its entries into programs."""
+    """Unpack an archive in memory, split its entries into programs and read their footers."""
     version, entries = unpack_bnd4(unpack_dcx(dcx))
     programs = []
+    metadata = {}
     for entry in entries:
         path = entry_path(entry.name)
         try:
             spans = split_programs(entry.data)
+            entry_hash = struct.unpack_from("<I", entry.data, 4)[0]
+            rows = [{"entry": entry.name, "program": k, "offset": offset, "size": size,
+                     "file": f"programs/{path}.{k}",
+                     **read_footer(entry.data[offset:offset + size], entry_hash)}
+                    for k, (offset, size) in enumerate(spans)]
+            last_block = entry.data.find(ORBSHDR, spans[-1][0])
+            metadata[entry.name] = read_metadata(entry.data, last_block + ORBSHDR_BLOCK)
         except FormatError as exc:
             raise FormatError(f"{entry.name}: {exc}") from exc
-        for k, (offset, size) in enumerate(spans):
-            programs.append({"entry": entry.name, "program": k, "offset": offset, "size": size,
-                             "file": f"programs/{path}.{k}"})
-    return Archive(version, entries, programs)
+        programs += rows
+    return Archive(version, entries, programs, metadata)
+
+
+def scan_eboot(elf: bytes) -> Counter:
+    """Report only: the OrbShdr footer blocks in a PS4 ELF, counted by loaded segment ("text",
+    "data", "rodata" or "other"), stage ("invalid" if the block doesn't parse) and bits 0-1 of
+    the type field."""
+    loads = [ph for ph in parse(elf).phdrs if ph.p_type == PT_LOAD]
+    counts: Counter = Counter()
+    pos = elf.find(ORBSHDR)
+    while pos >= 0:
+        seg = next(("text" if ph.p_flags & 1 else "data" if ph.p_flags & 2 else "rodata"
+                    for ph in loads if ph.p_offset <= pos < ph.p_offset + ph.p_filesz), "other")
+        info = struct.unpack_from("<I", elf, pos + 8)[0] if pos + 12 <= len(elf) else 0
+        ptype = (info >> 2) & 0xF
+        valid = elf[pos + 7] == FOOTER_VERSION and info & 0xC0 == 0x40 and ptype < len(STAGES)
+        counts[(seg, STAGES[ptype] if valid else "invalid", info & 3)] += 1
+        pos = elf.find(ORBSHDR, pos + 1)
+    return counts
 
 
 def write_archive(out_dir: Path, name: str, archive: Archive) -> Path:
@@ -206,7 +332,7 @@ def write_archive(out_dir: Path, name: str, archive: Archive) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data[row["entry"]][row["offset"]:row["offset"] + row["size"]])
     index = {"archive": name, "bnd4_version": archive.version, "entries": len(archive.entries),
-             "programs": archive.programs}
+             "programs": archive.programs, "metadata": archive.metadata}
     (base / "index.json").write_text(json.dumps(index, indent=1) + "\n", encoding="utf-8")
     return base
 
@@ -215,13 +341,32 @@ def default_inputs(game_dir: Path) -> list[Path]:
     return [game_dir / SHADER_DIR / name for name in sorted(SHADER_ARCHIVES.values())]
 
 
+def report_eboot(path: Path) -> int:
+    try:
+        _, elf = read_pinned(path, {k: v for k, v in PINNED_ELFS.items() if v == "eboot.elf"},
+                             PINNED_ELFS_HINT)
+        counts = scan_eboot(elf)
+    except (OSError, PinnedError, ElfError) as exc:
+        print(f"{path.name}: error: {exc}", file=sys.stderr)
+        return 1
+    for (seg, stage, low_bits), n in sorted(counts.items()):
+        print(f"{seg:6} {stage:7} bits 0-1 = {low_bits}: {n}")
+    print(f"total: {sum(counts.values())} OrbShdr markers")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Extract the shader programs of the game.")
     parser.add_argument("files", nargs="*", type=Path,
                         help=f"shader archives (default: the 8 in BB_GAME_DIR/{SHADER_DIR})")
     parser.add_argument("-o", "--out-dir", type=Path, default=analysis_dir() / "shaders",
                         help="output directory (default: analysis/shaders/ in the main checkout)")
+    parser.add_argument("--scan-eboot", type=Path, nargs="?", const=ELF_DIR / "eboot.elf",
+                        metavar="ELF", help="only count the OrbShdr footers in the self2elf "
+                        "output of eboot.bin (default: analysis/elf/eboot.elf)")
     args = parser.parse_args(argv)
+    if args.scan_eboot:
+        return report_eboot(args.scan_eboot)
 
     files = args.files
     if not files:
