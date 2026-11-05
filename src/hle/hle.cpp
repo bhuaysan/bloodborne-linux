@@ -3,9 +3,9 @@
 #include <sys/mman.h>
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <format>
@@ -16,6 +16,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "common/log.hpp"
 #include "common/memory.hpp"
 #include "hle/nid_table.hpp"
 
@@ -164,10 +165,7 @@ std::uintptr_t import_address(std::string_view library, std::string_view nid) {
     if (auto it = r.resolved.find(k); it != r.resolved.end()) {
         return it->second.address;
     }
-    std::fprintf(stderr, "hle: import %.*s %.*s was never resolved\n",
-                 static_cast<int>(library.size()), library.data(), static_cast<int>(nid.size()),
-                 nid.data());
-    std::abort();
+    common::log_fatal("hle", std::format("import {} {} was never resolved", library, nid));
 }
 
 StubObserver* set_stub_observer(StubObserver* observer) {
@@ -179,12 +177,18 @@ void on_stub_call(const StubInfo* stub, const std::uint64_t args[6]) {
     if (StubObserver* observer = registry().observer) {
         observer->on_call(*stub, args);
     } else if (should_log(call)) {
-        std::fprintf(stderr,
-                     "hle: stub %s (%s) %s %.*s call %" PRIu64 ": %#" PRIx64 " %#" PRIx64
-                     " %#" PRIx64 " %#" PRIx64 " %#" PRIx64 " %#" PRIx64 "\n",
-                     stub->library.c_str(), stub->module.c_str(), stub->nid.c_str(),
-                     static_cast<int>(stub->name.size()), stub->name.data(), call, args[0],
-                     args[1], args[2], args[3], args[4], args[5]);
+        // The message of #44's stub log, kept byte for byte (printf's %#x writes 0 as "0").
+        const std::string channel = "hle." + stub->library;
+        if (common::log_enabled(common::LogLevel::warn, channel)) {
+            std::array<char, 512> message{};
+            std::snprintf(message.data(), message.size(),
+                          "stub %s (%s) %s %.*s call %" PRIu64 ": %#" PRIx64 " %#" PRIx64
+                          " %#" PRIx64 " %#" PRIx64 " %#" PRIx64 " %#" PRIx64,
+                          stub->library.c_str(), stub->module.c_str(), stub->nid.c_str(),
+                          static_cast<int>(stub->name.size()), stub->name.data(), call, args[0],
+                          args[1], args[2], args[3], args[4], args[5]);
+            common::log_message(common::LogLevel::warn, channel, message.data());
+        }
     }
 }
 

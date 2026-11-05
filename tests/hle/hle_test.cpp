@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -9,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include "common/log.hpp"
 #include "loader/image.hpp"
 #include "loader/relocate.hpp"
 #include "support/game.hpp"
@@ -141,6 +143,25 @@ TEST(Hle, LogsWithoutObserver) {
     stub(0xabc);
     const std::string log = testing::internal::GetCapturedStderr();
     EXPECT_NE(log.find("libTest (libTestModule) loggedStub1 ? call 1: 0xabc "), std::string::npos)
+        << log;
+}
+
+// The stub line goes through the logger, on channel hle.<library>, with #44's message.
+TEST(Hle, StubLogGoesThroughTheLogger) {
+    using Fn = void (*)(std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t,
+                        std::uint64_t);
+    const auto stub = reinterpret_cast<Fn>(resolve(function("loggedStub2")));
+    bb::common::set_thread_name("stub-test");
+    testing::internal::CaptureStderr();
+    stub(0, 0x10, 2, 3, 4, 0xfedcba9876543210);
+    bb::common::set_log_filter(bb::common::LogFilter::parse("hle.libTest=error"));
+    stub(0, 0x10, 2, 3, 4, 5);
+    bb::common::set_log_filter(bb::common::LogFilter{});
+    const std::string log = testing::internal::GetCapturedStderr();
+    EXPECT_TRUE(std::regex_match(
+        log, std::regex("[0-9:.]{12} warn \\[stub-test\\] hle\\.libTest: stub libTest "
+                        "\\(libTestModule\\) loggedStub2 \\? call 1: 0 0x10 0x2 0x3 0x4 "
+                        "0xfedcba9876543210\n")))
         << log;
 }
 
