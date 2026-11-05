@@ -24,6 +24,15 @@ struct StubInfo {
     mutable std::atomic<std::uint64_t> calls{0};  // calls so far, including the current one
 };
 
+// One implementation that resolve() hands out through a trace thunk (debug builds). Lives as long
+// as the process; its thunk passes its address. `impl` must stay the first member: trace_entry
+// (stub_entry.S) jumps through it.
+struct TraceInfo {
+    void* impl;
+    std::string library, module, nid, channel;  // channel: "hle." + library
+    std::string_view name;                       // nid_name(nid)
+};
+
 // Receives stub calls instead of the log while it is installed.
 class StubObserver {
 public:
@@ -54,7 +63,9 @@ void register_export(std::string_view library, std::string_view nid, std::uintpt
 
 // The registered export of `imp`, else its registered implementation, else its function stub
 // (STT_FUNC) or its zero-filled 4 KiB data block (STT_OBJECT). Chosen on the first call per
-// (library, NID), then cached.
+// (library, NID), then cached. In builds without NDEBUG, an implementation is handed out as a
+// trace thunk instead if the log filter shows trace for hle.<library> at that first call
+// (docs/design/m3-core-os.md, "Logging").
 std::uintptr_t resolve(const loader::Import& imp);
 
 // What resolve() bound an import to.
@@ -73,6 +84,11 @@ StubObserver* set_stub_observer(StubObserver* observer);
 // Called by stub_entry (stub_entry.S, through the mangled name) with the integer argument
 // registers rdi, rsi, rdx, rcx, r8, r9.
 void on_stub_call(const StubInfo* stub, const std::uint64_t args[6]);
+
+// Called by trace_entry (stub_entry.S, through the mangled name) before a traced implementation
+// runs, with the address the call returns to and the integer argument registers rdi, rsi, rdx,
+// rcx, r8, r9. Logs the call at trace level on trace->channel if the filter shows it now.
+void on_traced_call(const TraceInfo* trace, std::uint64_t caller, const std::uint64_t args[6]);
 
 // Whether call number `call` (counted from 1) of one stub is logged: 1 to 10, then every 1000th.
 constexpr bool should_log(std::uint64_t call) {

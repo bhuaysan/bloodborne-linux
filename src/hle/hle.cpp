@@ -14,24 +14,27 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "common/log.hpp"
 #include "common/memory.hpp"
 #include "hle/nid_table.hpp"
 
-extern "C" void bb_hle_stub_entry();  // stub_entry.S
+extern "C" void bb_hle_stub_entry();   // stub_entry.S
+extern "C" void bb_hle_trace_entry();  // stub_entry.S
 
 namespace bb::hle {
 namespace {
 
 constexpr std::size_t thunk_size = 24;
 
-// Owns the executable pages that hold the thunks. A page is writable only while a thunk is
-// written into it; resolve() runs before game code, so no thread executes it meanwhile.
+// Owns the executable pages that hold the thunks, `mov r11, info; jmp entry`. A page is writable
+// only while a thunk is written into it; resolve() runs before game code, so no thread executes
+// it meanwhile.
 class ThunkPages {
 public:
-    std::uintptr_t add(const StubInfo* stub) {
+    std::uintptr_t add(const void* info_ptr, void (*entry_fn)()) {
         const std::size_t page = common::page_size();
         if (page_ == nullptr || used_ + thunk_size > page) {
             page_ = static_cast<std::byte*>(
@@ -41,8 +44,8 @@ public:
             protect(page, PROT_READ | PROT_WRITE);
         }
         std::byte* thunk = page_ + used_;
-        const auto entry = reinterpret_cast<std::uint64_t>(&bb_hle_stub_entry);
-        const auto info = reinterpret_cast<std::uint64_t>(stub);
+        const auto entry = reinterpret_cast<std::uint64_t>(entry_fn);
+        const auto info = reinterpret_cast<std::uint64_t>(info_ptr);
         std::memcpy(thunk, "\x49\xbb", 2);  // mov r11, imm64
         std::memcpy(thunk + 2, &info, 8);
         std::memcpy(thunk + 10, "\xff\x25\x00\x00\x00\x00", 6);  // jmp [rip+0]
@@ -73,16 +76,35 @@ struct Registry {
     std::unordered_map<std::string, std::uintptr_t> exports;
     std::unordered_map<std::string, Resolved> resolved;
     std::deque<StubInfo> stubs;                                // stable addresses
+    std::deque<TraceInfo> traces;                              // stable addresses
     ThunkPages thunks;
     std::vector<DataBlock> data_blocks;
     std::atomic<StubObserver*> observer = nullptr;
 };
 
-// Leaked on purpose: thunks point into `stubs`, and a thread or atexit handler can
+// Leaked on purpose: thunks point into `stubs` and `traces`, and a thread or atexit handler can
 // still call a stub while the process exits, so the registry is never destroyed.
 Registry& registry() {
     static Registry& r = *new Registry;
     return r;
+}
+
+// What resolve() hands out for the implementation `impl` of `imp`: a trace thunk if this is a
+// build without NDEBUG and the filter shows trace for hle.<library> now, else `impl` itself.
+// Called with the registry locked.
+std::uintptr_t implementation_address(Registry& r, const loader::Import& imp, void* impl) {
+#ifndef NDEBUG
+    std::string channel = "hle." + imp.library;
+    if (common::log_enabled(common::LogLevel::trace, channel)) {
+        const TraceInfo& trace = r.traces.emplace_back(impl, imp.library, imp.module, imp.nid,
+                                                       std::move(channel), nid_name(imp.nid));
+        return r.thunks.add(&trace, &bb_hle_trace_entry);
+    }
+#else
+    (void)r;
+    (void)imp;
+#endif
+    return reinterpret_cast<std::uintptr_t>(impl);
 }
 
 void log_shadowed(std::string_view library, std::string_view nid) {
@@ -135,7 +157,7 @@ std::uintptr_t resolve(const loader::Import& imp) {
     if (auto it = r.exports.find(k); it != r.exports.end()) {
         out = {it->second, Binding::exported};
     } else if (auto it = r.impls.find(k); it != r.impls.end()) {
-        out = {reinterpret_cast<std::uintptr_t>(it->second), Binding::implemented};
+        out = {implementation_address(r, imp, it->second), Binding::implemented};
     } else if (imp.type == loader::stt_object) {
         auto* block = static_cast<std::byte*>(
             common::map_anonymous(data_block_size, PROT_READ | PROT_WRITE, "hle: mmap"));
@@ -144,7 +166,7 @@ std::uintptr_t resolve(const loader::Import& imp) {
     } else {
         const StubInfo& stub =
             r.stubs.emplace_back(imp.library, imp.module, imp.nid, nid_name(imp.nid));
-        out = {r.thunks.add(&stub), Binding::stub};
+        out = {r.thunks.add(&stub, &bb_hle_stub_entry), Binding::stub};
     }
     r.resolved.emplace(k, out);
     return out.address;
@@ -189,6 +211,13 @@ void on_stub_call(const StubInfo* stub, const std::uint64_t args[6]) {
             common::log_message(common::LogLevel::warn, channel, message.data());
         }
     }
+}
+
+void on_traced_call(const TraceInfo* trace, std::uint64_t caller, const std::uint64_t args[6]) {
+    common::log(common::LogLevel::trace, trace->channel,
+                "call {} ({}) {} {} from {:#x}: {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}",
+                trace->library, trace->module, trace->nid, trace->name, caller, args[0], args[1],
+                args[2], args[3], args[4], args[5]);
 }
 
 Counts counts() {

@@ -1,10 +1,15 @@
 #include "hle/hle.hpp"
 
+#include <array>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <format>
 #include <regex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -185,6 +190,192 @@ TEST(Hle, ShadowedImplementationGoesThroughTheLogger) {
                         "[0-9:.]{12} warn \\[shadow-test\\] hle\\.libShadow: an export of "
                         "libShadow exportFirst shadows its implementation\n")))
         << log;
+}
+
+// Sets the log filter for its lifetime, then restores the default.
+struct FilterScope {
+    explicit FilterScope(std::string_view spec) {
+        bb::common::set_log_filter(bb::common::LogFilter::parse(spec));
+    }
+    ~FilterScope() { bb::common::set_log_filter(bb::common::LogFilter{}); }
+    FilterScope(const FilterScope&) = delete;
+    FilterScope& operator=(const FilterScope&) = delete;
+};
+
+// What the traced implementations below last received.
+struct Seen {
+    std::array<std::uint64_t, 7> ints;
+    std::array<double, 9> reals;
+    std::uint64_t returns_to;
+};
+Seen seen;
+
+// Integer arguments in all six registers and one on the stack; the return value fills rax.
+std::uint64_t traced_ints(std::uint64_t a, std::uint64_t b, std::uint64_t c, std::uint64_t d,
+                          std::uint64_t e, std::uint64_t f, std::uint64_t g) {
+    seen.ints = {a, b, c, d, e, f, g};
+    seen.returns_to = reinterpret_cast<std::uint64_t>(__builtin_return_address(0));
+    return 0xfedcba9876543210;
+}
+BB_HLE_FUNCTION("libTraceTest", "tracedInts", traced_ints);
+
+// Floating-point arguments in xmm0-xmm7 and one on the stack; the return value is in xmm0.
+double traced_reals(double x0, double x1, double x2, double x3, double x4, double x5, double x6,
+                    double x7, double x8, std::uint64_t a) {
+    seen.reals = {x0, x1, x2, x3, x4, x5, x6, x7, x8};
+    seen.ints[0] = a;
+    seen.returns_to = reinterpret_cast<std::uint64_t>(__builtin_return_address(0));
+    return -1.25e300;
+}
+BB_HLE_FUNCTION("libTraceTest", "tracedReals", traced_reals);
+
+// A variadic call passes the number of vector registers in al.
+int traced_format(char* out, std::size_t size, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    const int n = std::vsnprintf(out, size, format, args);
+    va_end(args);
+    return n;
+}
+BB_HLE_FUNCTION("libTraceTest", "tracedFormt", traced_format);
+
+// Returns rax as it was on entry.
+extern "C" std::uint64_t bb_test_echo_rax();
+asm(".text\n"
+    ".type bb_test_echo_rax, @function\n"
+    "bb_test_echo_rax:\n"
+    "    ret\n"
+    ".size bb_test_echo_rax, . - bb_test_echo_rax\n");
+BB_HLE_FUNCTION("libTraceTest", "tracedRax", bb_test_echo_rax);
+
+// Calls `fn` with rax = `value` and returns rax after the call.
+std::uint64_t call_with_rax(std::uintptr_t fn, std::uint64_t value) {
+    std::uint64_t out;
+    asm volatile(
+        "mov %%rsp, %%rbx\n\t"
+        "sub $128, %%rsp\n\t"  // past the red zone
+        "and $-16, %%rsp\n\t"
+        "call *%[fn]\n\t"
+        "mov %%rbx, %%rsp"
+        : "=a"(out)
+        : "a"(value), [fn] "r"(fn)
+        : "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "xmm0", "xmm1", "xmm2",
+          "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10", "xmm11", "xmm12",
+          "xmm13", "xmm14", "xmm15", "memory", "cc");
+    return out;
+}
+
+Import trace_import(std::string nid) {
+    return {std::move(nid), "libTraceTest", "libTraceTestModule", bb::loader::stt_func};
+}
+
+// Matches one trace line on hle.libTraceTest whose message starts with `start`.
+[[maybe_unused]] bool is_trace_line(const std::string& log, const std::string& start) {
+    static const std::regex line("[0-9:.]{12} trace \\[trace-test\\] hle\\.libTraceTest: [^\n]*\n");
+    const std::string prefix = "] hle.libTraceTest: " + start;
+    return std::regex_match(log, line) && log.find(prefix) != std::string::npos;
+}
+
+// With trace shown for hle.<library> when it is resolved, a call through the GOT slot of an
+// implementation logs one line with the address it returns to, and the implementation gets
+// every argument and returns its value unchanged.
+TEST(HleTrace, LogsImplementationCallsThroughTheGot) {
+    std::array<std::uintptr_t, 2> got{};
+    {
+        const FilterScope trace("hle.libTraceTest=trace");
+        got = {resolve(trace_import("tracedInts")), resolve(trace_import("tracedReals"))};
+    }
+#ifdef NDEBUG
+    EXPECT_EQ(got[0], reinterpret_cast<std::uintptr_t>(&traced_ints));
+    GTEST_SKIP() << "HLE calls are traced in builds without NDEBUG only";
+#else
+    EXPECT_NE(got[0], reinterpret_cast<std::uintptr_t>(&traced_ints));
+    EXPECT_NE(got[1], reinterpret_cast<std::uintptr_t>(&traced_reals));
+    EXPECT_EQ(resolve(trace_import("tracedInts")), got[0]);
+    EXPECT_EQ(import_address("libTraceTest", "tracedInts"), got[0]);
+    EXPECT_EQ(binding("libTraceTest", "tracedInts"), Binding::implemented);
+    bb::common::set_thread_name("trace-test");
+    const FilterScope trace("hle.libTraceTest=trace");
+
+    testing::internal::CaptureStderr();
+    const auto ints = reinterpret_cast<decltype(&traced_ints)>(std::as_const(got)[0]);
+    EXPECT_EQ(ints(1, 0x22, 0x333, 0x4444, 0x55555, 0xfedcba9876543210, 7), 0xfedcba9876543210);
+    std::string log = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(seen.ints, (std::array<std::uint64_t, 7>{1, 0x22, 0x333, 0x4444, 0x55555,
+                                                       0xfedcba9876543210, 7}));
+    EXPECT_TRUE(is_trace_line(
+        log, std::format("call libTraceTest (libTraceTestModule) tracedInts ? from {:#x}: 0x1 "
+                         "0x22 0x333 0x4444 0x55555 0xfedcba9876543210\n",
+                         seen.returns_to)))
+        << log;
+
+    testing::internal::CaptureStderr();
+    const auto reals = reinterpret_cast<decltype(&traced_reals)>(std::as_const(got)[1]);
+    EXPECT_EQ(reals(0.5, -1.0, 2.25, 3e10, -4e-10, 5.0, 6.125, 7.0, 8.5, 0x99), -1.25e300);
+    log = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(seen.reals, (std::array<double, 9>{0.5, -1.0, 2.25, 3e10, -4e-10, 5.0, 6.125, 7.0,
+                                                 8.5}));
+    EXPECT_EQ(seen.ints[0], 0x99U);
+    EXPECT_TRUE(is_trace_line(
+        log, std::format("call libTraceTest (libTraceTestModule) tracedReals ? from {:#x}: 0x99 ",
+                         seen.returns_to)))
+        << log;
+#endif
+}
+
+// The thunk keeps rax, which a variadic call sets to the number of vector registers it uses.
+TEST(HleTrace, KeepsRax) {
+    std::uintptr_t format_addr = 0;
+    std::uintptr_t rax_addr = 0;
+    {
+        const FilterScope trace("hle.libTraceTest=trace");
+        format_addr = resolve(trace_import("tracedFormt"));
+        rax_addr = resolve(trace_import("tracedRax"));
+    }
+    const FilterScope trace("hle.libTraceTest=trace");
+    testing::internal::CaptureStderr();
+    char text[64];
+    const int n = reinterpret_cast<decltype(&traced_format)>(format_addr)(
+        text, sizeof text, "%d %.2f %s %.1f", 17, 2.25, "x", -0.5);
+    const std::uint64_t rax = call_with_rax(rax_addr, 0x0123456789abcdef);
+    const std::string log = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(n, 14);
+    EXPECT_STREQ(text, "17 2.25 x -0.5");
+    EXPECT_EQ(rax, 0x0123456789abcdefU);
+#ifndef NDEBUG
+    EXPECT_NE(log.find("call libTraceTest (libTraceTestModule) tracedFormt ? from 0x"),
+              std::string::npos)
+        << log;
+    EXPECT_NE(log.find("call libTraceTest (libTraceTestModule) tracedRax ? from 0x"),
+              std::string::npos)
+        << log;
+#endif
+}
+
+std::uint64_t untraced(std::uint64_t x) {
+    return x + 1;
+}
+BB_HLE_FUNCTION("libTraceOff", "untraced", untraced);
+BB_HLE_FUNCTION("libTraceTest", "filterLater", untraced);
+
+// Without trace for hle.<library> at resolve time, the GOT gets the implementation itself, and
+// once traced, the filter at call time decides whether a line is written. Exports and stubs are
+// never traced.
+TEST(HleTrace, OnlyWhenTheFilterShowsTraceAtResolve) {
+    std::uintptr_t later = 0;
+    {
+        const FilterScope trace("hle=trace,hle.libTraceOff=debug");
+        EXPECT_EQ(resolve({"untraced", "libTraceOff", "libTraceOffModule", bb::loader::stt_func}),
+                  reinterpret_cast<std::uintptr_t>(&untraced));
+        register_export("libTraceTest", "tracedExprt", 0x1234);
+        EXPECT_EQ(resolve(trace_import("tracedExprt")), 0x1234U);
+        resolve(trace_import("tracedStub1"));
+        EXPECT_EQ(binding("libTraceTest", "tracedStub1"), Binding::stub);
+        later = resolve(trace_import("filterLater"));
+    }
+    testing::internal::CaptureStderr();
+    EXPECT_EQ(reinterpret_cast<decltype(&untraced)>(later)(41), 42U);
+    EXPECT_EQ(testing::internal::GetCapturedStderr(), "");
 }
 
 // Every import of the eboot gets a stub or a data block, and a call through a GOT slot reaches
