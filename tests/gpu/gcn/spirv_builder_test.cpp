@@ -1,5 +1,8 @@
-// SPIR-V builder: the word encoding, sharing of types and constants, misuse, and modules shaped
-// like the translator's output for each stage, validated by spirv-val.
+// SPIR-V builder: the word encoding, sharing of types and constants, misuse, and a compute module
+// shaped like the translator's output, validated by spirv-val. The word-encoding tests build
+// fragments that spirv-val would reject (no capability, undefined ids), so they compare words
+// only; every helper they use also appears in the validated module. The vertex and fragment
+// modules come with the image types in #129.
 
 #include <cstdint>
 #include <stdexcept>
@@ -224,7 +227,8 @@ TEST(SpirvBuilder, ValidatorRejectsAnInvalidModule) {
 
 // A compute shader with the pieces the translator uses: the draw block through a push constant
 // and a buffer device address, subgroup operations, LDS, registers as local variables, an
-// extended instruction, a selection and a loop with a phi.
+// extended instruction, float and signed arithmetic, a function call, a selection and a loop
+// with a phi.
 TEST(SpirvBuilder, ComputeModuleValidates) {
     if (!have_spirv_val()) {
         GTEST_SKIP() << "spirv-val not found";
@@ -236,13 +240,17 @@ TEST(SpirvBuilder, ComputeModuleValidates) {
                      spv::Capability::GroupNonUniformShuffle}) {
         b.capability(cap);
     }
+    // Core since SPIR-V 1.5, but still a valid declaration.
+    b.extension("SPV_KHR_physical_storage_buffer");
     b.memory_model(spv::AddressingModel::PhysicalStorageBuffer64, spv::MemoryModel::GLSL450);
     const Id glsl = b.import_extended("GLSL.std.450");
 
     const Id void_t = b.type_void();
     const Id bool_t = b.type_bool();
     const Id u32 = b.type_int(32, false);
+    const Id i32 = b.type_int(32, true);
     const Id u64 = b.type_int(64, false);
+    const Id f32 = b.type_float(32);
     const Id uvec4 = b.type_vector(u32, 4);
     const Id c0 = b.constant_u32(0);
     const Id c1 = b.constant_u32(1);
@@ -272,6 +280,13 @@ TEST(SpirvBuilder, ComputeModuleValidates) {
     const Id mask = b.variable(b.type_pointer(SC::Private, uvec4), SC::Private,
                                b.constant_composite(uvec4, {c0, c1, c0, c1}));
 
+    // A helper function with a parameter, called from main.
+    const Id plus_one = b.begin_function(u32, b.type_function(u32, {u32}));
+    const Id x = b.parameter(u32);
+    b.begin_block(b.id());
+    b.op_void(Op::OpReturnValue, {b.op(Op::OpIAdd, u32, {x, c1})});
+    b.end_function();
+
     const Id main = b.begin_function(void_t, b.type_function(void_t));
     const Id u32_fn = b.type_pointer(SC::Function, u32);
     const Id v0 = b.local_variable(u32_fn, c0);
@@ -283,7 +298,8 @@ TEST(SpirvBuilder, ComputeModuleValidates) {
                            {b.op(Op::OpLoad, u64, {address_ptr})});
     const Id lane = b.op(Op::OpBitwiseAnd, u32, {index, c63});
     b.op_void(Op::OpStore, {v0, lane});
-    const Id active = b.op(Op::OpULessThan, bool_t, {lane, b.constant_u32(32)});
+    const Id below_32 = b.op(Op::OpULessThan, bool_t, {lane, b.constant_u32(32)});
+    const Id active = b.op(Op::OpLogicalAnd, bool_t, {below_32, b.constant_bool(true)});
     const Id ballot = b.op(Op::OpGroupNonUniformBallot, uvec4, {subgroup, active});
     b.op_void(Op::OpStore, {mask, ballot});
     const Id first = b.op(Op::OpGroupNonUniformBallotFindLSB, u32, {subgroup, ballot});
@@ -296,7 +312,12 @@ TEST(SpirvBuilder, ComputeModuleValidates) {
     const Id lsb = b.op(Op::OpExtInst, u32, {glsl, GLSLstd450FindILsb, read});
     // Declared late, emitted at the start of the first block.
     const Id v1 = b.local_variable(u32_fn, b.constant_null(u32));
-    b.op_void(Op::OpStore, {v1, lsb});
+    // (u32(f32(lsb) * 0.5) as i32) - 1, stored back as u32.
+    const Id half = b.op(Op::OpFMul, f32,
+                         {b.op(Op::OpConvertUToF, f32, {lsb}), b.constant_f32(0.5f)});
+    const Id as_signed = b.op(Op::OpBitcast, i32, {b.op(Op::OpConvertFToU, u32, {half})});
+    const Id decremented = b.op(Op::OpIAdd, i32, {as_signed, b.constant_i32(-1)});
+    b.op_void(Op::OpStore, {v1, b.op(Op::OpBitcast, u32, {decremented})});
 
     const Id then_block = b.id();
     const Id merge = b.id();
@@ -318,7 +339,7 @@ TEST(SpirvBuilder, ComputeModuleValidates) {
     b.begin_block(body);
     b.op_void(Op::OpBranch, {cont});
     b.begin_block(cont);
-    b.op(Op::OpIAdd, u32, {i, c1}, next);
+    b.op(Op::OpFunctionCall, u32, {plus_one, i}, next);
     b.op_void(Op::OpBranch, {header});
     b.begin_block(exit);
     const Id out = b.op(Op::OpAccessChain, b.type_pointer(SC::PhysicalStorageBuffer, u32),
