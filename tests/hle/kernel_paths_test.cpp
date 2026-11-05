@@ -150,11 +150,21 @@ TEST_F(PathMapTest, LongNames) {
     EXPECT_EQ(map_.resolve("/app0/" + std::string(256, 'a'), Access::read).error,
               guest(ENAMETOOLONG));
     EXPECT_TRUE(map_.resolve("/app0/" + std::string(255, 'a'), Access::read));
-    std::string path = "/app0";
-    while (path.size() < 1024) {
-        path += "/abc";
-    }
-    EXPECT_EQ(map_.resolve(path, Access::read).error, guest(ENAMETOOLONG));
+    // PATH_MAX is 1024 including the NUL: 1023 bytes resolve, 1024 fail.
+    const auto path_of_size = [](std::size_t size) {
+        std::string path = "/app0";
+        while (size - path.size() > 201) {
+            path += "/" + std::string(200, 'a');
+        }
+        path += "/" + std::string(size - path.size() - 1, 'b');
+        return path;
+    };
+    const std::string longest = path_of_size(1023);
+    ASSERT_EQ(longest.size(), 1023u);
+    EXPECT_TRUE(map_.resolve(longest, Access::read));
+    const std::string too_long = path_of_size(1024);
+    ASSERT_EQ(too_long.size(), 1024u);
+    EXPECT_EQ(map_.resolve(too_long, Access::read).error, guest(ENAMETOOLONG));
 }
 
 TEST_F(PathMapTest, ProfileDirectories) {
