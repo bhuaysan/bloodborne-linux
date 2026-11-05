@@ -13,7 +13,7 @@ src/
   game/      bbgame     decompiled functions (registered into bbhook), the image accessor
   harness/   bbharness  differential test harness (tests only)
   tools/                small command-line programs (bb-load)
-tests/<target>/         GoogleTest unit tests, one directory per library
+tests/<target>/         GoogleTest unit and differential tests, one directory per target
 tests/support/          bbtestsupport: shared test helpers (game directory lookup, BB_REQUIRE_GAME)
 tests/harness/          harness tests, plus bbeboottest: the EbootTest fixture (also used by tests/game/)
 ```
