@@ -145,12 +145,20 @@ SHDR_AT = 0x24
 CODE_BASE = 0x34  # the u32 at 0x3C is the first program's code offset from here
 ORBSHDR = b"OrbShdr"
 ORBSHDR_BLOCK = 0x1C
+# Entry header fields with the same value in every entry of the archives: (offset, bytes).
+SHDR_FIXED = ((0x00, bytes.fromhex("0003e220")), (0x08, bytes(4)), (0x0E, bytes(2)),
+              (0x28, bytes.fromhex("07000100")), (0x2E, bytes(6)), (0x40, b"\xff" * 4))
+SHDR_HEADER_END = 0x44
 
 
 def split_programs(entry: bytes) -> list[tuple[int, int]]:
     """(offset, size) of each program in a shader entry."""
-    if entry[SHDR_AT:SHDR_AT + 4] != SHDR_TAG or len(entry) < CODE_BASE + 0xC:
+    if entry[SHDR_AT:SHDR_AT + 4] != SHDR_TAG or len(entry) < SHDR_HEADER_END:
         raise FormatError("no Shdr header at 0x24")
+    for at, value in SHDR_FIXED:
+        if entry[at:at + len(value)] != value:
+            raise FormatError(f"unsupported entry header field at {at:#x}: "
+                              f"{entry[at:at + len(value)].hex()}")
     start = CODE_BASE + struct.unpack_from("<I", entry, 0x3C)[0]
     starts = []
     marker = entry.find(ORBSHDR, start)
@@ -207,7 +215,10 @@ def read_footer(program: bytes, entry_hash: int) -> dict:
 # by u32 offsets relative to the field that holds them.
 META_HEADER = struct.Struct("<4IBBH2I")  # resources, 0, constants, samplers, inputs, outputs,
 #                                          stream-out records, 0, size of the name pool
-RESOURCE = struct.Struct("<II4s3I")  # slot, size (constant buffers), kind bytes, 0, 0, name
+RESOURCE = struct.Struct("<II4s3I")  # slot, size, kind bytes, members, first member, name
+# Kinds with this byte 2 (constant buffers and a few others) own a range of the constant
+# records: `members` records from index `first member`. All other kinds have 0 in both.
+MEMBERS_KIND = 0x6A
 CONSTANT_SIZE = 0x24  # skipped: the members of the constant buffers
 SAMPLER = struct.Struct("<4I")  # slot, 0, not interpreted, name
 VARYING = struct.Struct("<4sIII")  # kind bytes (byte 2: semantic index), 0, name, semantic
@@ -245,17 +256,25 @@ def read_metadata(entry: bytes, after: int) -> dict:
             + (n_in + n_out) * VARYING.size + n_so * STREAM_OUT_SIZE != pool:
         raise FormatError("metadata records do not end where the name pool starts")
     out: dict = {"resources": [], "samplers": [], "inputs": [], "outputs": []}
-    for _ in range(n_res):
-        slot, _, kind, *_ = RESOURCE.unpack_from(entry, pos)
+    for i in range(n_res):
+        slot, _, kind, members, first, _ = RESOURCE.unpack_from(entry, pos)
+        if (kind[2] == MEMBERS_KIND and not (members >= 1 and first + members <= n_const)) \
+                or (kind[2] != MEMBERS_KIND and (members or first)):
+            raise FormatError(f"resource {i} (kind {kind.hex()}): unsupported member range "
+                              f"{first}+{members} of {n_const} constants")
         out["resources"].append({"name": name(pos + 0x14), "slot": slot, "kind": kind.hex()})
         pos += RESOURCE.size
     pos += n_const * CONSTANT_SIZE
-    for _ in range(n_samp):
-        slot = SAMPLER.unpack_from(entry, pos)[0]
+    for i in range(n_samp):
+        slot, zero, *_ = SAMPLER.unpack_from(entry, pos)
+        if zero:
+            raise FormatError(f"sampler {i}: unsupported value {zero:#x} at 0x04")
         out["samplers"].append({"name": name(pos + 0xC), "slot": slot})
         pos += SAMPLER.size
     for i in range(n_in + n_out):
-        kind = entry[pos:pos + 4]
+        kind, zero, *_ = VARYING.unpack_from(entry, pos)
+        if zero:
+            raise FormatError(f"input/output {i}: unsupported value {zero:#x} at 0x04")
         out["inputs" if i < n_in else "outputs"].append(
             {"name": name(pos + 8), "semantic": name(pos + 0xC), "index": kind[2],
              "kind": kind.hex()})
