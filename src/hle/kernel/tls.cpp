@@ -33,8 +33,15 @@ struct Module {
     std::size_t first_byte;  // link_addr % align: where the block starts in its aligned allocation
 };
 
-std::mutex modules_mutex;
-std::vector<Module> modules;  // guarded by modules_mutex
+struct Templates {
+    std::mutex mutex;
+    std::vector<Module> modules;  // guarded by mutex
+};
+
+Templates& templates() {
+    static Templates& t = *new Templates;  // leaked: game threads may call in during exit
+    return t;
+}
 
 std::atomic<std::size_t> live_blocks{0};
 
@@ -83,9 +90,10 @@ private:
     std::byte* create(std::uint64_t id, std::uint64_t offset) {
         Module m;
         {
-            const std::lock_guard lock(modules_mutex);
-            const auto it = std::ranges::find(modules, id, &Module::id);
-            if (it == modules.end()) {
+            Templates& t = templates();
+            const std::lock_guard lock(t.mutex);
+            const auto it = std::ranges::find(t.modules, id, &Module::id);
+            if (it == t.modules.end()) {
                 fail("no TLS template registered for the module", id, offset);
             }
             m = *it;
@@ -161,11 +169,12 @@ void register_tls_module(std::uint64_t id, const std::byte* init, const loader::
             "hle.kernel: TLS module {}: bad template ({:#x} file bytes, {:#x} bytes, align {:#x})",
             id, tls.file_size, tls.mem_size, tls.align));
     }
-    const std::lock_guard lock(modules_mutex);
-    if (std::ranges::find(modules, id, &Module::id) != modules.end()) {
+    Templates& t = templates();
+    const std::lock_guard lock(t.mutex);
+    if (std::ranges::find(t.modules, id, &Module::id) != t.modules.end()) {
         throw std::logic_error(std::format("hle.kernel: TLS module {} is registered twice", id));
     }
-    modules.push_back(
+    t.modules.push_back(
         {id, init, tls.file_size, tls.mem_size, align, tls.link_addr & (align - 1)});
 }
 
