@@ -29,7 +29,7 @@ All code is in namespace `bb` with a nested namespace per library (`bb::loader`,
 
 ### Static registration
 
-HLE implementations (`bbhle` and later modules) and replacements (`bbgame`) register themselves into registries owned by `bbhle` and `bbhook`, through static objects in their source files. A static archive would drop object files that nothing references, and their registrations with them. Targets that contain registrations are therefore CMake `OBJECT` libraries, and only executables link them, directly. `bbharness` is a `STATIC` library that takes only the compile-time usage requirements (include directories) of `bbgame` and `bbhle`, for example through `$<COMPILE_ONLY:…>`, never their objects; each test executable links `bbgame` and `bbhle` itself. A `STATIC` library that links an `OBJECT` library puts its objects into the archive again, where the final link would drop them silently. Every registry is a function-local static (construct on first use), so the order of static initialization across files doesn't matter.
+HLE implementations (`bbhle` and later modules) and replacements (`bbgame`) register themselves into registries owned by `bbhle` and `bbhook`, through static objects in their source files. A static archive would drop object files that nothing references, and their registrations with them. Targets that contain registrations are therefore CMake `OBJECT` libraries, and only executables link them, directly. `bbharness` is a `STATIC` library that takes only the compile-time usage requirements (include directories) of `bbgame` and `bbhle`, through `$<COMPILE_ONLY:…>` (which needs CMake 3.27, the project's minimum), never their objects; each test executable links `bbgame` and `bbhle` itself. A `STATIC` library that links an `OBJECT` library puts its objects into the archive again, where the final link would drop them silently. Every registry is a function-local static (construct on first use), so the order of static initialization across files doesn't matter.
 
 ## Addresses
 
@@ -166,7 +166,7 @@ The NID name table is generated at build time from `symbols/nids.csv` by a small
 
 ### Data imports
 
-Each unresolved data import (`STT_OBJECT`) gets its own zero-filled 4 KiB block, also cached per (library, NID). `R_X86_64_64` relocations against imported data use small offsets (`symbol + 0x10`, see `docs/formats/elf-dynamic.md`), which stay inside the block. The harness compares these blocks like the data segment.
+Each unresolved data import (`STT_OBJECT`) gets its own zero-filled 4 KiB block, also cached per (library, NID). `R_X86_64_64` relocations against imported data use small offsets (`symbol + 0x10`, see `docs/formats/elf-dynamic.md`), which stay inside the block. The harness compares these blocks like the data segment. It finds them through `bb::hle::data_blocks()`, a copy of the list of `DataBlock{library, nid, data}` in creation order, each `bb::hle::data_block_size` (4096) bytes.
 
 ## Hooks
 
@@ -238,10 +238,17 @@ class Arena {                        // 16 MiB, mmap'd, zero in the baseline
     char* str(std::string_view s);   // with a terminating NUL
     std::byte* bytes(std::span<const std::byte> b);
 };
-class Harness {
+struct StubCall {
+    const hle::StubInfo* stub;
+    std::array<std::uint64_t, 6> args;  // rdi, rsi, rdx, rcx, r8, r9
+};
+class Harness : private hle::StubObserver {  // installs itself as the stub observer
     explicit Harness(loader::Image& image);  // takes the baseline
     Arena& arena();
-    void restore();                  // baseline back into every region, arena allocation at 0
+    void restore();                  // baseline back into every region, arena allocation at 0,
+                                     // empty stub log
+    const std::vector<StubCall>& log() const;  // stub calls since the last restore
+    void declare_arity(std::string_view library, std::string_view nid, int n);  // 0..6
     template <class Sig, class Build>
     Result compare(std::uint64_t link_addr, Sig* replacement, Build&& build);
 };
@@ -253,7 +260,7 @@ class Result {                       // true when nothing differs
 
 The arena is a bump allocator that starts at offset 0 again at every restore, so a builder that makes the same calls gets the same addresses in both runs, and the layout is the same in every run of a build. `alloc` throws `std::length_error` when the arena is full. The builder returns a `std::tuple` that converts to the parameter types of `Sig`. Until the second part of #46, `compare` rejects floating-point and `void` return types at compile time.
 
-A report line names each difference: `return value: original 0x28, replacement 0x29`, or `memory: image 0x4100..0x4101 differs: original 15, replacement 16` (link addresses, end exclusive, up to 8 bytes of each side shown) and `memory: arena +0x4..+0x5 differs: …` (offsets). At most 8 ranges are listed, then their total. The harness core needs only a mapped and relocated `Image`, so its tests use a synthetic ELF with hand-assembled functions and run without the game.
+A report line names each difference: `return value: original 0x28, replacement 0x29`, or `memory: image 0x4100..0x4101 differs: original 15, replacement 16` (link addresses, end exclusive, up to 8 bytes of each side shown) and `memory: arena +0x4..+0x5 differs: …` (offsets). At most 8 ranges are listed, then their total. A data block is the region `data block <library> <nid>`, reported as offsets like the arena. Only the blocks that exist when the harness is constructed are in the snapshot. A stub log difference gives `stub log: differs at call 2 (original 2 calls, replacement 2)` (counted from 1), then up to 16 calls of each side as `  original 1: libTest harnessImpA (?) 0x… 0x… 0x… 0x… 0x… 0x…` (library, NID, name, all six arguments). `declare_arity` throws `std::invalid_argument` outside 0..6. Only one harness may exist at a time, because it is the process's stub observer from construction to destruction. The harness core needs only a mapped and relocated `Image`, so its tests use a synthetic ELF with hand-assembled functions and run without the game.
 
 ### One comparison
 
@@ -280,7 +287,7 @@ Not compared: the stack below the call, registers other than the return register
 - No heap: an import such as `malloc` is a stub that returns 0. Functions that allocate wait for M3, where `malloc` comes either from an HLE allocator or from the loaded `libc.prx`. Either way its memory must come from the arena so it is compared too.
 - A crash in the original or the replacement kills the test binary. Isolating each call in a forked child can come later if it is needed.
 - The original code isn't instrumented by AddressSanitizer. Only the replacement and the harness are.
-- AddressSanitizer's stack-use-after-return detection, on by default, moves an instrumented function's locals into fake stack frames on the heap. Pointers to the replacement's locals would then not look like stack pointers and would compare unequal. The harness turns it off with `__asan_default_options()` returning `detect_stack_use_after_return=0`, defined in the harness's GoogleTest main so the linker keeps it.
+- AddressSanitizer's stack-use-after-return detection, on by default, moves an instrumented function's locals into fake stack frames on the heap. Pointers to the replacement's locals would then not look like stack pointers and would compare unequal. The harness turns it off with `__asan_default_options()` returning `detect_stack_use_after_return=0`, defined in the harness tests' own main (`tests/harness/main.cpp`, instead of `gtest_main`) so the linker keeps it.
 - With clang, `-fsanitize=undefined` includes `-fsanitize=function`, which reads a signature word next to the target of every indirect call. Game code and stub thunks have none, so clang builds add `-fno-sanitize=function`. GCC has no such check.
 
 ## Tools
