@@ -24,7 +24,8 @@ The other NIDs stay unnamed. The FreeBSD manual page lists and the derivation ru
 |---|---|---|
 | `959qrazPIrg` | libc.prx preinit | Returns the runtime address of the eboot's `PT_SCE_PROCPARAM` block (see the design note, "libc runs the game's allocator") *(survey)* |
 | `p5EcQeEeJAE` | libc.prx 0x1fb58, once at init | `rdi` = a static 3-slot table (libc.prx 0xba1e0), filled from the allocator tables the eboot supplies in its process parameters (entries +0x20, +0x28, +0x50, or +0x20, +0x30, +0x28 of the fallback table). Result ignored. Hands the kernel side callbacks from those tables |
-| `OMDRKKAZ8I4`, `zE-wXIZjLoM` | libc.prx | Status reports: libc passes a code, e.g. when the process parameters are invalid *(survey)* |
+| `OMDRKKAZ8I4` | libc.prx 0x5c4, 0x1f56b, 0x1f823, 0x1fb9e, 0x1fbc6, 0x23d58, 0x60027, 0x61357, 0x61367 | Error report: `(code, 0)` with a code 0xa00200xx. The wrapper at 0x1f560 has no code after its call (it falls into padding), so at least there it ends the process |
+| `zE-wXIZjLoM` | libc.prx 0x64b, 0x657, 0x1f70b, 0x1f7c4, 0x5ff2a, 0x5ff8a, 0x603cb, 0x611ab | Status report: `(code, 0)` with a code 0xa00200xx; returns. libc's exit paths call it right before `_exit` (0x5ff2a: 0xa0020003 for status 0, 0xa0020004 otherwise) |
 | `Wl2o5hOVZdw` | libc.prx 0x1fe83, 0x22494, 0x268af; tail call at 0x1fe10 | `rdi` = a tag string (the name printed as `[%s]` in the report before it, or `"SceLibc"`). Result ignored. Called once after a multi-line diagnostic report printed through libc's printf: ends the report for that tag |
 | `DRuBt2pvICk` | libc.prx 0x2729a, in libc's `read` wrapper (0x27210) | `(0, buffer, count)`: the fast path for fd 0 (console input). The result is returned unchanged, without errno conversion. Other descriptors take the general path |
 | `FxVZqBAA7ks` | libc.prx 0x27362, in libc's `write` wrapper (0x27340) | `(fd, buffer, count)` for fd 1 and 2: direct console write. The result is returned unchanged |
@@ -33,7 +34,7 @@ The other NIDs stay unnamed. The FreeBSD manual page lists and the derivation ru
 | `crb5j7mkk1c` | libc.prx 0x54530 (function 0x54510) | `rdi` = a 64-bit value from an object's +0x18. Result 2 and 1 select object states 3 and 2, anything else 0. Classifies a handle |
 | `OjWstbIRPUo` | libc.prx 0x55810 (tail jump from a libc export) | `rdi` = an object's resource pointer (+0x148). Result ignored. Releases it on the object's failure path |
 | `f7KBOafysXo` | libc.prx | `(path, 1 or 2, 0x118-byte result)`, possibly a file or module query. The unwinder may need module information from it (design note, open question 3) *(survey)* |
-| `6xVpy0Fdq+I` | libc.prx | Signal-related, next to `signal`, `sigprocmask`, `sigfillset` and `sigreturn` *(survey)* |
+| `6xVpy0Fdq+I` | libc.prx 0x2fcc6 (`setjmp`), 0x2fd17 (`longjmp`) | Takes the arguments of `sigprocmask`: `(1, NULL, jmp_buf + 0x48)` saves the mask, `(3, jmp_buf + 0x48, NULL)` restores it. The 16 bytes at +0x48 hold the signal set |
 
 ### Threads
 

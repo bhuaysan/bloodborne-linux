@@ -404,7 +404,8 @@ TEST(HleGame, RelocatesTheEbootWithStubs) {
     bb::loader::Image image = bb::loader::map_eboot(game);
     bb::loader::relocate(image, resolve, bb::loader::eboot_module_id);
     image.finalize_protection();
-    EXPECT_EQ(counts().stubs - before.stubs, 663U);  // 3 event queue imports implemented
+    // The HLE modules implement some of the function imports, so those get no stub.
+    EXPECT_EQ(counts().stubs - before.stubs, 661U);
     EXPECT_EQ(counts().data_blocks - before.data_blocks, 20U);
 
     const bb::loader::Rela& rela = image.dyn.plt_relocs.at(0);
