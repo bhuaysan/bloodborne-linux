@@ -32,7 +32,7 @@ def make_metadata() -> bytes:
     """Metadata with two resources (a constant buffer and a texture), one constant buffer
     member, one sampler, one input, one output and one stream-out record. A str field is a
     name, stored as its offset from the field."""
-    records = [[("I", 3), ("I", 0x50), ("4s", bytes.fromhex("16046a00")), ("I", 0), ("I", 0),
+    records = [[("I", 3), ("I", 0x50), ("4s", bytes.fromhex("16046a00")), ("I", 1), ("I", 0),
                 ("I", "cbParam")],
                [("I", 1), ("I", 0), ("4s", bytes.fromhex("02050300")), ("I", 0), ("I", 0),
                 ("I", "g_Texture0")],
@@ -59,6 +59,8 @@ def make_shader_entry(codes: list[bytes], pre: bytes = b"\x6a\x02\x00\x08",
     """A shader entry with one program per code blob, and the expected (offset, size) list.
     `gap` goes between the last footer block and the metadata."""
     header = bytearray(0x50)
+    for at, value in sb.SHDR_FIXED:
+        header[at:at + len(value)] = value
     header[0x04:0x08] = ENTRY_HASH.to_bytes(4, "little")
     header[0x24:0x28] = b"Shdr"
     struct.pack_into("<I", header, 0x3C, len(header) - 0x34)
@@ -177,6 +179,14 @@ class SplitTests(unittest.TestCase):
         with self.assertRaisesRegex(sb.FormatError, "Shdr"):
             sb.split_programs(bytes(0x24) + b"Shdx" + entry[0x28:])
 
+    def test_fixed_header_fields(self):
+        entry, _ = make_shader_entry([b"\x01" * 4])
+        for at, value in sb.SHDR_FIXED:
+            data = bytearray(entry)
+            data[at] ^= 1
+            with self.subTest(at=at), self.assertRaisesRegex(sb.FormatError, f"field at {at:#x}"):
+                sb.split_programs(bytes(data))
+
     def test_no_footer(self):
         entry, _ = make_shader_entry([b"\x01" * 4])
         with self.assertRaisesRegex(sb.FormatError, "no OrbShdr"):
@@ -260,6 +270,27 @@ class MetadataTests(unittest.TestCase):
         struct.pack_into("<I", data, meta + 0x1C + 0x14, 0)  # cbParam's name points to itself
         with self.assertRaisesRegex(sb.FormatError, "outside the name pool"):
             sb.read_metadata(bytes(data), meta)
+
+
+    def test_unknown_fields_refused(self):
+        entry, _ = make_shader_entry([b"\x01" * 4])
+        meta = 0x24 + struct.unpack_from("<I", entry, 0x10)[0]
+        res = meta + sb.META_HEADER.size
+        samp = res + 2 * sb.RESOURCE.size + sb.CONSTANT_SIZE
+        var = samp + sb.SAMPLER.size
+        for at, value, error in (
+                (res + 0x0C, 0, "member range 0\\+0 of 1"),  # constant buffer without members
+                (res + 0x0C, 2, "member range 0\\+2 of 1"),  # more members than constants
+                (res + 0x10, 1, "member range 1\\+1 of 1"),
+                (res + sb.RESOURCE.size + 0x0C, 1, "resource 1 .kind 02050300."),  # texture
+                (res + sb.RESOURCE.size + 0x10, 1, "resource 1"),
+                (samp + 4, 1, "sampler 0"),
+                (var + sb.VARYING.size + 4, 1, "input/output 1")):
+            data = bytearray(entry)
+            struct.pack_into("<I", data, at, value)
+            with self.subTest(at=at - meta, value=value), \
+                    self.assertRaisesRegex(sb.FormatError, error):
+                sb.read_metadata(bytes(data), meta)
 
 
 class ScanTests(unittest.TestCase):
