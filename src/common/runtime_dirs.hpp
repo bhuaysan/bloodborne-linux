@@ -49,7 +49,8 @@ public:
     // Creates `dir` and its missing parents with mode 0700 (existing directories keep their
     // mode) and returns it normalised. `dir` must be absolute and lie inside one of the four
     // directories, else std::logic_error. Throws std::filesystem::filesystem_error when creation
-    // fails or a component exists and is not a directory.
+    // fails, a component exists and is not a directory, or a component at or below the base
+    // directory is a symlink (it could lead outside the four directories).
     std::filesystem::path ensure(const std::filesystem::path& dir) const;
 
 private:

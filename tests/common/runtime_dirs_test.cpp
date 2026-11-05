@@ -192,4 +192,22 @@ TEST_F(RuntimeDirsTest, EnsureFailsOnAFileInTheWay) {
     EXPECT_THROW(dirs.ensure(dirs.profile_data()), fs::filesystem_error);
 }
 
+TEST_F(RuntimeDirsTest, EnsureRefusesSymlinksBelowTheBase) {
+    fs::path game = tmp_ / "game";
+    fs::create_directory(game);
+    RuntimeDirs dirs = make("default", {game});
+    dirs.ensure(dirs.data());
+    fs::create_directory_symlink(game, dirs.data() / "profiles");
+    EXPECT_THROW(dirs.ensure(dirs.profile_data()), fs::filesystem_error);
+    EXPECT_TRUE(fs::is_empty(game));
+    // A dangling symlink is refused too, and so is the base itself as a symlink.
+    fs::create_symlink(tmp_ / "missing", dirs.data() / "dangling");
+    EXPECT_THROW(dirs.ensure(dirs.data() / "dangling/x"), fs::filesystem_error);
+    EXPECT_FALSE(fs::exists(tmp_ / "missing"));
+    fs::create_directories(dirs.state().parent_path());
+    fs::create_directory_symlink(game, dirs.state());
+    EXPECT_THROW(dirs.ensure(dirs.logs()), fs::filesystem_error);
+    EXPECT_TRUE(fs::is_empty(game));
+}
+
 }  // namespace

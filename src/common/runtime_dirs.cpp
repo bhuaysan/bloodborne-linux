@@ -117,11 +117,13 @@ fs::path RuntimeDirs::logs() const { return state_ / "logs"; }
 
 fs::path RuntimeDirs::ensure(const fs::path& dir) const {
     fs::path target = normal(dir);
-    bool inside = false;
+    const fs::path* owner = nullptr;
     for (const fs::path* base : {&data_, &cache_, &config_, &state_}) {
-        inside = inside || is_within(target, *base);
+        if (!owner && is_within(target, *base)) {
+            owner = base;
+        }
     }
-    if (!target.is_absolute() || !inside) {
+    if (!target.is_absolute() || !owner) {
         throw std::logic_error("not a runtime directory: " + dir.string());
     }
     // Create each missing component top-down, so parents above bloodborne-linux/ (for example
@@ -130,6 +132,14 @@ fs::path RuntimeDirs::ensure(const fs::path& dir) const {
     for (const fs::path& part : target) {
         current /= part;
         std::error_code ec;
+        // The containment check above is lexical. A symlink at or below the base directory
+        // could point anywhere (the game directory, say), so refuse to walk through one. The
+        // base's parents had their symlinks resolved when the base was computed.
+        if (is_within(current, *owner) && fs::is_symlink(fs::symlink_status(current, ec))) {
+            throw fs::filesystem_error(
+                "runtime directory component is a symlink", current,
+                std::make_error_code(std::errc::too_many_symbolic_link_levels));
+        }
         if (fs::is_directory(current, ec)) {
             continue;
         }
