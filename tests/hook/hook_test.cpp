@@ -171,6 +171,12 @@ int replacement_b() {
     return 1002;
 }
 
+int registered() {
+    return 1003;
+}
+
+BB_REPLACE(0x10, registered);
+
 TEST(Hook, RunsTheReplacementUntilRemoved) {
     Image image = map_elf(build_elf(), test_base);
     image.finalize_protection();
@@ -259,6 +265,16 @@ TEST(Hook, RefusesABrokenFde) {
     Image image = map_elf(elf, test_base);
     const Replacement hook[] = {{0x10, reinterpret_cast<void*>(&replacement_a), "a"}};
     expect_refusal([&] { bb::hook::apply(image, hook); }, "hook a at 0x10: FDE at 0x1814");
+}
+
+TEST(Hook, RegistersWithTheMacro) {
+    auto all = bb::hook::replacements();
+    auto it = std::find_if(all.begin(), all.end(), [](const Replacement& r) {
+        return std::string_view(r.name) == "registered";
+    });
+    ASSERT_NE(it, all.end());
+    EXPECT_EQ(it->link_addr, 0x10U);
+    EXPECT_EQ(it->impl, reinterpret_cast<void*>(&registered));
 }
 
 TEST(Hook, ForgetsTheHooksOfAnUnmappedImage) {

@@ -116,7 +116,20 @@ void write(loader::Image& image, std::uint64_t link, const Bytes& bytes) {
     protect(start, end, code_segment(image, link)->prot);
 }
 
+std::vector<Replacement>& registry() {
+    static std::vector<Replacement> registered;
+    return registered;
+}
+
 }  // namespace
+
+std::span<const Replacement> replacements() {
+    return registry();
+}
+
+void register_replacement(const Replacement& r) {
+    registry().push_back(r);
+}
 
 void apply(loader::Image& image, std::span<const Replacement> replaced) {
     check(image, replaced);
