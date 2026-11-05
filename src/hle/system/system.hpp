@@ -1,5 +1,6 @@
 // The system services the start-up path needs (docs/design/m3-core-os.md, "System services"):
-// libSceSysmodule and libSceUserService.
+// libSceSysmodule, libSceUserService, libSceSystemService, libSceAppContent, libScePlayGo and
+// libSceDiscMap.
 //
 // Every function is registered by NID in its source file. NIDs without a matched name in
 // symbols/nids.csv have a descriptive name here and a comment that says so (m3-core-os.md,
@@ -69,5 +70,106 @@ std::int32_t user_service_get_user_list(std::int32_t* list);
 // Name unknown (NID 1xxcMiGu2fo): writes the user's name to buf, cut to size - 1 bytes and
 // NUL-terminated (the game passes 0x11, 0x2161cd0).
 std::int32_t user_service_get_user_name(std::int32_t id, char* buf, std::size_t size);
+
+// --- libSceSystemService --------------------------------------------------------------------
+
+// Ours: callers only test for non-zero (0x178a438, 0x215e756).
+inline constexpr std::int32_t system_service_bb_error_no_event =
+    static_cast<std::int32_t>(0x80ff0101);
+inline constexpr std::int32_t system_service_bb_error_unknown_id =
+    static_cast<std::int32_t>(0x80ff0102);
+inline constexpr std::int32_t system_service_bb_error_invalid_argument =
+    static_cast<std::int32_t>(0x80ff0103);
+
+// The integer the query returns for id 1. The game maps it through the table at 0x4736630 to its
+// own language index, 8 for 1, and index 8 is "engUS" in the game's list at 0x49bba84 (UTF-16).
+inline constexpr std::int32_t system_language_english_us = 1;
+
+// Writes the number of pending events (0) to the int at status + 0, which is all the game reads
+// (0x178a412, 0x1e76a83). The rest of the caller's buffer is left alone.
+std::int32_t system_service_get_status(void* status);
+std::int32_t system_service_receive_event(void* event);
+// Name unknown (NID fZo48un7LK4): an integer by id. The game asks only for id 1 (nine sites,
+// e.g. 0x14ef12e), and maps the value through a 21-entry table.
+std::int32_t system_service_get_int(std::int32_t id, std::int32_t* value);
+// Name unknown (NID -+3hY+y8bNo): takes a URL (0x2037030 passes a web page of the game) and an
+// int. Logged, success.
+std::int32_t system_service_open_url(const char* url, std::int32_t arg);
+// Name unknown (NID Vo5V8KAwCmk): no arguments, result ignored (0x19d4632, 0x2036fc0). Logged,
+// success.
+std::int32_t system_service_notify(void);
+
+// --- libSceAppContent -----------------------------------------------------------------------
+
+// Ours: the game ignores the result of every call (0x20261e6 to 0x202622a).
+inline constexpr std::int32_t app_content_bb_error_unknown_key =
+    static_cast<std::int32_t>(0x80ff0201);
+inline constexpr std::int32_t app_content_bb_error_invalid_argument =
+    static_cast<std::int32_t>(0x80ff0202);
+
+// The number of keys the game asks for: 0 to 4, at 0x20261e6 to 0x202622a.
+inline constexpr std::int32_t app_param_keys = 5;
+
+std::int32_t app_content_initialize(const void* init_params, void* boot_params);
+// Name unknown (NID 99b82IKXpH4): an integer by key (app_param_value).
+std::int32_t app_content_get_int(std::int32_t key, std::int32_t* value);
+
+// The values of keys 0 to 4.
+// - Key 1: the only output the game reads. Its default before the call is 10 (data at
+//   0x5128a00), and the game reads it as two decimal digits (0x20264d0, 0x2026500). We return
+//   13, the one user-defined integer in the dump's sce_sys/param.sfo (USER_DEFINED_PARAM_1),
+//   which has the same two-digit form. That the key names this parameter is our inference.
+// - Keys 0, 2, 3, 4: 0. Nothing in the eboot reads their outputs (0x56a0248, 0x56a024c,
+//   0x56a0250, 0x56a0254 are referenced only by the calls).
+inline constexpr std::int32_t app_param_value[app_param_keys] = {0, 13, 0, 0, 0};
+
+// Name unknown (NID xnd8BJzAxmk): writes the number of add-on content items to *count (0). The
+// game passes (0, list, list size, count) and only reads the list when the count is non-zero
+// (0x1fb67cf, 0x1fb6818).
+std::int32_t app_content_get_addcont_count(std::uint32_t arg, void* list, std::uint32_t list_size,
+                                           std::uint32_t* count);
+
+// --- libScePlayGo ---------------------------------------------------------------------------
+
+// Ours: the game tests only for non-zero (0x1fdeae9, 0x1fde8db).
+inline constexpr std::int32_t playgo_bb_error_bad_handle = static_cast<std::int32_t>(0x80ff0301);
+inline constexpr std::int32_t playgo_bb_error_invalid_argument =
+    static_cast<std::int32_t>(0x80ff0302);
+
+// The handle Open hands out.
+inline constexpr std::int32_t playgo_handle = 1;
+// The one chunk we report.
+inline constexpr std::uint16_t playgo_chunk_id = 0;
+// The per-chunk state the game counts as "all there": when every entry is 2, it sets its own
+// state to 2 and skips the progress callback (0x1fdeb50 to 0x1fdeb77), the same state as for no
+// chunks at all.
+inline constexpr std::int8_t playgo_chunk_installed = 2;
+
+std::int32_t playgo_initialize(const void* params);
+std::int32_t playgo_open(std::int32_t* handle, const void* params);
+// Name unknown (NID 73fF1MFU8hA): writes up to `max` chunk ids and their number (the game passes
+// room for 100, 0x1fdeb04).
+std::int32_t playgo_get_chunk_ids(std::int32_t handle, std::uint16_t* ids, std::uint32_t max,
+                                  std::uint32_t* count);
+// Name unknown (NID uWIYLFkkwqk): writes one state byte per chunk id (0x1fdeb30).
+std::int32_t playgo_get_chunk_states(std::int32_t handle, const std::uint16_t* ids,
+                                     std::uint32_t count, std::int8_t* states);
+// Name unknown (NID 4AAcTU9R3XM): the game passes a mode 0, 1 or 2 (0x1fdec10). Logged, success.
+std::int32_t playgo_set_mode(std::int32_t handle, std::int32_t mode);
+
+// --- libSceDiscMap (imported by libSceFios2 only) -------------------------------------------
+
+// Ours: libSceFios2 tests only for non-zero (libSceFios2 0x29c74, 0x2a386).
+inline constexpr std::int32_t disc_map_bb_error_not_mapped = static_cast<std::int32_t>(0x80ff0401);
+
+// Name unknown (NID lbQKqsERhtE): (path, ?, ?, int* out). libSceFios2 (0x2d721 to 0x2d73e)
+// reports "remapped" only for result 0 with *out != 0, so we return 0 with *out = 0.
+std::int32_t disc_map_is_remapped(const char* path, std::uint64_t arg1, std::uint64_t arg2,
+                                  std::int32_t* out);
+// Name unknown (NID ioKMruft1ek): (path, offset, size, out, out, out). For a non-zero result
+// libSceFios2 keeps the original offset (tagged with bit 63, 0x29c78), for 0 it takes the second
+// output shifted by 16 (0x29c98). We return disc_map_bb_error_not_mapped and write nothing.
+std::int32_t disc_map_map_range(const char* path, std::uint64_t offset, std::uint64_t size,
+                                std::uint64_t* out1, std::uint64_t* out2, std::uint64_t* out3);
 
 }  // namespace bb::hle::system

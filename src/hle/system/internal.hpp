@@ -6,5 +6,6 @@ namespace bb::hle::system {
 // Each module's part of reset().
 void reset_sysmodule();
 void reset_user_service();
+void reset_playgo();
 
 }  // namespace bb::hle::system

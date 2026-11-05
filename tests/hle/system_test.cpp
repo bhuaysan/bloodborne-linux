@@ -56,6 +56,21 @@ TEST(SystemRegistration, EveryNidResolvesToItsImplementation) {
         {"libSceUserService", "CdWp0oHWGr0", address(&user_service_get_user_id)},
         {"libSceUserService", "fPhymKNvK-A", address(&user_service_get_user_list)},
         {"libSceUserService", "1xxcMiGu2fo", address(&user_service_get_user_name)},
+        {"libSceSystemService", "rPo6tV8D9bM", address(&system_service_get_status)},
+        {"libSceSystemService", "656LMQSrg6U", address(&system_service_receive_event)},
+        {"libSceSystemService", "fZo48un7LK4", address(&system_service_get_int)},
+        {"libSceSystemService", "-+3hY+y8bNo", address(&system_service_open_url)},
+        {"libSceSystemService", "Vo5V8KAwCmk", address(&system_service_notify)},
+        {"libSceAppContent", "R9lA82OraNs", address(&app_content_initialize)},
+        {"libSceAppContent", "99b82IKXpH4", address(&app_content_get_int)},
+        {"libSceAppContent", "xnd8BJzAxmk", address(&app_content_get_addcont_count)},
+        {"libScePlayGo", "ts6GlZOKRrE", address(&playgo_initialize)},
+        {"libScePlayGo", "M1Gma1ocrGE", address(&playgo_open)},
+        {"libScePlayGo", "73fF1MFU8hA", address(&playgo_get_chunk_ids)},
+        {"libScePlayGo", "uWIYLFkkwqk", address(&playgo_get_chunk_states)},
+        {"libScePlayGo", "4AAcTU9R3XM", address(&playgo_set_mode)},
+        {"libSceDiscMap", "lbQKqsERhtE", address(&disc_map_is_remapped)},
+        {"libSceDiscMap", "ioKMruft1ek", address(&disc_map_map_range)},
     };
     for (const Row& row : rows) {
         EXPECT_EQ(resolved(row.library, row.nid), row.impl) << row.library << " " << row.nid;
@@ -149,6 +164,115 @@ TEST_F(SystemTest, UserNameIsTheProfileName) {
     EXPECT_TRUE(contains(log, "invalid arguments: id 2 size 17 (caller 0x")) << log;
     EXPECT_EQ(user_service_get_user_name(user_id, name.data(), 0),
               user_service_bb_error_invalid_argument);
+}
+
+TEST_F(SystemTest, SystemServiceStatusHasNoEvents) {
+    std::array<std::int32_t, 4> status;
+    status.fill(-1);
+    EXPECT_EQ(system_service_get_status(status.data()), 0);
+    EXPECT_EQ(status[0], 0);
+    EXPECT_EQ(status[1], -1);  // only the event count is written
+    std::array<std::byte, 64> event{};
+    EXPECT_EQ(system_service_receive_event(event.data()), system_service_bb_error_no_event);
+}
+
+TEST_F(SystemTest, SystemServiceIntegerQuery) {
+    std::int32_t value = -1;
+    EXPECT_EQ(system_service_get_int(1, &value), 0);
+    EXPECT_EQ(value, system_language_english_us);
+
+    value = -1;
+    const std::string log = stderr_of([&] {
+        EXPECT_EQ(system_service_get_int(7, &value), system_service_bb_error_unknown_id);
+    });
+    EXPECT_EQ(value, -1);
+    EXPECT_TRUE(contains(log, "hle.libSceSystemService: integer query: unknown id 7 (caller 0x"))
+        << log;
+}
+
+TEST_F(SystemTest, SystemServiceRequestsSucceed) {
+    const std::string log = stderr_of([] {
+        EXPECT_EQ(system_service_open_url("http://example.invalid/", 0), 0);
+        EXPECT_EQ(system_service_notify(), 0);
+    });
+    EXPECT_TRUE(contains(log, "open url \"http://example.invalid/\" 0: ignored")) << log;
+    EXPECT_TRUE(contains(log, "Vo5V8KAwCmk: ignored")) << log;
+}
+
+TEST_F(SystemTest, AppContentParameters) {
+    std::array<std::byte, 0x20> init{}, boot{};
+    EXPECT_EQ(app_content_initialize(init.data(), boot.data()), 0);
+    for (std::int32_t key = 0; key < app_param_keys; ++key) {
+        std::int32_t value = -1;
+        EXPECT_EQ(app_content_get_int(key, &value), 0);
+        EXPECT_EQ(value, key == 1 ? 13 : 0) << key;
+    }
+    std::int32_t value = -1;
+    const std::string log = stderr_of([&] {
+        EXPECT_EQ(app_content_get_int(5, &value), app_content_bb_error_unknown_key);
+        EXPECT_EQ(app_content_get_int(-1, &value), app_content_bb_error_unknown_key);
+    });
+    EXPECT_EQ(value, -1);
+    EXPECT_TRUE(contains(log, "integer parameter: unknown key 5 (caller 0x")) << log;
+    EXPECT_TRUE(contains(log, "integer parameter: unknown key -1 (caller 0x")) << log;
+}
+
+TEST_F(SystemTest, AppContentHasNoAddcont) {
+    std::uint32_t count = 7;
+    std::array<std::byte, 64> list{};
+    EXPECT_EQ(app_content_get_addcont_count(0, nullptr, 0, &count), 0);
+    EXPECT_EQ(count, 0u);
+    count = 7;
+    EXPECT_EQ(app_content_get_addcont_count(0, list.data(), 2, &count), 0);
+    EXPECT_EQ(count, 0u);
+}
+
+TEST_F(SystemTest, PlayGoNeedsOpen) {
+    std::uint32_t count = 0;
+    std::array<std::uint16_t, 100> ids{};
+    EXPECT_EQ(playgo_get_chunk_ids(playgo_handle, ids.data(), 100, &count),
+              playgo_bb_error_bad_handle);
+    std::int32_t handle = 0;
+    EXPECT_EQ(playgo_initialize(nullptr), 0);
+    EXPECT_EQ(playgo_open(&handle, nullptr), 0);
+    EXPECT_EQ(handle, playgo_handle);
+    EXPECT_EQ(playgo_get_chunk_ids(handle + 1, ids.data(), 100, &count),
+              playgo_bb_error_bad_handle);
+}
+
+TEST_F(SystemTest, PlayGoReportsEverythingInstalled) {
+    std::int32_t handle = 0;
+    ASSERT_EQ(playgo_open(&handle, nullptr), 0);
+    std::array<std::uint16_t, 100> ids;
+    ids.fill(0xffff);
+    std::uint32_t count = 0;
+    EXPECT_EQ(playgo_get_chunk_ids(handle, ids.data(), 100, &count), 0);
+    ASSERT_EQ(count, 1u);
+    EXPECT_EQ(ids[0], playgo_chunk_id);
+    EXPECT_EQ(ids[1], 0xffff);
+    EXPECT_EQ(playgo_get_chunk_ids(handle, ids.data(), 0, &count), 0);
+    EXPECT_EQ(count, 0u);
+
+    const std::array<std::uint16_t, 2> query{playgo_chunk_id, 5};
+    std::array<std::int8_t, 3> states{-1, -1, -1};
+    const std::string log = stderr_of([&] {
+        EXPECT_EQ(playgo_get_chunk_states(handle, query.data(), 2, states.data()), 0);
+    });
+    EXPECT_EQ(states, (std::array<std::int8_t, 3>{2, 2, -1}));
+    EXPECT_TRUE(contains(log, "chunk states: unknown chunk id 5 (caller 0x")) << log;
+    EXPECT_EQ(playgo_set_mode(handle, 1), 0);
+}
+
+TEST_F(SystemTest, DiscMapRemapsNothing) {
+    std::int32_t out = -1;
+    EXPECT_EQ(disc_map_is_remapped("/app0/dvdroot_ps4/x", 0, 0, &out), 0);
+    EXPECT_EQ(out, 0);
+    std::uint64_t a = 1, b = 2, c = 3;
+    EXPECT_EQ(disc_map_map_range("/app0/dvdroot_ps4/x", 0x10000, 0x800, &a, &b, &c),
+              disc_map_bb_error_not_mapped);
+    EXPECT_EQ(a, 1u);
+    EXPECT_EQ(b, 2u);
+    EXPECT_EQ(c, 3u);
 }
 
 }  // namespace
