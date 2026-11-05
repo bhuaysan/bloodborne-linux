@@ -75,7 +75,7 @@ src/                 the runtime, C++20 (see docs/design/runtime.md)
   game/              decompiled game functions
   harness/           differential test harness (tests only)
   tools/             bb-load
-tests/               GoogleTest unit tests, one directory per library
+tests/               GoogleTest unit and differential tests, one directory per target, plus support/
 symbols/             our analysis as text: functions.csv, nids.csv, types/
 tools/
   self2elf/          rebuilds the ELFs from eboot.bin and the bundled .prx files
@@ -155,7 +155,7 @@ GitHub Actions builds every preset, runs the unit tests and the privacy checks. 
 
 ## Conventions
 
-- Language: C++20 for the runtime and decomp, Python 3 for tools. Build with CMake + Ninja (added when coding starts).
+- Language: C++20 for the runtime and decomp, Python 3 for tools. Build with CMake + Ninja.
 - Documentation and code comments are in English.
 - Commit messages are in the imperative mood, under 72 characters, and say what changed. Reference issues with `Fixes #N` / `Refs #N`.
 - Keep changes small and focused, one logical change per commit.
