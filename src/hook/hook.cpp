@@ -8,9 +8,10 @@
 #include <cerrno>
 #include <cstring>
 #include <format>
+#include <iterator>
 #include <map>
-#include <numeric>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -79,28 +80,19 @@ std::map<Key, Saved>::iterator live(const loader::Image& image, std::uint64_t li
 
 // Checks the parts that apply and remove share. A patch it passes lies in a code segment.
 void check(const loader::Image& image, std::span<const Replacement> replaced) {
-    // Two patches overlap only if they are neighbours by address. Of each overlapping pair the
-    // later entry of the list is refused, the earliest such entry first.
-    std::vector<std::size_t> by_addr(replaced.size());
-    std::iota(by_addr.begin(), by_addr.end(), std::size_t{0});
-    std::sort(by_addr.begin(), by_addr.end(), [&](std::size_t a, std::size_t b) {
-        return std::pair(replaced[a].link_addr, a) < std::pair(replaced[b].link_addr, b);
-    });
-    std::size_t overlapping = replaced.size();
-    for (std::size_t k = 1; k < by_addr.size(); ++k) {
-        const std::size_t a = by_addr[k - 1], b = by_addr[k];
-        if (replaced[b].link_addr - replaced[a].link_addr < patch_size) {
-            overlapping = std::min(overlapping, std::max(a, b));
-        }
-    }
-    for (std::size_t i = 0; i < replaced.size(); ++i) {
-        const Replacement& r = replaced[i];
-        if (i == overlapping) {
+    // Refuses the first entry that overlaps an earlier one, as a check against every earlier
+    // entry would. If any earlier entry overlaps, the nearest one below or above does.
+    std::set<std::uint64_t> earlier;
+    for (const Replacement& r : replaced) {
+        auto above = earlier.lower_bound(r.link_addr);
+        if ((above != earlier.end() && *above - r.link_addr < patch_size) ||
+            (above != earlier.begin() && r.link_addr - *std::prev(above) < patch_size)) {
             refuse(r, "double hook: the patch overlaps another entry of the list");
         }
         if (!code_segment(image, r.link_addr)) {
             refuse(r, "the patch lies outside the executable segments");
         }
+        earlier.insert(r.link_addr);
     }
 }
 

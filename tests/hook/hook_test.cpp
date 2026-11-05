@@ -242,6 +242,9 @@ TEST(Hook, RefusesBadEntries) {
     // Overlapping entries that are not next to each other in the list, out of address order.
     expect_refusal([&] { apply({{0x18, a, "one"}, {0xff8, a, "two"}, {0x10, a, "three"}}); },
                    "hook three at 0x10: double hook: the patch overlaps another entry");
+    // The first entry that overlaps an earlier one is refused, not the first one found by address.
+    expect_refusal([&] { apply({{0x10, a, "one"}, {0x1a, a, "two"}, {0x15, a, "three"}}); },
+                   "hook two at 0x1a: double hook: the patch overlaps another entry");
     expect_refusal([&] { bb::hook::remove(image, std::array{Replacement{0x10, a, "a"}}); },
                    "hook a at 0x10: not hooked");
 
