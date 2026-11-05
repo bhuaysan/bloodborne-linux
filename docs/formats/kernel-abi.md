@@ -100,7 +100,7 @@ Header `sys/sys/mman.h`. `MAP_FAILED` is -1: libc compares with it after every `
 | 0x1 | PROT_READ | PROT_READ | libc 0x530d1 (file mapping) |
 | 0x2 | PROT_WRITE | PROT_WRITE | libc 0x52f96 (anonymous mappings use 0x3) |
 | 0x4 | PROT_EXEC | PROT_EXEC | no use found |
-| 0x10, 0x20 | above PROT_EXEC | none | reported as unknown by the table. The memory calls accept them, keep them in the region table and drop them for the host (design note, Memory). The eboot passes 0x33 to `IWIBBdTHit4` (0x2081da6) and tests bit 4 of the protection that `WFcfL2lzido` reports (0x26bae04) |
+| 0x10, 0x20 | above PROT_EXEC | none | reported as unknown by the table. `sceKernelMprotect` accepts them, keeps them in the region table and drops them for the host; the map calls are to do the same once they are implemented (design note, Memory). The eboot passes 0x33 to `IWIBBdTHit4` (0x2081da6) and tests bit 4 of the protection that `WFcfL2lzido` reports (0x26bae04) |
 
 | Guest | Name | Host | Use |
 |---|---|---|---|
@@ -122,7 +122,7 @@ Header `sys/sys/mman.h`. `MAP_FAILED` is -1: libc compares with it after every `
 
 libc's file mapping is `mmap(0, st_size, PROT_READ, MAP_PRIVATE, fd, 0)` after `fstat` (libc 0x530be–0x530e1). The eboot's only `sceKernelMprotect` call (eboot 0x2903214) passes its caller's value through.
 
-`msync` gets flags 1 at its only call (libc 0x541a2, probing one 4 KiB page). The runtime passes it on as the host's `MS_ASYNC`, also 1, and refuses other values: the other `MS_*` values are not yet checked against FreeBSD's `sys/sys/mman.h`.
+`msync` gets flags 1 at its only call (libc 0x541a2, probing one 4 KiB page). `msync` isn't implemented yet and still goes to a logging stub. The plan is to pass flags 1 on as the host's `MS_ASYNC`, also 1, and refuse other values, since the other `MS_*` values are not yet checked against FreeBSD's `sys/sys/mman.h`.
 
 ## Clock ids
 

@@ -67,12 +67,14 @@ The other NIDs stay unnamed. The FreeBSD manual page lists and the derivation ru
 
 ### Virtual and direct memory
 
+`src/hle/kernel/vmem.cpp` implements `sceKernelMunmap` and `sceKernelMprotect` so far. The calls in this table still go to logging stubs; where a row says what the runtime does with a call, that is the plan (design note, Memory).
+
 | NID | Callers | Behaviour |
 |---|---|---|
 | `mL8NDH86iQI` | libc.prx 0x23ec0, 0x23ff9, 0x24932 | Named anonymous map for libc's arena growth: `(&addr, length, prot, flags, name)`. `addr` is 0 on entry and the mapping on return; prot 3, flags 0. 0 means success; on failure libc releases `(addr, length)` with `sceKernelMunmap` anyway. At 0x23ed9 it then calls `sceKernelMlock` on the mapping if a libc flag is set, and releases the mapping when that fails |
 | `IWIBBdTHit4` | eboot 0x2081dbe | Anonymous map: `(&addr, length, prot, flags)`, `addr` 0 on entry, length rounded up to 0x4000, prot 3 or 0x33, flags 0. Failure is a non-zero result or `addr` still 0. Released with `teiItL2boFw` |
-| `rVjRvHJ0X6c` | eboot 0x20825f3, 0x26bae5b, 0x26d3f5e, 0x26d4066, 0x26d423e, 0x2902024, 0x290316b, 0x290328c | `(address, 0, &record, 0x48)`: the mapping that holds the address. 0 means success. Record fields read: +0 start (u64), +0x10 the direct-memory offset of start (u64; `address + offset - start` at 0x2902063 and 0x2903295, released as direct memory at 0x26d3f67), +0x20 a flag byte: bit 1 direct memory (released through `sceKernelMunmap` and the direct-memory release at 0x20826fd), bit 0 memory from `IWIBBdTHit4` (released through `teiItL2boFw` at 0x2082721). Nothing else is read; we fill +8 with the exclusive end |
-| `BC+OG5m9+bw` | eboot 0x26bae74 | `(offset, &int32, &u64, &u64)` with the record's +0x10 offset after `rVjRvHJ0X6c`. 0 means success; the caller then compares the int32 with 3. A query on direct memory; fails until #97 tracks direct memory |
+| `rVjRvHJ0X6c` | eboot 0x20825f3, 0x26bae5b, 0x26d3f5e, 0x26d4066, 0x26d423e, 0x2902024, 0x290316b, 0x290328c | `(address, 0, &record, 0x48)`: the mapping that holds the address. 0 means success. Record fields read: +0 start (u64), +0x10 the direct-memory offset of start (u64; `address + offset - start` at 0x2902063 and 0x2903295, released as direct memory at 0x26d3f67), +0x20 a flag byte: bit 1 direct memory (released through `sceKernelMunmap` and the direct-memory release at 0x20826fd), bit 0 memory from `IWIBBdTHit4` (released through `teiItL2boFw` at 0x2082721). Nothing else is read. The runtime is to fill +8 with the exclusive end |
+| `BC+OG5m9+bw` | eboot 0x26bae74 | `(offset, &int32, &u64, &u64)` with the record's +0x10 offset after `rVjRvHJ0X6c`. 0 means success; the caller then compares the int32 with 3. A query on direct memory. The runtime is to fail it until #97 tracks direct memory |
 | `teiItL2boFw` | eboot 0x2082721 | `(address, length)`: releases memory from `IWIBBdTHit4` (record flag bit 0). Result ignored |
 | `WFcfL2lzido` | eboot 0x26bad98, 0x26badf8, 0x26bb5ee, 0x26bb60f, 0x29031df | `(address, &start or NULL, &end or NULL, &flags)`. 0 means success. Reports the bounds of the mapping that holds the address and its protection bits as a u32 mask; callers test bit 0 (0x26bada4) and bit 4 (0x26bae04) after allocating a block. |
 | `pO96TwzOm5E` | eboot | Total size of direct memory *(survey)* |
