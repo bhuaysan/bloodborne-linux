@@ -40,4 +40,17 @@ std::vector<Phdr> read_phdrs(std::span<const std::byte> data, const ElfHeader& h
     return out;
 }
 
+const Phdr* single_phdr(std::span<const Phdr> phdrs, std::uint32_t type, std::string_view what) {
+    const Phdr* found = nullptr;
+    for (const Phdr& ph : phdrs) {
+        if (ph.type == type) {
+            if (found) {
+                throw LoadError(std::format("more than one {} program header", what));
+            }
+            found = &ph;
+        }
+    }
+    return found;
+}
+
 }  // namespace bb::loader

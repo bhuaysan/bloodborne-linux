@@ -85,20 +85,6 @@ std::vector<Segment> read_segments(std::span<const std::byte> elf, std::span<con
     return segments;
 }
 
-// The only program header of `type`, or nullptr. Throws LoadError when there are several.
-const Phdr* single(std::span<const Phdr> phdrs, std::uint32_t type, std::string_view what) {
-    const Phdr* found = nullptr;
-    for (const Phdr& ph : phdrs) {
-        if (ph.type == type) {
-            if (found) {
-                throw LoadError(std::format("more than one {} program header", what));
-            }
-            found = &ph;
-        }
-    }
-    return found;
-}
-
 // Throws LoadError unless [link, link + size) lies inside the memory of one PT_LOAD.
 void need_in_load(std::span<const Phdr> phdrs, std::uint64_t link, std::uint64_t size,
                   std::string_view what) {
@@ -179,7 +165,7 @@ void Image::finalize_protection() {
 }
 
 std::optional<TlsTemplate> read_tls(std::span<const Phdr> phdrs) {
-    const Phdr* ph = single(phdrs, pt_tls, "PT_TLS");
+    const Phdr* ph = single_phdr(phdrs, pt_tls, "PT_TLS");
     if (!ph) {
         return std::nullopt;
     }
@@ -197,7 +183,7 @@ std::optional<TlsTemplate> read_tls(std::span<const Phdr> phdrs) {
 }
 
 std::optional<std::uint64_t> read_proc_param(std::span<const Phdr> phdrs) {
-    const Phdr* ph = single(phdrs, pt_sce_procparam, "PT_SCE_PROCPARAM");
+    const Phdr* ph = single_phdr(phdrs, pt_sce_procparam, "PT_SCE_PROCPARAM");
     if (!ph) {
         return std::nullopt;
     }

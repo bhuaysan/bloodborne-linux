@@ -126,15 +126,7 @@ std::uint8_t fde_encoding(const SegmentData& d, std::uint64_t cie) {
 
 std::optional<UnwindTable> read_unwind_table(std::span<const std::byte> elf,
                                              std::span<const Phdr> phdrs) {
-    const Phdr* hdr = nullptr;
-    for (const Phdr& ph : phdrs) {
-        if (ph.type == pt_gnu_eh_frame) {
-            if (hdr) {
-                throw LoadError("more than one PT_GNU_EH_FRAME program header");
-            }
-            hdr = &ph;
-        }
-    }
+    const Phdr* hdr = single_phdr(phdrs, pt_gnu_eh_frame, "PT_GNU_EH_FRAME");
     if (!hdr) {
         return std::nullopt;
     }

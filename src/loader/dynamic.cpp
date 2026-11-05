@@ -58,16 +58,6 @@ constexpr std::size_t nid_length = 11;
 constexpr std::string_view base64_digits =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-";
 
-// The program header of `type`, or nullptr. Throws LoadError when there are several.
-const Phdr* find_phdr(std::span<const Phdr> phdrs, std::uint32_t type, std::string_view what) {
-    auto is_type = [&](const Phdr& ph) { return ph.type == type; };
-    if (std::count_if(phdrs.begin(), phdrs.end(), is_type) > 1) {
-        throw LoadError(std::format("more than one {} segment", what));
-    }
-    auto it = std::find_if(phdrs.begin(), phdrs.end(), is_type);
-    return it == phdrs.end() ? nullptr : &*it;
-}
-
 // Whether the memory of a PT_LOAD with all of `flags` holds the link addresses addr..addr+size.
 // An empty range may start at the end of the segment.
 bool in_load(std::span<const Phdr> phdrs, std::uint64_t addr, std::uint64_t size,
@@ -265,8 +255,8 @@ std::vector<Rela> read_relas(std::span<const std::byte> table, std::size_t symbo
 }  // namespace
 
 DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> phdrs) {
-    const Phdr* dynlib = find_phdr(phdrs, pt_sce_dynlibdata, "PT_SCE_DYNLIBDATA");
-    const Phdr* dynamic = find_phdr(phdrs, pt_dynamic, "PT_DYNAMIC");
+    const Phdr* dynlib = single_phdr(phdrs, pt_sce_dynlibdata, "PT_SCE_DYNLIBDATA");
+    const Phdr* dynamic = single_phdr(phdrs, pt_dynamic, "PT_DYNAMIC");
     if (dynlib == nullptr || dynamic == nullptr) {
         throw LoadError("no PT_SCE_DYNLIBDATA or PT_DYNAMIC segment");
     }

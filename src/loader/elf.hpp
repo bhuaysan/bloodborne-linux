@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace bb::loader {
@@ -44,5 +45,9 @@ ElfHeader read_elf_header(std::span<const std::byte> data);
 // The program headers described by `header`. Throws LoadError when the entry size is not
 // phdr_size or the table doesn't fit `data`.
 std::vector<Phdr> read_phdrs(std::span<const std::byte> data, const ElfHeader& header);
+
+// The program header of `type`, or nullptr when there is none. Throws LoadError naming `what`
+// when there are several.
+const Phdr* single_phdr(std::span<const Phdr> phdrs, std::uint32_t type, std::string_view what);
 
 }  // namespace bb::loader
