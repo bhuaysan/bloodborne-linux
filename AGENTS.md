@@ -67,7 +67,7 @@ docs/
   clean-room.md      reference policy, NID naming, game version hash
   references.md      credit log for every external source
   formats/           our own notes on PS4 and game file formats
-  design/            design notes (runtime.md: loader, stubs, hooks, harness)
+  design/            design notes (runtime.md: loader, stubs, hooks, harness; graphics.md: shader translator)
 src/                 the runtime, C++20 (see docs/design/runtime.md)
   common/            file reading, SHA-256, game directory lookup
   loader/            SELF to ELF, ELF parsing, mapping, relocation
@@ -75,7 +75,8 @@ src/                 the runtime, C++20 (see docs/design/runtime.md)
   hook/              function-entry patches and the replacement registry
   game/              decompiled game functions
   harness/           differential test harness (tests only)
-  tools/             bb-load
+  gpu/               GCN shader translator (gcn/), later PM4 state (pm4/) and the Vulkan backend (vk/)
+  tools/             bb-load, bb-gcn
 tests/               GoogleTest unit and differential tests, one directory per target, plus support/
 symbols/             our analysis as text: functions.csv, nids.csv, types/
 third_party/         copied third-party code with its license (see docs/clean-room.md)
@@ -87,6 +88,7 @@ tools/
   noreturn/          finds imports that never return, for Ghidra's analysis
   nidtable/          generates the runtime's NID name table from symbols/nids.csv
   ghidra-sync/       syncs Ghidra annotations with symbols/
+  shaderbnd/         extracts the shader programs from the game's archives into analysis/
   common/            shared Python helpers (paths, pinned files, PS4 ELF reader)
   githooks/          privacy checks (enabled via core.hooksPath)
   merge-pr.sh        merges a PR locally after the gate (see Reviews)

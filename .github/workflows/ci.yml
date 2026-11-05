@@ -26,10 +26,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # spirv-headers is a build dependency of the shader translator. The
+      # Vulkan loader, lavapipe (mesa-vulkan-drivers) and spirv-tools run its
+      # execution and validation tests (docs/design/graphics.md).
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libgtest-dev
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libgtest-dev \
+              spirv-headers spirv-tools libvulkan-dev mesa-vulkan-drivers
 
       - name: Configure
         run: cmake --preset "${{ matrix.preset }}" -DBB_WERROR=ON
