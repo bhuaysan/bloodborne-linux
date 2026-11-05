@@ -2,6 +2,10 @@
 // with its source, is in docs/formats/kernel-abi.md. HLE functions use only these tables.
 #pragma once
 
+#include <sys/stat.h>
+#include <sys/time.h>
+
+#include <cstddef>
 #include <cstdint>
 #include <ctime>
 #include <optional>
@@ -76,5 +80,46 @@ std::optional<int> host_whence(int guest);
 // The host clock for a guest clock id, or std::nullopt if the id is unassigned or has no host
 // clock.
 std::optional<clockid_t> host_clock(std::int32_t guest);
+
+// ---- structs -----------------------------------------------------------------------------------
+
+struct GuestTimespec {
+    std::int64_t tv_sec;
+    std::int64_t tv_nsec;
+};
+
+struct GuestTimeval {
+    std::int64_t tv_sec;
+    std::int64_t tv_usec;
+};
+
+GuestTimespec guest_timespec(const timespec& host);
+timespec host_timespec(const GuestTimespec& guest);
+GuestTimeval guest_timeval(const timeval& host);
+
+// struct stat, 120 bytes.
+struct GuestStat {
+    std::uint32_t st_dev;
+    std::uint32_t st_ino;
+    std::uint16_t st_mode;
+    std::uint16_t st_nlink;
+    std::uint32_t st_uid;
+    std::uint32_t st_gid;
+    std::uint32_t st_rdev;
+    GuestTimespec st_atim;
+    GuestTimespec st_mtim;
+    GuestTimespec st_ctim;
+    std::int64_t st_size;
+    std::int64_t st_blocks;
+    std::uint32_t st_blksize;
+    std::uint32_t st_flags;
+    std::uint32_t st_gen;
+    std::int32_t st_lspare;
+    GuestTimespec st_birthtim;
+};
+
+// Fields wider in the host (st_dev, st_ino, st_rdev, st_blksize) are truncated, st_nlink is
+// clamped to 0xffff. st_flags, st_gen, st_lspare and st_birthtim are 0.
+GuestStat guest_stat(const struct stat& host);
 
 }  // namespace bb::hle::kernel

@@ -5,7 +5,9 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <set>
 #include <thread>
 
@@ -193,6 +195,61 @@ TEST(KernelAbi, ClockIds) {
     for (std::int32_t unknown : {1, 2, 3, 6, 16, -1}) {
         EXPECT_FALSE(host_clock(unknown)) << unknown;
     }
+}
+
+TEST(KernelAbi, TimespecAndTimeval) {
+    const timespec ts{1234567890, 999999999};
+    const GuestTimespec g = guest_timespec(ts);
+    EXPECT_EQ(g.tv_sec, 1234567890);
+    EXPECT_EQ(g.tv_nsec, 999999999);
+    const timespec back = host_timespec(g);
+    EXPECT_EQ(back.tv_sec, ts.tv_sec);
+    EXPECT_EQ(back.tv_nsec, ts.tv_nsec);
+    const GuestTimeval tv = guest_timeval(timeval{42, 123456});
+    EXPECT_EQ(tv.tv_sec, 42);
+    EXPECT_EQ(tv.tv_usec, 123456);
+}
+
+// Reads a field of a guest struct by its documented offset, as the game does.
+template <typename T>
+T at(const void* base, std::size_t offset) {
+    T v;
+    std::memcpy(&v, static_cast<const std::byte*>(base) + offset, sizeof v);
+    return v;
+}
+
+TEST(KernelAbi, StatFieldsAtTheirGuestOffsets) {
+    struct stat host{};
+    host.st_dev = 0x1'0000'0005;
+    host.st_ino = 0x1'0000'0007;
+    host.st_mode = S_IFREG | 0644;
+    host.st_nlink = 0x12345;
+    host.st_uid = 1001;
+    host.st_gid = 1002;
+    host.st_rdev = 3;
+    host.st_atim = {100, 1};
+    host.st_mtim = {200, 2};
+    host.st_ctim = {300, 3};
+    host.st_size = 0x1'2345'6789;
+    host.st_blocks = 77;
+    host.st_blksize = 4096;
+    const GuestStat g = guest_stat(host);
+    EXPECT_EQ(at<std::uint32_t>(&g, 0), 5u);
+    EXPECT_EQ(at<std::uint32_t>(&g, 4), 7u);
+    EXPECT_EQ(at<std::uint16_t>(&g, 8), S_IFREG | 0644);
+    EXPECT_EQ(at<std::uint16_t>(&g, 10), 0xffff);
+    EXPECT_EQ(at<std::uint32_t>(&g, 12), 1001u);
+    EXPECT_EQ(at<std::uint32_t>(&g, 16), 1002u);
+    EXPECT_EQ(at<std::uint32_t>(&g, 20), 3u);
+    EXPECT_EQ(at<std::int64_t>(&g, 24), 100);
+    EXPECT_EQ(at<std::int64_t>(&g, 32), 1);
+    EXPECT_EQ(at<std::int64_t>(&g, 40), 200);
+    EXPECT_EQ(at<std::int64_t>(&g, 56), 300);
+    EXPECT_EQ(at<std::int64_t>(&g, 72), 0x1'2345'6789);
+    EXPECT_EQ(at<std::int64_t>(&g, 80), 77);
+    EXPECT_EQ(at<std::uint32_t>(&g, 88), 4096u);
+    EXPECT_EQ(at<std::uint32_t>(&g, 92), 0u);
+    EXPECT_EQ(at<std::int64_t>(&g, 104), 0);
 }
 
 }  // namespace

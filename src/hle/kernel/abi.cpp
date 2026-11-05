@@ -4,6 +4,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
@@ -12,9 +13,18 @@
 namespace bb::hle::kernel {
 namespace {
 
+static_assert(sizeof(GuestTimespec) == 16 && sizeof(GuestTimeval) == 16);
+static_assert(offsetof(GuestStat, st_mode) == 8 && offsetof(GuestStat, st_atim) == 24);
+static_assert(offsetof(GuestStat, st_mtim) == 40 && offsetof(GuestStat, st_size) == 72);
+static_assert(offsetof(GuestStat, st_blksize) == 88 && offsetof(GuestStat, st_birthtim) == 104);
+static_assert(sizeof(GuestStat) == 120);
+
 // Values that are the same on both sides and therefore pass through unchanged.
 static_assert(SEEK_SET == 0 && SEEK_CUR == 1 && SEEK_END == 2 && SEEK_DATA == 3 && SEEK_HOLE == 4);
 static_assert(O_RDONLY == 0 && O_WRONLY == 1 && O_RDWR == 2);
+static_assert(S_IFMT == 0170000 && S_IFIFO == 0010000 && S_IFCHR == 0020000 &&
+              S_IFDIR == 0040000 && S_IFBLK == 0060000 && S_IFREG == 0100000 &&
+              S_IFLNK == 0120000 && S_IFSOCK == 0140000);
 
 struct Pair {
     int guest, host;
@@ -194,6 +204,36 @@ std::optional<clockid_t> host_clock(std::int32_t guest) {
         }
     }
     return std::nullopt;
+}
+
+GuestTimespec guest_timespec(const timespec& host) {
+    return {host.tv_sec, host.tv_nsec};
+}
+
+timespec host_timespec(const GuestTimespec& guest) {
+    return {static_cast<time_t>(guest.tv_sec), static_cast<long>(guest.tv_nsec)};
+}
+
+GuestTimeval guest_timeval(const timeval& host) {
+    return {host.tv_sec, host.tv_usec};
+}
+
+GuestStat guest_stat(const struct stat& host) {
+    GuestStat g{};
+    g.st_dev = static_cast<std::uint32_t>(host.st_dev);
+    g.st_ino = static_cast<std::uint32_t>(host.st_ino);
+    g.st_mode = static_cast<std::uint16_t>(host.st_mode);
+    g.st_nlink = static_cast<std::uint16_t>(std::min<nlink_t>(host.st_nlink, 0xffff));
+    g.st_uid = host.st_uid;
+    g.st_gid = host.st_gid;
+    g.st_rdev = static_cast<std::uint32_t>(host.st_rdev);
+    g.st_atim = guest_timespec(host.st_atim);
+    g.st_mtim = guest_timespec(host.st_mtim);
+    g.st_ctim = guest_timespec(host.st_ctim);
+    g.st_size = host.st_size;
+    g.st_blocks = host.st_blocks;
+    g.st_blksize = static_cast<std::uint32_t>(host.st_blksize);
+    return g;
 }
 
 }  // namespace bb::hle::kernel
