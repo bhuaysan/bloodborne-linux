@@ -1,6 +1,9 @@
 #include "common/log.hpp"
 
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <regex>
@@ -11,6 +14,8 @@
 #include <vector>
 
 #include <pthread.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 
@@ -135,6 +140,48 @@ TEST_F(LogTest, FilterComesFromTheEnvironment) {
     }
     // The previous filter stays.
     EXPECT_TRUE(bb::common::log_enabled(LogLevel::trace, "hle.libkernel"));
+}
+
+TEST_F(LogTest, WritesTheFileInTheStateDirectory) {
+    std::string templ = (std::filesystem::temp_directory_path() / "bb-log-test-XXXXXX").string();
+    ASSERT_NE(::mkdtemp(templ.data()), nullptr);
+    const std::filesystem::path root = std::filesystem::canonical(templ);
+    const char* state = std::getenv("XDG_STATE_HOME");
+    const std::optional<std::string> saved_state =
+        state ? std::optional<std::string>(state) : std::nullopt;
+    ::setenv("XDG_STATE_HOME", (root / "state").c_str(), 1);
+    const auto dirs = bb::common::RuntimeDirs::from_environment("default", {});
+    if (saved_state) {
+        ::setenv("XDG_STATE_HOME", saved_state->c_str(), 1);
+    } else {
+        ::unsetenv("XDG_STATE_HOME");
+    }
+
+    const std::filesystem::path path = bb::common::open_log_file(dirs);
+    EXPECT_EQ(path.parent_path(), root / "state" / "bloodborne-linux" / "logs");
+    EXPECT_TRUE(std::regex_match(path.filename().string(),
+                                 std::regex("[0-9]{8}T[0-9]{6}Z-" + std::to_string(::getpid()) +
+                                            "\\.log")))
+        << path;
+    testing::internal::CaptureStderr();
+    bb::common::set_thread_name("log-test-file");
+    bb::common::log(LogLevel::error, "game", "to {}", "both");
+    bb::common::log_flush();
+    bb::common::close_log_file();
+    bb::common::log(LogLevel::error, "game", "stderr only");
+    const std::string err = testing::internal::GetCapturedStderr();
+
+    std::ifstream in(path);
+    const std::string file((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    EXPECT_TRUE(std::regex_match(
+        file, std::regex("[0-9:.]{12} error \\[log-test-file\\] game: to both\n")))
+        << file;
+    EXPECT_EQ(err.substr(0, file.size()), file);
+    EXPECT_NE(err.find("stderr only"), std::string::npos) << err;
+    struct stat st {};
+    ASSERT_EQ(::stat(path.c_str(), &st), 0);
+    EXPECT_EQ(st.st_mode & 0777, 0600U);
+    std::filesystem::remove_all(root);
 }
 
 TEST_F(LogTest, UnnamedThreadShowsItsId) {

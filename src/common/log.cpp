@@ -1,5 +1,6 @@
 #include "common/log.hpp"
 
+#include <fcntl.h>
 #include <pthread.h>
 #include <unistd.h>
 
@@ -12,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <system_error>
 
 namespace bb::common {
 namespace {
@@ -20,7 +22,8 @@ constexpr std::array<std::string_view, 7> level_names = {"trace", "debug", "info
                                                          "error", "fatal", "off"};
 
 struct Logger {
-    std::mutex mutex;  // serialises whole lines and guards filters
+    std::mutex mutex;  // serialises whole lines and guards filters and file
+    int file = -1;     // the log file, or -1
     // Every filter ever set, kept because a thread may still be reading a replaced one.
     // set_log_filter is rare.
     std::vector<std::unique_ptr<const LogFilter>> filters;
@@ -48,12 +51,18 @@ void write_all(int fd, std::string_view data) {
     }
 }
 
-// "hh:mm:ss.mmm" of now, in UTC.
-std::string clock_text() {
-    timespec ts{};
+// Now, in UTC.
+tm utc_now(timespec& ts) {
     ::clock_gettime(CLOCK_REALTIME, &ts);
     tm utc{};
     ::gmtime_r(&ts.tv_sec, &utc);
+    return utc;
+}
+
+// "hh:mm:ss.mmm" of now.
+std::string clock_text() {
+    timespec ts{};
+    const tm utc = utc_now(ts);
     return std::format("{:02}:{:02}:{:02}.{:03}", utc.tm_hour, utc.tm_min, utc.tm_sec,
                        ts.tv_nsec / 1'000'000);
 }
@@ -153,6 +162,9 @@ void log_message(LogLevel level, std::string_view channel, std::string_view mess
     Logger& l = logger();
     const std::lock_guard lock(l.mutex);
     write_all(STDERR_FILENO, line);
+    if (l.file >= 0) {
+        write_all(l.file, line);
+    }
 }
 
 void log_fatal(std::string_view channel, std::string_view message) {
@@ -162,7 +174,41 @@ void log_fatal(std::string_view channel, std::string_view message) {
 }
 
 void log_flush() {
-    const std::lock_guard lock(logger().mutex);
+    Logger& l = logger();
+    const std::lock_guard lock(l.mutex);
+    if (l.file >= 0) {
+        ::fdatasync(l.file);
+    }
+}
+
+std::filesystem::path open_log_file(const RuntimeDirs& dirs) {
+    timespec ts{};
+    const tm utc = utc_now(ts);
+    const std::filesystem::path path =
+        dirs.ensure(dirs.logs()) /
+        std::format("{:04}{:02}{:02}T{:02}{:02}{:02}Z-{}.log", utc.tm_year + 1900, utc.tm_mon + 1,
+                    utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec, ::getpid());
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        throw std::filesystem::filesystem_error("cannot create the log file", path,
+                                                std::error_code(errno, std::generic_category()));
+    }
+    Logger& l = logger();
+    const std::lock_guard lock(l.mutex);
+    if (l.file >= 0) {
+        ::close(l.file);
+    }
+    l.file = fd;
+    return path;
+}
+
+void close_log_file() {
+    Logger& l = logger();
+    const std::lock_guard lock(l.mutex);
+    if (l.file >= 0) {
+        ::close(l.file);
+        l.file = -1;
+    }
 }
 
 void set_thread_name(std::string_view name) {
