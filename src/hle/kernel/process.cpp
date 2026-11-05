@@ -99,11 +99,12 @@ void fill_progname(std::byte* block) {
 }
 
 // sysctl (DFmMT80xcNI). libc.prx calls it from one function (0x52ee0, sites 0x52f50 and
-// 0x52fe1), with the MIB {1, 14, 32, pid}, first for the size, then for the records. It walks
-// them as variable-length records (length at +0, type at +4, a start and end address at +8 and
-// +0x10, a path at +0x88), looks for the one that holds an address and maps its file: a map of the
-// process's memory. We report an empty map: libc then finds no record and returns -1, as for a
-// failed sysctl. Any other MIB is logged and refused.
+// 0x52fe1), with the MIB {1, 14, 32, pid}: kern.proc.vmmap (docs/formats/kernel-abi.md, "sysctl
+// MIB"), first for the size, then for the records. It walks them as variable-length records
+// (length at +0, type at +4, a start and end address at +8 and +0x10, a path at +0x88), looks for
+// the one that holds an address and maps its file: a map of the process's memory. We report an
+// empty map: libc then finds no record and returns -1, as for a failed sysctl. Any other MIB is
+// logged and refused.
 std::int32_t sys_ctl(const std::int32_t* name, std::uint32_t name_length, void* old_data,
                      std::uint64_t* old_length, const void* new_data, std::uint64_t new_length) {
     const void* caller = BB_CALLER();

@@ -236,3 +236,15 @@ The timeout's type is not shown by any event-queue call site. The game's counted
 | null `out`, `events` or `count`, capacity < 1 | `0x80020016` (`EINVAL`) | unchanged |
 
 **Producers** (our own HLE modules) call `bb::hle::EventQueue::trigger(handle, event)`. It returns false and drops the event if the handle is not a live queue. Events come out in trigger order. A trigger whose `(id, kind)` is already pending replaces that record in place, so a producer that fires faster than the game waits doesn't grow the queue. A trigger wakes one waiter; a wait that leaves events behind wakes the next.
+
+## sysctl MIB
+
+Header `sys/sys/sysctl.h`. libc.prx passes one MIB to `sysctl` (`DFmMT80xcNI`), from the function at 0x52ee0: four `int`s, the last the process id. It calls once for the size (0x52f50), then for the records (0x52fe1). Every other MIB is refused (`src/hle/kernel/process.cpp`).
+
+| Level | Name | Value | Use |
+|---|---|---|---|
+| 0 | `CTL_KERN` | 1 | libc 0x52f20 |
+| 1 | `KERN_PROC` | 14 | libc 0x52f27 |
+| 2 | `KERN_PROC_VMMAP` | 32 | libc 0x52f2e |
+
+`kern.proc.vmmap` returns the memory map of a process as variable-length records. libc reads the record length at +0 and compares the start and end address at +8 and +0x10 with the address it looks for (0x53040, 0x53049). The runtime reports an empty map (length 0), so the record layout needs no translation.
