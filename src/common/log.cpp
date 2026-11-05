@@ -58,6 +58,15 @@ std::string clock_text() {
                        ts.tv_nsec / 1'000'000);
 }
 
+// `text` without leading and trailing spaces and tabs.
+std::string_view trim(std::string_view text) {
+    const std::size_t first = text.find_first_not_of(" \t");
+    if (first == std::string_view::npos) {
+        return {};
+    }
+    return text.substr(first, text.find_last_not_of(" \t") - first + 1);
+}
+
 }  // namespace
 
 std::string_view log_level_name(LogLevel level) {
@@ -76,13 +85,14 @@ LogFilter LogFilter::parse(std::string_view spec) {
     LogFilter filter;
     while (!spec.empty()) {
         const std::size_t comma = spec.find(',');
-        const std::string_view entry = spec.substr(0, comma);
+        const std::string_view entry = trim(spec.substr(0, comma));
         spec = comma == std::string_view::npos ? std::string_view{} : spec.substr(comma + 1);
         if (entry.empty()) {
             continue;
         }
         const std::size_t eq = entry.find('=');
-        const std::string_view name = eq == std::string_view::npos ? entry : entry.substr(eq + 1);
+        const std::string_view name =
+            trim(eq == std::string_view::npos ? entry : entry.substr(eq + 1));
         const std::optional<LogLevel> level = parse_log_level(name);
         if (!level) {
             throw std::invalid_argument(std::format("unknown log level '{}' in '{}'", name, entry));
@@ -91,7 +101,7 @@ LogFilter LogFilter::parse(std::string_view spec) {
             filter.default_ = *level;
             continue;
         }
-        const std::string_view channel = entry.substr(0, eq);
+        const std::string_view channel = trim(entry.substr(0, eq));
         if (channel.empty()) {
             throw std::invalid_argument(std::format("empty channel name in '{}'", entry));
         }

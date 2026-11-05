@@ -33,7 +33,8 @@ public:
     // Parses a BB_LOG value: comma-separated entries, each `<channel>=<level>` or a bare
     // `<level>` that sets the default. An entry for "hle" also covers "hle.libkernel"; the
     // longest matching entry wins, and a later entry for the same channel replaces an earlier
-    // one. Empty entries are ignored. Throws std::invalid_argument for an unknown level or an
+    // one. Spaces and tabs around entries, channels and levels are ignored, and so are empty
+    // entries. Throws std::invalid_argument for an unknown level or an
     // empty channel name.
     static LogFilter parse(std::string_view spec);
 

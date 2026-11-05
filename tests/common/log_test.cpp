@@ -44,6 +44,14 @@ TEST(LogFilter, LaterEntryReplacesEarlier) {
     EXPECT_EQ(LogFilter::parse("trace,error").level("loader"), LogLevel::error);
 }
 
+TEST(LogFilter, IgnoresSpacesAroundEntries) {
+    const LogFilter filter = LogFilter::parse(" warn, hle = debug ,\tgame=off\t, ");
+    EXPECT_EQ(filter.level("loader"), LogLevel::warn);
+    EXPECT_EQ(filter.level("hle.libkernel"), LogLevel::debug);
+    EXPECT_EQ(filter.level("game"), LogLevel::off);
+    EXPECT_THROW(LogFilter::parse(" = debug"), std::invalid_argument);
+}
+
 TEST(LogFilter, RejectsBadEntries) {
     EXPECT_THROW(LogFilter::parse("loader=verbose"), std::invalid_argument);
     EXPECT_THROW(LogFilter::parse("loud"), std::invalid_argument);
