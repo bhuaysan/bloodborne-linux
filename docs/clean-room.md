@@ -14,7 +14,7 @@ Never search for, open, fetch or read:
 
 - Public documentation of PS4 platform formats (SELF, PKG, SFO, the NID hashing scheme).
 - Hardware and specification documents: AMD GCN ISA manuals, Vulkan / SPIR-V, ELF, System V x86-64 ABI, FreeBSD and Linux man pages.
-- FreeBSD's public system headers (BSD licence), for constant values, `errno` numbers and struct layouts that the man pages name but don't give. Confirm each value against how the game or a bundled PRX uses it before relying on it.
+- FreeBSD's public system headers (BSD license), for constant values, `errno` numbers and struct layouts that the man pages name but don't give. Only from the upstream FreeBSD source tree or an installed FreeBSD system, never copies bundled with PS4 SDKs, toolchains or emulators. They are not a source of NID candidate names. Confirm each value against how the game or a bundled PRX uses it before relying on it, and record the FreeBSD release and the header files in [references.md](references.md).
 - General programming resources.
 
 ### Case by case
