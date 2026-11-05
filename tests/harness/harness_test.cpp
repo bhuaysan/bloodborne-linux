@@ -1,9 +1,11 @@
 #include "harness/harness.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
+#include <iterator>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -29,8 +31,9 @@ using Bytes = std::vector<std::byte>;
 
 constexpr std::uintptr_t test_base = 0x32000000;  // clear of the other tests' bases
 // Link addresses: the code segment at 0 (file offset 0x1000), the data segment at 0x4000 (file
-// offset 0x2000) with a global.
-constexpr std::uint64_t global = 0x4100, read_write_at = 0x10;
+// offset 0x2000) with the GOT slots of the two imports and a global.
+constexpr std::uint64_t got_a = 0x4000, got_b = 0x4008, global = 0x4100;
+constexpr std::uint64_t read_write_at = 0x10, calls_at = 0x40, float_bits_at = 0x60;
 
 template <class T>
 void put(Bytes& out, std::size_t offset, T value) {
@@ -50,25 +53,59 @@ void rel32(Bytes& elf, std::uint64_t field, std::uint64_t next, std::uint64_t ta
     put(elf, 0x1000 + field, static_cast<std::int32_t>(target - next));
 }
 
-// A PS4 ELF with two hand-assembled leaf functions and no imports.
+// A PS4 ELF with three hand-assembled functions and two function imports of libTest.
 Bytes build_elf() {
     Bytes elf(0x3000);
     // read_write(int* p): v = p[0]; global = v + 1; p[1] = 7; return 2 * v
     code(elf, read_write_at, {0x8b, 0x07, 0x8d, 0x48, 0x01, 0x89, 0x0d, 0, 0, 0, 0,  //
                               0xc7, 0x47, 0x04, 7, 0, 0, 0, 0x01, 0xc0, 0xc3});
     rel32(elf, 0x17, 0x1b, global);
+    // calls(a, b): harnessImpA(a, b); harnessImpB(a + 8, rsp)
+    code(elf, calls_at, {0x53, 0x48, 0x89, 0xfb, 0xff, 0x15, 0, 0, 0, 0,          //
+                         0x48, 0x8d, 0x7b, 0x08, 0x48, 0x89, 0xe6, 0xff, 0x15, 0,  //
+                         0, 0, 0, 0x5b, 0xc3});
+    rel32(elf, 0x46, 0x4a, got_a);
+    rel32(elf, 0x53, 0x57, got_b);
+    // float_bits(uint32_t bits): movd xmm0, edi; ret
+    code(elf, float_bits_at, {0x66, 0x0f, 0x6e, 0xc7, 0xc3});
 
-    // PT_SCE_DYNLIBDATA: the module name, then the smallest dynamic table parse_dynamic accepts.
-    // The empty symbol table starts at offset 0 and holds only the null symbol.
-    Bytes blob(8);
-    std::memcpy(blob.data(), "\0self\0\0", 8);
+    // PT_SCE_DYNLIBDATA: the string table, the symbols, the PLT relocations, then the dynamic
+    // table. Library A (id 0) of module B (id 1) is libTest of libTestModule.
+    Bytes blob(1);
+    auto str = [&](std::string_view s) {
+        const std::uint64_t at = blob.size();
+        std::ranges::transform(s, std::back_inserter(blob), [](char c) { return std::byte(c); });
+        blob.push_back(std::byte{0});
+        return at;
+    };
+    const std::uint64_t self = str("self"), file = str("libTest.prx"),
+                        module = str("libTestModule"), library = str("libTest"),
+                        imp_a = str("harnessImpA#A#B"), imp_b = str("harnessImpB#A#B");
+    const std::uint64_t strsz = blob.size(), symtab = (strsz + 7) & ~7ULL;
+    blob.resize(symtab + 24);  // the null symbol
+    for (std::uint64_t name : {imp_a, imp_b}) {
+        const std::size_t at = blob.size();
+        put(blob, at, static_cast<std::uint32_t>(name));
+        put<std::uint8_t>(blob, at + 4, 0x12);  // STB_GLOBAL, STT_FUNC
+        put<std::uint64_t>(blob, at + 16, 0);   // up to st_size
+    }
+    const std::uint64_t jmprel = blob.size();
+    for (std::uint64_t sym : {1, 2}) {
+        put(blob, blob.size(), sym == 1 ? got_a : got_b);
+        put(blob, blob.size(), sym << 32 | r_x86_64_jump_slot);
+        put<std::int64_t>(blob, blob.size(), 0);  // r_addend
+    }
+    const std::uint64_t dynamic = blob.size();
     const std::pair<std::uint64_t, std::uint64_t> entries[] = {
-        {0x6100000D, 0x0101ULL << 32 | 1},                   // DT_SCE_MODULE_INFO "self"
-        {0x61000035, 0}, {0x61000037, 6},                    // string table
-        {0x61000039, 0}, {0x6100003F, 0}, {0x6100003B, 24},  // symbols
-        {0x61000029, 0}, {0x6100002D, 0}, {0x6100002B, 7},   // PLT relocations
-        {0x6100002F, 0}, {0x61000031, 0}, {0x61000033, 24},  // relocations
-        {0x61000027, 0}, {0, 0}};                            // DT_SCE_PLTGOT, DT_NULL
+        {1, file},                                            // DT_NEEDED
+        {0x6100000F, 1ULL << 48 | 0x0101ULL << 32 | module},  // DT_SCE_NEEDED_MODULE
+        {0x61000015, 1ULL << 32 | library},                   // DT_SCE_IMPORT_LIB
+        {0x6100000D, 0x0101ULL << 32 | self},                 // DT_SCE_MODULE_INFO
+        {0x61000035, 0}, {0x61000037, strsz},                 // string table
+        {0x61000039, symtab}, {0x6100003F, 72}, {0x6100003B, 24},  // symbols
+        {0x61000029, jmprel}, {0x6100002D, 48}, {0x6100002B, 7},   // PLT relocations
+        {0x6100002F, 0}, {0x61000031, 0}, {0x61000033, 24},        // relocations
+        {0x61000027, got_a}, {0, 0}};                              // DT_SCE_PLTGOT, DT_NULL
     for (auto [tag, value] : entries) {
         put(blob, blob.size(), tag);
         put(blob, blob.size(), value);
@@ -84,7 +121,7 @@ Bytes build_elf() {
         {pt_load, pf_r | pf_x, 0x1000, 0, 0x1000, 0x1000, 0x4000},
         {pt_load, pf_r | 2, 0x2000, 0x4000, 0x1000, 0x2000, 0x4000},  // PF_W: data and .bss
         {pt_sce_dynlibdata, pf_r, 0x3000, 0, blob.size(), 0, 0x10},
-        {pt_dynamic, pf_r, 0x3000 + 8, 0, blob.size() - 8, blob.size() - 8, 8},
+        {pt_dynamic, pf_r, 0x3000 + dynamic, 0, blob.size() - dynamic, blob.size() - dynamic, 8},
     };
     put<std::uint16_t>(elf, 0x38, static_cast<std::uint16_t>(std::size(phdrs)));
     for (std::size_t i = 0; i < std::size(phdrs); ++i) {
@@ -174,6 +211,101 @@ TEST_F(HarnessTest, CatchesWrongResults) {
                   "memory: image 0x4100..0x4101 differs: original 15, replacement 16");
     expect_report(harness.compare<int(int*)>(read_write_at, &wrong_arena, two_ints),
                   "memory: arena +0x4..+0x5 differs: original 07, replacement 08");
+}
+
+// A replacement that writes into the data block too, so it must be in the snapshot.
+int writes_data_block(int* p) {
+    reinterpret_cast<std::byte*>(bb::hle::import_address("libTest", "harnessData"))[0x10] =
+        std::byte{1};
+    return read_write(p);
+}
+
+TEST(HarnessDataTest, ComparesDataBlocks) {
+    bb::hle::resolve({"harnessData", "libTest", "libTestModule", bb::loader::stt_object});
+    Image image = load();
+    loaded = &image;
+    Harness harness{image};
+    expect_report(harness.compare<int(int*)>(read_write_at, &writes_data_block, two_ints),
+                  "memory: data block libTest harnessData +0x10..+0x11 differs: original 00, "
+                  "replacement 01");
+    loaded = nullptr;
+}
+
+using TwoArgs = void(std::uint64_t, std::uint64_t);
+
+void call_import(std::string_view nid, std::uint64_t a, std::uint64_t b) {
+    reinterpret_cast<TwoArgs*>(bb::hle::import_address("libTest", nid))(a, b);
+}
+
+// 0x40
+void calls(std::uint64_t a, std::uint64_t b) {
+    call_import("harnessImpA", a, b);
+    std::uint64_t local = 0;  // its address is a stack pointer as the original's rsp is
+    call_import("harnessImpB", a + 8, reinterpret_cast<std::uint64_t>(&local));
+}
+
+void swapped(std::uint64_t a, std::uint64_t b) {
+    call_import("harnessImpB", a + 8, b);
+    call_import("harnessImpA", a, b);
+}
+
+void second_arg_plus_one(std::uint64_t a, std::uint64_t b) {
+    calls(a, b + 1);
+}
+
+// a in the arena, b the global in the image.
+std::tuple<std::uint64_t, std::uint64_t> arena_and_global(Arena& a) {
+    return {reinterpret_cast<std::uint64_t>(a.zeroed<std::uint64_t>(2)), loaded->runtime(global)};
+}
+
+TEST_F(HarnessTest, ComparesStubCallsWithNormalizedPointers) {
+    harness.declare_arity("libTest", "harnessImpA", 2);
+    harness.declare_arity("libTest", "harnessImpB", 2);
+    const Result r = harness.compare<TwoArgs>(calls_at, &calls, arena_and_global);
+    EXPECT_TRUE(r) << r.report();
+    ASSERT_EQ(harness.log().size(), 2U);
+    EXPECT_EQ(harness.log()[0].stub->nid, "harnessImpA");
+    EXPECT_EQ(harness.log()[0].args[1], image.runtime(global));
+    EXPECT_EQ(harness.log()[1].args[0], harness.log()[0].args[0] + 8);
+    harness.restore();
+    EXPECT_TRUE(harness.log().empty());
+}
+
+TEST_F(HarnessTest, CatchesADifferentImportOrder) {
+    const Result r = harness.compare<TwoArgs>(calls_at, &swapped, arena_and_global);
+    expect_report(r, "stub log: differs at call 1 (original 2 calls, replacement 2)\n"
+                     "  original 1: libTest harnessImpA (?) 0x");
+    expect_report(r, "  replacement 1: libTest harnessImpB (?) 0x");
+}
+
+TEST_F(HarnessTest, ComparesArgumentsUpToTheDeclaredArity) {
+    for (int arity : {0, 1}) {
+        harness.declare_arity("libTest", "harnessImpA", arity);
+        const Result r = harness.compare<TwoArgs>(calls_at, &second_arg_plus_one, arena_and_global);
+        EXPECT_TRUE(r) << arity << ": " << r.report();
+    }
+    harness.declare_arity("libTest", "harnessImpA", 2);
+    expect_report(harness.compare<TwoArgs>(calls_at, &second_arg_plus_one, arena_and_global),
+                  "stub log: differs at call 1 (original 2 calls, replacement 2)");
+    EXPECT_THROW(harness.declare_arity("libTest", "harnessImpA", 7), std::invalid_argument);
+    EXPECT_THROW(harness.declare_arity("libTest", "harnessImpA", -1), std::invalid_argument);
+}
+
+// 0x60
+float float_bits(std::uint32_t bits) {
+    return std::bit_cast<float>(bits);
+}
+
+float positive_zero(std::uint32_t) {
+    return 0.0f;
+}
+
+TEST_F(HarnessTest, ComparesFloatsBitwise) {
+    auto minus_zero = [](Arena&) { return std::tuple{std::uint32_t{0x80000000}}; };
+    const Result r = harness.compare<float(std::uint32_t)>(float_bits_at, &float_bits, minus_zero);
+    EXPECT_TRUE(r) << r.report();
+    expect_report(harness.compare<float(std::uint32_t)>(float_bits_at, &positive_zero, minus_zero),
+                  "return value: original -0 (bits 0x80000000), replacement 0 (bits 0x0)");
 }
 
 TEST_F(HarnessTest, ArenaLayoutIsDeterministic) {
