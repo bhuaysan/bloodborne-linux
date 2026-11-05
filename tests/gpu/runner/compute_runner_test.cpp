@@ -48,7 +48,14 @@ TEST(ComputeRunner, NoDriverGivesReason) {
     };
     const auto driver_files = saved("VK_DRIVER_FILES");
     const auto icd_filenames = saved("VK_ICD_FILENAMES");
-    const std::string none = (std::filesystem::temp_directory_path() / "bb-no-icd.json").string();
+    // The manifest path lies in a directory this test just created, so no other process can have
+    // put a driver manifest there for the loader to parse and load.
+    std::string dir_template =
+        (std::filesystem::temp_directory_path() / "bb-no-icd-XXXXXX").string();
+    ASSERT_NE(::mkdtemp(dir_template.data()), nullptr) << "cannot create a temp directory";
+    const std::filesystem::path dir = dir_template;
+    const std::string none = (dir / "none.json").string();
+    ASSERT_FALSE(std::filesystem::exists(none)) << none;
     ::setenv("VK_DRIVER_FILES", none.c_str(), 1);
     ::setenv("VK_ICD_FILENAMES", none.c_str(), 1);
     std::string why;
@@ -58,6 +65,7 @@ TEST(ComputeRunner, NoDriverGivesReason) {
     };
     restore("VK_DRIVER_FILES", driver_files);
     restore("VK_ICD_FILENAMES", icd_filenames);
+    std::filesystem::remove(dir);
     EXPECT_EQ(runner, nullptr);
     EXPECT_EQ(why.rfind("no Vulkan instance", 0), 0u) << why;
 }
