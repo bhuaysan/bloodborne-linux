@@ -137,8 +137,10 @@ TEST(GcnDisassemble, AssemblesToTheSameWords) {
 
 // Encodings that LLVM's syntax can't express. The text is still LLVM's syntax.
 TEST(GcnDisassemble, EncodingsLlvmCannotExpress) {
-    // LLVM rejects m0 as an SMRD destination, which the field allows.
+    // LLVM rejects m0 and exec (or either half) as an SMRD destination, which the field allows.
     EXPECT_EQ(text({smrd(0, code::m0, 4, false, 6)}), "s_load_dword m0, s[4:5], s6");
+    EXPECT_EQ(text({smrd(0, code::exec + 1, 4, true, 1)}), "s_load_dword exec_hi, s[4:5], 0x1");
+    EXPECT_EQ(text({smrd(1, code::exec, 4, true, 1)}), "s_load_dwordx2 exec, s[4:5], 0x1");
     // A literal offset of 255 or less: LLVM encodes the immediate form, with or without lit().
     EXPECT_EQ(text({smrd(0, 0, 4, false, 255), 0x10}), "s_load_dword s0, s[4:5], 0x10");
     // Opcodes with no gfx7 syntax in LLVM.
