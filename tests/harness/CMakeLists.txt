@@ -16,7 +16,7 @@ target_link_libraries(bbeboottest PUBLIC bbharness bbtestsupport GTest::gtest
                                   PRIVATE $<COMPILE_ONLY:bbgame> $<COMPILE_ONLY:bbhle> bb_warnings)
 
 add_executable(harness_eboot_test eboot_test.cpp main.cpp)
-target_link_libraries(harness_eboot_test PRIVATE bbeboottest bbgame bbhle bb_warnings)
+target_link_libraries(harness_eboot_test PRIVATE bbeboottest bbgame bbhle bbeboottls bb_warnings)
 add_test(NAME harness_eboot_test COMMAND harness_eboot_test)
 # gtest_discover_tests sets this on its entries; without it a run without the game (all cases
 # skipped, gtest exits 0) would show as Passed instead of Skipped.
