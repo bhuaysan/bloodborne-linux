@@ -1,7 +1,7 @@
 """Checks that every copy of the pinned SHA-256 hashes agrees.
 
-The hash of eboot.bin is in docs/clean-room.md, tools/self2elf/self2elf.py and
-src/loader/self.hpp. The hash of the eboot.elf that self2elf rebuilds is in tools/common/ps4elf.py
+The hashes of eboot.bin and of the PRXs the runtime loads are in docs/clean-room.md,
+tools/self2elf/self2elf.py and src/loader/self.hpp. The hash of the eboot.elf that self2elf rebuilds is in tools/common/ps4elf.py
 and tests/loader/self_test.cpp. Needs no game files.
 """
 
@@ -40,6 +40,13 @@ class PinnedHashesTest(unittest.TestCase):
     def test_eboot_bin_in_loader(self):
         found = re.findall(rf'eboot_bin_sha256 =\s*"({HEX})"', read("src/loader/self.hpp"))
         self.assertEqual(found, [by_name(self2elf.KNOWN_FILES)["eboot.bin"]])
+
+    def test_prxs_in_loader(self):
+        found = re.findall(rf'\{{"([^"]+\.prx)", "({HEX})"\}}', read("src/loader/self.hpp"))
+        self.assertEqual(len(found), 2)
+        known = by_name(self2elf.KNOWN_FILES)
+        for name, digest in found:
+            self.assertEqual(digest, known[f"sce_module/{name}"], name)
 
     def test_eboot_elf_in_loader_test(self):
         found = re.findall(rf'"({HEX})"', read("tests/loader/self_test.cpp"))
