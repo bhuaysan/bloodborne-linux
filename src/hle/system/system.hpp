@@ -82,7 +82,7 @@ inline constexpr std::int32_t system_service_bb_error_invalid_argument =
     static_cast<std::int32_t>(0x80ff0103);
 
 // The integer the query returns for id 1. The game maps it through the table at 0x4736630 to its
-// own language index, 8 for 1, and index 8 is "engUS" in the game's list at 0x49bba84 (UTF-16).
+// own language index, 8 for 1, and index 8 is "engUS" in the game's list at 0x49b7a84 (UTF-16).
 inline constexpr std::int32_t system_language_english_us = 1;
 
 // Writes the number of pending events (0) to the int at status + 0, which is all the game reads
