@@ -21,12 +21,12 @@ Addresses are eboot link addresses. Packet and register names are AMD's. Packets
 | Range | Contents |
 |---|---|
 | 0x2bc04a8–0x2bc07b8 | PLT stubs of the 50 imports (`jmp [rip+…]`, 16 bytes apart) |
-| 0x10899f0–0x1089c4f | One thunk per import: a `jmp` to the stub, or a 2–4 instruction wrapper that converts the result to a bool |
+| 0x10899f0–0x1089c4f | Thunks for 31 of the 50 imports: a `jmp` to the stub, or a 2–4 instruction wrapper that converts the result to a bool. The other 19 have no thunk: packet writers outside this range call their stubs directly (default state, stage registers, markers, `1qXLHIpROPE`) |
 | 0x1071270 | Command buffer initialisation (below) |
 | 0x1072870–0x1078833 | Graphics packet writers, one function per packet or packet group |
 | 0x1078930–0x1084807 | Performance counter writers (only reached when profiling is on) |
 | 0x10877c0, 0x1087450–0x1087710 | Fetch shader generator and its input builders |
-| 0x1089c50–0x108bc3e | Compute packet writers (shader-type bit set in every header) |
+| 0x1089c50–0x108bc3e | Compute-side packet writers. Many set the shader-type bit as a constant (`SET_SH_REG`, `SET_QUEUE_REG`, `DISPATCH_DIRECT`, `INDIRECT_BUFFER`, `RELEASE_MEM`, 0x8D); others leave it clear or take it from the object's header bits (0x8C, `SET_UCONFIG_REG`, `WRITE_DATA`, `EVENT_WRITE`, `NOP`). Some write bodies that differ from the graphics writer of the same opcode (0x8C, 0x8D) |
 | 0x108c7b0–0x108ca00 | Compute queue object: map, unmap, submit to ring |
 | 0x108d000–0x1092000 | State cache layer: per-stage shader binding, resource tables, constant engine use |
 | 0x11fa000–0x11fc400 | Submit layer: builds the address and size arrays from recorded chunks |
@@ -102,14 +102,16 @@ All packets are type 3 (`0xC0000000 | (count - 1) << 16 | opcode << 8 | bits`), 
 | 0x86 | `WAIT_ON_CE_COUNTER` | 0x10781d0 | DCB |
 | 0x88 | `WAIT_ON_DE_COUNTER_DIFF` | 0x11fd230 | CCB |
 | 0x8A | not in the AMD guide | 0x1072490 | 12-dword body; 2 callers |
-| 0x8C | not in the AMD guide | 0x1074a90 | 5-dword body with a 40-bit address; 1 caller; compute variant 0x108a590 |
-| 0x8D | not in the AMD guide | 0x1074b50 | 3-dword body, followed by the draw trailer like a draw; 4 callers; compute variant 0x108a680 |
+| 0x8C | not in the AMD guide | 0x1074a90 | 5-dword body: one dword of three bitfields (bits 0–9, 10–19, 20–30), the constant 0x420, then a 40-bit address; 1 caller. The compute-side writer 0x108a590 writes only the bitfield dword (1-dword body) and no shader-type bit, then the 3-dword profiling slot (below) |
+| 0x8D | not in the AMD guide | 0x1074b50 | 3-dword body, followed by the draw trailer like a draw; 4 callers. The compute-side writer 0x108a680 writes a different 5-dword body (four argument dwords, then `(arg & 3) << 3 | 1`) with the shader-type bit set, after the profiling slot and before the draw trailer |
 
 The default state block that the game writes itself at 0x10728d0 is `CONTEXT_CONTROL`, `CLEAR_STATE`, `NUM_INSTANCES` 1 and `CB_COLOR_CONTROL` = 0x00CC0010.
 
 ### Draw trailer
 
 Every draw and dispatch writer ends with two more dwords. If the import behind 0x1089c40 returns true, they are `EVENT_WRITE` with event type 0x35 (`THREAD_TRACE_MARKER` in the register guide's VGT event list); otherwise a `NOP` with an empty payload. The performance counter writers are guarded by the same call. With the import returning 0, the stream contains neither.
+
+The compute-side 0x8C and 0x8D writers (0x108a590, 0x108a680) also reserve a 3-dword profiling slot under the same guard: `SET_UCONFIG_REG` of uconfig offset 0x342 without the shader-type bit (`0xC0017900, 0x342, value`), or else a `NOP` of the same length (`0xC0011000`). The 0x8C writer puts it after the packet, the 0x8D writer before.
 
 ### NOP tags
 
@@ -228,13 +230,13 @@ What this means for the translator:
 
 - At draw time the fetch code is read from the address in the vertex stage's user-data dwords 0–1 and decoded up to its `s_setpc_b64`. Its code hash joins the cache key as the design says.
 - The generator uses only SMRD, VOP2, SOPP, MUBUF and SOP1, which items 3a, 3b and 3d cover.
-- Offline, real fetch shaders can be produced by calling 0x10877c0 itself through the differential harness, which maps the eboot. It is plain x86 code with no imports. Its input comes from the shader objects, so this waits for item 2's register-block and input-usage layout.
+- Offline, real fetch shaders can be produced by calling 0x10877c0 itself through the differential harness, which maps the eboot. It calls no other game function, but it uses two libkernel imports for its stack protector: it loads the canary through the GOT slot 0x53e3be0 (`f7uOxY9mM1U`, `__stack_chk_guard`) and calls the PLT stub 0x2bbe4f8 (`Ou3iL1abvng`, `__stack_chk_fail`) at 0x1087ab4. The harness has to resolve both before the call. Its input comes from the shader objects, so this waits for item 2's register-block and input-usage layout.
 
 **Shaders inside the eboot.** The eboot holds 5493 `OrbShdr` markers: 5139 in the executable segment between 0x2d0a04a and 0x46d6e92 and 354 in the data segment between 0x50dfb04 and 0x52e3da4, one `s_endpgm` per marker. 210 of them contain one `s_swappc_b64 s[0:1], s[0:1]` each. They carry no readable names near the marker. Item 2's eboot scan extracts them like the archive shaders.
 
 ## libSceGnmDriver imports
 
-Each import is reached through one thunk in 0x10899f0–0x1089c4f, either a plain `jmp` or a wrapper that reshapes the result. "Unreachable" means neither the thunk nor any function that calls it has a caller, and no relocation or RIP-relative reference points at them.
+31 imports are reached through a thunk in 0x10899f0–0x1089c4f, either a plain `jmp` or a wrapper that reshapes the result. The other 19 have no thunk; a packet writer outside that range calls the PLT stub itself: `0H2vBYbTLHI` (0x10728b4), the 11 stage-register imports (0x1075400–0x1075a70, 0x108a8b0, 0x108a947), the 5 marker imports (0x10774c8, 0x107754f, 0x1078038, 0x10780bf, 0x1078119 and their compute twins at 0x108ae68–0x108b7d9), `1qXLHIpROPE` (0x1078489) and `nF6bFRUBRAU` (0x1089c94). The "Reached through" columns name the thunk or the writer. "Unreachable" means neither that function nor any function that calls it has a caller, and no relocation or RIP-relative reference points at them.
 
 ### Reachable
 
@@ -271,9 +273,9 @@ Each import is reached through one thunk in 0x10899f0–0x1089c4f, either a plai
 
 The HLE registers these as logging stubs.
 
-| NID | Thunk | What the thunk shows |
+| NID | Reached through | What the caller shows |
 |---|---|---|
-| `aj3L-iaFmyk` | wrappers 0x10774f0, 0x108ae90 | Like `jiItzS6+22g` with an extra u32 (a colour, by analogy) |
+| `aj3L-iaFmyk` | wrappers 0x10774f0, 0x108ae90 | Like `jiItzS6+22g` with an extra u32 |
 | `aPIZJTXC+cU` | wrappers 0x1078060, 0x108b720 | Like `W1Etj-jlW7Y` with an extra u32 |
 | `A+uGq+3KFtQ` | 0x1089ac0 | Map-compute-queue variant (above) |
 | `UoYY0DWMC0U` | 0x1089a60 | Returns a byte |
