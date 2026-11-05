@@ -1,10 +1,8 @@
 #include "loader/image.hpp"
 
 #include <sys/mman.h>
-#include <unistd.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <cstring>
 #include <format>
 #include <stdexcept>
@@ -14,6 +12,7 @@
 #include <utility>
 
 #include "common/file.hpp"
+#include "common/memory.hpp"
 #include "common/sha256.hpp"
 #include "loader/bytes.hpp"
 #include "loader/elf.hpp"
@@ -24,17 +23,7 @@ namespace {
 
 constexpr std::uint32_t pf_w = 2;
 
-std::uint64_t page_size() {
-    return static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
-}
-
-std::uint64_t page_down(std::uint64_t value) {
-    return value & ~(page_size() - 1);
-}
-
-std::uint64_t page_up(std::uint64_t value) {
-    return page_down(value + page_size() - 1);
-}
+using common::page_down, common::page_up;
 
 int prot_from_flags(std::uint32_t flags) {
     return ((flags & pf_r) ? PROT_READ : 0) | ((flags & pf_w) ? PROT_WRITE : 0) |
@@ -46,7 +35,7 @@ int prot_from_flags(std::uint32_t flags) {
 std::vector<Segment> read_segments(std::span<const std::byte> elf, std::span<const Phdr> phdrs,
                                    std::uint64_t& max_align) {
     std::vector<Segment> segments;
-    max_align = page_size();
+    max_align = common::page_size();
     for (const Phdr& ph : phdrs) {
         if (ph.type != pt_load) {
             continue;
@@ -94,18 +83,10 @@ void need_in_load(std::span<const Phdr> phdrs, std::uint64_t link, std::uint64_t
     }
 }
 
-// `err` is errno saved right after the failing call, before formatting `what` can change it.
-[[noreturn]] void throw_errno(int err, const std::string& what) {
-    throw std::system_error(err, std::generic_category(), what);
-}
-
 // mprotect over the pages of segment `s` of the image at `base`.
 void protect(std::uintptr_t base, const Segment& s, int prot) {
     std::uint64_t start = page_down(s.link_addr), end = page_up(s.link_addr + s.mem_size);
-    if (mprotect(reinterpret_cast<void*>(base + start), end - start, prot) != 0) {
-        int err = errno;
-        throw_errno(err, std::format("mprotect of {:#x}..{:#x}", base + start, base + end));
-    }
+    common::protect(reinterpret_cast<void*>(base + start), end - start, prot);
 }
 
 }  // namespace
@@ -221,12 +202,9 @@ Image map_elf(std::span<const std::byte> elf, std::uintptr_t base) {
     // Kernels before 4.17 treat MAP_FIXED_NOREPLACE as a hint, hence the address check.
     auto range = std::format("{:#x}..{:#x}", base, base + span);
     void* want = reinterpret_cast<void*>(base);
-    void* got = mmap(want, span, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
-                     -1, 0);
-    if (got == MAP_FAILED) {
-        int err = errno;
-        throw_errno(err, std::format("cannot reserve {} for the image", range));
-    }
+    void* got = common::map_anonymous(span, PROT_NONE,
+                                      std::format("cannot reserve {} for the image", range), want,
+                                      MAP_FIXED_NOREPLACE);
     if (got != want) {
         munmap(got, span);
         throw std::system_error(std::make_error_code(std::errc::address_in_use),

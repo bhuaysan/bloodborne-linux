@@ -4,16 +4,17 @@
 #include <sys/mman.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <cstring>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
 
+#include "common/memory.hpp"
+
 namespace bb::harness {
 namespace {
 
-constexpr std::size_t page = 4096, max_ranges = 8, max_shown_bytes = 8, max_shown_calls = 16;
+constexpr std::size_t max_ranges = 8, max_shown_bytes = 8, max_shown_calls = 16;
 
 std::string show_bytes(const std::byte* p, std::size_t n) {
     std::string out;
@@ -60,11 +61,8 @@ void show_log(Result& result, std::string_view side, const std::vector<StubCall>
 }  // namespace
 
 Arena::Arena() {
-    void* p = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED) {
-        throw std::system_error(errno, std::generic_category(), "harness: arena mmap");
-    }
-    data_ = static_cast<std::byte*>(p);
+    data_ = static_cast<std::byte*>(
+        common::map_anonymous(size, PROT_READ | PROT_WRITE, "harness: arena mmap"));
 }
 
 Arena::~Arena() {
@@ -153,6 +151,7 @@ void Harness::keep_original() {
 }
 
 void Harness::compare_state(Result& result) const {
+    const std::size_t page = common::page_size();
     std::size_t ranges = 0;
     for (std::size_t i = 0; i < regions_.size(); ++i) {
         const Region& r = regions_[i];

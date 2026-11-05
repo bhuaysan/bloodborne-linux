@@ -1,10 +1,8 @@
 #include "hle/hle.hpp"
 
 #include <sys/mman.h>
-#include <unistd.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
@@ -15,10 +13,10 @@
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <system_error>
 #include <unordered_map>
 #include <vector>
 
+#include "common/memory.hpp"
 #include "hle/nid_table.hpp"
 
 extern "C" void bb_hle_stub_entry();  // stub_entry.S
@@ -28,22 +26,15 @@ namespace {
 
 constexpr std::size_t thunk_size = 24;
 
-void* map(std::size_t size, int prot) {
-    void* p = mmap(nullptr, size, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED) {
-        throw std::system_error(errno, std::generic_category(), "hle: mmap");
-    }
-    return p;
-}
-
 // Owns the executable pages that hold the thunks. A page is writable only while a thunk is
 // written into it; resolve() runs before game code, so no thread executes it meanwhile.
 class ThunkPages {
 public:
     std::uintptr_t add(const StubInfo* stub) {
-        const std::size_t page = static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
+        const std::size_t page = common::page_size();
         if (page_ == nullptr || used_ + thunk_size > page) {
-            page_ = static_cast<std::byte*>(map(page, PROT_READ | PROT_WRITE));
+            page_ = static_cast<std::byte*>(
+                common::map_anonymous(page, PROT_READ | PROT_WRITE, "hle: mmap"));
             used_ = 0;
         } else {
             protect(page, PROT_READ | PROT_WRITE);
@@ -62,9 +53,7 @@ public:
 
 private:
     void protect(std::size_t page, int prot) {
-        if (mprotect(page_, page, prot) != 0) {
-            throw std::system_error(errno, std::generic_category(), "hle: mprotect");
-        }
+        common::protect(page_, page, prot, "hle: ");
     }
 
     std::byte* page_ = nullptr;
@@ -117,7 +106,8 @@ std::uintptr_t resolve(const loader::Import& imp) {
     if (auto it = r.impls.find(k); it != r.impls.end()) {
         address = reinterpret_cast<std::uintptr_t>(it->second);
     } else if (imp.type == loader::stt_object) {
-        auto* block = static_cast<std::byte*>(map(data_block_size, PROT_READ | PROT_WRITE));
+        auto* block = static_cast<std::byte*>(
+            common::map_anonymous(data_block_size, PROT_READ | PROT_WRITE, "hle: mmap"));
         r.data_blocks.push_back({imp.library, imp.nid, block});
         address = reinterpret_cast<std::uintptr_t>(block);
     } else {

@@ -1,11 +1,9 @@
 #include "hook/hook.hpp"
 
 #include <sys/mman.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <cstring>
 #include <format>
 #include <iterator>
@@ -14,10 +12,10 @@
 #include <set>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 #include <vector>
 
+#include "common/memory.hpp"
 #include "loader/bytes.hpp"
 
 namespace bb::hook {
@@ -91,11 +89,7 @@ void check(const loader::Image& image, std::span<const Replacement> replaced) {
 }
 
 void protect(std::uintptr_t start, std::uintptr_t end, int prot) {
-    if (mprotect(reinterpret_cast<void*>(start), end - start, prot) != 0) {
-        int err = errno;
-        throw std::system_error(err, std::generic_category(),
-                                std::format("mprotect of {:#x}..{:#x}", start, end));
-    }
+    common::protect(reinterpret_cast<void*>(start), end - start, prot);
 }
 
 // Writes `bytes` at `link`, which check() found in a code segment. On a finalized image, makes
@@ -106,9 +100,8 @@ void write(loader::Image& image, std::uint64_t link, const Bytes& bytes) {
         std::memcpy(at, bytes.data(), bytes.size());
         return;
     }
-    auto page = static_cast<std::uintptr_t>(sysconf(_SC_PAGESIZE));
-    std::uintptr_t start = (image.base + link) & ~(page - 1);
-    std::uintptr_t end = (image.base + link + patch_size + page - 1) & ~(page - 1);
+    std::uintptr_t start = common::page_down(image.base + link);
+    std::uintptr_t end = common::page_up(image.base + link + patch_size);
     protect(start, end, PROT_READ | PROT_WRITE);
     std::memcpy(at, bytes.data(), bytes.size());
     protect(start, end, code_segment(image, link)->prot);
