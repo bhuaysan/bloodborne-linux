@@ -51,9 +51,9 @@ The other NIDs stay unnamed. The FreeBSD manual page lists and the derivation ru
 | `R1Jvn8bSCW8` | eboot | Destroy it *(survey)* |
 | `Zxa0VhQVTsk` | eboot | Wait: count, timeout pointer *(survey)* |
 | `4czppHBiriw` | eboot | Post: count *(survey)* |
-| `D0OdFMjp46I` | eboot | Create an event queue with a name *(survey)* |
-| `jpFjmgAC5AE` | eboot | Delete an event queue *(survey)* |
-| `fzyMKs9kim0` | eboot | Wait on an event queue: queue, event array, capacity, `&count`, timeout pointer *(survey)* |
+| `D0OdFMjp46I` | eboot | Create an event queue with a name ([kernel-abi.md](kernel-abi.md#event-queue)) |
+| `jpFjmgAC5AE` | eboot | Delete an event queue ([kernel-abi.md](kernel-abi.md#event-queue)) |
+| `fzyMKs9kim0` | eboot | Wait on an event queue: queue, event array, capacity, `&count`, timeout pointer ([kernel-abi.md](kernel-abi.md#event-queue)) |
 
 ### Time
 

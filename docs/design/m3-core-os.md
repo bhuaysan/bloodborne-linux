@@ -48,7 +48,7 @@ The eboot uses initial-exec TLS only: `mov rax, fs:0` followed by adding a const
 ## Sync
 
 - Mutexes, rwlocks and condition variables: the game's object holds a pointer to our object, which wraps the glibc primitive of the matching type. An object still holding its static-initialiser value is created on first use, under a global lock. The issues confirm the guest object size and initialiser values from the game and libc.prx code.
-- The counted sync object (create/destroy/wait/post) and the event queue (create/destroy/wait, triggered from our own code, e.g. a flip) are our own objects on a mutex and a condition variable.
+- The counted sync object (create/destroy/wait/post) and the event queue (create/destroy/wait, triggered from our own code, e.g. a flip) are our own objects on a mutex and a condition variable. Other HLE modules raise events through `bb::hle::EventQueue::trigger(handle, event)`; the event record, the wait's timeout and the results are in [kernel-abi.md](../formats/kernel-abi.md#event-queue).
 - Error results: see [Errors](#errors).
 
 ## Errors

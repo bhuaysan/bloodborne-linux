@@ -203,3 +203,36 @@ Header `sys/sys/dirent.h`. `sceKernelGetdirentries(fd, buf, nbytes, basep)` fill
 A full record is 264 bytes (Fios 0x2d475 copies 0x108 bytes per entry). A record's length is `8 + ((d_namlen + 1 + 3) & ~3)`: the name is NUL-terminated and padded with NULs to a multiple of 4 (header). The `d_type` values (`DT_UNKNOWN` 0, `DT_FIFO` 1, `DT_CHR` 2, `DT_DIR` 4, `DT_BLK` 6, `DT_REG` 8, `DT_LNK` 10, `DT_SOCK` 12, `DT_WHT` 14) are the same as on Linux. A `static_assert` in `abi.cpp` checks them, so a host `d_type` is passed through.
 
 `GuestDirent` names its fields without the `d_` prefix because glibc's `<dirent.h>` defines `d_fileno` as a macro. `dirent_length(n)` is the record length for an `n`-byte name. `put_dirent(out, fileno, type, name)` writes one record to the start of `out` with `memcpy`, since a guest buffer need not be aligned, and returns its length. It writes nothing and returns 0 if the record doesn't fit or the name is empty or longer than 255 bytes. Bytes after the record's padding are left alone.
+
+## Event queue
+
+Three unnamed libkernel imports (see [kernel-imports.md](kernel-imports.md#counted-sync-object-and-event-queue)), implemented in `src/hle/kernel/equeue.cpp`. The eboot calls create twice, delete six times and wait five times; libc.prx and libSceFios2.prx don't import them.
+
+- **Create** `D0OdFMjp46I` `(uint64* out, const char* name)`: writes a handle to `*out` and returns 0. The handle is a 64-bit value (eboot 0x11e4899 keeps it in a qword); 0 means "no queue" to the game (eboot 0x26d633b skips the delete when it is 0), so ours start at 1. The names are `"FlipEventQueue"` (eboot 0x26d6202) and `"Initialize"` (eboot 0x11e48a0). A negative result is a failure (eboot 0x26d6211). After each create the game passes the handle to a video out call (eboot 0x11e48bb, 0x26d6234), with 0 as the third argument: the flip event registration (#100).
+- **Delete** `jpFjmgAC5AE` `(uint64 handle)`: returns 0. The game ignores the result (eboot 0x26d6347).
+- **Wait** `fzyMKs9kim0` `(uint64 handle, event* events, int32 capacity, int32* count, uint32* timeout)`: every call site passes capacity 1, a 32-byte stack buffer (eboot 0x11e41a6: the buffer at `rbp-0x30` ends at the stack guard at `rbp-0x10`; eboot 0x26d6f1b: `rbp-0x98` to the count at `rbp-0x74`), a 4-byte count and a null timeout. eboot 0x26d6f2b leaves its loop on a negative result; the other four ignore it.
+
+No call site reads a field of the event record, so its layout is ours (`GuestEvent`, 32 bytes, the size of the game's buffer):
+
+| Field | Offset | Type | Meaning |
+|---|---|---|---|
+| id | 0 | uint64 | event source, chosen by the producer |
+| kind | 8 | int16 | event type, chosen by the producer |
+| flags | 10 | uint16 | 0 so far |
+| detail | 12 | uint32 | producer-defined |
+| data | 16 | int64 | producer-defined |
+| user_data | 24 | uint64 | the value the guest gave when it registered for the event |
+
+The timeout's type is not shown by any event-queue call site. The game's counted-sync wait passes its timeout the same way, as a pointer to a 4-byte value, and null for -1 (eboot 0x263ae41), so the wait reads a `uint32` in microseconds (the unit is our choice). It does not write the remaining time back.
+
+**Results** (our choices, `sce_error` codes as in [sce error codes](#sce-error-codes)):
+
+| Case | Result | `*count` |
+|---|---|---|
+| events returned | 0 | number written, at most `min(capacity, 64)` |
+| timeout passed with nothing pending | `0x8002003c` (`ETIMEDOUT`) | 0 |
+| queue deleted while waiting | `0x80020055` (`ECANCELED`) | 0 |
+| unknown or deleted handle (wait, delete) | `0x80020009` (`EBADF`) | unchanged |
+| null `out`, `events` or `count`, capacity < 1 | `0x80020016` (`EINVAL`) | unchanged |
+
+**Producers** (our own HLE modules) call `bb::hle::EventQueue::trigger(handle, event)`. It returns false and drops the event if the handle is not a live queue. Events come out in trigger order. A trigger whose `(id, kind)` is already pending replaces that record in place, so a producer that fires faster than the game waits doesn't grow the queue. A trigger wakes one waiter; a wait that leaves events behind wakes the next.
