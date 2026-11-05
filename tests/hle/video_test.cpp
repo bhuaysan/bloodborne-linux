@@ -49,13 +49,18 @@ std::uint64_t flip_count(std::int32_t port) {
     return count;
 }
 
-// A port set up as at 0x11e488e..0x11e48bb: open, flip queue.
+// A port set up as at 0x11e488e..0x11e4915: open, flip queue, two 1920x1080 buffers.
 struct Port {
     Port() {
         handle = sceVideoOutOpen(0, 0, 0, nullptr);
         EXPECT_GT(handle, 0);
         EXPECT_EQ(bb::hle::kernel::equeue_create(&queue, "FlipEventQueue"), 0);
         EXPECT_EQ(sceVideoOutAddFlipEvent(queue, handle, 0x1234), 0);
+        std::array<unsigned char, 0x78> attr{};
+        EXPECT_EQ(sceVideoOutSetBufferAttribute(attr.data(), 0x80000000, 0, 0, 1920, 1080, 1920),
+                  0);
+        const std::array<std::uint64_t, 2> buffers{0x10000000, 0x10800000};
+        EXPECT_EQ(sceVideoOutRegisterBuffers(handle, 0, buffers.data(), 2, attr.data()), 0);
     }
     ~Port() {
         EXPECT_EQ(sceVideoOutClose(handle), 0);
@@ -71,8 +76,10 @@ TEST(HleVideo, OpenHandsOutDistinctHandles) {
     EXPECT_GT(a, 0);
     EXPECT_GT(b, 0);
     EXPECT_NE(a, b);
+    EXPECT_EQ(video_out_configure(a, 0), 0);
     EXPECT_EQ(sceVideoOutClose(a), 0);
     EXPECT_EQ(sceVideoOutClose(a), video_out_error);
+    EXPECT_EQ(video_out_configure(a, 0), video_out_error);
     EXPECT_NE(sceVideoOutOpen(0, 0, 0, nullptr), a);  // not reused
     EXPECT_EQ(sceVideoOutClose(b), 0);
 }
@@ -81,13 +88,35 @@ TEST(HleVideo, CallsOnUnknownPortsFail) {
     std::uint64_t queue = 0;
     ASSERT_EQ(bb::hle::kernel::equeue_create(&queue, nullptr), 0);
     std::array<unsigned char, 0x40> block{};
+    const std::uint64_t buffer = 0x10000000;
     EXPECT_LT(sceVideoOutAddFlipEvent(queue, 0x7fff0000, 0), 0);
+    EXPECT_LT(sceVideoOutRegisterBuffers(0x7fff0000, 0, &buffer, 1, block.data()), 0);
     EXPECT_LT(sceVideoOutSubmitFlip(0x7fff0000, 0, 1, 0), 0);
     EXPECT_LT(sceVideoOutGetFlipStatus(0x7fff0000, block.data()), 0);
     const std::int32_t port = sceVideoOutOpen(0, 0, 0, nullptr);
     EXPECT_LT(sceVideoOutAddFlipEvent(queue + 1000, port, 0), 0);  // no such queue
+    EXPECT_LT(sceVideoOutRegisterBuffers(port, max_buffers - 1, &buffer, 2, block.data()), 0);
+    EXPECT_LT(sceVideoOutRegisterBuffers(port, 0, &buffer, 0, block.data()), 0);
     EXPECT_EQ(sceVideoOutClose(port), 0);
     EXPECT_EQ(bb::hle::kernel::equeue_delete(queue), 0);
+}
+
+TEST(HleVideo, BufferAttributeFillsOnlyOurLayout) {
+    std::array<unsigned char, 0x40> block;
+    block.fill(0xa5);
+    EXPECT_EQ(sceVideoOutSetBufferAttribute(block.data() + 1, 0x80000000, 1, 0, 1920, 1080, 1920),
+              0);
+    BufferAttribute a;
+    std::memcpy(&a, block.data() + 1, sizeof a);
+    EXPECT_EQ(a.format, 0x80000000u);
+    EXPECT_EQ(a.tiling, 1u);
+    EXPECT_EQ(a.width, 1920u);
+    EXPECT_EQ(a.height, 1080u);
+    EXPECT_EQ(a.pitch, 1920u);
+    EXPECT_EQ(block[0], 0xa5);
+    for (std::size_t i = 1 + sizeof a; i < block.size(); ++i) {
+        EXPECT_EQ(block[i], 0xa5) << i;
+    }
 }
 
 TEST(HleVideo, FlipWakesAWaiterWithTheFlipEvent) {
@@ -139,6 +168,23 @@ TEST(HleVideo, FlipReachesOnlyItsPortsQueues) {
     EXPECT_EQ(flip_count(second.handle), 0u);
 }
 
+TEST(HleVideo, GnmSubmitsSucceedAndSubmitAndFlipFlips) {
+    const std::array<std::uint64_t, 2> buffers{0x20000000, 0x20010000};
+    const std::array<std::uint32_t, 2> sizes{0x100, 0x40};
+    EXPECT_EQ(gnm_submit(2, buffers.data(), sizes.data(), nullptr, nullptr), 0);
+    EXPECT_EQ(gnm_submit_other(1, buffers.data(), sizes.data(), nullptr, nullptr), 0);
+
+    const Port port;
+    EXPECT_EQ(gnm_submit_and_flip(1, buffers.data(), sizes.data(), nullptr, nullptr, port.handle,
+                                  1, 1, 5),
+              0);
+    EXPECT_EQ(sceGnmSubmitDone(), 0);
+    const WaitOutcome w = wait_for(port.queue, nullptr);
+    EXPECT_EQ(w.event.detail, 1u);
+    EXPECT_EQ(w.event.data, 5);
+    EXPECT_EQ(flip_count(port.handle), 1u);
+}
+
 // The eboot imports each of them under the library it is registered for, so relocating it puts
 // the implementation into the GOT slot.
 TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
@@ -150,12 +196,19 @@ TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
         std::string_view library, nid;
         void* impl;
     };
-    const std::array<Expected, 5> expected{{
+    const std::array<Expected, 12> expected{{
         {"libSceVideoOut", "Up36PTk687E", reinterpret_cast<void*>(&sceVideoOutOpen)},
         {"libSceVideoOut", "uquVH4-Du78", reinterpret_cast<void*>(&sceVideoOutClose)},
+        {"libSceVideoOut", "CBiu4mCE1DA", reinterpret_cast<void*>(&video_out_configure)},
         {"libSceVideoOut", "HXzjK9yI30k", reinterpret_cast<void*>(&sceVideoOutAddFlipEvent)},
+        {"libSceVideoOut", "i6-sR91Wt-4", reinterpret_cast<void*>(&sceVideoOutSetBufferAttribute)},
+        {"libSceVideoOut", "w3BY+tAEiQY", reinterpret_cast<void*>(&sceVideoOutRegisterBuffers)},
         {"libSceVideoOut", "U46NwOiJpys", reinterpret_cast<void*>(&sceVideoOutSubmitFlip)},
         {"libSceVideoOut", "SbU3dwp80lQ", reinterpret_cast<void*>(&sceVideoOutGetFlipStatus)},
+        {"libSceGnmDriver", "zwY0YV91TTI", reinterpret_cast<void*>(&gnm_submit)},
+        {"libSceGnmDriver", "iCO804ZgzdA", reinterpret_cast<void*>(&gnm_submit_other)},
+        {"libSceGnmDriver", "xbxNatawohc", reinterpret_cast<void*>(&gnm_submit_and_flip)},
+        {"libSceGnmDriver", "yvZ73uQUqrk", reinterpret_cast<void*>(&sceGnmSubmitDone)},
     }};
     std::set<std::string> imports;
     for (const bb::loader::Symbol& sym : image.dyn.symbols) {
