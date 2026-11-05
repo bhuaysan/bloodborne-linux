@@ -162,7 +162,7 @@ Headers `sys/sys/_timespec.h`, `sys/sys/_timeval.h`, `sys/x86/include/_types.h`.
 
 `GuestTimespec` and `GuestTimeval` hold them. `guest_timespec` and `guest_timeval` copy the host fields, `host_timespec` converts back (for a guest `nanosleep` or `clock_settime` argument).
 
-`struct rusage` is 144 bytes: libc's only `getrusage` caller (0x2eef0) reserves 0x90 bytes below its stack guard, passes `who` 0 and reads only the two timevals at offsets 0 (`ru_utime`) and 16 (`ru_stime`). The remaining 112 bytes are taken as 14 8-byte counters, as in the Linux x86-64 layout. `guest_getrusage` (`GuestRusage`) fills them from the host's `RUSAGE_SELF` and zeroes the counters; any `who` other than 0 (`RUSAGE_SELF`) fails with `EINVAL`.
+`struct rusage` is 144 bytes: libc's only `getrusage` caller (0x2eef0) reserves 0x90 bytes below its stack guard, passes `who` 0 and reads only the two timevals at offsets 0 (`ru_utime`) and 16 (`ru_stime`). The remaining 112 bytes are taken as 14 8-byte counters, as in the Linux x86-64 layout. `guest_getrusage` (`GuestRusage`) fills the two timevals from the host's `RUSAGE_SELF` and zeroes the 14 counters; any `who` other than 0 (`RUSAGE_SELF`) fails with `EINVAL`.
 
 ## struct stat
 
