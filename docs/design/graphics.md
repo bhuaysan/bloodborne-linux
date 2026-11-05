@@ -70,7 +70,7 @@ What a first look shows, to be worked out and documented in `docs/formats/`:
 - **Shader program** (`docs/formats/shader-binary.md`): each archive entry starts with a header (tag `Shdr`) that gives the offset of the first program's code. A program is GCN code, then a footer that ends in a 0x1C-byte block starting with the `OrbShdr` marker. The footer, together with the data after the last block, holds the metadata:
   - resource names (`g_Texture0`, `SS_ClampLinear`),
   - input semantics (`IN.tex0`, `TEXCOORD`),
-  - the entry point name.
+  - the entry point name (only as the name of the outputs, so compute shaders don't carry it; #117).
   
   Some files hold more than one program.
 
@@ -80,13 +80,13 @@ Material on these formats from category 3 of the code sources may be used under 
 
 - one file per program under `programs/`: code plus footer, as stored. The last program of an entry also holds the data after its footer block;
 - every entry as stored under `entries/`, so the entry header and the trailing data stay available;
-- `index.json`, with entry name, program index, offset in the entry and size (#114), and later stage, code size and the SHA-256 of the code (the **code hash**, #117).
+- `index.json`, with entry name, program index, offset in the entry and size (#114), and the program type, stage, code size and SHA-256 of the code (the **code hash**, #117); per entry, the resource, sampler, input and output names from the metadata (#117).
 
 Nothing it writes is committed.
 
 The code hash is the shader's identity everywhere: in corpus reports, in the translation cache, and later at run time, where the game gives us only the code address (`SPI_SHADER_PGM_LO_*`). Whether the footer follows the code in GPU memory, so the run time can find the code size the same way, is checked once the game boots. Until then the run time decodes as described below.
 
-The eboot may contain shaders of its own, such as GNM's internal clear and copy shaders, or fetch shaders. The extractor also scans the eboot's data for the `OrbShdr` marker and reports what it finds.
+The eboot may contain shaders of its own, such as GNM's internal clear and copy shaders, or fetch shaders. The extractor also scans the eboot for the `OrbShdr` marker and reports what it finds (`--scan-eboot`, report only): 5,493 footer blocks of PS, VS, ES, LS and CS programs, most of them in the executable segment (`docs/formats/shader-binary.md`).
 
 ## Shader translator
 
@@ -211,7 +211,7 @@ The register state a program starts with depends on pipeline registers, and so d
 
 The translation cache key is code hash + fetch code hash + ShaderKey + translator version. The cache lives in `$XDG_CACHE_HOME/bloodborne-linux/shaders/`. Offline, keys come from the footer metadata where it carries them, otherwise from test defaults.
 
-Other stages (LS, HS, ES, GS for tessellation and geometry shaders) wait until the corpus shows that the game uses them.
+Other stages (LS, HS, ES, GS for tessellation and geometry shaders) come later. The corpus uses all of them: 850 LS, 404 HS, 1,699 ES and 1,701 GS programs (with their copy shaders) of 20,218, plus 469 domain shaders that run as VS (`docs/formats/shader-binary.md`).
 
 ### SPIR-V builder
 
@@ -336,5 +336,5 @@ Items 1, 3a and 10 can start at once. Items 5 and 6a wait for item 0.
 - Does the footer follow the code in GPU memory? This is checked at run time.
 - Where do fetch shaders come from? Item 10 answers this.
 - How often do shaders depend on the wave size? Item 9 counts this.
-- Does the game use the LS/HS/ES/GS stages? The footer's stage field answers this (item 2).
+- ~~Does the game use the LS/HS/ES/GS stages?~~ Yes (item 2, #117): the footer's program type shows 850 LS, 404 HS, 1,699 ES and 1,701 GS programs, plus a copy shader per GS and 469 domain shaders on the VS stage. Tessellation and geometry shaders are never combined. The eboot holds no GS or HS programs.
 - Which clip-space conventions apply? This is decided with the backend.
