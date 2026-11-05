@@ -21,6 +21,7 @@
 
 #include "loader/bytes.hpp"
 #include "loader/elf.hpp"
+#include "loader/load_set.hpp"
 #include "support/game.hpp"
 
 namespace {
@@ -541,6 +542,17 @@ TEST(MapEboot, RefusesAnotherBuild) {
     expect_error<LoadError>([&] { map_eboot(dir, test_base); }, "eboot.bin has SHA-256 ");
     std::filesystem::remove_all(dir);
     expect_error<std::system_error>([&] { map_eboot(dir, test_base); }, "eboot.bin");
+    EXPECT_EQ(protection(test_base), "unmapped");
+}
+
+TEST(MapPrx, RefusesAnotherBuildAndUnpinnedNames) {
+    auto dir = std::filesystem::path(testing::TempDir()) / "bb-map-prx-test";
+    std::filesystem::create_directories(dir / "sce_module");
+    std::ofstream(dir / "sce_module" / "libc.prx") << "not the pinned libc";
+    expect_error<LoadError>([&] { map_prx(dir, "libc.prx", test_base); }, "libc.prx has SHA-256 ");
+    expect_error<LoadError>([&] { map_prx(dir, "libSceFace.prx", test_base); },
+                            "libSceFace.prx is not a pinned PRX");
+    std::filesystem::remove_all(dir);
     EXPECT_EQ(protection(test_base), "unmapped");
 }
 

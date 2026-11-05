@@ -18,6 +18,7 @@
 #include "loader/bytes.hpp"
 #include "loader/elf.hpp"
 #include "loader/image.hpp"
+#include "loader/load_set.hpp"
 #include "loader/relocate.hpp"
 #include "loader/self.hpp"
 #include "support/game.hpp"
@@ -583,6 +584,25 @@ TEST(Relocate, RefusesAFinalizedImage) {
     EXPECT_TRUE(calls.empty());
 }
 
+TEST(Exports, ListsTheDefinedSymbols) {
+    Synthetic s;
+    s.add_symbol(s.str("DDDDDDDDDDD#A#A"), 0x12, 1, 0x200);  // function
+    s.add_symbol(s.str("EEEEEEEEEEE#A#A"), 0x16, 1, 0x10);   // STT_TLS, skipped
+    Image image = map_elf(to_file(s.build()), reloc_base);
+    const std::vector<Export> found = exports(image);
+    ASSERT_EQ(found.size(), 2U);
+    EXPECT_EQ(found[0].library, "libSelf");
+    EXPECT_EQ(found[0].nid, "BBBBBBBBBBB");
+    EXPECT_EQ(found[0].address, reloc_base + 0x4100);
+    EXPECT_EQ(found[1].nid, "DDDDDDDDDDD");
+    EXPECT_EQ(found[1].address, reloc_base + 0x200);
+
+    Synthetic outside;
+    outside.add_symbol(outside.str("DDDDDDDDDDD#A#A"), 0x12, 1, 0x2000);  // between the segments
+    Image bad = map_elf(to_file(outside.build()), reloc_base + 0x100000);
+    EXPECT_THROW(exports(bad), LoadError);
+}
+
 TEST(ParseDynamicGame, ReadsTheEboot) {
     BB_REQUIRE_GAME(game);
     auto elf = self_to_elf(bb::common::read_file(game / "eboot.bin"));
@@ -686,6 +706,46 @@ TEST(RelocateGame, RelocatesTheEboot) {
         }
     }
     image.finalize_protection();
+}
+
+// Maps eboot, libSceFios2 and libc one after the other, with module ids 1 to 3, and relocates
+// them with fake imports. libc.prx also exports 4 STT_TLS symbols, which exports() skips.
+TEST(LoadSetGame, MapsAndRelocatesTheLoadSet) {
+    BB_REQUIRE_GAME(game);
+    LoadSet set = map_load_set(game);
+    ASSERT_EQ(set.modules.size(), 3U);
+    const LoadedModule& eboot = set.modules[0];
+    const LoadedModule& fios2 = set.modules[1];
+    const LoadedModule& libc = set.modules[2];
+    EXPECT_EQ(eboot.file, "eboot.bin");
+    EXPECT_EQ(eboot.id, eboot_module_id);
+    EXPECT_EQ(eboot.image.base, default_base);
+    EXPECT_EQ(fios2.file, "libSceFios2.prx");
+    EXPECT_EQ(fios2.id, 2U);
+    EXPECT_EQ(fios2.image.base, default_base + 0x56d4000);  // right after the eboot's .bss
+    EXPECT_EQ(fios2.image.dyn.self.name, "libSceFios2");
+    EXPECT_EQ(libc.file, "libc.prx");
+    EXPECT_EQ(libc.id, 3U);
+    EXPECT_EQ(libc.image.base, fios2.image.base + 0x178000);
+    EXPECT_EQ(libc.image.dyn.self.name, "libc");
+    EXPECT_TRUE(exports(eboot.image).empty());
+    EXPECT_EQ(exports(fios2.image).size(), 165U);  // as tools/elfimports counts them
+    EXPECT_EQ(exports(libc.image).size(), 1597U + 539U);
+
+    for (LoadedModule& m : set.modules) {
+        relocate(m.image, [](const Import&) { return std::uintptr_t{0x7e00'0000'0000}; }, m.id);
+        m.image.finalize_protection();
+    }
+    std::size_t dtpmod = 0;  // 3 in libSceFios2, 14 in libc, each holding the module id
+    for (const LoadedModule* m : {&fios2, &libc}) {
+        for (const Rela& r : m->image.dyn.relocs) {
+            if (r.type == r_x86_64_dtpmod64) {
+                ++dtpmod;
+                EXPECT_EQ(slot(m->image, r.offset), m->id) << m->file;
+            }
+        }
+    }
+    EXPECT_EQ(dtpmod, 17U);
 }
 
 }  // namespace

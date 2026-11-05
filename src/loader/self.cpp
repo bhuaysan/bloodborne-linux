@@ -1,8 +1,11 @@
 #include "loader/self.hpp"
 
 #include <algorithm>
+#include <format>
+#include <string>
 #include <utility>
 
+#include "common/file.hpp"
 #include "common/sha256.hpp"
 #include "loader/bytes.hpp"
 #include "loader/elf.hpp"
@@ -140,6 +143,18 @@ std::vector<std::byte> self_to_elf(std::span<const std::byte> self) {
         throw LoadError("rebuilt ELF doesn't match the digest stored in the SELF");
     }
     return out;
+}
+
+std::vector<std::byte> read_pinned_self(const std::filesystem::path& file,
+                                        std::string_view sha256) {
+    std::vector<std::byte> self = common::read_file(file);
+    std::string digest = common::to_hex(common::sha256(self));
+    if (digest != sha256) {
+        throw LoadError(std::format(
+            "{} has SHA-256 {}, expected {} (CUSA03173 patch 1.09, see docs/clean-room.md)",
+            file.string(), digest, sha256));
+    }
+    return self_to_elf(self);
 }
 
 }  // namespace bb::loader

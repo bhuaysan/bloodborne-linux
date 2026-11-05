@@ -7,7 +7,7 @@ The interfaces that the loader, the import stubs, the hooks and the differential
 ```
 src/
   common/    bbcommon   file reading, SHA-256, game directory lookup
-  loader/    bbloader   SELF → ELF, ELF parsing, mapping, relocation, eh_frame lookup
+  loader/    bbloader   SELF → ELF, ELF parsing, mapping, relocation, eh_frame lookup, load set
   hle/       bbhle      HLE module registry, import stubs, NID name table
   hook/      bbhook     function-entry patches
   game/      bbgame     decompiled functions (registered into bbhook), the image accessor
@@ -52,7 +52,7 @@ The game directory comes from `BB_GAME_DIR` in the environment. Tests also read 
 
 ### Base and mapping
 
-Default base: **0x10000000**. The eboot spans about 87 MiB (code segment at link address 0, data segment at 0x50dc000, `.bss` up to 0x56d30f4), so it ends well below 0x7fff8000. That matters for the `debug` preset: AddressSanitizer on x86-64 Linux keeps its shadow memory from 0x7fff8000 up to about 0x10007fff8000, so a mapping must lie either below 0x7fff8000 or above that range. The bundled PRXs (M3) go after the eboot, in the same low range.
+Default base: **0x10000000**. The eboot spans about 87 MiB (code segment at link address 0, data segment at 0x50dc000, `.bss` up to 0x56d30f4), so it ends well below 0x7fff8000. That matters for the `debug` preset: AddressSanitizer on x86-64 Linux keeps its shadow memory from 0x7fff8000 up to about 0x10007fff8000, so a mapping must lie either below 0x7fff8000 or above that range. The bundled PRXs (M3) go after the eboot, in the same low range: `libSceFios2.prx` at 0x156d4000 and `libc.prx` at 0x1584c000 with the default base (see Load set below).
 
 Every executable is built as PIE (`CMAKE_POSITION_INDEPENDENT_CODE` in the top-level `CMakeLists.txt`). The kernel puts the heap (`brk`) of a non-PIE program at a random address up to 1 GiB above the program at 0x400000, so some runs found the eboot's range taken. A PIE program and its heap lie far above 0x7fff8000.
 
@@ -68,7 +68,8 @@ Image map_eboot(const std::filesystem::path& game_dir, uintptr_t base = default_
 Image map_elf(std::span<const std::byte> elf, uintptr_t base);  // any PS4 ELF, for tests
 
 using Resolver = std::function<uintptr_t(const Import&)>;
-void relocate(Image& image, const Resolver& resolve);
+inline constexpr uint64_t eboot_module_id = 1;
+void relocate(Image& image, const Resolver& resolve, uint64_t module_id);
 }
 ```
 
@@ -85,6 +86,24 @@ Who runs which steps:
 | differential harness (M2) | 1, 2 with `bb::hle::resolve`, 4 |
 | game runtime (M3) | 1 for the eboot and the bundled PRXs, their exports registered with `bb::hle`, 2 with `bb::hle::resolve` for all three, 3 with all registered replacements, 4, the TLS check, then PRX init and the entry point on the game's main thread ([m3-core-os.md](m3-core-os.md)) |
 | loader unit tests | 1, 2 with a fake resolver, 4 |
+
+### Load set
+
+`loader/load_set.hpp` (M3):
+
+```cpp
+namespace bb::loader {
+inline constexpr std::array<std::string_view, 2> load_set_prxs = {"libSceFios2.prx", "libc.prx"};
+struct Export { std::string library, nid; uintptr_t address; };
+std::vector<Export> exports(const Image& image);  // defined NID#lib#0 symbols, STT_TLS skipped
+Image map_prx(const std::filesystem::path& game_dir, std::string_view name, uintptr_t base);
+struct LoadedModule { std::string file; uint64_t id; Image image; };
+struct LoadSet { std::vector<LoadedModule> modules; };
+LoadSet map_load_set(const std::filesystem::path& game_dir, uintptr_t base = default_base);
+}
+```
+
+`map_prx` reads `sce_module/<name>`, checks it against `prx_sha256` in `loader/self.hpp` (a copy of the table in `docs/clean-room.md`, checked by `tools/common/test_pinned_hashes.py`) and maps it like `map_eboot`. Only the two PRXs of the load set have an entry there. `map_load_set` maps the eboot at `base`, then each PRX at the first address after the previous image's span that is aligned to its largest `p_align` (0x4000 in both), with module ids 1, 2, 3 in that order. It relocates nothing. `exports` checks that every export lies inside a segment of its image.
 
 ### Loaded image
 
@@ -123,13 +142,13 @@ The image owns its mapping through `mapping` and unmaps it on destruction. It is
 
 ### Relocations
 
-Supported: `R_X86_64_RELATIVE` (base + addend), `R_X86_64_64` (symbol + addend), `R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` (symbol). Any other type is an error that names the type and the offset. `DTPMOD64` and the TLS types wait for M3 (they don't occur in the eboot).
+Supported: `R_X86_64_RELATIVE` (base + addend), `R_X86_64_64` (symbol + addend), `R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` (symbol), and `R_X86_64_DTPMOD64` (the `module_id` parameter, the TLS module id of the image being relocated: eboot 1, then the PRXs in loading order). DTPMOD64 ignores its symbol: in the PRXs every one names symbol 1, a local section symbol with an empty name and `st_shndx` 0, so the module is always the image itself. The eboot has none, and passes `eboot_module_id`. Any other type, `R_X86_64_DTPOFF64` and the other TLS types included, is an error that names the type and the offset.
 
 A relocation against a defined symbol of the same file (`st_shndx != 0`) resolves to base + `st_value` without calling the resolver. The eboot has none, but the PRXs (M3) and synthetic test ELFs do. Undefined symbols with a `NID#library#module` name are imports and go to the resolver. The weak, untyped, undefined `module_start` and `module_stop` of the PRXs (`docs/formats/elf-dynamic.md`) are not imports: relocations against them resolve to 0, as for any unresolved weak symbol. Any other plain-named undefined symbol is an error.
 
 Every import must resolve to a non-zero address. The game runtime, `bb-load` and the harness pass `bb::hle::resolve`.
 
-M3 adds `R_X86_64_DTPMOD64` for the PRXs and a module id parameter for it, and registers the PRXs' exports with `bb::hle` before relocating, so `resolve` binds imports to them first ([m3-core-os.md](m3-core-os.md#loading-the-bundled-prxs)).
+M3 registers the PRXs' exports with `bb::hle` before relocating, so `resolve` binds imports to them first ([m3-core-os.md](m3-core-os.md#loading-the-bundled-prxs)).
 
 `relocate` (declared in `loader/relocate.hpp`) applies `DT_SCE_RELA` first, then `DT_SCE_JMPREL`. It checks the type, then the target, then resolves the symbol, so the resolver never sees an import of a rejected relocation. Each 8-byte target must lie inside the memory of a `PT_LOAD`, and inside a writable one unless the image has `DT_TEXTREL` (checked without overflow). On an error the image is partly relocated and must be discarded. Calling `relocate` after `finalize_protection` is a `std::logic_error`. In the eboot, no relocation targets the code segment, 686 of the 701 imports are referenced, and `R_X86_64_64` against imported data uses only the addends 0 and 0x10.
 
