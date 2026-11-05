@@ -1,3 +1,6 @@
 bb_add_test(tools_test SOURCES bb_load_test.cpp)
 target_compile_definitions(tools_test PRIVATE BB_LOAD_PATH="$<TARGET_FILE:bb-load>")
 add_dependencies(tools_test bb-load)
+bb_add_test(bb_gcn_test SOURCES bb_gcn_test.cpp)
+target_compile_definitions(bb_gcn_test PRIVATE BB_GCN_PATH="$<TARGET_FILE:bb-gcn>")
+add_dependencies(bb_gcn_test bb-gcn)

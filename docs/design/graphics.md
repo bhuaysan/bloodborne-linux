@@ -282,6 +282,7 @@ Disassembler (`src/gpu/gcn/disassemble.cpp`, #115):
 - A SOP2, SOP1 or SOPC literal whose value LLVM would encode as an inline constant prints as `lit(0x…)`: 0 to 64, −16 to −1 and the float constants on 32-bit operands, and only 0 to 64 on 64-bit operands, where LLVM reads the literal as a 64-bit integer.
 - `hwreg()`, `sendmsg()` and the `s_waitcnt` counters print in LLVM's named form where it has one. Other values print as the raw number, which LLVM accepts: `s_waitcnt` with bit 7 or bits 12–15 set (gfx7 has a 4-bit lgkmcnt), and messages LLVM has no name for, such as `MSG_GS` with `GS_OP_NOP`.
 - Known differences, for the corpus round trip's list: LLVM rejects `m0` and `exec` (or either half) as an SMRD destination, it takes only a register (no inline constant or literal) as the source of `s_setpc_b64`, `s_rfe_b64`, `s_cbranch_join`, `s_movrels_b32` and `s_movrels_b64` and no literal as either source of `s_cbranch_g_fork`, it encodes an SMRD literal offset of 255 or less in the immediate form (also with `lit()`), it has no gfx7 syntax for `s_mov_regrd_b32`, `s_mov_fed_b32` and `s_getreg_regrd_b32`, and fields that an instruction doesn't use (the immediate of `s_endpgm`, the base of `s_memtime`) don't appear in the text.
+- `bb-gcn disasm [--all] FILE` prints the program at the start of a file up to its final `s_endpgm`, or with `--all` every whole dword. Each line has the text, then the byte offset and the words as a comment.
 
 SPIR-V builder (`src/gpu/gcn/spirv_builder.hpp`, #122):
 
