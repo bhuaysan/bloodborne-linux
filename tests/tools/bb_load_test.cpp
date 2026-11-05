@@ -203,8 +203,10 @@ TEST(BbLoadGame, PrintsTheLoadSet) {
     // At most 468 stubs across the load set; each new HLE function lowers the number.
     std::string word;
     int stubs = -1;
-    std::istringstream(last) >> word >> stubs;
+    std::istringstream in(last);
+    EXPECT_TRUE(in >> word >> stubs) << last;
     EXPECT_EQ(word, "hle") << last;
+    EXPECT_GT(stubs, 0) << last;
     EXPECT_LE(stubs, 468) << last;
     EXPECT_TRUE(last.ends_with(" stubs, 3 data blocks")) << last;
 }
