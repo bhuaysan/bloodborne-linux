@@ -160,6 +160,15 @@ code ─decode─► instructions ─cfg─► blocks ─analyze─► typed pro
 
 An analysis pass marks the shaders whose results can depend on the wave width: cross-lane results that are not uniform, and `s_barrier` under control flow that depends on EXEC (a hang risk). The corpus report counts them.
 
+### Control flow
+
+The scalar branches split a program into blocks (`build_cfg`), and the structurizer turns the graph into SPIR-V's structured control flow.
+
+- **Blocks** start at the entry, at every branch target, and after every branch and `s_endpgm`. A block ends in a fall-through, an `s_branch`, a conditional `s_cbranch_*` (taken or next) or `s_endpgm`. A conditional branch to the next instruction is a fall-through. A branch that doesn't land on an instruction, control that runs off the end, and the unsupported branches (`s_cbranch_*fork`, `s_cbranch_join`, `s_setpc_b64`, the `s_cbranch_cdbg*` debug branches) are errors. `s_swappc_b64` is not a branch here: the fetch subroutine it calls is inlined.
+- **Execz skips** (see above) become a fall-through when the skipped region, the blocks between the branch and its target, is entered only from the branch's block, is left only to the target, doesn't end the program, and writes scalars. "Writes scalars" means a scalar ALU or SMRD instruction (they all write SCC or a destination), or a scalar destination operand in another format. Whether the scalars are also used after the region isn't checked: that needs the implicit operands of every opcode, which the translator's passes know. A fall-through is correct either way, since running the region with no active lane gives the same result; it only costs the skip. Later skips are checked first, so that a nested skip that became a fall-through no longer counts as an exit of the outer region. `vccz` and `vccnz` stay branches.
+- **Analysis** (`analyze`): reverse postorder of the reachable blocks, immediate dominators with the iterative algorithm of Cooper, Harvey and Kennedy, loop headers (the targets of back edges that dominate their source), merge nodes (more than one forward edge in), and whether the graph is reducible.
+- **Structurizer**: acyclic regions and natural loops come in a second part of #124, the fallback for irreducible graphs in a third. #124 is split to keep each PR within the size limit.
+
 ### Per-draw data
 
 Each draw or dispatch passes one push constant: a buffer device address pointing to the **draw block**. It holds:
@@ -270,6 +279,12 @@ SPIR-V builder (`src/gpu/gcn/spirv_builder.hpp`, #122):
 - Tests: `tests/gpu/gcn/spirv_val.*` pipes a module to `spirv-val --target-env vulkan1.3 -` and returns its messages. The tests skip without the tool. A validated compute module covers what the translator needs there: the draw block through a push constant and a `PhysicalStorageBuffer64` address, subgroup ballot, broadcast with a dynamic lane and shuffle, a `Workgroup` array, a `GLSL.std.450` instruction, float and signed constants, an extension, a function call with a parameter, a selection and a loop with a phi. A negative test checks that a module without a needed capability is rejected. The word-encoding tests build fragments that `spirv-val` would reject (no capability, undefined ids), so they compare words only; every builder call they make also appears in the validated module.
 - The image, sampler and sampled-image types and the validated vertex and fragment modules (with `OpDemoteToHelperInvocation`) moved to #129 (listed in a comment there), to keep #122 within the PR size limit.
 - The `SPV_KHR_quad_control` names (`QuadControlKHR`, `QuadDerivativesKHR`, `RequireFullQuadsKHR`) are newer than some distributions' headers, so item 8a checks CI's headers before using them.
+
+Control flow graph (`src/gpu/gcn/cfg.hpp`, #124):
+
+- `build_cfg` returns the blocks in program order, block 0 first. A `Block` holds the byte offset and index of its first instruction, its instruction count (the branch included), its `Exit` (`next`, `jump`, `conditional`, `end`) and the block indices `taken` and `next`. `successors` lists `taken` before `next`. The translator emits nothing for a block's branch instruction: its effect is the exit, so a skip that became a fall-through simply ends the block.
+- `analyze` returns a `CfgAnalysis`: `rpo`, `order` (each block's position in `rpo`), `idom`, `loop_header`, `merge_node`, `reducible`, and `dominates(a, b)`. Unreachable blocks have position and dominator `CfgAnalysis::none`.
+- Tests: synthetic programs of SOPP branches and `s_nop` placeholders, decoded from words encoded by hand. SOP1 is decoded in parallel (#115), so a scalar write is a placeholder turned into an `s_mov_b32` with a scalar destination.
 
 ## Offline test strategy
 
