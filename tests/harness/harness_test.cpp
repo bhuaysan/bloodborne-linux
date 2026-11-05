@@ -193,4 +193,25 @@ TEST_F(HarnessTest, ArenaLayoutIsDeterministic) {
     EXPECT_THROW(a.zeroed<std::uint64_t>(Arena::size / 8 + 1), std::length_error);
 }
 
+// Ten differing arena ranges after p: a 12-byte run at +0x100, then single bytes.
+int many_ranges(int* p) {
+    const int r = read_write(p);
+    auto* arena = reinterpret_cast<unsigned char*>(p);
+    std::memset(arena + 0x100, 0xff, 12);
+    for (std::size_t i = 1; i < 10; ++i) {
+        arena[0x100 + 0x10 * i] = 0xff;
+    }
+    return r;
+}
+
+TEST_F(HarnessTest, CapsTheListedRanges) {
+    const Result r = harness.compare<int(int*)>(read_write_at, &many_ranges, two_ints);
+    expect_report(r, "memory: arena +0x100..+0x10c differs: original 00 00 00 00 00 00 00 00 "
+                     "..., replacement ff ff ff ff ff ff ff ff ...\n");
+    expect_report(r, "memory: arena +0x170..+0x171 differs");
+    EXPECT_EQ(r.report().find("+0x180"), std::string::npos) << r.report();
+    expect_report(r, "memory: 10 differing ranges in all\n");
+    EXPECT_EQ(std::ranges::count(r.report(), '\n'), 9) << r.report();
+}
+
 }  // namespace
