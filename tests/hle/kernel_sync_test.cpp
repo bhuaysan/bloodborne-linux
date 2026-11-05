@@ -128,7 +128,12 @@ TEST(KernelMutex, TrylockFailsWhileAnotherThreadHoldsIt) {
     EXPECT_EQ(on_thread([&] { return px_trylock(&m); }), ebusy);
     EXPECT_EQ(sce_destroy(&m), sce_error(ebusy));
     EXPECT_EQ(sce_unlock(&m), 0);
-    EXPECT_EQ(on_thread([&] { return sce_trylock(&m) + sce_unlock(&m); }), 0);
+    EXPECT_EQ(on_thread([&] {
+                  const int locked = sce_trylock(&m);
+                  const int unlocked = sce_unlock(&m);
+                  return locked != 0 ? locked : unlocked;
+              }),
+              0);
     EXPECT_EQ(sce_destroy(&m), 0);
 }
 
