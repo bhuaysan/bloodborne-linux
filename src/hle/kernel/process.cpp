@@ -147,7 +147,12 @@ std::int32_t signal_mask(std::int32_t how, const void* set, void* old_set) {
 // 6xVpy0Fdq+I, name unknown: the sigprocmask of libc's setjmp (0x2fcc6: how 1, set null, old set
 // at +0x48 of the jmp_buf) and longjmp (0x2fd17: how 3, set from +0x48, old set null). It takes
 // the arguments of sigprocmask and behaves like our signal_mask.
-std::int32_t jmp_signal_mask(std::int32_t how, const void* set, void* old_set) {
+// longjmp pushes two registers before its call (0x2fd00, 0x2fd01), so we are entered with
+// rsp % 16 == 0 instead of 8. force_align_arg_pointer realigns the stack in the prologue, so the
+// SSE code of std::format and the C library below us sees an aligned stack.
+__attribute__((force_align_arg_pointer)) std::int32_t jmp_signal_mask(std::int32_t how,
+                                                                      const void* set,
+                                                                      void* old_set) {
     static std::atomic<std::uint64_t> calls{0};
     log_often(calls, BB_CALLER(), "6xVpy0Fdq+I({}, {}, {}) ignored", how, set, old_set);
     if (old_set != nullptr) {

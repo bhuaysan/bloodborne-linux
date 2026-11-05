@@ -99,6 +99,38 @@ TEST(KernelProcess, SysctlReportsAnEmptyVmMapAndRefusesTheRest) {
 
 using MaskFn = std::int32_t(std::int32_t, const void*, void*);
 
+// Calls fn(how, set, old_set) with the stack shape of libc.prx's longjmp (0x2fd00): two pushes,
+// then the call, so the callee starts with rsp % 16 == 0 instead of the SysV 8.
+extern "C" std::int32_t call_like_longjmp(std::int32_t how, const void* set, void* old_set,
+                                          MaskFn* fn);
+asm(R"(
+    .text
+    .p2align 4
+    .type call_like_longjmp, @function
+call_like_longjmp:
+    push %rdi
+    push %rsi
+    call *%rcx
+    pop %rsi
+    pop %rdi
+    ret
+    .size call_like_longjmp, .-call_like_longjmp
+)");
+
+TEST(KernelProcess, JmpSignalMaskSurvivesTheMisalignedStackOfLongjmp) {
+    auto* mask = function<MaskFn>("6xVpy0Fdq+I");
+    unsigned char saved[16];
+    std::memset(saved, 0xcc, sizeof saved);
+    testing::internal::CaptureStderr();
+    EXPECT_EQ(call_like_longjmp(3, saved, nullptr, mask), 0);  // logs: within the first 10 calls
+    EXPECT_EQ(call_like_longjmp(1, nullptr, saved, mask), 0);
+    const std::string log = testing::internal::GetCapturedStderr();
+    EXPECT_NE(log.find("6xVpy0Fdq+I(3,"), std::string::npos) << log;
+    for (unsigned char byte : saved) {
+        EXPECT_EQ(byte, 0);
+    }
+}
+
 TEST(KernelProcess, SignalCallsLeaveTheHostSignalStateAlone) {
     sigset_t before;
     ASSERT_EQ(pthread_sigmask(SIG_SETMASK, nullptr, &before), 0);
