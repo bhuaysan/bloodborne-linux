@@ -86,9 +86,8 @@ Registry& registry() {
 }
 
 void log_shadowed(std::string_view library, std::string_view nid) {
-    std::fprintf(stderr, "hle: an export of %.*s %.*s shadows its implementation\n",
-                 static_cast<int>(library.size()), library.data(), static_cast<int>(nid.size()),
-                 nid.data());
+    common::log(common::LogLevel::warn, std::format("hle.{}", library),
+                "an export of {} {} shadows its implementation", library, nid);
 }
 
 }  // namespace

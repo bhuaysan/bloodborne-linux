@@ -165,6 +165,28 @@ TEST(Hle, StubLogGoesThroughTheLogger) {
         << log;
 }
 
+// An export that shadows an implementation is reported through the logger, on hle.<library>,
+// in both registration orders, and the filter can silence it.
+TEST(Hle, ShadowedImplementationGoesThroughTheLogger) {
+    bb::common::set_thread_name("shadow-test");
+    testing::internal::CaptureStderr();
+    register_function("libShadow", "implFirst", nullptr);
+    register_export("libShadow", "implFirst", 0x1000);
+    register_export("libShadow", "exportFirst", 0x2000);
+    register_function("libShadow", "exportFirst", nullptr);
+    bb::common::set_log_filter(bb::common::LogFilter::parse("hle.libShadow=error"));
+    register_function("libShadow", "silenced", nullptr);
+    register_export("libShadow", "silenced", 0x3000);
+    bb::common::set_log_filter(bb::common::LogFilter{});
+    const std::string log = testing::internal::GetCapturedStderr();
+    EXPECT_TRUE(std::regex_match(
+        log, std::regex("[0-9:.]{12} warn \\[shadow-test\\] hle\\.libShadow: an export of "
+                        "libShadow implFirst shadows its implementation\n"
+                        "[0-9:.]{12} warn \\[shadow-test\\] hle\\.libShadow: an export of "
+                        "libShadow exportFirst shadows its implementation\n")))
+        << log;
+}
+
 // Every import of the eboot gets a stub or a data block, and a call through a GOT slot reaches
 // the stub of the slot's import. 686 of the 701 imports are referenced, 20 of them data.
 TEST(HleGame, RelocatesTheEbootWithStubs) {
