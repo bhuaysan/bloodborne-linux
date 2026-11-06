@@ -60,6 +60,20 @@ protected:
         std::ofstream(file, std::ios::binary) << text;
     }
 
+    // 3000 files and some junk in /savedata0. Returns the names a listing shows, each once.
+    std::map<std::string, int> fill_save0() const {
+        std::map<std::string, int> names{{".", 1}, {"..", 1}};
+        for (int i = 0; i < 3000; ++i) {
+            const std::string name = "entry_" + std::to_string(i);
+            write(save0_ / name, "");
+            names[name] = 1;
+            if (i % 100 == 0) {
+                write(save0_ / ("._" + name), "junk");
+            }
+        }
+        return names;
+    }
+
     fs::path tmp_, game_, save0_, save1_;
 };
 
@@ -182,6 +196,58 @@ TEST_F(DirTest, RefusesBuffersTooSmallForTheNextRecordAndNonDirectories) {
     EXPECT_EQ(sceKernelGetdirentries(pipe, buffer, sizeof buffer, nullptr), sce(EINVAL));
     EXPECT_EQ(sceKernelClose(pipe), 0);
     ::close(ends[1]);
+}
+
+// libSceFios2 lists with 64 KiB buffers (0x2d420), more than one host getdents64 read holds.
+TEST_F(DirTest, OneCallSpansSeveralHostReads) {
+    const std::map<std::string, int> expected = fill_save0();
+    const std::int32_t fd = sceKernelOpen("/savedata0", o_rdonly | o_directory, 0);
+    ASSERT_GE(fd, 3);
+    std::vector<std::byte> buffer(0x10000);
+    std::int64_t base = -1;
+    const std::int32_t n = sceKernelGetdirentries(fd, buffer.data(), 0x10000, &base);
+    EXPECT_EQ(base, 0);
+    // 3002 records of at most 20 bytes fit in one buffer, and their host records don't fit in
+    // one 8 KiB host read.
+    ASSERT_GT(n, 8192);
+    std::map<std::string, int> seen;
+    for (const Record& r : parse(buffer.data(), static_cast<std::size_t>(n))) {
+        ++seen[r.name];
+    }
+    EXPECT_EQ(seen, expected);
+    EXPECT_EQ(sceKernelGetdirentries(fd, buffer.data(), 0x10000, &base), 0);
+    EXPECT_EQ(sceKernelClose(fd), 0);
+}
+
+// The eboot's pattern (0x20725eb): take one record, seek back to the base, read the same block
+// again and take the next record from it.
+TEST_F(DirTest, RereadsEachBlockFromItsBase) {
+    const std::map<std::string, int> expected = fill_save0();
+    const std::int32_t fd = sceKernelOpen("/savedata0", o_rdonly | o_directory, 0);
+    ASSERT_GE(fd, 3);
+    std::vector<std::byte> block(4096), again(4096);
+    std::map<std::string, int> seen;
+    for (int blocks = 0; blocks < 1000; ++blocks) {
+        std::int64_t base = -1;
+        const std::int32_t n = sceKernelGetdirentries(fd, block.data(), 4096, &base);
+        ASSERT_GE(n, 0);
+        if (n == 0) {
+            break;
+        }
+        const std::vector<Record> records = parse(block.data(), static_cast<std::size_t>(n));
+        for (std::size_t k = 0; k < records.size(); ++k) {
+            if (k > 0) {
+                ASSERT_EQ(sceKernelLseek(fd, base, 0), base);
+                std::int64_t base_again = -1;
+                ASSERT_EQ(sceKernelGetdirentries(fd, again.data(), 4096, &base_again), n);
+                ASSERT_EQ(base_again, base);
+                ASSERT_EQ(std::memcmp(block.data(), again.data(), static_cast<std::size_t>(n)), 0);
+            }
+            ++seen[records[k].name];
+        }
+    }
+    EXPECT_EQ(seen, expected);
+    EXPECT_EQ(sceKernelClose(fd), 0);
 }
 
 TEST_F(DirTest, ListsTheGameDirectory) {
