@@ -21,7 +21,7 @@ using bb::gcn::ShaderKey;
 using bb::gcn::translate;
 
 constexpr std::uint32_t s_endpgm = sopp(1);
-const ShaderKey key16 = {.pgm_rsrc2 = 16u << 1};  // 16 user SGPRs
+const ShaderKey key5 = {.pgm_rsrc2 = 5u << 1};  // 5 user SGPRs, s5 and up for masks
 
 TEST(GcnTranslate, ProgramsPassSpirvVal) {
     if (!have_spirv_val()) {
@@ -29,7 +29,7 @@ TEST(GcnTranslate, ProgramsPassSpirvVal) {
     }
     for (const auto& name : program_names()) {
         SCOPED_TRACE(name);
-        const auto translation = translate(program_words(name), {}, key16);
+        const auto translation = translate(program_words(name), {}, key5);
         EXPECT_EQ(validate(translation.spirv), "");
         EXPECT_FALSE(translation.interface.wave_size_dependent);
     }
@@ -53,11 +53,11 @@ TEST(GcnTranslate, AluAndBranchesPassSpirvVal) {
         code.insert(code.end(), words.begin(), words.end());
     }
     code.push_back(s_endpgm);
-    EXPECT_EQ(validate(translate(code, {}, key16).spirv), "");
+    EXPECT_EQ(validate(translate(code, {}, key5).spirv), "");
 }
 
 // The message of the GcnError that translating `code` throws.
-std::string error(const std::vector<std::uint32_t>& code, const ShaderKey& key = key16) {
+std::string error(const std::vector<std::uint32_t>& code, const ShaderKey& key = key5) {
     try {
         translate(code, {}, key);
     } catch (const GcnError& e) {
@@ -67,22 +67,39 @@ std::string error(const std::vector<std::uint32_t>& code, const ShaderKey& key =
 }
 
 TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
-    EXPECT_EQ(error({vopc(0xc1, 256, 1), s_endpgm}),  // v_cmp_lt_u32_e32 vcc, v0, v1
-              "unsupported instruction v_cmp_lt_u32_e32 at offset 0x0 (word 0x7d820300)");
+    EXPECT_EQ(error({vopc(0x01, 256, 1), s_endpgm}),  // v_cmp_lt_f32_e32 vcc, v0, v1
+              "unsupported instruction v_cmp_lt_f32_e32 at offset 0x0 (word 0x7c020300)");
     EXPECT_EQ(error({sop1(3, 0, 126), s_endpgm}),  // s_mov_b32 s0, exec_lo
               "exec_lo is read as a value at offset 0x0 (word 0xbe80037e)");
     EXPECT_EQ(error({sop1(3, 0, 106), s_endpgm}),  // s_mov_b32 s0, vcc_lo
               "unsupported register operand 106 of s_mov_b32 at offset 0x0 (word 0xbe80036a)");
     EXPECT_EQ(error({s_endpgm}, {.stage = bb::gcn::Stage::pixel}),
               "only the compute stage is translated so far at offset 0x0 (word 0x00000000)");
-    EXPECT_EQ(error({sop1(4, 126, 0), s_endpgm}),  // s_mov_b64 exec, s[0:1]
-              "unsupported mask operand of s_mov_b64 at offset 0x0 (word 0xbefe0400)");
+    EXPECT_EQ(error({sop1(4, 126, 108), s_endpgm}),  // s_mov_b64 exec, tba
+              "unsupported mask operand of s_mov_b64 at offset 0x0 (word 0xbefe046c)");
+    EXPECT_EQ(error({sopc(0, 0, 1), s_endpgm}),  // s_cmp_eq_i32 s0, s1
+              "unsupported instruction s_cmp_eq_i32 at offset 0x0 (word 0xbf000100)");
+    EXPECT_EQ(error({sopp(6, 1), sopp(0), s_endpgm}),  // s_cbranch_vccz 1
+              "unsupported instruction s_cbranch_vccz at offset 0x0 (word 0xbf860001)");
+    // v_cmp_lt_u32_e64 s[6:7], v0, v1 makes s[6:7] a mask
+    const auto cmp = [](unsigned sdst, std::vector<std::uint32_t> rest) {
+        auto code = vop3(0xc1, sdst, 256, 257);
+        code.insert(code.end(), rest.begin(), rest.end());
+        return code;
+    };
+    EXPECT_EQ(error(cmp(6, {sop1(3, 0, 6), s_endpgm})),  // s_mov_b32 s0, s6
+              "s6 is used as both a mask and a value at offset 0x8 (word 0xbe800306)");
+    EXPECT_EQ(error(cmp(6, {sop1(4, 10, 6), sop1(3, 0, 11), s_endpgm})),
+              // s_mov_b64 s[10:11], s[6:7] makes s[10:11] a mask, s_mov_b32 s0, s11 reads it
+              "s11 is used as both a mask and a value at offset 0xc (word 0xbe80030b)");
+    EXPECT_EQ(error(cmp(2, {s_endpgm})),
+              "user data s2 is used as a mask at offset 0x0 (word 0xd1820002)");
     EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 1u << 7}),  // TGID_X_EN
               "COMPUTE_PGM_RSRC2 0x80 is not supported yet at offset 0x0 (word 0x00000000)");
-    EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 16u << 1 | 4u << 15}), "no error");  // LDS_SIZE
+    EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 5u << 1 | 4u << 15}), "no error");  // LDS_SIZE
     EXPECT_EQ(error({sop1(4, 0, 255), 1, s_endpgm}),  // s_mov_b64 s[0:1], 1 (a literal)
               "64-bit literals are not supported yet at offset 0x0 (word 0xbe8004ff)");
-    EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 16u << 1, .num_threads = {0, 1, 1}}),
+    EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 5u << 1, .num_threads = {0, 1, 1}}),
               "a workgroup size of 0 at offset 0x0 (word 0x00000000)");
 }
 
