@@ -75,8 +75,8 @@ inline constexpr std::int32_t save_failed = static_cast<std::int32_t>(0x809f0001
 inline constexpr std::uint32_t save_mode_create = 4;
 
 // Where save directories and the per-user byte store live: profile_data()/savedata, created
-// with mode 0700. bb-run (#101) is to pass it to set_save_data_root at start-up; until then
-// every mount fails. A directory the game names SPRJ0000 is <root>/SPRJ0000/.
+// with mode 0700. bb-run passes it to set_save_data_root at start-up; without a root every
+// mount fails. A directory the game names SPRJ0000 is <root>/SPRJ0000/.
 std::filesystem::path save_data_root(const common::RuntimeDirs& dirs);
 void set_save_data_root(const std::filesystem::path& root);
 // Unmounts everything and forgets the root (tests).
