@@ -10,7 +10,7 @@ The PS4 runs x86-64 code, so the game's own machine code can run directly on a L
 
 On top of that, game functions are gradually decompiled into readable C++ until the original executable is no longer needed.
 
-This is also a learning project. Third-party code and facts are used only under the rules in [docs/clean-room.md](docs/clean-room.md) and credited in [docs/references.md](docs/references.md).
+The port builds on existing work, such as PS4 emulators and community research, under the rules in [docs/clean-room.md](docs/clean-room.md). Every source is credited in [docs/references.md](docs/references.md).
 
 ## Status
 
@@ -57,7 +57,7 @@ CI (GitHub Actions, `.github/workflows/ci.yml`) builds all three presets on Ubun
 
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
-- [Clean-room policy](docs/clean-room.md)
+- [Source and license policy](docs/clean-room.md)
 - [References and credits](docs/references.md)
 
 ## Contributing
@@ -70,7 +70,7 @@ git config core.hooksPath tools/githooks
 
 ## License
 
-The project's own code and documentation are MIT licensed (see [LICENSE](LICENSE)). The license does not cover the game.
+The project is licensed under the GNU General Public License, version 2 or (at your option) any later version (see [LICENSE](LICENSE)). Code taken from other projects keeps its own license and notices (`third_party/`, header comments). Code written before 2026-11-06 was published under the MIT license. The license does not cover the game.
 
 ## Legal
 

@@ -4,7 +4,7 @@ Guidance for coding agents working on this repository. Humans should start with 
 
 ## Goal
 
-Reverse engineer Bloodborne (PS4, CUSA03173, patch 1.09) **with our own code** (plus credited third-party code where licenses allow) and run it **natively on Linux x86-64**, with **no emulation**.
+Reverse engineer Bloodborne (PS4, CUSA03173, patch 1.09) and run it **natively on Linux x86-64**, with **no emulation**, as an optimized port. Build on existing work (emulators, community research, open-source code) wherever that is faster, with credit and under compatible licenses.
 
 ## Architecture: incremental hybrid
 
@@ -21,13 +21,14 @@ See `docs/architecture.md` and `docs/roadmap.md`.
 
 ## Hard rules
 
-### Clean room / references
-**Read [`docs/clean-room.md`](docs/clean-room.md) before using any external source.** In short:
-- **Never** look at leaked Sony SDK material (also when it is copied into another project), NID name tables from any source, reverse-engineering, decomp, recomp or modding material for Bloodborne or other FromSoftware games (only file-format material is allowed), or standalone PS4 recomp tools and disassembler loader plugins (neither source nor running them).
-- Public format and hardware docs are allowed. So are some code sources (AMD GPU code, Mesa, FromSoftware file-format material, PS4 emulators), under the license rules in `docs/clean-room.md`: code is reused only from permissive licenses and keeps its notice; copyleft and unlicensed sources give facts only.
+### Sources and licenses
+**Read [`docs/clean-room.md`](docs/clean-room.md) (the source and license policy) before reusing external code.** In short:
+- **Never** look at leaked Sony SDK material (also when it is copied into another project), and never use game data other than the maintainer's own dump.
+- Everything else is allowed: public docs and NID lists, PS4 emulators (for example shadPS4), Mesa and other open-source code, and Bloodborne/FromSoftware reverse-engineering, decomp and modding material.
+- The project is GPL-2.0-or-later. Code is copied or adapted only from files whose license is compatible (see `docs/clean-room.md`), and keeps its copyright lines, an SPDX tag and a `// Source:` comment.
 - Log every source in `docs/references.md` in the same change that uses it.
-- Import names are recovered only by matching hashes of candidate names we can justify ourselves (see the NID section in `docs/clean-room.md`).
-- If you're unsure whether a source is allowed, don't open it. Ask the maintainer.
+- Import names need a NID that matches the documented hash; record the name's source in `symbols/nids.csv`.
+- If a source's license is unclear, don't copy from it. Ask the maintainer.
 
 ### Game version
 All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is listed in `docs/clean-room.md`. Tools must verify it.
@@ -64,7 +65,7 @@ CMakeLists.txt       C++ build (CMakePresets.json: debug, relwithdebinfo, releas
 docs/
   architecture.md    system design
   roadmap.md         milestones and tracks
-  clean-room.md      reference policy, NID naming, game version hash
+  clean-room.md      source and license policy, NID naming, game version hash
   references.md      credit log for every external source
   formats/           our own notes on PS4 and game file formats
   design/            design notes (runtime.md: loader, stubs, hooks, harness; graphics.md: shader translator)
@@ -120,7 +121,7 @@ Code is never reviewed only in the session that wrote it.
    - Every function the PR marks `replaced` in `symbols/functions.csv` passed its differential test and its disassembly review (item 2).
    - The PR stays within the 500-line limit above.
    - The PR doesn't change the guardrails: `AGENTS.md`, `docs/clean-room.md`, `.gitignore`, any `.gitattributes`, `.github/`, `tools/githooks/`, `tools/merge-pr.sh`, `tools/privacy-check.sh`, `tools/run-tests.sh` or `tools/common/toolenv.py` (it finds the game for the tests).
-   - Each new source in `docs/references.md` falls clearly into a category that `docs/clean-room.md` allows, as checked by the independent review. For code sources the review also checks that the license column matches the files, that copied or adapted code keeps its notices, that nothing was copied from a non-permissive file, and that `third_party/` holds only unchanged copies plus their license and `NOTICE` files.
+   - Each new source in `docs/references.md` is allowed by `docs/clean-room.md` (no leaked SDK material), as checked by the independent review. For code sources the review also checks that the license column matches the files, that copied or adapted code keeps its notices, that nothing was copied from a file whose license is incompatible with GPL-2.0-or-later, and that `third_party/` holds only unchanged copies plus their license and `NOTICE` files.
 
    Anything that fails the gate goes to the maintainer. `tools/merge-pr.sh` refuses guardrail changes and oversized PRs unless the maintainer runs it with `--maintainer`. Agents never pass that flag. Agents always pass `--sha <commit>`, the PR head the independent review saw; the script refuses the merge if the branch has moved since.
    **Never use GitHub's merge button or `gh pr merge`**: GitHub writes the account's display name into the commit. Merge with `tools/merge-pr.sh --sha <reviewed head> <N>` instead. It rebases locally, runs the tests and the privacy check (which includes authorship) on the rebased commits, and fast-forwards `main`.
@@ -128,7 +129,7 @@ Code is never reviewed only in the session that wrote it.
    - a walkthrough of the new code
    - code health and an architecture check
    - a sample check of `symbols/` quality
-   - a clean-room audit (`docs/references.md` complete, code sources and `third_party/` match their licenses, no names of unclear origin)
+   - a source and license audit (`docs/references.md` complete, code sources and `third_party/` match their licenses, no leaked SDK material)
    - a privacy audit of the history
    
    Small fixes go into a follow-up PR. Bigger findings become issues labeled `review`. Then the maintainer tags the milestone.

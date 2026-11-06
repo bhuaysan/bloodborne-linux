@@ -18,4 +18,4 @@ labels: [research]
 
 ## Sources consulted
 
-<!-- External docs used (also add them to docs/references.md). Off-limits and code-source rules: docs/clean-room.md (leaked SDK material, NID name tables and FromSoftware decomp, recomp and modding material stay off-limits). -->
+<!-- External sources used (also add them to docs/references.md). Source and license rules: docs/clean-room.md (only leaked SDK material is off-limits; copied code needs a GPL-2.0-or-later-compatible license). -->

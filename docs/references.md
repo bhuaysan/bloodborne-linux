@@ -72,7 +72,7 @@ Every external source consulted for this project is listed here. What may be use
 
 ## Code sources
 
-Third-party source code and its documentation, consulted under the rules in [clean-room.md](clean-room.md#code-sources). One row per project and release or commit. Copied files also keep their license text in `third_party/<project>/`.
+Third-party source code and its documentation, consulted under the rules in [clean-room.md](clean-room.md#code-reuse-and-licenses). One row per project and release or commit. Copied files also keep their license text in `third_party/<project>/`.
 
 | Project | Release or commit | License of the files | Files or pages consulted | Taken (facts or code) | Used in | Date |
 |---|---|---|---|---|---|---|
