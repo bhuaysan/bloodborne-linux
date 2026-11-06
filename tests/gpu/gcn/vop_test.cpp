@@ -1,5 +1,5 @@
-// VOP1, VOP2 and VOPC: decoding and disassembly of words encoded by hand from the Sea Islands ISA manual, and a
-// round trip of every opcode in the table through llvm-mc.
+// VOP1, VOP2 and VOPC: decoding and disassembly of words encoded by hand from the Sea Islands ISA
+// manual, and a round trip of every opcode in the table through llvm-mc.
 
 #include <cstdint>
 #include <stdexcept>
@@ -57,6 +57,87 @@ TEST(GcnVop, Vop1) {
     EXPECT_EQ(inst.num_dst + inst.num_src, 0);
 }
 
+Operand lit(std::uint32_t value) { return {OperandKind::literal, 1, code::literal, value}; }
+
+const Operand vcc_pair = sreg(code::vcc, 2);
+
+TEST(GcnVop, Vop2) {
+    auto inst = one({vop2(37, 1, v + 2, 3)});  // v_add_i32: carry out in dst[1]
+    EXPECT_EQ(inst.format, Format::vop2);
+    EXPECT_EQ(inst.name, "v_add_i32_e32");
+    ASSERT_EQ(inst.num_dst, 2);
+    ASSERT_EQ(inst.num_src, 2);
+    EXPECT_EQ(inst.dst[0], vgpr(1));
+    EXPECT_EQ(inst.dst[1], vcc_pair);
+    EXPECT_EQ(inst.src[0], vgpr(2));
+    EXPECT_EQ(inst.src[1], vgpr(3));
+
+    inst = one({vop2(40, 1, v + 2, 3)});  // v_addc_u32: carry out and carry in
+    ASSERT_EQ(inst.num_dst, 2);
+    ASSERT_EQ(inst.num_src, 3);
+    EXPECT_EQ(inst.dst[1], vcc_pair);
+    EXPECT_EQ(inst.src[2], vcc_pair);
+
+    inst = one({vop2(0, 1, 2, 3)});  // v_cndmask_b32: VCC is the last source only
+    ASSERT_EQ(inst.num_dst, 1);
+    ASSERT_EQ(inst.num_src, 3);
+    EXPECT_EQ(inst.dst[0], vgpr(1));
+    EXPECT_EQ(inst.src[0], sreg(2));
+    EXPECT_EQ(inst.src[1], vgpr(3));
+    EXPECT_EQ(inst.src[2], vcc_pair);
+
+    inst = one({vop2(1, code::vcc, v + 2, 133)});  // v_readlane_b32: SGPR destination
+    EXPECT_EQ(inst.name, "v_readlane_b32");
+    ASSERT_EQ(inst.num_dst, 1);
+    ASSERT_EQ(inst.num_src, 2);
+    EXPECT_EQ(inst.dst[0], sreg(code::vcc));
+    EXPECT_EQ(inst.src[0], vgpr(2));
+    EXPECT_EQ(inst.src[1].kind, OperandKind::constant);
+    EXPECT_EQ(inst.src[1].code, 133);
+
+    inst = one({vop2(32, 1, v + 2, 3), 0x41200000});  // v_madmk_f32: K between src0 and vsrc1
+    EXPECT_EQ(inst.size, 2);
+    ASSERT_EQ(inst.num_src, 3);
+    EXPECT_EQ(inst.src[0], vgpr(2));
+    EXPECT_EQ(inst.src[1], lit(0x41200000));
+    EXPECT_EQ(inst.src[2], vgpr(3));
+
+    inst = one({vop2(33, 1, v + 2, 3), 0x41200000});  // v_madak_f32: K last
+    EXPECT_EQ(inst.size, 2);
+    ASSERT_EQ(inst.num_src, 3);
+    EXPECT_EQ(inst.src[1], vgpr(3));
+    EXPECT_EQ(inst.src[2], lit(0x41200000));
+
+    // With src0 = 255 the src0 literal and K are the same dword.
+    inst = one({vop2(32, 1, 255, 3), 0x3f800000});
+    EXPECT_EQ(inst.size, 2);
+    EXPECT_EQ(inst.src[0], lit(0x3f800000));
+    EXPECT_EQ(inst.src[1], lit(0x3f800000));
+    EXPECT_EQ(inst.src[2], vgpr(3));
+    inst = one({vop2(33, 1, 255, 3), 0x3f800000});
+    EXPECT_EQ(inst.size, 2);
+    EXPECT_EQ(inst.src[0], lit(0x3f800000));
+    EXPECT_EQ(inst.src[1], vgpr(3));
+    EXPECT_EQ(inst.src[2], lit(0x3f800000));
+}
+
+TEST(GcnVop, Vopc) {
+    auto inst = one({vopc(0x22, v + 1, 4)});  // v_cmp_eq_f64: VCC is the only destination
+    EXPECT_EQ(inst.format, Format::vopc);
+    EXPECT_EQ(inst.name, "v_cmp_eq_f64_e32");
+    ASSERT_EQ(inst.num_dst, 1);
+    ASSERT_EQ(inst.num_src, 2);
+    EXPECT_EQ(inst.dst[0], vcc_pair);
+    EXPECT_EQ(inst.src[0], vgpr(1, 2));
+    EXPECT_EQ(inst.src[1], vgpr(4, 2));
+
+    inst = one({vopc(0x88, 255, 2), 0x3f800000});  // v_cmp_class_f32: the mask is one dword
+    ASSERT_EQ(inst.num_src, 2);
+    EXPECT_EQ(inst.size, 2);
+    EXPECT_EQ(inst.src[0], lit(0x3f800000));
+    EXPECT_EQ(inst.src[1], vgpr(2));
+}
+
 TEST(GcnVop, Errors) {
     const std::vector<std::vector<std::uint32_t>> bad = {
         {vop1(27, 1, v)},   // unknown VOP1 opcode
@@ -71,7 +152,8 @@ TEST(GcnVop, Errors) {
         {vopc(0x89, v, 2)},                    // unknown VOPC opcode
         {vopc(0x21, v, 255)},                  // v[255:256]
         {vop2(1, 128, v + 2, 3)},              // v_readlane_b32 to a constant
-        {vop2(1, 1, v + 2, 255)},              // lane select literal past the end
+        {vop2(1, 1, v + 2, 255), 5},           // a literal as the lane select of v_readlane_b32
+        {vop2(2, 1, 2, 255), 5},               // and of v_writelane_b32
         {vop2(2, 1, 2, code::lds_direct)},     // LDS_DIRECT as the lane select
         {vop2(32, 1, v + 2, 3)},               // v_madmk_f32 literal past the end
         {vop2(33, 1, v + 2, 3)},               // v_madak_f32 literal past the end
@@ -196,12 +278,17 @@ TEST(GcnVop, EncodingsLlvmRejects) {
         {{vop1(11, 1, 255), 0x12345678}, "v_cvt_f32_f16_e32 v1, 0x12345678"},
         {{vop1(11, 1, 255), 0x10000}, "v_cvt_f32_f16_e32 v1, 0x10000"},
         {{vop1(11, 1, 255), 0x3f800000}, "v_cvt_f32_f16_e32 v1, 0x3f800000"},
-        // m0 as the destination of v_readlane_b32, and two different SGPRs or an SGPR and a literal on the constant bus.
+        // m0 as the destination of v_readlane_b32, and two different SGPRs or an SGPR and a literal
+        // on the constant bus.
         {{vop2(1, code::m0, v + 2, 3)}, "v_readlane_b32 m0, v2, s3"},
         {{vop2(2, 1, 2, 3)}, "v_writelane_b32 v1, s2, s3"},
         {{vop2(33, 1, 2, 3), 5}, "v_madak_f32 v1, s2, v3, 0x5"},  // an SGPR and a literal
         {{vop2(42, 1, 2, 3)}, "v_subbrev_u32_e32 v1, vcc, s2, v3, vcc"},  // an SGPR and VCC
-        {{vop2(1, 1, v + 2, 255), 0x12345678}, "v_readlane_b32 s1, v2, 0x12345678"},  // literal
+        // v_readlane_b32 takes only a VGPR as src0, v_writelane_b32 only an SGPR or a constant.
+        {{vop2(1, 1, 2, 3)}, "v_readlane_b32 s1, s2, s3"},
+        {{vop2(1, 1, 133, 3)}, "v_readlane_b32 s1, 5, s3"},
+        {{vop2(1, 1, 255, 3), 0x12345678}, "v_readlane_b32 s1, 0x12345678, s3"},
+        {{vop2(2, 1, v + 2, 133)}, "v_writelane_b32 v1, v2, 5"},
     };
     for (const Case& c : rejected) {
         SCOPED_TRACE(c.text);

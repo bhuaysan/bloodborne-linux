@@ -82,6 +82,15 @@ private:
         return scalar(c, dwords);
     }
 
+    // The lane select of v_readlane_b32 and v_writelane_b32: an SGPR, special register or inline
+    // constant. The manual defines a trailing literal only for src0 and K, so code 255 is an error.
+    Operand lane_select(unsigned c) {
+        if (c == code::literal) {
+            fail("a literal as the lane select");
+        }
+        return scalar(c, 1);
+    }
+
     // The VCC register pair, an implicit operand.
     static Operand vcc() { return {OperandKind::scalar, 2, code::vcc, 0}; }
 
@@ -133,12 +142,12 @@ private:
             }
             add_dst(scalar(vdst, 1));
             add_src(src0(1));
-            add_src(scalar(field, 1));
+            add_src(lane_select(field));
             return;
         case Vop::writelane:
             add_dst(vgpr(vdst, 1));
             add_src(src0(1));
-            add_src(scalar(field, 1));
+            add_src(lane_select(field));
             return;
         case Vop::compare:
             add_dst(vcc());
