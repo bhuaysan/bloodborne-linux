@@ -42,8 +42,8 @@ The other NIDs stay unnamed. The FreeBSD manual page lists and the derivation ru
 
 | NID | Callers | Behaviour |
 |---|---|---|
-| `W0Hpm2X0uPE` | eboot, libSceFios2.prx | Sets a priority-like thread attribute *(survey)* |
-| `1tKyG7RlMJo` | eboot, libSceFios2.prx | Thread attribute call, as far as its call sites show *(survey)* |
+| `W0Hpm2X0uPE` | eboot 0xd1ab46, 0x263b63d; Fios 0x2ec24 | Sets a thread's priority: `(thread, int priority)` ([kernel-abi.md](kernel-abi.md#threads), "Names, priority and affinity") |
+| `1tKyG7RlMJo` | eboot 0x263b59d; Fios 0x2ec5b, 0x2eca3 | Reads a thread's priority: `(thread, int* priority)` ([kernel-abi.md](kernel-abi.md#threads)) |
 
 ### Counted sync object and event queue
 

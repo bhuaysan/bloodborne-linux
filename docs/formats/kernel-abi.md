@@ -340,7 +340,7 @@ Requests are served strictly in order: while the oldest waiting request is large
 
 ## Threads
 
-The libkernel thread and thread attribute imports, `sched_yield`, and the libScePosix `pthread_*` thread imports (issue #94). `src/hle/kernel/thread.cpp` implements `scePthreadCreate`, `Join`, `Detach`, `Exit`, `Self`, `Equal` and `Yield`, `sched_yield`, the attribute's init, destroy, the five setters below and `scePthreadAttrGet`, and the libScePosix `pthread_create`, `Jmi+9w9u0E4`, `pthread_join`, `pthread_exit`, `pthread_self` and `pthread_attr_init`, `_destroy`, `_setstacksize`, `_setdetachstate` and `_setschedparam`. Affinity, names, priority changes, thread-specific data and once are #99.
+The libkernel thread and thread attribute imports, `sched_yield`, and the libScePosix `pthread_*` thread imports (issue #94). `src/hle/kernel/thread.cpp` implements `scePthreadCreate`, `Join`, `Detach`, `Exit`, `Self`, `Equal` and `Yield`, `sched_yield`, the attribute's init, destroy, the five setters below and `scePthreadAttrGet`, and the libScePosix `pthread_create`, `Jmi+9w9u0E4`, `pthread_join`, `pthread_exit`, `pthread_self` and `pthread_attr_init`, `_destroy`, `_setstacksize`, `_setdetachstate` and `_setschedparam`. #99 adds the attribute's affinity setter and getter, `scePthreadRename`, `Setaffinity`, `Getaffinity` and the unnamed priority calls `W0Hpm2X0uPE` and `1tKyG7RlMJo` (below, "Names, priority and affinity"). Thread-specific data and once follow in a second PR of #99.
 
 **Creation.** `scePthreadCreate(&thread, attr, entry, arg, name)` (eboot 0x263b3de, 0xd1ab29; libc 0x60df, 0x634d; Fios 0x2eb4e), `pthread_create(&thread, attr, entry, arg)` (eboot 0x66674, 0x666df) and the unnamed libScePosix `Jmi+9w9u0E4(&thread, attr, entry, arg, name)` (eboot 0x4388aa). For the last one, the eboot's wrapper at 0x438840 passes its own entry, argument and name through, and its callers pass a code address as the entry (0x42326e, used at 0x4232c9); it reports a non-zero result through `perror` (0x4388fb), so the result is an errno number. The name may be null; libc passes a formatted buffer (0x60cc), libSceFios2 at most 15 bytes (0x2eb10).
 
@@ -357,6 +357,20 @@ The libkernel thread and thread attribute imports, `sched_yield`, and the libSce
 | inherit sched | any `int` | recorded | Fios 0x2eaa0: 0 |
 
 The host stack is the requested size plus a 64 KiB reserve for the runtime's own frames (design note, Threads). The setter takes any size from 0x4000 up; a size the host can't give, including one that doesn't fit in 64 bits with the reserve, fails the create with `EAGAIN`. `scePthreadAttrGet(thread, attr)` fills an initialised attribute with the thread's attributes and its current detach state (libc 0x81abf, with Self as the thread); `EINVAL` for an invalid attribute, `ESRCH` for a handle not in the table. Policy, priority and inheritance are kept in the attribute, logged at create and not applied. The libScePosix setters take the same values: FreeBSD's `PTHREAD_CREATE_JOINABLE` and `_DETACHED` are 0 and 1, and its `struct sched_param` is one `int`.
+
+**Names, priority and affinity.** The handle-taking calls refuse a handle that isn't in the table with `ESRCH` and a null result pointer with `EINVAL`. Most callers test the result for non-zero (the eboot ignores it at 0x263b46e and 0x17fa398), and the eboot gives up a thread creation when the affinity setter or the priority setter fails (0xd1ab0e, 0xd1ab46), so both accept any value. Priority and affinity are kept in the thread's attributes (so `scePthreadAttrGet` reports them), logged, and not applied.
+
+| Call | Arguments | Source |
+|---|---|---|
+| `scePthreadAttrSetaffinity` | `(attr, uint64 mask)` | eboot 0xd1ab0e (before the create at 0xd1ab29), Fios 0x2ead6 (only for a non-zero mask) |
+| `scePthreadAttrGetaffinity` | `(attr, uint64* mask)` | libc 0x81ad0: after `scePthreadAttrGet` of Self, it stores the mask's bit count as the number of CPUs (0x81ae2) |
+| `scePthreadSetaffinity` | `(thread, uint64 mask)` | eboot 0x263b46e, 0x207f9a8, 0x208bad8, 0x21984f0, 0x2198595 (mask anded with 0x3f), 0x17fa398 (0xe or 0x30), 0x1e3f1bf (0xf or 0x30), 0x201779f and 0x2037312 (Self, 1); Fios 0x2ecd4 |
+| `scePthreadGetaffinity` | `(thread, uint64* mask)` | Fios 0x2ed13, 0x2ed6b (Self); the mask is zeroed before the call |
+| `W0Hpm2X0uPE`, name unknown | `(thread, int priority)` | eboot 0xd1ab46 (the attribute's priority, right after the create), 0x263b63d (0x100 to 0x2ff); Fios 0x2ec24 |
+| `1tKyG7RlMJo`, name unknown | `(thread, int* priority)` | eboot 0x263b59d (read before the change at 0x263b63d); Fios 0x2ec5b, 0x2eca3 (Self) |
+| `scePthreadRename` | `(thread, const char* name)` | eboot 0x66834, a tail jump from a method that reads the handle at +0x48 of its object (in the table at 0x513ff70) |
+
+The default mask, of a new attribute and of a thread the runtime didn't start, is 0x3f, the six cores the eboot ever puts in a mask (our choice; libc then counts six CPUs). Rename refuses a null name with `EINVAL` and logs the old and the new name. The new name goes to the log and, cut to 15 bytes, to the host. The log keeps its name per thread and only the thread itself can set it, so a thread renamed by another one keeps its old name in its own log lines; only its host name changes. A thread that has finished or is being joined keeps its host name.
 
 **Exit.** `scePthreadExit(value)` and `pthread_exit(value)` end the calling thread with `value` as its result. The eboot's thread entry 0x263b1e0 never returns through its `ret`: it ends in 0x207f990, which calls `scePthreadExit` (0x207f99b). libc's wrapper (0x6190) and the eboot (0x667e0) pass an `int` sign-extended to 64 bits. After the entry returns or exits, and before the host's `thread_local` destructors, the thread runs the runtime's exit handlers (design note, Threads).
 
