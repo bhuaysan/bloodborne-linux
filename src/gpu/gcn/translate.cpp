@@ -128,7 +128,8 @@ public:
             b_.extension("SPV_KHR_maximal_reconvergence");
             b_.execution_mode(main, spv::ExecutionMode::MaximallyReconvergesKHR);
         }
-        return {b_.words(), {.wave_size_dependent = wave_size_dependent_}};
+        return {b_.words(),
+                {.wave_size_dependent = wave_size_dependent_, .mask_round_trip = round_trip()}};
     }
 
 private:
@@ -540,7 +541,7 @@ private:
             return load(u32_, vgpr(o.code + dword));
         case OperandKind::scalar:
             if (const unsigned c = o.code + dword; is_mask_half(c)) {
-                return ballot(load(bool_, mask_var(c & ~1u)))[c & 1];
+                return mask_value(c & ~1u)[c & 1];
             }
             return load(u32_, value_sgpr(o.code + dword));
         case OperandKind::constant:
@@ -569,9 +570,28 @@ private:
     // The dwords of a 32- or 64-bit source; a mask takes one ballot.
     std::array<Id, 2> read_words(const Operand& o) {
         if (is_mask(o)) {
-            return ballot(load(bool_, mask_var(o.code)));
+            return mask_value(o.code);
         }
         return {read(o, 0), o.dwords == 2 ? read(o, 1) : Id{0}};
+    }
+
+    // A mask pair read as a value, through a ballot. A value written to its dwords comes back
+    // exact only when the subgroup has all 64 lanes; the bits of the other subgroups' lanes read
+    // as 0. So the pairs that are written and read as values are recorded for mask_round_trip.
+    // EXEC is left out: its value is a lane mask by definition.
+    std::array<Id, 2> mask_value(unsigned pair) {
+        if (pair != code::exec) {
+            value_reads_.insert(pair);
+        }
+        return ballot(load(bool_, mask_var(pair)));
+    }
+
+    // Whether VCC or an SGPR mask pair is written as a value somewhere and read as a value
+    // somewhere (flow-insensitive, like the type pass): typically a compiler reusing a pair for
+    // other data.
+    bool round_trip() const {
+        return std::ranges::any_of(value_writes_,
+                                   [&](unsigned pair) { return value_reads_.contains(pair); });
     }
 
     // The wave mask of a lane bit, as its low and high dword: a ballot over the subgroup, moved
@@ -655,6 +675,9 @@ private:
             const Op half = (c & 1) != 0 ? Op::OpUGreaterThanEqual : Op::OpULessThan;
             const Id mine = b_.op(half, bool_, {lane_, b_.constant_u32(32)});
             const Id var = mask_var(c & ~1u);
+            if ((c & ~1u) != code::exec) {
+                value_writes_.insert(c & ~1u);
+            }
             store(var, b_.op(Op::OpSelect, bool_, {mine, lane_bit(value), load(bool_, var)}));
             return;
         }
@@ -730,6 +753,7 @@ private:
     std::map<std::uint32_t, Id> builtins_;
     std::set<unsigned> mask_sgprs_;                 // the first SGPR of each mask pair
     const Instruction* inst_ = nullptr;
+    std::set<unsigned> value_writes_, value_reads_;  // mask pairs written or read as values
     bool uses_subgroup_ = false;
     bool wave_size_dependent_ = false;
 };

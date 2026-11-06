@@ -47,6 +47,7 @@ TEST(GcnTranslate, ProgramsPassSpirvVal) {
         const auto translation = translate(program_words(name), {}, key5);
         EXPECT_EQ(validate(translation.spirv), "");
         EXPECT_EQ(translation.interface.wave_size_dependent, name == "cross_lane");
+        EXPECT_EQ(translation.interface.mask_round_trip, name == "cross_lane");  // s[8:9]
     }
 }
 
@@ -70,6 +71,25 @@ TEST(GcnTranslate, WaveSizeDependence) {
     EXPECT_TRUE(dependent({vop2(0x01, 6, 256 + 1, 131)}));   // v_readlane_b32 s6, v1, 3
     EXPECT_TRUE(dependent({vop1(0x02, 6, 256 + 1)}));        // v_readfirstlane_b32 s6, v1
     EXPECT_TRUE(dependent(vop3(0x123, 1, 106, 128)));        // v_mbcnt_lo_u32_b32_e64 v1, vcc_lo, 0
+}
+
+// A value written to VCC or an SGPR mask pair and read back as a value sets mask_round_trip;
+// either one alone doesn't, and neither does EXEC.
+TEST(GcnTranslate, MaskRoundTrip) {
+    const auto round_trip = [](const std::vector<std::vector<std::uint32_t>>& parts) {
+        std::vector<std::uint32_t> code;
+        for (const auto& part : parts) {
+            code.insert(code.end(), part.begin(), part.end());
+        }
+        code.push_back(s_endpgm);
+        return translate(code, {}, key5).interface.mask_round_trip;
+    };
+    const auto cmp = vop3(0xc1, 8, 256, 257);  // v_cmp_lt_u32_e64 s[8:9], v0, v1
+    EXPECT_TRUE(round_trip({cmp, {sop1(3, 8, 0)}, {sop1(3, 6, 9)}}));  // s8 = s0, s6 = s9
+    EXPECT_FALSE(round_trip({cmp, {sop1(3, 6, 9)}}));                   // s6 = s9
+    EXPECT_FALSE(round_trip({cmp, {sop1(3, 8, 0)}}));                   // s8 = s0
+    EXPECT_TRUE(round_trip({{sop1(3, 106, 0)}, {sop1(3, 6, 107)}}));    // vcc_lo = s0, s6 = vcc_hi
+    EXPECT_FALSE(round_trip({{sop1(3, 126, 0)}, {sop1(3, 6, 126)}}));   // exec_lo = s0, s6 = exec_lo
 }
 
 // Scalar ALU, a loop on SCC, and the vector ALU in VOP1, VOP2 and VOP3 encodings.
