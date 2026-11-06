@@ -16,8 +16,8 @@ std::filesystem::path programs_dir();
 // The names of every program, from its .s or .hex file, sorted.
 std::vector<std::string> program_names();
 
-// The words of .hex text: one instruction per line, each word as 8 hex digits, the words of a
-// line separated by one space. Throws std::runtime_error naming the line on anything else.
+// The words of .hex text: one instruction per line, 1 or 2 words of 8 lower-case hex digits, the
+// words of a line separated by one space. Throws std::runtime_error naming the line otherwise.
 std::vector<std::vector<std::uint32_t>> parse_hex(std::string_view text);
 
 // The instructions of programs_dir()/<name>.hex, and all their words in order.

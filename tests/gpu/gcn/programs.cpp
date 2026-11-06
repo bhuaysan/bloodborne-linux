@@ -16,11 +16,11 @@ bool is_hex_digit(char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
 }
 
-// One line of .hex text: 1 to 3 words (an instruction, a 64-bit encoding, or either with a
-// literal).
+// One line of .hex text: 1 or 2 words. No gfx7 instruction is longer: a 32-bit encoding may take
+// a literal, a 64-bit encoding takes none.
 std::vector<std::uint32_t> parse_line(std::string_view line, std::size_t number) {
     const auto bad = [&] {
-        return std::runtime_error(".hex line " + std::to_string(number) + " is not 1 to 3 words " +
+        return std::runtime_error(".hex line " + std::to_string(number) + " is not 1 or 2 words " +
                                   "of 8 lower-case hex digits: \"" + std::string(line) + "\"");
     };
     std::vector<std::uint32_t> words;
@@ -37,7 +37,7 @@ std::vector<std::uint32_t> parse_line(std::string_view line, std::size_t number)
             throw bad();
         }
     }
-    if (words.size() > 3) {
+    if (words.size() > 2) {
         throw bad();
     }
     return words;

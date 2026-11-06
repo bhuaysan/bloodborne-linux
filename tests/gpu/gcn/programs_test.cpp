@@ -21,13 +21,12 @@ TEST(GcnPrograms, ParseHex) {
     EXPECT_EQ(parse_hex(""), Instructions{});
     EXPECT_EQ(parse_hex("be8003ff 12345678\nbf810000\n"),
               (Instructions{{0xbe8003ff, 0x12345678}, {0xbf810000}}));
-    EXPECT_EQ(parse_hex("00000001 00000002 00000003\n"), (Instructions{{1, 2, 3}}));
 }
 
 TEST(GcnPrograms, ParseHexRejectsOtherText) {
     for (const char* text : {"bf810000", "\n", "bf81000\n", "BF810000\n", "bf810000 \n",
                              "bf810000  12345678\n", "bf810000\tbf810000\n", "0xbf81000\n",
-                             "; s_endpgm\n", "00000001 00000002 00000003 00000004\n"}) {
+                             "; s_endpgm\n", "00000001 00000002 00000003\n"}) {
         SCOPED_TRACE(text);
         EXPECT_THROW(parse_hex(text), std::runtime_error);
     }
