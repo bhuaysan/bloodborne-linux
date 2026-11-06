@@ -138,7 +138,18 @@ struct Initialised {
     bb::loader::LoadSet set;
     std::map<std::string, int> init_stubs;  // "library NID" -> calls during the init
     std::string init_log;                   // stderr during the init
+    std::size_t direct_regions = 0;         // direct memory regions right after the init
 };
+
+std::size_t count_direct_regions() {
+    std::size_t count = 0;
+    for (const bb::hle::kernel::vmem::Region& r : bb::hle::kernel::vmem::regions()) {
+        if ((r.flags & bb::hle::kernel::vmem::region_direct) != 0) {
+            ++count;
+        }
+    }
+    return count;
+}
 
 const Initialised& initialised(const std::filesystem::path& game) {
     static Initialised* state = nullptr;
@@ -161,6 +172,7 @@ const Initialised& initialised(const std::filesystem::path& game) {
         s->init_log = testing::internal::GetCapturedStderr();
         bb::hle::set_stub_observer(nullptr);
         s->init_stubs = recorder.calls();
+        s->direct_regions = count_direct_regions();
         state = s;
     });
     return *state;
@@ -213,10 +225,12 @@ TEST(PrxInitGame, RunsBothInitialisersWithOnlyExpectedStubs) {
 
 // libc's preinit copied the eboot's first allocator table (block +0x30) into its dispatch cells:
 // malloc (0x1f850) jumps through 0xba190, which holds the table's +0x20, the eboot's 0x20809f0.
-// The game's allocator maps its heap as direct memory on the first allocation.
+// The game's allocator maps its heap as direct memory on the first allocation. No libc
+// constructor allocates: the init leaves no direct memory mapped, so the heap is mapped later.
 TEST(PrxInitGame, MallocReachesTheGamesAllocator) {
     BB_REQUIRE_GAME(game);
     const Initialised& s = initialised(game);
+    EXPECT_EQ(s.direct_regions, 0U) << s.init_log;
     std::uintptr_t cell = 0;
     std::memcpy(&cell, reinterpret_cast<const void*>(module(s, 2).runtime(0xba190)), sizeof cell);
     EXPECT_EQ(cell, module(s, 0).runtime(0x20809f0));
