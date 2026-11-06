@@ -65,13 +65,14 @@ TEST(GcnDescriptors, SourcesAreForgotten) {
               std::vector<Path>{});
 }
 
-// A V# with swizzle_enable (dword 1 bit 31) or add_tid_enable (dword 3 bit 23, bit 119 of the
-// descriptor, Table 8.5) is a GcnError until those modes are implemented; the other bits of those
-// dwords, such as the cache swizzle (bit 62) and the stride, are not.
+// A V# with swizzle_enable (dword 1 bit 31), add_tid_enable (dword 3 bit 23, bit 119 of the
+// descriptor, Table 8.5) or heap (dword 3 bit 26, bit 122) is a GcnError until those modes are
+// implemented; the other bits of those dwords, such as the cache swizzle (bit 62) and the stride,
+// are not: the positive case sets every one of them.
 TEST(GcnDescriptors, SwizzledDescriptorsAreRejected) {
     using bb::gcn::GcnError;
     using Vsharp = std::array<std::uint32_t, 4>;
-    EXPECT_NO_THROW(bb::gcn::check_buffer_descriptor({0x1000, 0x3fff'ffff, 64, 0xff7f'ffff}));
+    EXPECT_NO_THROW(bb::gcn::check_buffer_descriptor({0x1000, 0x7fff'ffff, 64, 0xfb7f'ffff}));
     try {
         bb::gcn::check_buffer_descriptor({0x1000, 0x8000'0010, 64, 0});
         FAIL() << "no error for swizzle_enable";
@@ -85,6 +86,13 @@ TEST(GcnDescriptors, SwizzledDescriptorsAreRejected) {
     } catch (const GcnError& e) {
         EXPECT_STREQ(e.what(),
                      "V# with add_tid_enable is not supported yet at offset 0xc (word 0x00800000)");
+    }
+    try {
+        bb::gcn::check_buffer_descriptor({0x1000, 0x10, 64, 0x0400'0000});
+        FAIL() << "no error for heap";
+    } catch (const GcnError& e) {
+        EXPECT_STREQ(e.what(),
+                     "V# with heap is not supported yet at offset 0xc (word 0x04000000)");
     }
     EXPECT_THROW(bb::gcn::check_buffer_descriptor(Vsharp{0, 1u << 31, 0, 1u << 23}), GcnError);
 }
