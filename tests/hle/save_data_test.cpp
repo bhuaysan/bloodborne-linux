@@ -52,8 +52,8 @@ protected:
     static std::int32_t mount(const char* dir, std::uint32_t mode, SaveMountOutput* out) {
         std::array<char, 32> name{};
         std::strncpy(name.data(), dir, name.size() - 1);
-        const SaveMountInput in{.user_id = 1, .pad0 = 0, .short_name = nullptr,
-                                .dir_name = name.data(), .label = "", .blocks = 0x140,
+        const SaveMountInput in{.user_id = 1, .pad0 = 0, .name_prefix = nullptr,
+                                .dir_name = name.data(), .descriptor_text = "", .blocks = 0x140,
                                 .mode = mode};
         return save_data_mount(&in, out);
     }

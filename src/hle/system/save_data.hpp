@@ -14,13 +14,15 @@ class RuntimeDirs;
 
 namespace bb::hle::system {
 
-// The mount call's input record (eboot 0x283fd70-0x283fe40, the same helper for load and save).
+// The mount call's input record, built inline by the load task (0x283f97f-0x283fe12) and the
+// save task (0x2842257-0x2842456).
 struct SaveMountInput {
     std::uint32_t user_id;
     std::uint32_t pad0;
-    const char* short_name;  // up to 10 bytes, null in practice
+    const char* name_prefix;  // up to 10 bytes, the directory name format's first string
+                              // (0x28328c0, used at 0x283e8a5); null in practice
     const char* dir_name;    // the save directory, a 32-byte buffer
-    const char* label;       // a 65-byte buffer
+    const char* descriptor_text;  // 65 bytes from the save descriptor (0x2832dc0)
     std::uint64_t blocks;
     std::uint32_t mode;
 };
@@ -73,8 +75,8 @@ inline constexpr std::int32_t save_failed = static_cast<std::int32_t>(0x809f0001
 inline constexpr std::uint32_t save_mode_create = 4;
 
 // Where save directories live: profile_data()/savedata, created
-// with mode 0700. bb-run passes it to set_save_data_root at start-up; until then every mount
-// fails. A directory the game names SPRJ0000 is <root>/SPRJ0000/.
+// with mode 0700. bb-run (#101) is to pass it to set_save_data_root at start-up; until then
+// every mount fails. A directory the game names SPRJ0000 is <root>/SPRJ0000/.
 std::filesystem::path save_data_root(const common::RuntimeDirs& dirs);
 void set_save_data_root(const std::filesystem::path& root);
 // Unmounts everything and forgets the root (tests).
