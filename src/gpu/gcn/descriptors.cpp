@@ -154,4 +154,14 @@ std::vector<ResourceSource> find_buffer_sources(std::span<const Instruction> pro
     return sources;
 }
 
+void check_buffer_descriptor(const std::array<std::uint32_t, 4>& vsharp) {
+    constexpr std::uint32_t swizzle_enable = 1u << 31, add_tid_enable = 1u << 23;
+    if ((vsharp[1] & swizzle_enable) != 0) {
+        throw GcnError("V# with swizzle_enable is not supported yet", 4, vsharp[1]);
+    }
+    if ((vsharp[3] & add_tid_enable) != 0) {
+        throw GcnError("V# with add_tid_enable is not supported yet", 12, vsharp[3]);
+    }
+}
+
 }  // namespace bb::gcn
