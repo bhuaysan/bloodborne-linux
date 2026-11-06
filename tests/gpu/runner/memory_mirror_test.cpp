@@ -224,8 +224,11 @@ struct MemoryMirror : testing::Test {
             buffer_size_ /= 2;
         }
         VkMemoryRequirements needs;
-        vkGetBufferMemoryRequirements(device_, sparse_buffer(dma_buf), &needs);
+        const VkBuffer probe = sparse_buffer(dma_buf);
+        vkGetBufferMemoryRequirements(device_, probe, &needs);
         granularity_ = needs.alignment;
+        vkDestroyBuffer(device_, probe, nullptr);  // so that the tests' buffers fit
+        buffers_.pop_back();
         std::cout << props.properties.deviceName << ", " << p12.driverName << ' '
                   << p12.driverInfo << std::hex << "\nmaxBufferSize 0x" << p13.maxBufferSize
                   << ", sparseAddressSpaceSize 0x" << sparse_space_
