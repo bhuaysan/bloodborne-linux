@@ -290,8 +290,8 @@ TEST(BbRunGame, RunsTheEntry) {
 }
 
 // The goal of M3 (docs/design/m3-core-os.md, "Goal"): the game reaches its main loop, and bb-run
-// stops there with status 0. Disabled until the game gets there (#106).
-TEST(BbRunGame, DISABLED_ReachesTheMainLoop) {
+// stops there with status 0.
+TEST(BbRunGame, ReachesTheMainLoop) {
     BB_REQUIRE_GAME(game);
     const TempDir dir;
     const Result r = run_bb_run(
