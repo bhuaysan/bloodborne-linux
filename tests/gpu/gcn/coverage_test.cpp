@@ -228,7 +228,8 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
 
     // The probes: each opcode the corpus uses, alone before an s_endpgm. This lists every opcode
     // the translator lacks, not only the first one of each program. The share of the corpus's
-    // instructions whose opcode translates is the headline number.
+    // instructions whose opcode translates is the headline number. Each probe that translates is
+    // validated too, so spirv-val checks real modules even while few whole programs translate.
     struct Probe {
         const OpcodeUse* use;
         std::string result;
@@ -244,7 +245,12 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
             code[0] &= ~0xffffu;  // a branch to the next instruction, the s_endpgm
         }
         code.push_back(s_endpgm);
-        const Outcome o = translate_program(code, 0, false);
+        const Outcome o = translate_program(code, 0, true);
+        if (o.internal || !o.invalid.empty()) {
+            ADD_FAILURE() << "probe of " << use.name << ": "
+                          << (o.internal ? "internal error: " + o.message
+                                         : "spirv-val: " + o.invalid);
+        }
         probes.push_back({&use, o.translated ? "translates" : kind_of(o.message, o.blocker)});
         ++probe_messages[probes.back().result];
         instructions += use.instructions;
