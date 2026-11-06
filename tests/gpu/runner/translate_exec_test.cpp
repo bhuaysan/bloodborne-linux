@@ -243,6 +243,51 @@ TEST_F(TranslateExec, FloatEdgeCases) {
 // The SALU arithmetic with its SCC results (collected into one word, the first one highest), the
 // SOPK forms, s_cselect_b32, and s_not_b64 and s_wqm_b64 on a lane mask. Every lane stores the
 // same scalar results.
+// The integer VALU against the same arithmetic on the host: the multiplies (the 24-bit ones read
+// the low 24 bits of their sources), bit fields (also a field that reaches past bit 31), the
+// shifts (the count is taken modulo 32, or 64), min, max, median and the 64-bit shifts.
+TEST_F(TranslateExec, IntegerAlu) {
+    constexpr std::uint32_t stages = 29;
+    const auto out = run("int_alu", {}, stages * lanes);
+    const auto sext24 = [](std::uint32_t x) { return static_cast<std::int32_t>(x << 8) >> 8; };
+    const auto s32 = [](std::uint32_t x) { return static_cast<std::int32_t>(x); };
+    const auto u32 = [](auto x) { return static_cast<std::uint32_t>(x); };
+    const auto median = [](auto x, auto y, auto z) {
+        return std::max(std::min(x, y), std::min(std::max(x, y), z));
+    };
+    for (std::uint32_t i = 0; i < lanes; ++i) {
+        SCOPED_TRACE(testing::Message() << "lane " << i);
+        const std::uint32_t a = 0x7fffffe0 + i, b = (i << 18) ^ 0x00fff0f1, c = i - 32;
+        const std::uint32_t offset = i % 32, width = i / 2 % 32, n = i % 32;
+        const std::uint32_t a24 = a & 0xffffff, b24 = b & 0xffffff;
+        const std::int64_t sa = sext24(a), sb = sext24(b);
+        std::uint32_t bfe_i = 0;
+        if (width != 0) {
+            bfe_i = offset + width < 32 ? u32(s32(a << (32 - offset - width)) >> (32 - width))
+                                        : u32(s32(a) >> offset);
+        }
+        const std::uint64_t wide = std::uint64_t{a} << 32 | a;
+        const std::uint64_t shifted[] = {wide << i, wide >> i,
+                                         static_cast<std::uint64_t>(std::int64_t(wide) >> i)};
+        const std::uint32_t expected[stages] = {
+            a * b, u32(std::uint64_t{a} * b >> 32), a * b,
+            u32(std::int64_t{s32(a)} * s32(b) >> 32),
+            a24 * b24, u32(std::uint64_t{a24} * b24 >> 32), u32(sa * sb), u32(sa * sb >> 32),
+            a24 * b24 + c, u32(sa * sb) + c,
+            width == 0 ? 0 : (a >> offset) & ((1u << width) - 1), bfe_i,
+            a >> n, u32(s32(a) >> n), a << n, a >> n, u32(s32(a) >> n),
+            u32(std::min(s32(a), s32(c))), std::max(a, c),
+            u32(std::min({s32(a), s32(b), s32(c)})), std::max({a, b, c}),
+            u32(median(s32(a), s32(b), s32(c))), median(a, b, c),
+            u32(shifted[0]), u32(shifted[0] >> 32), u32(shifted[1]), u32(shifted[1] >> 32),
+            u32(shifted[2]), u32(shifted[2] >> 32),
+        };
+        for (std::uint32_t stage = 0; stage < stages; ++stage) {
+            EXPECT_EQ(out[stage * lanes + i], expected[stage]) << "stage " << stage;
+        }
+    }
+}
+
 TEST_F(TranslateExec, ScalarArithmetic) {
     if (!runner_->info().subgroup_quad) {  // s_wqm_b64 swaps within the quad
         GTEST_SKIP() << "no quad subgroup operations in compute";

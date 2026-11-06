@@ -144,7 +144,21 @@ constexpr VectorOp vector_ops[] = {
     {"v_and_b32", Op::OpBitwiseAnd},
     {"v_or_b32", Op::OpBitwiseOr},
     {"v_xor_b32", Op::OpBitwiseXor},
-    {"v_lshlrev_b32", Op::OpShiftLeftLogical, true},  // by the low 5 bits
+    {"v_lshlrev_b32", Op::OpShiftLeftLogical, true},  // the shifts use the low 5 bits
+    {"v_lshl_b32", Op::OpShiftLeftLogical},
+    {"v_lshrrev_b32", Op::OpShiftRightLogical, true},
+    {"v_lshr_b32", Op::OpShiftRightLogical},
+    {"v_ashrrev_i32", Op::OpShiftRightArithmetic, true},
+    {"v_ashr_i32", Op::OpShiftRightArithmetic},
+};
+
+// v_{min,max,min3,max3,med3}_{i32,u32}: the stem and the number of sources.
+struct MinMaxName {
+    std::string_view stem;
+    unsigned sources;
+};
+constexpr MinMaxName minmax_names[] = {
+    {"min", 2}, {"max", 2}, {"min3", 3}, {"max3", 3}, {"med3", 3},
 };
 
 // A float compare, v_cmp[x]_<cond>_f32. The ordered conditions are false when an operand is NaN,
@@ -769,13 +783,72 @@ private:
         } else if (op != std::end(vector_ops)) {
             const Id x = read(inst.src[op->rev ? 1 : 0]);
             Id y = read(inst.src[op->rev ? 0 : 1]);
-            if (op->op == Op::OpShiftLeftLogical) {
+            if (op->op != Op::OpBitwiseAnd && op->op != Op::OpBitwiseOr &&
+                op->op != Op::OpBitwiseXor) {  // a shift
                 y = b_.op(Op::OpBitwiseAnd, u32_, {y, b_.constant_u32(31)});
             }
             write_vector(inst.dst[0], b_.op(op->op, u32_, {x, y}));
-        } else {
+        } else if (!vector_integer(inst, name)) {
             unsupported();
         }
+    }
+
+    // The multiplies of alu.hpp, the bit field extracts, the 64-bit shifts and the integer min,
+    // max and median. Returns false for any other instruction.
+    bool vector_integer(const Instruction& inst, std::string_view name) {
+        const auto u = [&](Op op, Id x, Id y) { return b_.op(op, u32_, {x, y}); };
+        const auto src = [&](unsigned i) { return read(inst.src[i]); };
+        if (const auto mul = detail::classify_int_mul(name)) {
+            write_vector(inst.dst[0], alu_.int_mul(*mul, src(0), src(1), mul->add ? src(2) : 0));
+        } else if (name == "v_bfe_u32" || name == "v_bfe_i32") {  // offset and width: 5 bits
+            const Id c31 = b_.constant_u32(31);
+            write_vector(inst.dst[0], alu_.bit_field(src(0), u(Op::OpBitwiseAnd, src(1), c31),
+                                                     u(Op::OpBitwiseAnd, src(2), c31),
+                                                     name == "v_bfe_i32"));
+        } else if (name == "v_lshl_b64" || name == "v_lshr_b64" || name == "v_ashr_i64") {
+            const Id count = u(Op::OpBitwiseAnd, src(1), b_.constant_u32(63));
+            const Id r = b_.op(name == "v_lshl_b64"   ? Op::OpShiftLeftLogical
+                               : name == "v_lshr_b64" ? Op::OpShiftRightLogical
+                                                      : Op::OpShiftRightArithmetic,
+                               u64_, {read64(inst.src[0]), count});
+            write_vector(inst.dst[0], b_.op(Op::OpUConvert, u32_, {r}), 0);
+            write_vector(inst.dst[0],
+                         b_.op(Op::OpUConvert, u32_,
+                               {b_.op(Op::OpShiftRightLogical, u64_, {r, b_.constant_u32(32)})}),
+                         1);
+        } else if (const auto mm = integer_minmax(name)) {
+            const bool sign = name.ends_with("_i32");
+            const GLSLstd450 low = sign ? GLSLstd450SMin : GLSLstd450UMin;
+            const GLSLstd450 high = sign ? GLSLstd450SMax : GLSLstd450UMax;
+            const auto pick = [&](GLSLstd450 f, Id x, Id y) {
+                return b_.op(Op::OpExtInst, u32_, {b_.import_extended("GLSL.std.450"), f, x, y});
+            };
+            const bool min = mm->stem.starts_with("min");
+            Id r;
+            if (mm->stem == "med3") {  // max(min(a, b), min(max(a, b), c))
+                r = pick(high, pick(low, src(0), src(1)),
+                         pick(low, pick(high, src(0), src(1)), src(2)));
+            } else {
+                r = pick(min ? low : high, src(0), src(1));
+                if (mm->sources == 3) {
+                    r = pick(min ? low : high, r, src(2));
+                }
+            }
+            write_vector(inst.dst[0], r);
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    // The entry of v_{min,max,min3,max3,med3}_{i32,u32}, or null for another name.
+    static const MinMaxName* integer_minmax(std::string_view name) {
+        if (!name.starts_with("v_") || (!name.ends_with("_i32") && !name.ends_with("_u32"))) {
+            return nullptr;
+        }
+        const auto it = std::ranges::find(minmax_names, name.substr(2, name.size() - 6),
+                                          &MinMaxName::stem);
+        return it == std::end(minmax_names) ? nullptr : &*it;
     }
 
     // The VALU additions and subtractions with a carry or borrow out in a mask, and from one.

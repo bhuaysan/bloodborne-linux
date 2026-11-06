@@ -5,8 +5,57 @@
 namespace bb::gcn::detail {
 
 namespace {
+
 using Op = spv::Op;
+
+struct MulName {
+    std::string_view name;
+    IntMul op;
+};
+constexpr MulName mul_names[] = {
+    {"v_mul_lo_u32", {32, false, false, false}},  {"v_mul_hi_u32", {32, false, true, false}},
+    {"v_mul_lo_i32", {32, true, false, false}},   {"v_mul_hi_i32", {32, true, true, false}},
+    {"v_mul_u32_u24", {24, false, false, false}}, {"v_mul_hi_u32_u24", {24, false, true, false}},
+    {"v_mul_i32_i24", {24, true, false, false}},  {"v_mul_hi_i32_i24", {24, true, true, false}},
+    {"v_mad_u32_u24", {24, false, false, true}},  {"v_mad_i32_i24", {24, true, false, true}},
+};
+
 }  // namespace
+
+std::optional<IntMul> classify_int_mul(std::string_view name) {
+    for (const auto& entry : mul_names) {
+        if (entry.name == name) {
+            return entry.op;
+        }
+    }
+    return std::nullopt;
+}
+
+SpirvBuilder::Id Alu::int_mul(const IntMul& op, Id a, Id b, Id c) {
+    const Id u32 = b_.type_int(32, false);
+    const Id u64 = b_.type_int(64, false);
+    const auto field = [&](Id v) {  // the low 24 bits, sign- or zero-extended
+        if (op.bits == 32) {
+            return v;
+        }
+        const Id shift = b_.constant_u32(8);
+        return b_.op(op.is_signed ? Op::OpShiftRightArithmetic : Op::OpShiftRightLogical, u32,
+                     {b_.op(Op::OpShiftLeftLogical, u32, {v, shift}), shift});
+    };
+    a = field(a);
+    b = field(b);
+    Id r;
+    if (op.high) {  // the product of the sources extended to 64 bits is exact
+        const Op extend = op.is_signed ? Op::OpSConvert : Op::OpUConvert;
+        const Id product =
+            b_.op(Op::OpIMul, u64, {b_.op(extend, u64, {a}), b_.op(extend, u64, {b})});
+        r = b_.op(Op::OpUConvert, u32,
+                  {b_.op(Op::OpShiftRightLogical, u64, {product, b_.constant_u32(32)})});
+    } else {
+        r = b_.op(Op::OpIMul, u32, {a, b});
+    }
+    return op.add ? b_.op(Op::OpIAdd, u32, {r, c}) : r;
+}
 
 SpirvBuilder::Id Alu::bit_field(Id value, Id offset, Id width, bool is_signed) {
     const Id u32 = b_.type_int(32, false);

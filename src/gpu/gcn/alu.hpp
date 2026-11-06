@@ -5,15 +5,31 @@
 // instructions".
 #pragma once
 
+#include <optional>
+#include <string_view>
+
 #include "gpu/gcn/spirv_builder.hpp"
 
 namespace bb::gcn::detail {
+
+// The 24- and 32-bit VALU multiplies: v_mul_{lo,hi}_{u32,i32}, v_mul_{,hi_}{u32_u24,i32_i24}
+// and v_mad_{u32_u24,i32_i24}.
+struct IntMul {
+    unsigned bits;  // of each source: 24 or 32
+    bool is_signed;
+    bool high;  // the high 32 bits of the product
+    bool add;   // plus the third source (v_mad)
+};
+std::optional<IntMul> classify_int_mul(std::string_view name);
 
 class Alu {
 public:
     using Id = SpirvBuilder::Id;
 
     explicit Alu(SpirvBuilder& b) : b_(b) {}
+
+    // The multiply of `op` on u32 values; `c` is the addend of a v_mad and unused otherwise.
+    Id int_mul(const IntMul& op, Id a, Id b, Id c);
 
     // Bit field extract of the u32 `value`: `offset` in 0-31 and `width` in 0-32 are u32 too. The
     // unsigned form is (value >> offset) & ((1 << width) - 1). The signed form sign-extends it
