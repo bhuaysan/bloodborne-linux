@@ -20,14 +20,14 @@ How the game's GPU work reaches Vulkan: the shader translator (GCN → SPIR-V), 
 src/gpu/
   gcn/     bbgcn    decoder, disassembler, analysis, translator, SPIR-V builder (no Vulkan, no loader)
   pm4/     bbpm4    PM4 packets, parser and GPU register mirror (second wave)
-  vk/      bbvk     Vulkan backend: device core (#269); memory, pipelines, presentation later
+  vk/      bbvk     Vulkan backend: device core and scheduler (#269); memory, pipelines, presentation later
 src/tools/bb-gcn    command line: disassemble or translate one shader binary
 tools/shaderbnd/    Python: extracts the shaders from the game's archives into analysis/
 tests/gpu/gcn/      bbgcn unit, corpus and execution tests (one directory per target, as in runtime.md)
 tests/gpu/pm4/      bbpm4 tests on synthetic streams
 tests/gpu/runner/   bbcomputerunner: the test-only Vulkan compute runner on lavapipe, and the translator's execution tests (built only with Vulkan)
 tests/gpu/programs/ our GCN test programs: assembly source plus assembled words as hex text
-tests/gpu/vk/       bbvk tests: device choice, and the device core on lavapipe (built only with Vulkan)
+tests/gpu/vk/       bbvk tests: device choice, and the device core and scheduler on lavapipe (built only with Vulkan)
 ```
 
 Dependencies:
@@ -601,9 +601,15 @@ Part 1 of #269: `src/gpu/vk/device.*`, tests in `tests/gpu/vk/device_test.cpp`.
 - `properties()` keeps the core, 1.1, 1.2 and 1.3 properties (`pNext` cleared). The mirror imports dma-bufs, not host pointers, so `minImportedHostPointerAlignment` isn't kept.
 - The test creates lavapipe through the selector, with `VK_LOADER_DRIVERS_SELECT=*lvp*` unless the environment sets it, and skips without an instance or a lavapipe device. It checks that lavapipe reports dma-bufs importable for the mirror's buffers. It defines the same `leak:pthread_once` suppression as the compute runner. A manual run on the reference machine picked the RX 7800 XT (RADV) automatically, with the sparse-only family.
 
-Part 2 of #269 (a follow-up branch, kept apart for the 500-line limit):
-- `Scheduler` over the graphics queue: one timeline semaphore; `commands()` begins a command buffer on first use; `flush()` ends it with a barrier from all device writes to host reads and submits it with `vkQueueSubmit2`, signalling the next value (1, 2, …), and returns that value (with nothing recorded it submits nothing and returns the last value); `completed()` reads the semaphore; `wait(value, timeout)` waits and refuses a value never submitted; `finish()`; `defer(function)` runs a function once the work recorded so far has completed (to destroy objects the work uses); command buffers are reused once their value is reached. One thread uses it; other threads may wait on its semaphore.
-- The compute runner moves onto `Instance`, `Device` and `Scheduler`: its own instance, device choice, feature chains, command pool and fence go, its `DeviceInfo` comes from `properties()`, and the LeakSanitizer suppression moves into one test object library shared by the Vulkan test binaries. `Device` gets `memory_type(allowed, flags)` and the memory properties for the runner's buffers.
+Part 2 of #269: `src/gpu/vk/scheduler.*`, tests in `tests/gpu/vk/scheduler_test.cpp`.
+
+- `Scheduler` over the graphics queue, one per device, used by one thread. One timeline semaphore starting at 0. `commands()` begins a command buffer (`ONE_TIME_SUBMIT`) on the first call after a flush and returns the same one until the next flush; `recording()` says whether one is begun. `flush()` ends it with a `vkCmdPipelineBarrier2` from all commands' memory writes to host reads, submits it with `vkQueueSubmit2` (holding the queue's mutex) signalling `submitted() + 1` at all commands, and returns that value; with nothing recorded it submits nothing and returns `submitted()`. `completed()` reads the semaphore; `wait(value, timeout_ns)` returns whether the value was reached and throws `std::logic_error` for a value above `submitted()` (including the value of work still being recorded); `finish()` is `wait(flush())`. Other threads may wait on `semaphore()` (tested).
+- Command buffers come from one pool with `RESET_COMMAND_BUFFER`, so beginning one again resets it. `commands()` takes the first command buffer whose last submission's value the semaphore has reached, or allocates one. The test holds a submission back with a `VkEvent` the host sets (`vkCmdWaitEvents` from the host stage), which makes the "still in use" case deterministic on lavapipe.
+- `defer(function)` queues a function for the value of the work being recorded, or for `submitted()` with nothing recorded. `flush()`, `wait()` and the destructor run the due ones in order on the scheduler's thread; a function deferred after its work completed runs in the next `flush()`, even one that submits nothing. The destructor drops the work being recorded, waits for `submitted()` and runs every function left.
+- `Device` gained `memory()` (the physical device's memory properties) and `memory_type(allowed, flags)`: the first type in a `memoryTypeBits` mask with all the flags. The scheduler test uses it for its host-visible buffer.
+- Deviation from the plan: the compute runner did not move onto `bbvk` in this branch. The scheduler, `memory_type` and their tests took about 450 of the 500 changed lines, and the runner's move deletes about 200 lines and adds about 50. It is part 3 of #269 (below).
+
+Part 3 of #269 (a follow-up branch): the compute runner moves onto `Instance`, `Device` and `Scheduler`. Its own `make` and `check`, instance, device choice, feature chains, command pool and fence go; its `DeviceInfo` (including `subgroup_quad`) comes from `properties()`, its host-coherent memory type from `memory_type()`, and `run()` records into `commands()` and waits with `wait(flush(), timeout)`. Its "no lavapipe driver" reason stays. The LeakSanitizer suppression moves into one test object library shared by the Vulkan test binaries (`vk_test`, `compute_runner_test`). The memory mirror spike test keeps its own device: it needs host-pointer import, which `bbvk` does not enable.
 
 ### Items
 
@@ -614,7 +620,7 @@ Each item is one issue of at most 500 lines of code and tests. "Design" items ar
 | 11 (#266) | **Maintainer: packages.** `SDL3-devel` locally and in CI, which builds in a Fedora 44 container (Ubuntu 24.04 has no SDL3 package and too old Vulkan headers). The window target is built only when SDL3 is found. | – |
 | 12 (#267) | **AMD register and PM4 headers** unchanged in `third_party/amd-gcn/`, own PR; the packet-name check of gnm.md against them. | – |
 | 13 (#268) | **Design spike: GPU memory mirror.** Sparse buffers below `maxBufferSize` (2 GiB by default) over a window range, bias table or consecutive addresses, host-pointer imports bound into them on RADV and lavapipe, binding granularity against 16 KiB mappings, a compute test reading CPU-written data through the bias. Result: "GPU memory mirror" above (dma-bufs of the memfd, 2 GiB buffers, bias table, 64 KiB blocks). | – |
-| 14 (#269) | **`bbvk` device core.** Instance, device choice (a discrete GPU first, lavapipe for tests), required features (Vulkan 1.3, buffer device address, sparse residency, dma-buf import: `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf`, with `vkGetPhysicalDeviceExternalBufferProperties` reporting dma-buf importable for sparse storage buffers with device addresses), queues, a timeline-semaphore scheduler. Shares setup with the test runner. Split in two (above): part 1 the device core, part 2 the scheduler and the runner on top. | – |
+| 14 (#269) | **`bbvk` device core.** Instance, device choice (a discrete GPU first, lavapipe for tests), required features (Vulkan 1.3, buffer device address, sparse residency, dma-buf import: `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf`, with `vkGetPhysicalDeviceExternalBufferProperties` reporting dma-buf importable for sparse storage buffers with device addresses), queues, a timeline-semaphore scheduler. Shares setup with the test runner. Split in three (above): part 1 the device core, part 2 the scheduler, part 3 the runner on top. | – |
 | 15 (#270) | **PM4 parser core** (`bbpm4`). Headers, type-2 filler, register spaces and mirror, `NOP` tags, `INDIRECT_BUFFER`, `REWIND`, `CONTEXT_CONTROL`, `CLEAR_STATE`, unknown-opcode log. Synthetic streams. | 12 |
 | 16 (#271) | **Stage register imports.** `sceGnmSet{Vs,Ps,Cs,Es,Gs,Hs,Ls}Shader` and their "unchanged" variants, layouts checked against the shader files. | 12 |
 | 17 (#272) | **Constant engine.** CE RAM, `WRITE_CONST_RAM`, `DUMP_CONST_RAM`, `INDIRECT_BUFFER_CONST`, the CE/DE counters, DCB and CCB as two streams. | 18 |
