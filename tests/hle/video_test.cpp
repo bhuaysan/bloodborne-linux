@@ -196,6 +196,17 @@ TEST(HleVideo, GnmSubmitsSucceedAndSubmitAndFlipFlips) {
     EXPECT_EQ(flip_count(port.handle), 1u);
 }
 
+// Each map hands out a new, positive id: the game treats 0 as a failed map (0x108c7b0).
+TEST(HleVideo, MappingComputeQueuesHandsOutPositiveIds) {
+    std::array<std::uint32_t, 0x400> ring{};
+    std::uint32_t read_pointer = 7;
+    const std::int32_t first = gnm_map_compute_queue(0, 0, ring.data(), 0x400, &read_pointer);
+    const std::int32_t second = gnm_map_compute_queue(1, 0, ring.data(), 0x400, &read_pointer);
+    EXPECT_GT(first, 0);
+    EXPECT_GT(second, first);
+    EXPECT_EQ(read_pointer, 7u);  // the game's wrapper clears it
+}
+
 // The eboot imports each of them under the library it is registered for, so relocating it puts
 // the implementation into the GOT slot.
 TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
@@ -207,8 +218,9 @@ TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
         std::string_view library, nid;
         void* impl;
     };
-    const std::array<Expected, 12> expected{{
+    const std::array<Expected, 13> expected{{
         {"libSceVideoOut", "Up36PTk687E", reinterpret_cast<void*>(&sceVideoOutOpen)},
+        {"libSceGnmDriver", "29oKvKXzEZo", reinterpret_cast<void*>(&gnm_map_compute_queue)},
         {"libSceVideoOut", "uquVH4-Du78", reinterpret_cast<void*>(&sceVideoOutClose)},
         {"libSceVideoOut", "CBiu4mCE1DA", reinterpret_cast<void*>(&video_out_configure)},
         {"libSceVideoOut", "HXzjK9yI30k", reinterpret_cast<void*>(&sceVideoOutAddFlipEvent)},

@@ -15,6 +15,7 @@ constexpr std::string_view channel = "hle.libSceGnmDriver";
 constexpr std::uint64_t logged_submits = 3;
 
 std::atomic<std::uint64_t> submits{0};
+std::atomic<std::int32_t> compute_queues{0};
 
 void log_submit(std::string_view call, std::uint32_t count, const std::uint32_t* draw_sizes) {
     const std::uint64_t n = submits.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -47,6 +48,14 @@ std::int32_t gnm_submit_and_flip(std::uint32_t count, const std::uint64_t*,
     return sceVideoOutSubmitFlip(handle, index, mode, arg);
 }
 
+std::int32_t gnm_map_compute_queue(std::uint32_t, std::uint32_t, const void* ring,
+                                   std::uint32_t ring_dwords, std::uint32_t*) {
+    const std::int32_t id = compute_queues.fetch_add(1, std::memory_order_relaxed) + 1;
+    common::log(common::LogLevel::info, channel, "compute queue {}: ring {}, {:#x} dwords", id,
+                ring, ring_dwords);
+    return id;
+}
+
 std::int32_t sceGnmSubmitDone() {
     return 0;
 }
@@ -54,6 +63,7 @@ std::int32_t sceGnmSubmitDone() {
 BB_HLE_FUNCTION("libSceGnmDriver", "zwY0YV91TTI", gnm_submit);           // name unknown
 BB_HLE_FUNCTION("libSceGnmDriver", "iCO804ZgzdA", gnm_submit_other);     // name unknown
 BB_HLE_FUNCTION("libSceGnmDriver", "xbxNatawohc", gnm_submit_and_flip);  // name unknown
+BB_HLE_FUNCTION("libSceGnmDriver", "29oKvKXzEZo", gnm_map_compute_queue);  // name unknown
 BB_HLE_FUNCTION("libSceGnmDriver", "yvZ73uQUqrk", sceGnmSubmitDone);
 
 }  // namespace bb::hle::video

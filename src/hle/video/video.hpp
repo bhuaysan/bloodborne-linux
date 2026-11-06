@@ -85,7 +85,7 @@ std::int32_t sceVideoOutSubmitFlip(std::int32_t handle, std::int32_t index, std:
 std::int32_t sceVideoOutGetFlipStatus(std::int32_t handle, void* status);
 inline constexpr std::size_t flip_count_offset = 0x18;
 
-// libSceGnmDriver. Each call reports success and nothing runs: command buffers are M4.
+// libSceGnmDriver. Each call reports success and nothing runs: command buffers and rings are M4.
 
 // NID zwY0YV91TTI, name unknown. Submits `count` draw command buffers (addresses and sizes in
 // bytes) and as many optional second buffers (null at 0x26b0c23). Called from 12 sites, e.g.
@@ -108,6 +108,14 @@ std::int32_t gnm_submit_and_flip(std::uint32_t count, const std::uint64_t* draw,
                                  const std::uint32_t* draw_sizes, const std::uint64_t* second,
                                  const std::uint32_t* second_sizes, std::int32_t handle,
                                  std::int32_t index, std::int32_t mode, std::int64_t arg);
+
+// NID 29oKvKXzEZo, name unknown. Maps a compute queue on the game's ring (docs/formats/gnm.md,
+// "Compute queues"): `(int, int, ring address, ring size in dwords, read-pointer address)`. Its
+// wrapper 0x1089a80 stores a non-negative result as the queue id and clears the read pointer;
+// 0x108c7b0 then treats id 0 as a failed map, and the render thread's device creation gives up
+// (0x26b1216). Returns the next id, from 1. Nothing reads the ring yet (M4).
+std::int32_t gnm_map_compute_queue(std::uint32_t, std::uint32_t, const void* ring,
+                                   std::uint32_t ring_dwords, std::uint32_t* read_pointer);
 
 // Returns 0. Called through 0x1089b50 after the submit-and-flip at 0x26b0dff and 0x26b0ee2.
 std::int32_t sceGnmSubmitDone();
