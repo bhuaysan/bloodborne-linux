@@ -24,7 +24,8 @@ using namespace bb::test::vk;
 
 constexpr std::uint64_t base = 0x12'0000'0000;  // guest address of the output
 constexpr std::uint32_t lanes = 64;
-constexpr std::uint64_t data_offset = 0x1400;  // the memory programs' table, after their output
+constexpr std::uint64_t data_offset = 0x1400;   // the memory programs' table, after their output
+constexpr std::uint64_t store_offset = 0x1c00;  // and the buffer they store to
 constexpr std::uint32_t data_word(std::uint32_t i) { return 0xd0000 + i; }
 
 class TranslateExec : public testing::Test {
@@ -38,14 +39,14 @@ protected:
     }
 
     // Runs the program with user_data = {output address, then `inputs`} and returns the first
-    // `words` dwords of the guest memory, 0x2000 bytes with the table of the memory programs
+    // `words` dwords of the guest memory, 0x3000 bytes with the table of the memory programs
     // (data_word) at data_offset.
     std::vector<std::uint32_t> run(std::string_view name, std::vector<std::uint32_t> inputs,
                                    std::uint32_t words) {
         const auto translation = bb::gcn::translate(
             bb::test::gcn::program_words(name), {},
             {.pgm_rsrc2 = bb::test::gcn::program_user_sgprs(name) << 1});
-        auto memory = runner_->guest_memory(base, 0x2000);
+        auto memory = runner_->guest_memory(base, 0x3000);
         for (std::uint32_t i = 0; i < 0x200; ++i) {
             const std::uint32_t word = data_word(i);
             std::memcpy(memory.data() + data_offset + 4 * i, &word, 4);
@@ -185,16 +186,23 @@ TEST_F(TranslateExec, CrossLane) {
     }
 }
 
-// The user data of the memory programs: the output, the table through a pointer, and the V# of a
-// buffer at the table (stride, number of records).
-std::vector<std::uint32_t> memory_user_data(std::uint32_t stride, std::uint32_t records) {
-    const std::uint64_t table = base + data_offset;
+// The user data of the memory programs: the output, the table through a pointer, the V# of a
+// buffer (stride, number of records) at the table, the V# of the buffer to store to, and soffset.
+std::vector<std::uint32_t> memory_user_data(std::uint32_t stride, std::uint32_t records,
+                                            std::uint32_t store_records = 0,
+                                            std::uint32_t soffset = 0) {
+    const std::uint64_t table = base + data_offset, store = base + store_offset;
     return {static_cast<std::uint32_t>(table),
             static_cast<std::uint32_t>(table >> 32),
             static_cast<std::uint32_t>(table),
             static_cast<std::uint32_t>(table >> 32) | stride << 16,
             records,
-            0};
+            0,
+            static_cast<std::uint32_t>(store),
+            static_cast<std::uint32_t>(store >> 32),
+            store_records,
+            0,
+            soffset};
 }
 
 // s_load_* and s_buffer_load_*, run with EXEC = 0. The V# covers 24 bytes, as 24 raw bytes or as 3
@@ -214,6 +222,59 @@ TEST_F(TranslateExec, ScalarMemory) {
                 ASSERT_EQ(out[k * lanes + i], inside ? data_word(index[k]) : 0u)
                     << "value " << k << " lane " << i;
             }
+        }
+    }
+}
+
+// Untyped MUBUF dword loads and stores: offen, idxen, both, a dword pair, addr64, soffset, and
+// lanes that are inactive or out of range. The range rule (docs/design/graphics.md): each dword
+// is checked on its own. A raw access (no idxen, or stride 0) is inside when offset + 4 * d <
+// size, with size = num_records bytes (stride 0) or num_records * stride (unverified); a
+// structured one (idxen and a stride) when index < num_records, whatever its offset. Loads outside
+// read 0, stores outside are dropped, addr64 is not checked, and soffset never counts.
+TEST_F(TranslateExec, BufferMemory) {
+    constexpr std::uint32_t soffset = 16, store_records = 0x22a;  // 554 bytes, not a multiple of 4
+    constexpr std::uint32_t sentinel = 0x77, far_offset = 0x44;   // offset:0x40 plus a VGPR of 4
+    // The raw size 102 cuts the pair of lane 25 after its first dword (100 < 102, 104 >= 102).
+    for (const auto [stride, records] : {std::pair{0u, 102u}, {16u, 20u}}) {
+        SCOPED_TRACE(testing::Message() << "stride " << stride << " records " << records);
+        const std::uint32_t size = records * std::max(stride, 1u);
+        const auto raw = [&](std::uint32_t offset, std::uint32_t dword = 0) {
+            return offset + 4 * dword < size;
+        };
+        const auto structured = [&](std::uint32_t index, std::uint32_t offset) {
+            return stride != 0 ? index < records : raw(offset);
+        };
+        const auto data = [](bool ok, std::uint32_t address) {
+            return ok ? data_word(address / 4) : 0u;
+        };
+        const auto out = run("mem_mubuf", memory_user_data(stride, records, store_records, soffset),
+                             0x800);
+        const auto slot = [&](std::uint32_t k, std::uint32_t i) { return out[k * lanes + i]; };
+        for (std::uint32_t i = 0; i < lanes; ++i) {
+            SCOPED_TRACE(testing::Message() << "lane " << i);
+            // offen: soffset moves the address, not the check
+            EXPECT_EQ(slot(0, i), data(raw(4 * i + 8), soffset + 4 * i + 8));
+            // idxen: index against num_records
+            EXPECT_EQ(slot(1, i), data(structured(i, 0), i * stride));
+            // idxen and offen with an offset beyond the stride: not part of the check
+            EXPECT_EQ(slot(2, i), data(structured(i, far_offset), i * stride + far_offset));
+            const bool exec = i < 32 && (i & 7) < 4;  // exec_lo = 0x0f0f0f0f, exec_hi = 0
+            EXPECT_EQ(slot(3, i), exec ? data(raw(4 * i), 4 * i) : sentinel);
+            EXPECT_EQ(slot(4, i), data(raw(4 * i), 4 * i));  // pair, a dword at a time
+            EXPECT_EQ(slot(5, i), data(raw(4 * i, 1), 4 * i + 4));
+            EXPECT_EQ(slot(6, i), data_word(i));  // addr64: never checked
+        }
+        // The stores: one dword per lane, and a pair per lane at 0x200 + 8 * lane. The size cuts
+        // the pair of lane 5 (bytes 552 and 556) after its first dword, and that dword ends past
+        // the size (552 + 4 > 554), so only a per-dword start check keeps it.
+        const auto stored = [&](std::uint32_t byte) { return out[(store_offset + byte) / 4]; };
+        for (std::uint32_t i = 0; i < lanes; ++i) {
+            EXPECT_EQ(stored(4 * i), 0xa000 | i) << "lane " << i;
+            const std::uint32_t pos = 0x200 + 8 * i;
+            EXPECT_EQ(stored(pos), pos < store_records ? (0xa000 | i) : 0u) << "lane " << i;
+            EXPECT_EQ(stored(pos + 4), pos + 4 < store_records ? (0xb000 | i) : 0u)
+                << "lane " << i;
         }
     }
 }

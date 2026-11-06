@@ -185,4 +185,15 @@ TEST(GcnTranslate, VectorModifiersAreRejected) {
     EXPECT_EQ(error(with(0, 0)), "no error");
 }
 
+TEST(GcnTranslate, BufferMemoryErrors) {
+    const auto message = [](std::vector<std::uint32_t> code) {
+        code.push_back(s_endpgm);
+        return error(code);
+    };
+    EXPECT_TRUE(message(mubuf(8, 3, 1, 4, 128, 0, buf::offen))  // buffer_load_ubyte
+                    .starts_with("unsupported instruction buffer_load_ubyte at offset"));
+    EXPECT_TRUE(message(mubuf(12, 3, 1, 4, 128, 0, buf::offen | buf::tfe))
+                    .starts_with("buffer_load_dword with tfe or lds is not supported yet at"));
+}
+
 }  // namespace

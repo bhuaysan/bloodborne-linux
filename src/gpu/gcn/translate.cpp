@@ -287,6 +287,9 @@ private:
             case Format::smrd:
                 scalar_memory(inst);
                 break;
+            case Format::mubuf:
+                buffer_memory(inst);
+                break;
             default:
                 unsupported();
             }
@@ -560,9 +563,64 @@ private:
         }
     }
 
-    // The fields of a V#: its 48-bit base address, its stride and its size in bytes.
+    // MUBUF loads and stores of dwords, untyped, in active lanes (docs/design/graphics.md,
+    // "Resources and memory"). The byte offset is the instruction's, plus the VGPR offset with
+    // `offen`; with `idxen` the VGPR index adds index * stride; soffset only moves the address
+    // and is never part of the range check. Each dword is checked on its own: raw (no `idxen`, or
+    // a stride of 0) by `in_range` on the offset, structured (`idxen` and a stride) by index <
+    // num_records, with no check of the offset. `addr64` adds a 64-bit VGPR address and is not
+    // range-checked. Out-of-range loads read 0 and out-of-range stores are dropped.
+    void buffer_memory(const Instruction& inst) {
+        const std::string_view name = inst.name;
+        const bool load = name.starts_with("buffer_load_dword");
+        if (!load && !name.starts_with("buffer_store_dword")) {
+            unsupported();
+        }
+        if ((inst.flags & (flag::tfe | flag::lds)) != 0) {
+            fail(std::format("{} with tfe or lds is not supported yet", name));
+        }
+        const Operand& data = load ? inst.dst[0] : inst.src[0];
+        const Operand* a = &inst.src[load ? 0 : 1];
+        const Vsharp v = vsharp(a[1]);
+        Id guest = b_.op(Op::OpIAdd, u64_, {v.base, b_.op(Op::OpUConvert, u64_, {read(a[2])})});
+        Id offset = c64(inst.mem_offset), index = c64(0);
+        unsigned next = 0;
+        if ((inst.flags & flag::addr64) != 0) {
+            guest = b_.op(Op::OpIAdd, u64_, {guest, read64(a[0])});
+        }
+        if ((inst.flags & flag::idxen) != 0) {
+            index = b_.op(Op::OpUConvert, u64_, {read(a[0], next++)});
+        }
+        if ((inst.flags & flag::offen) != 0) {
+            offset = b_.op(Op::OpIAdd, u64_,
+                           {offset, b_.op(Op::OpUConvert, u64_, {read(a[0], next++)})});
+        }
+        guest = add(guest, add(offset, b_.op(Op::OpIMul, u64_, {index, v.stride})));
+        const bool checked = (inst.flags & flag::addr64) == 0;
+        const bool by_index = (inst.flags & flag::idxen) != 0;
+        const Id structured = b_.op(Op::OpINotEqual, bool_, {v.stride, c64(0)});
+        const Id index_ok = b_.op(Op::OpULessThan, bool_, {index, v.records});
+        for (unsigned d = 0; d < data.dwords; ++d) {
+            const Id address = add(add(guest, c64(4 * d)), bias_);
+            Id ok = b_.constant_bool(true);
+            if (checked) {
+                ok = in_range(v, offset, d);
+                if (by_index) {
+                    ok = b_.op(Op::OpSelect, bool_, {structured, index_ok, ok});
+                }
+            }
+            const Id cond = b_.op(Op::OpLogicalAnd, bool_, {active(), ok});
+            if (load) {
+                write_vector(data, guarded_load(cond, address), d);
+            } else {
+                guarded_store(cond, address, read(data, d));
+            }
+        }
+    }
+
+    // The fields of a V#: its 48-bit base address, its stride, num_records and its size in bytes.
     struct Vsharp {
-        Id base = 0, stride = 0, size = 0;  // u64
+        Id base = 0, stride = 0, records = 0, size = 0;  // u64
     };
     Vsharp vsharp(const Operand& o) {
         const Id dw1 = read(o, 1);
@@ -575,13 +633,13 @@ private:
         const Id stride = b_.op(Op::OpBitFieldUExtract, u32_,
                                 {dw1, b_.constant_u32(16), b_.constant_u32(14)});
         v.stride = b_.op(Op::OpUConvert, u64_, {stride});
+        v.records = b_.op(Op::OpUConvert, u64_, {read(o, 2)});
         // The size is num_records bytes for a stride of 0. For a stride, the unit of num_records
-        // is taken to be records (unverified, see docs/design/graphics.md).
+        // is taken to be records (unverified for a raw access, see docs/design/graphics.md).
         const Id unit = b_.op(Op::OpSelect, u64_,
                               {b_.op(Op::OpIEqual, bool_, {stride, b_.constant_u32(0)}),
                                c64(1), v.stride});
-        v.size = b_.op(Op::OpIMul, u64_,
-                       {b_.op(Op::OpUConvert, u64_, {read(o, 2)}), unit});
+        v.size = b_.op(Op::OpIMul, u64_, {v.records, unit});
         return v;
     }
 
@@ -825,8 +883,8 @@ private:
         store(mask_var(o.code), value);
     }
 
-    void write_vector(const Operand& o, Id value) {
-        const Id var = vgpr(o.code);
+    void write_vector(const Operand& o, Id value, unsigned dword = 0) {
+        const Id var = vgpr(o.code + dword);
         store(var, b_.op(Op::OpSelect, u32_, {active(), value, load(u32_, var)}));
     }
 
