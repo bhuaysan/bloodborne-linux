@@ -1,5 +1,5 @@
 // Decoder for the scalar microcode formats (Sea Islands ISA manual, "Microcode Formats"). DS is
-// decoded in ds_flat.cpp. FLAT is not decoded yet (second part of #119).
+// decoded in ds_flat.cpp, MUBUF in memory.cpp. FLAT is not decoded yet (second part of #119).
 
 #include <algorithm>
 #include <array>
@@ -9,6 +9,7 @@
 #include <format>
 
 #include "gpu/gcn/gcn.hpp"
+#include "gpu/gcn/memory.hpp"
 #include "gpu/gcn/opcodes.hpp"
 
 namespace bb::gcn {
@@ -18,10 +19,7 @@ GcnError::GcnError(const std::string& message, std::uint32_t offset, std::uint32
       offset_(offset),
       word_(word) {}
 
-namespace {
-
-using detail::Imm;
-using detail::OpInfo;
+namespace detail {
 
 // `value` of the float inline constant with code `c`: the f32 pattern, or on a 64-bit operand the
 // high dword of the f64 (its low dword is 0 for every float constant).
@@ -57,6 +55,16 @@ bool valid_register(unsigned c, unsigned dwords) {
                            c == code::tma || c == code::exec);
 }
 
+}  // namespace detail
+
+namespace {
+
+using detail::bits;
+using detail::float_constant;
+using detail::Imm;
+using detail::OpInfo;
+using detail::valid_register;
+
 // Decodes the instruction that starts at code[index].
 class Decoder {
 public:
@@ -88,6 +96,8 @@ public:
             smrd_operands();
         } else if (detail::is_ds_flat(w)) {
             return detail::decode_ds_flat(code_, index_);
+        } else if (detail::is_memory_encoding(w)) {
+            return detail::decode_memory(code_, index_);
         } else {
             fail("unsupported encoding");
         }

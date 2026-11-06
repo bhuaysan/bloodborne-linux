@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 namespace bb::test::gcn {
 
@@ -30,6 +31,29 @@ constexpr std::uint32_t sopp(unsigned op, unsigned simm16 = 0) {
 constexpr std::uint32_t smrd(unsigned op, unsigned sdst, unsigned sbase, bool imm,
                              unsigned offset) {
     return 0x18u << 27 | op << 22 | sdst << 15 | (sbase / 2) << 9 | unsigned{imm} << 8 | offset;
+}
+
+// The vector memory formats. Flags are the bits of the 64-bit encoding: the low half is the first
+// dword and the high half the second. Descriptors are given by their first SGPR (a multiple of 4).
+inline std::vector<std::uint32_t> split(std::uint64_t encoding) {
+    return {static_cast<std::uint32_t>(encoding), static_cast<std::uint32_t>(encoding >> 32)};
+}
+
+constexpr std::uint64_t second(unsigned field, unsigned low) {
+    return std::uint64_t{field} << (32 + low);
+}
+
+namespace buf {  // MUBUF
+inline constexpr std::uint64_t offen = 1u << 12, idxen = 1u << 13, glc = 1u << 14,
+                               addr64 = 1u << 15, lds = 1u << 16;
+inline constexpr std::uint64_t slc = second(1, 22), tfe = second(1, 23);
+}  // namespace buf
+
+inline std::vector<std::uint32_t> mubuf(unsigned op, unsigned vdata, unsigned vaddr,
+                                        unsigned srsrc, unsigned soffset, unsigned offset = 0,
+                                        std::uint64_t flags = 0) {
+    return split(0x38ull << 26 | op << 18 | offset | second(vaddr, 0) | second(vdata, 8) |
+                 second(srsrc / 4, 16) | second(soffset, 24) | flags);
 }
 
 }  // namespace bb::test::gcn

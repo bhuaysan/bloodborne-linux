@@ -11,6 +11,7 @@
 
 #include "gpu/gcn/gcn.hpp"
 #include "gpu/gcn/opcodes.hpp"
+#include "gpu/gcn/memory.hpp"
 
 namespace bb::gcn {
 
@@ -204,6 +205,8 @@ std::string operand(const Operand& op, Literal literal) {
         return sendmsg(op.value);
     case OperandKind::vector:
         return range("v", op.code, op.dwords);
+    case OperandKind::off:
+        return "off";
     }
     return "?";
 }
@@ -229,6 +232,9 @@ std::string disassemble(const Instruction& inst) {
     }
     if (inst.format == Format::ds || inst.format == Format::flat) {
         out += detail::ds_flat_modifiers(inst);
+    }
+    if (inst.format == Format::mubuf) {
+        out += detail::memory_fields(inst);
     }
     return out;
 }
