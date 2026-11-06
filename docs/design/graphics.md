@@ -535,7 +535,7 @@ Each item is one issue of at most 500 lines of code and tests. "Design" items ar
 |---|---|---|
 | 11 (#266) | **Maintainer: packages.** `SDL3-devel` locally; `libsdl3-dev` in CI. The window target is built only when SDL3 is found. | – |
 | 12 (#267) | **AMD register and PM4 headers** unchanged in `third_party/amd-gcn/`, own PR; the packet-name check of gnm.md against them. | – |
-| 13 (#268) | **Design spike: GPU memory mirror.** Sparse buffers of up to 4 GiB over a window range, bias table or consecutive addresses, host-pointer imports bound into them on RADV and lavapipe, binding granularity against 16 KiB mappings, a compute test reading CPU-written data through the bias. Result into this note. | – |
+| 13 (#268) | **Design spike: GPU memory mirror.** Sparse buffers below `maxBufferSize` (2 GiB by default) over a window range, bias table or consecutive addresses, host-pointer imports bound into them on RADV and lavapipe, binding granularity against 16 KiB mappings, a compute test reading CPU-written data through the bias. Result into this note. | – |
 | 14 (#269) | **`bbvk` device core.** Instance, device choice (a discrete GPU first, lavapipe for tests), required features (Vulkan 1.3, buffer device address, sparse residency, host memory import), queues, a timeline-semaphore scheduler. Shares setup with the test runner. | – |
 | 15 (#270) | **PM4 parser core** (`bbpm4`). Headers, type-2 filler, register spaces and mirror, `NOP` tags, `INDIRECT_BUFFER`, `REWIND`, `CONTEXT_CONTROL`, `CLEAR_STATE`, unknown-opcode log. Synthetic streams. | 12 |
 | 16 (#271) | **Stage register imports.** `sceGnmSet{Vs,Ps,Cs,Es,Gs,Hs,Ls}Shader` and their "unchanged" variants, layouts checked against the shader files. | 12 |
