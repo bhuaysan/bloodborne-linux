@@ -25,7 +25,8 @@ using Destructor = void (*)(void*);
 
 // Our own limit; libc.prx creates one key (0x55792).
 constexpr std::size_t max_keys = 256;
-// How often the exit handler runs the destructors while they leave values behind.
+// How often the exit handler runs the destructors while they leave values behind (glibc's
+// PTHREAD_DESTRUCTOR_ITERATIONS, see pthread_key_create(3)).
 constexpr int destructor_rounds = 4;
 
 // A guest key is a 4-byte int (libc reads it with a 32-bit load at 0x54f94): the slot index plus
@@ -79,7 +80,8 @@ int key_create(Key* key, Destructor destructor) {
     return EAGAIN;
 }
 
-// The values that threads still hold stay where they are and are never destroyed, as POSIX says.
+// The values that threads still hold stay where they are and are never destroyed, as
+// pthread_key_create(3) describes for pthread_key_delete.
 int key_delete(Key key) {
     Keys& k = keys();
     const std::lock_guard lock(k.mutex);
