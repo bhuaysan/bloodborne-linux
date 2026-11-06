@@ -88,7 +88,7 @@ TEST(GcnVop3, Operands) {
 
     inst = one(vop3(0x180, 0, 0));  // v_nop_e64: the other fields are unused
     EXPECT_EQ(inst.num_dst + inst.num_src, 0);
-    inst = one(vop3(0x180, 3, v + 1, 4, 5, 0x700, 0xe0000000));
+    inst = one(vop3(0x180, 3, v + 1, 4, 5, 0xf00, 0xf8000000));
     EXPECT_EQ(inst.num_dst + inst.num_src, 0);
 }
 
@@ -114,6 +114,7 @@ TEST(GcnVop3, Errors) {
         {vintrp(3, 1, 2, 0, 0)},                 // unknown VINTRP opcode
         {vintrp(0, 1, 2, 33, 0)},                // attribute 33
         {vintrp(2, 1, 3, 0, 0)},                 // parameter 3
+        {vintrp(2, 1, 255, 0, 0)},               // parameter 255
     };
     for (const auto& words : bad) {
         SCOPED_TRACE(words[0]);
@@ -185,6 +186,10 @@ const std::vector<Case> cases = {
     {vop3(0x161, 2, v + 4, 133), "v_lshl_b64 v[2:3], v[4:5], 5"},
     {vop3(0x168, 2, v + 4, v + 6, 0, 0, omod(1)), "v_ldexp_f64 v[2:3], v[4:5], v6 mul:2"},
     {vop3(0x16d, 1, v + 2, v + 3, v + 4, code::vcc << 8), "v_div_scale_f32 v1, vcc, v2, v3, v4"},
+    {vop3(0x16d, 1, v + 2, v + 3, v + 4, code::vcc << 8, neg(1)),
+     "v_div_scale_f32 v1, vcc, -v2, v3, v4"},
+    {vop3(0x16d, 1, v + 2, v + 3, v + 4, code::vcc << 8, omod(1)),
+     "v_div_scale_f32 v1, vcc, v2, v3, v4 mul:2"},
     {vop3(0x16e, 2, v + 4, v + 6, v + 8, 10 << 8),
      "v_div_scale_f64 v[2:3], s[10:11], v[4:5], v[6:7], v[8:9]"},
     {vop3(0x16f, 1, v + 2, v + 3, v + 4), "v_div_fmas_f32 v1, v2, v3, v4"},
@@ -244,6 +249,13 @@ TEST(GcnVop3, EncodingsLlvmRejects) {
         {vop3(0x125, 1, v + 2, v + 3, 0, 2 << 8, neg(1)), "v_add_i32_e64 v1, s[2:3], -v2, v3"},
         {vop3(0x01, 2, v + 1, v + 2, 0, abs_clamp(0, true)),
          "v_cmp_lt_f32_e64 s[2:3], v1, v2 clamp"},
+        // Modifiers on the integer operand of a float instruction, and on v_cndmask_b32.
+        {vop3(0x12b, 1, v + 2, v + 3, 0, 0, neg(2)), "v_ldexp_f32_e64 v1, v2, -v3"},
+        {vop3(0x88, 2, v + 1, v + 2, 0, 0, neg(2)), "v_cmp_class_f32_e64 s[2:3], v1, -v2"},
+        {vop3(0x174, 2, v + 4, v + 6, 0, 0, neg(2)), "v_trig_preop_f64 v[2:3], v[4:5], -v6"},
+        {vop3(0x100, 1, v + 2, v + 3, 4, abs_clamp(0, true)),
+         "v_cndmask_b32_e64 v1, v2, v3, s[4:5] clamp"},
+        {vop3(0x100, 1, v + 2, v + 3, 4, 0, omod(1)), "v_cndmask_b32_e64 v1, v2, v3, s[4:5] mul:2"},
         // The VOP3 forms of the lane instructions and v_mov_fed_b32.
         {vop3(0x101, 1, v + 2, 3), "v_readlane_b32_e64 s1, v2, s3"},
         {vop3(0x102, 1, 2, 3), "v_writelane_b32_e64 v1, s2, s3"},
