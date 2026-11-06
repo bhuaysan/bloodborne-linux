@@ -45,6 +45,9 @@ The eboot uses initial-exec TLS only: `mov rax, fs:0` followed by adding a const
 
 - The thread handle of the scePthread functions and the POSIX `pthread_t` of libScePosix are pointers to our `Thread` object (host `pthread_t`, name, attributes, return value). The sce and POSIX entry points share one implementation and differ only in how they report errors.
 - Stack size and detach state are applied. Priority, scheduling policy and affinity are recorded and logged, not applied. Names go to `pthread_setname_np` (cut to 15 bytes) and into the log.
+- Implementation (#94, `src/hle/kernel/thread.cpp`, values in [kernel-abi.md](../formats/kernel-abi.md#threads)): live `Thread` objects are kept in a table, and a handle that isn't in it is refused without reading through it. A new thread runs `check_eboot_tls()` and `set_thread_name()` before its entry. Planned for the second part of #94: a thread the runtime didn't start (a `std::thread`, the host main thread) gets an object on its first Self; it can't be joined or detached and is freed at its exit.
+- The host stack is the requested size plus a 64 KiB reserve, because HLE calls, the logger and the sanitizers run on the game's stacks too. "Applied" means the game gets at least what it asked for.
+- Exit jumps back (`longjmp`) to the thread's start routine instead of calling the host `pthread_exit`, which would force-unwind through game frames that have no unwind information registered with the host. The eboot's threads always end that way (kernel-abi.md, Threads, "Exit"). Exit on a thread the runtime didn't start falls back to the host `pthread_exit`, with a warning. Planned for the second part of #94: after the entry returns or exits, the start routine runs the exit handlers (`register_thread_exit_handler`), on the thread and before glibc's `thread_local` destructors, as the TLS section requires; #99 registers the thread-specific-data destructors there.
 
 ## Sync
 

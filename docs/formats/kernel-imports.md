@@ -90,7 +90,7 @@ The other NIDs stay unnamed. The FreeBSD manual page lists and the derivation ru
 
 | NID | Callers | Behaviour |
 |---|---|---|
-| `Jmi+9w9u0E4` | eboot | Thread creation with a name, next to `pthread_create` *(survey)* |
+| `Jmi+9w9u0E4` | eboot 0x4388aa | `pthread_create` with a name as fifth argument; the result is an errno number ([kernel-abi.md](kernel-abi.md#threads)) |
 
 ## libSceLibcInternal (data)
 
