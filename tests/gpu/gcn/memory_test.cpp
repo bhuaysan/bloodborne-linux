@@ -1,5 +1,5 @@
-// MUBUF, MTBUF, MIMG and EXP: decoding and LLVM's syntax for words encoded by hand from the Sea Islands
-// ISA manual, and a round trip through llvm-mc for every opcode and export target.
+// MUBUF, MTBUF, MIMG and EXP: decoding and LLVM's syntax for words encoded by hand from the Sea
+// Islands ISA manual, and a round trip through llvm-mc for every opcode and export target.
 
 #include <cstdint>
 #include <format>
@@ -122,6 +122,7 @@ void expect_assembles(const std::vector<Case>& cases) {
     const auto assembled = assemble(lines);
     for (std::size_t i = 0; i < cases.size(); ++i) {
         EXPECT_EQ(assembled[i].words, cases[i].words) << cases[i].text;
+        EXPECT_EQ(assembled[i].text, cases[i].text);
     }
 }
 
@@ -436,7 +437,7 @@ TEST(GcnMemory, RoundTripImage) {
         try {
             const bool atomic = op >= 15 && op < 32, gather = op >= 64 && op < 96;
             const unsigned dmask = atomic ? 3 : gather ? 2 : 0xb;
-            const unsigned ssamp = op >= 32 && op != 126 ? 12 : 0;  // the sampling opcodes
+            const unsigned ssamp = op >= 32 ? 12 : 0;  // the sampling opcodes
             for (std::uint64_t flags : {std::uint64_t{0}, img::tfe | img::glc | img::da}) {
                 const auto w = mimg(op, 1, 4, 8, ssamp, dmask, flags);
                 all.push_back({w, text(w)});
@@ -475,12 +476,29 @@ TEST(GcnMemory, RoundTripImageDmaskAndFlags) {
 }
 
 // Encodings that llvm-mc rejects: a gather4 whose dmask has more or fewer than one bit, and an
-// atomic with a dmask other than 1 or 3.
+// atomic with a dmask other than 1 or 3 (3 or 15 for the compare-and-swap atomics).
+// The compare-and-swap atomics take 3 or 15 as dmask, which the round trip over every opcode
+// (dmask 3) doesn't reach.
+TEST(GcnMemory, RoundTripImageCmpswapDmask15) {
+    std::vector<Case> all;
+    for (unsigned op : {16u, 29u}) {
+        const auto w = mimg(op, 0, 4, 8, 0, 0xf, img::glc);
+        all.push_back({w, text(w)});
+    }
+    if (!have_llvm_mc()) {
+        GTEST_SKIP() << "llvm-mc not found";
+    }
+    expect_assembles(all);
+}
+
 TEST(GcnMemory, ImageEncodingsLlvmCannotExpress) {
     const std::vector<Case> differ = {
         {mimg(64, 0, 4, 8, 12, 0x3), "image_gather4 v[0:3], v4, s[8:15], s[12:15] dmask:0x3"},
         {mimg(64, 0, 4, 8, 12, 0), "image_gather4 v[0:3], v4, s[8:15], s[12:15]"},
         {mimg(17, 0, 4, 8, 0, 0x7), "image_atomic_add v[0:2], v4, s[8:15] dmask:0x7"},
+        {mimg(16, 0, 4, 8, 0, 0x1), "image_atomic_cmpswap v0, v4, s[8:15] dmask:0x1"},
+        {mimg(16, 0, 4, 8, 0, 0x7), "image_atomic_cmpswap v[0:2], v4, s[8:15] dmask:0x7"},
+        {mimg(29, 0, 4, 8, 0, 0x1), "image_atomic_fcmpswap v0, v4, s[8:15] dmask:0x1"},
     };
     for (const Case& c : differ) {
         SCOPED_TRACE(c.text);
