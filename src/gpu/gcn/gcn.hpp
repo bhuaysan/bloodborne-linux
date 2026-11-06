@@ -42,7 +42,7 @@ enum class OperandKind : std::uint8_t {
     literal,   // 32-bit literal that follows the instruction, in `value`
     offset,    // SMRD dword offset, in `value`
     simm,      // 16-bit immediate, printed in hex
-    count,     // 16-bit immediate, printed as an unsigned number
+    count,     // 16-bit unsigned immediate, printed in decimal up to 64 and in hex above
     branch,    // signed dword offset from the next instruction, in `value` (sign-extended)
     hwreg,     // hardware register field of s_getreg/s_setreg, in `value`
     waitcnt,   // counters of s_waitcnt, in `value`
