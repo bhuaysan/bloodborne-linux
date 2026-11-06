@@ -355,7 +355,14 @@ TEST(GcnTranslate, TypedMemoryErrors) {
     };
     EXPECT_EQ(message(0, 4, 7), "no error");  // tbuffer_load_format_x, 32 bits, float
     EXPECT_EQ(message(0, 4, 4), "no error");
-    EXPECT_TRUE(message(4, 4, 7).starts_with("unsupported instruction tbuffer_store_format_x at"));
+    EXPECT_EQ(message(4, 4, 7), "no error");  // tbuffer_store_format_x
+    EXPECT_EQ(message(4, 1, 1), "no error");  // 8 bits, SNORM
+    for (const unsigned nf : {2u, 3u, 6u}) {  // USCALED, SSCALED and SNORM_OGL can't be written
+        EXPECT_TRUE(message(4, 1, nf).starts_with(
+            std::format("tbuffer_store_format_x: number format {} can't be stored", nf)))
+            << nf;
+        EXPECT_EQ(message(0, 1, nf), "no error") << nf;  // but read
+    }
     EXPECT_TRUE(message(0, 4, 7, buf::tfe)
                     .starts_with("tbuffer_load_format_x with tfe is not supported yet at"));
     EXPECT_TRUE(message(0, 4, 7, buf::addr64)  // the helper adds offen
@@ -418,10 +425,10 @@ TEST(GcnTranslate, FloatModes) {
     EXPECT_EQ(build(0, add), (std::vector<std::uint32_t>{nan, rte, flush}));
     EXPECT_EQ(build(3u << 16 | 3u << 12, add), (std::vector<std::uint32_t>{nan, rtz, preserve}));
     EXPECT_EQ(build(0, {s_endpgm}), std::vector<std::uint32_t>{});  // no float instruction
-    // A typed load converts through f32 in every number format but UINT and SINT: a half float's
-    // infinities, NaNs and -0 need the modes, an integer load needs none.
-    const auto typed = [&](unsigned dfmt, unsigned nfmt) {
-        auto code = mtbuf(0, 3, 1, 4, 128, 0, dfmt, nfmt, buf::offen);
+    // A typed load or store converts through f32 in every number format but UINT and SINT: a
+    // half float's infinities, NaNs and -0 need the modes, an integer load or store needs none.
+    const auto typed = [&](unsigned dfmt, unsigned nfmt, unsigned op = 0) {
+        auto code = mtbuf(op, 3, 1, 4, 128, 0, dfmt, nfmt, buf::offen);
         code.push_back(s_endpgm);
         return build(0, code);
     };
@@ -432,6 +439,9 @@ TEST(GcnTranslate, FloatModes) {
     EXPECT_EQ(typed(10, 3), float_modes);  // 8_8_8_8, SSCALED
     EXPECT_EQ(typed(5, 4), std::vector<std::uint32_t>{});  // 16_16, UINT
     EXPECT_EQ(typed(5, 5), std::vector<std::uint32_t>{});  // 16_16, SINT
+    EXPECT_EQ(typed(2, 7, 4), float_modes);  // tbuffer_store_format_x, 16, FLOAT
+    EXPECT_EQ(typed(1, 1, 4), float_modes);  // 8, SNORM
+    EXPECT_EQ(typed(10, 4, 4), std::vector<std::uint32_t>{});  // 8_8_8_8, UINT
     for (const std::uint32_t rsrc1 : {1u << 12, 2u << 12, 1u << 16, 2u << 16}) {
         EXPECT_EQ(error(add, {.pgm_rsrc1 = rsrc1, .pgm_rsrc2 = 5u << 1}),
                   std::format("PGM_RSRC1 {:#x}: this float mode is not supported at "

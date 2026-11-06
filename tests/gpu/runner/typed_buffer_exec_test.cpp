@@ -1,7 +1,8 @@
-// Execution tests of the typed buffer loads (MTBUF) on lavapipe: the program mem_typed loads 16
-// formats from a table, and each result is worked out here from the element's bytes with the
-// usual conversions of normalized, scaled and integer formats (docs/design/graphics.md, "Typed
-// buffer formats").
+// Execution tests of the typed buffer loads and stores (MTBUF) on lavapipe: the program mem_typed
+// loads 16 formats from a table, and each result is worked out here from the element's bytes with
+// the usual conversions of normalized, scaled and integer formats; mem_tstore stores 13 formats,
+// and the output is worked out from the conversions back (docs/design/graphics.md, "Typed buffer
+// formats").
 
 #include <algorithm>
 #include <array>
@@ -25,7 +26,7 @@ namespace {
 using namespace bb::test::vk;
 namespace nf {
 constexpr unsigned unorm = 0, snorm = 1, uscaled = 2, sscaled = 3, uint_ = 4, sint = 5, snorm_ogl = 6;
-}  // the number formats the program uses
+}  // the number formats the programs use
 
 constexpr std::uint64_t base = 0x12'0000'0000;  // guest address of the output
 constexpr std::uint32_t table_offset = 0x8000, table_size = 2048, lanes = 64;
@@ -203,6 +204,145 @@ TEST_F(TypedBuffer, RangeCutsElement) {
 TEST_F(TypedBuffer, DstSelIsIgnored) {
     check(table_size, 7 | 1 << 3 | 4 << 6);
     check(table_size, 0);
+}
+
+// The `width` bits that a store writes for the component `v` (a float's bits or an integer):
+// UNORM and SNORM clamp (NaN gives 0), scale in f32 and round to nearest even, UINT and SINT
+// saturate, and FLOAT rounds to a half float to nearest even (a NaN gives the quiet NaN of its
+// sign) or keeps the 32 bits.
+std::uint32_t encode(std::uint32_t v, unsigned width, unsigned nfmt) {
+    const std::uint64_t mask = (std::uint64_t{1} << width) - 1;
+    float f = std::bit_cast<float>(v);
+    f = std::isnan(f) ? 0.0f : f;
+    const auto s = static_cast<std::int64_t>(static_cast<std::int32_t>(v));
+    const std::int64_t smax = (std::int64_t{1} << (width - 1)) - 1;
+    switch (nfmt) {
+    case nf::unorm:
+        return static_cast<std::uint32_t>(
+            std::nearbyint(std::clamp(f, 0.0f, 1.0f) * static_cast<float>(mask)));
+    case nf::snorm:
+        return static_cast<std::uint32_t>(static_cast<std::int64_t>(std::nearbyint(
+                   std::clamp(f, -1.0f, 1.0f) * static_cast<float>(smax)))) & mask;
+    case nf::uint_: return static_cast<std::uint32_t>(std::min<std::uint64_t>(v, mask));
+    case nf::sint: return static_cast<std::uint32_t>(std::clamp(s, -smax - 1, smax)) & mask;
+    default:
+        if (width == 32) {
+            return v;
+        }
+        if (std::isnan(std::bit_cast<float>(v))) {
+            return (v >> 16 & 0x8000) | 0x7e00;
+        }
+        return std::bit_cast<std::uint16_t>(static_cast<_Float16>(std::bit_cast<float>(v)));
+    }
+}
+
+class TypedStore : public testing::Test {
+protected:
+    void SetUp() override {
+        std::string why;
+        runner_ = ComputeRunner::create(why);
+        if (!runner_) {
+            GTEST_SKIP() << why;
+        }
+        // Floats: the edges of the conversions first (clamping, the ties of round to even, the
+        // half float's range and denormals), then random values around 1 and in the half
+        // float's range. Integers: the edges of 2 to 16 bits, then random values of any size.
+        const float specials[] = {
+            0.0f, -0.0f, 1.0f, -1.0f, 0.5f, 1.5f, 2.0f, -2.0f,
+            std::numeric_limits<float>::quiet_NaN(), -std::numeric_limits<float>::quiet_NaN(),
+            std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(),
+            0.5f / 255, 1.5f / 255, 2.5f / 255, -0.5f / 127, -1.5f / 127, 0.5f / 511,
+            65504.0f, 65519.0f, 65520.0f, 65536.0f, -65520.0f, 1e10f,
+            std::ldexp(1.0f, -14), std::ldexp(1023.0f, -24), std::ldexp(2047.0f, -25),
+            std::ldexp(1.0f, -24), std::ldexp(1.0f, -25), std::ldexp(3.0f, -26),
+            std::ldexp(3.0f, -25), std::ldexp(1.0f, -26), -std::ldexp(1.0f, -25),
+            1.0f + std::ldexp(1.0f, -11), 1.0f + std::ldexp(3.0f, -11), 1e-30f, -1e-40f,
+        };
+        const std::int32_t ints[] = {
+            0, 1, -1, 2, -2, -3, 3, 127, 128, -128, -129, 255, 256, 511, 512, -512, -513, 1023,
+            1024, 32767, 32768, -32768, -32769, 65535, 65536, INT32_MIN, INT32_MAX, -65536,
+        };
+        std::uint32_t x = 0x9e3779b9;
+        const auto next = [&] { return x ^= x << 13, x ^= x >> 17, x ^= x << 5; };
+        for (std::uint32_t i = 0; i < 4 * lanes; ++i) {
+            const std::uint32_t r = next();
+            const float f = i < std::size(specials) ? specials[i]
+                            : i % 2 != 0
+                                ? std::ldexp(static_cast<float>(r % 4096) - 2048, -10)
+                                : std::bit_cast<float>((r & 0x807fffff) | (100 + r % 48) << 23);
+            input_[i] = std::bit_cast<std::uint32_t>(f);
+            input_[4 * lanes + i] = i < std::size(ints)
+                                        ? static_cast<std::uint32_t>(ints[i])
+                                        : static_cast<std::int32_t>(next()) >> (r % 32);
+        }
+    }
+
+    // Runs mem_tstore with an output V# of `size` bytes, over output bytes that start as 0xa5,
+    // and checks every byte of the output. Each store writes its element whole when its first
+    // byte is inside the V# and nothing otherwise; an element of 4 bytes or more is written to
+    // the aligned dwords.
+    void check(std::uint32_t size) {
+        const auto program = bb::test::gcn::program_words("mem_tstore");
+        const auto translation = bb::gcn::translate(
+            program, {}, {.pgm_rsrc2 = bb::test::gcn::program_pgm_rsrc2("mem_tstore")});
+        auto memory = runner_->guest_memory(base, 0x10000);
+        std::vector<std::uint8_t> expected(output_size, 0xa5);
+        std::memcpy(memory.data(), expected.data(), output_size);
+        std::memcpy(memory.data() + table_offset, input_.data(), sizeof(input_));
+        const auto lo = [](std::uint64_t v) { return static_cast<std::uint32_t>(v); };
+        const auto hi = [](std::uint64_t v) { return static_cast<std::uint32_t>(v >> 32); };
+        DrawBlock draw;  // s[4:7] the input's V#, s[8:11] the output's
+        draw.user_data = {lo(base), hi(base), 0, 0, lo(base + table_offset),
+                          hi(base + table_offset), sizeof(input_), identity, lo(base), hi(base),
+                          size, identity};
+        runner_->run(translation.spirv, draw, {1, 1, 1});
+        std::uint32_t k = 0;
+        for (const auto& inst : bb::gcn::decode(program)) {
+            if (inst.format != bb::gcn::Format::mtbuf) {
+                continue;
+            }
+            const auto layout = fields(inst.dfmt);
+            const unsigned bytes = (layout.back().offset + layout.back().width + 7) / 8;
+            const unsigned integer = inst.nfmt == nf::uint_ || inst.nfmt == nf::sint ? 1 : 0;
+            const unsigned scale = inst.src[1].code == 0 ? 1 : inst.src[1].code == 2 ? 2 : 16;
+            for (std::uint32_t lane = 0; lane < lanes; ++lane) {
+                std::uint32_t at = 1024 * k + scale * lane + inst.mem_offset;
+                if (at >= size) {
+                    continue;
+                }
+                at = bytes < 4 ? at : at & ~3u;
+                std::uint64_t element[2] = {};
+                for (unsigned c = 0; c < layout.size(); ++c) {
+                    const std::uint32_t v =
+                        c < inst.src[0].dwords ? input_[4 * (lanes * integer + lane) + c] : 0;
+                    const std::uint64_t bits = encode(v, layout[c].width, inst.nfmt);
+                    element[layout[c].offset / 64] |= bits << (layout[c].offset % 64);
+                }
+                std::memcpy(expected.data() + at, element, bytes);
+            }
+            ++k;
+        }
+        EXPECT_EQ(k, 13u);
+        for (std::uint32_t i = 0; i < output_size; ++i) {
+            ASSERT_EQ(static_cast<unsigned>(memory[i]), expected[i])
+                << "block " << i / 1024 << " byte " << i % 1024;
+        }
+    }
+
+    std::unique_ptr<ComputeRunner> runner_;
+    std::array<std::uint32_t, 8 * lanes> input_;
+};
+
+// Every lane's element is written, in each format; the narrow elements of adjacent lanes share
+// dwords, and half of the 8_8 elements cross into the next dword.
+TEST_F(TypedStore, Formats) {
+    check(output_size);
+}
+
+// A V# that ends at byte 42 of the 8_8 block: lane 20's element (bytes 41 and 42) starts inside
+// and is written whole, the next lanes and the later blocks are not written.
+TEST_F(TypedStore, Range) {
+    check(1024 * 4 + 42);
 }
 
 }  // namespace

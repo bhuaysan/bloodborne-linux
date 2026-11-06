@@ -1359,31 +1359,56 @@ private:
     }
     Id exec_var() override { return mask_exec(); }
 
-    // MTBUF loads of 1 to 4 components of a typed element, in active lanes (docs/design/
-    // graphics.md, "Typed buffer formats"). The address and the range check are those of
-    // buffer_memory, but the element is all-or-nothing: it is inside when its first byte is, and
-    // an element that starts outside reads 0 in every component. An element of 4 bytes or more is
-    // read as aligned dwords (the two low bits of its address are ignored); a narrower one byte by
-    // byte, from any address. The element is converted from its dwords. The V#'s dst_sel plays no
-    // part: the components are X, Y, Z, W of the format, and those the format doesn't have are 0.
+    // MTBUF loads and stores of 1 to 4 components of a typed element, in active lanes (docs/
+    // design/graphics.md, "Typed buffer formats"). The address and the range check are those of
+    // buffer_memory, but the element is all-or-nothing (8.1.5.3): it is inside when its first byte
+    // is, an element that starts outside reads 0 in every component, and one that starts inside is
+    // written whole. An element of 4 bytes or more is accessed as aligned dwords (the two low bits
+    // of its address are ignored); a narrower one byte by byte, from any address. The V#'s dst_sel
+    // plays no part: the components are X, Y, Z, W of the format, those the format doesn't have
+    // read 0, and a store gives 0 to those the instruction doesn't have.
     void typed_memory(const Instruction& inst) {
         const std::string_view name = inst.name;
-        if (!name.starts_with("tbuffer_load_format_")) {
+        const bool load = name.starts_with("tbuffer_load_format_");
+        if (!load && !name.starts_with("tbuffer_store_format_")) {
             unsupported();
         }
         if ((inst.flags & flag::tfe) != 0) {
             fail(std::format("{} with tfe is not supported yet", name));
         }
-        if (const std::string why = format_error(inst.dfmt, inst.nfmt); !why.empty()) {
+        if (const std::string why = format_error(inst.dfmt, inst.nfmt, !load); !why.empty()) {
             fail(std::format("{}: {}", name, why));
         }
+        if (inst.nfmt != nfmt::uint_ && inst.nfmt != nfmt::sint) {
+            // The other number formats convert through f32 (or a half float). The float modes
+            // keep a half float's infinities, NaNs and -0 on the way; no conversion makes an f32
+            // denormal, and the 16-bit integers convert exactly. The rounding mode does reach
+            // the divisions and products of the normalized formats (a known difference, see the
+            // design note).
+            note_float();
+        }
         const FormatLayout& layout = *format_layout(inst.dfmt);
-        const Operand& data = inst.dst[0];
-        const BufferAccess m = buffer_access(inst, &inst.src[0]);
+        const Operand& data = load ? inst.dst[0] : inst.src[0];
+        const BufferAccess m = buffer_access(inst, &inst.src[load ? 0 : 1]);
         const Id inside_buffer = inside(m, 0);
         const Id cond = b_.op(Op::OpLogicalAnd, bool_, {active(), inside_buffer});
         const auto where = [&](unsigned delta) { return add(add(m.guest, c64(delta)), bias_); };
         const Id zero = b_.constant_u32(0);
+        if (!load) {
+            FormatEmitter::Words value;
+            for (unsigned c = 0; c < 4; ++c) {
+                value[c] = c < data.dwords ? read(data, c) : zero;
+            }
+            const auto raw = FormatEmitter(b_, u32_).encode(inst.dfmt, inst.nfmt, value);
+            if (layout.bytes < 4) {
+                when(cond, [&] { store_bytes(where(0), raw[0], layout.bytes); });
+            }
+            for (unsigned d = 0; d < layout.bytes / 4; ++d) {
+                guarded_store(cond, b_.op(Op::OpBitwiseAnd, u64_, {where(4 * d), c64(~3ull)}),
+                              raw[d]);
+            }
+            return;
+        }
         FormatEmitter::Words raw;
         raw.fill(zero);
         if (layout.bytes < 4) {
@@ -1398,16 +1423,41 @@ private:
             raw[d] = guarded_load(cond, b_.op(Op::OpBitwiseAnd, u64_, {where(4 * d), c64(~3ull)}));
         }
         const auto value = FormatEmitter(b_, u32_).decode(inst.dfmt, inst.nfmt, raw);
-        if (inst.nfmt != nfmt::uint_ && inst.nfmt != nfmt::sint) {
-            // The other number formats convert through f32 (or unpack a half float). The float
-            // modes keep a half float's infinities, NaNs and -0 on the way; no conversion makes an
-            // f32 denormal, and the 16-bit integers convert exactly. The rounding mode does reach
-            // the divisions of the normalized formats (a known difference, see the design note).
-            note_float();
-        }
         for (unsigned c = 0; c < data.dwords; ++c) {
             // Zero raw bits are not a zero component in every number format (SNORM_OGL).
             write_vector(data, b_.op(Op::OpSelect, u32_, {inside_buffer, value[c], zero}), c);
+        }
+    }
+
+    // Writes the low `bytes` (1 or 2) bytes of `value` at the device address `address`, which
+    // may cross into the next dword. Other lanes may write the other bytes of the same dword at
+    // the same time, so each dword takes the bits with one compare-and-swap loop, as the LDS's
+    // sub-dword writes do.
+    void store_bytes(Id address, Id value, unsigned bytes) {
+        const std::uint32_t mask = (1u << (8 * bytes)) - 1;
+        const Id aligned = b_.op(Op::OpBitwiseAnd, u64_, {address, c64(~3ull)});
+        const Id shift = byte_shift(b_.op(Op::OpUConvert, u32_, {address}));
+        const auto wide = [&](Id x) {  // x << shift, as a u64
+            return b_.op(Op::OpShiftLeftLogical, u64_, {b_.op(Op::OpUConvert, u64_, {x}), shift});
+        };
+        const Id bits = wide(b_.op(Op::OpBitwiseAnd, u32_, {value, b_.constant_u32(mask)}));
+        const Id written = wide(b_.constant_u32(mask));
+        const auto half = [&](Id x, unsigned d) {  // the low (d = 0) or high dword of x
+            return b_.op(Op::OpUConvert, u32_,
+                         {d == 0 ? x : b_.op(Op::OpShiftRightLogical, u64_, {x, c64(32)})});
+        };
+        const auto merge = [&](unsigned d) {
+            const Id kept = b_.op(Op::OpNot, u32_, {half(written, d)});
+            const Id pointer = device_pointer(add(aligned, c64(4 * d)));
+            atomic_update(pointer, spv::Scope::Device, [&](Id v) {
+                return b_.op(Op::OpBitwiseOr, u32_,
+                             {b_.op(Op::OpBitwiseAnd, u32_, {v, kept}), half(bits, d)});
+            });
+        };
+        merge(0);
+        if (bytes > 1) {
+            when(b_.op(Op::OpINotEqual, bool_, {half(written, 1), b_.constant_u32(0)}),
+                 [&] { merge(1); });
         }
     }
 
@@ -1623,7 +1673,7 @@ private:
                                   {b_.op(Op::OpShiftLeftLogical, u32_, {mask, shift})});
             const Id bits = b_.op(Op::OpShiftLeftLogical, u32_,
                                   {b_.op(Op::OpBitwiseAnd, u32_, {value, mask}), shift});
-            atomic_update(pointer, [&](Id v) {
+            atomic_update(pointer, spv::Scope::Workgroup, [&](Id v) {
                 return b_.op(Op::OpBitwiseOr, u32_,
                              {b_.op(Op::OpBitwiseAnd, u32_, {v, kept}), bits});
             });
@@ -1669,7 +1719,8 @@ private:
                             {pointer, scope, none, none, data1, data});
                 break;
             default:
-                old = atomic_update(pointer, [&](Id v) { return updated(d.op, v, data, data1); });
+                old = atomic_update(pointer, spv::Scope::Workgroup,
+                                    [&](Id v) { return updated(d.op, v, data, data1); });
             }
             store(result, old);
         });
@@ -1701,11 +1752,11 @@ private:
         }
     }
 
-    // Replaces the dword at `pointer` by f(old) atomically, as a loop on a compare-and-swap, and
-    // returns the old value.
+    // Replaces the dword at `pointer` by f(old) atomically, as a loop on a compare-and-swap at
+    // scope `s` (the LDS's workgroup, or the device for buffers), and returns the old value.
     template <typename F>
-    Id atomic_update(Id pointer, F f) {
-        const Id scope = b_.constant_u32(spirv_word(spv::Scope::Workgroup));
+    Id atomic_update(Id pointer, spv::Scope s, F f) {
+        const Id scope = b_.constant_u32(spirv_word(s));
         const Id none = b_.constant_u32(0);
         // The other lanes update the dword atomically at the same time, so the first read is an
         // atomic one too, or it would race with them. A stale value is fixed by the loop.
