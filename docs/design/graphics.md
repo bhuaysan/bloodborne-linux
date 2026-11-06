@@ -302,7 +302,7 @@ Vector ALU formats (`src/gpu/gcn/vop.hpp`, `vop_opcodes.cpp`, `vop_decode.cpp`, 
 - Operand code 254 (LDS_DIRECT) is valid only in src0 of a vector ALU instruction and only as a 32-bit source, as in LLVM. It has the kind `scalar` with its code, like the other special sources, and prints as `src_lds_direct`. The scalar formats still reject it.
 - The mnemonic carries LLVM's `_e32` suffix, except for `v_nop`, `v_clrexcp` and `v_readfirstlane_b32`, which LLVM prints without one. `v_readfirstlane_b32` takes an SGPR operand code in the vdst field; a constant there is an error.
 - Literals with an inline value print as `lit(0x…)`, with the 32-bit rule of the scalar formats. On a 64-bit operand llvm-mc reads a literal as the f64's high dword, so 0 to 64 and the high dwords of the float constants get `lit()` there.
-- Known differences: `v_mov_fed_b32` has no gfx7 syntax in LLVM, LLVM rejects `m0` as the destination of `v_readfirstlane_b32` and takes only a VGPR as its source, and the unused fields of `v_nop` and `v_clrexcp` don't appear in the text.
+- Known differences: `v_mov_fed_b32` has no gfx7 syntax in LLVM, LLVM rejects `m0` as the destination of `v_readfirstlane_b32` and takes only a VGPR or `src_lds_direct` as its source, and the unused fields of `v_nop` and `v_clrexcp` don't appear in the text.
 
 SPIR-V builder (`src/gpu/gcn/spirv_builder.hpp`, #122):
 
