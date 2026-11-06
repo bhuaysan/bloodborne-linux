@@ -63,10 +63,10 @@ TEST(GcnTranslate, ProgramsPassSpirvVal) {
             translate(program_words(name), {}, {.pgm_rsrc2 = program_pgm_rsrc2(name)});
         EXPECT_EQ(validate(translation.spirv), "");
         // ballots and any(...) over the subgroup, for the SCC after a lane mask operation, and the
-        // LDS (whose accesses wait for the subgroup)
+        // LDS (whose accesses wait for the subgroup), and the shuffles of ds_swizzle_b32
         EXPECT_EQ(translation.interface.wave_size_dependent,
                   name == "cross_lane" || name == "mask_exec" || name == "mask_scc" ||
-                      name == "mask_branch" || name.starts_with("lds_"));
+                      name == "mask_branch" || name == "ds_swizzle" || name.starts_with("lds_"));
         // s[8:9] of cross_lane; the mask programs keep only lane masks in their mask pairs
         EXPECT_EQ(translation.interface.mask_round_trip, name == "cross_lane");
     }
@@ -97,6 +97,7 @@ TEST(GcnTranslate, WaveSizeDependence) {
         EXPECT_TRUE(dependent({sopp(op, 1), sopp(0)})) << op;
     }
     EXPECT_TRUE(dependent(ds(ds_read_b32, 1, 0)));           // ds_read_b32 v1, v0
+    EXPECT_TRUE(dependent(ds(ds_swizzle_b32, 1, 0, 0, 0, 0x041f)));  // ds_swizzle_b32 v1, v0
 }
 
 // A value written to VCC or an SGPR mask pair and read back as a value sets mask_round_trip, also
@@ -278,8 +279,11 @@ TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
         inst.push_back(s_endpgm);
         return inst;
     };
-    EXPECT_EQ(error(with_ds(ds(ds_swizzle_b32, 1, 0, 0, 0, 0x8000))),
-              "unsupported instruction ds_swizzle_b32 at offset 0x0 (word 0xd8d48000)");
+    EXPECT_EQ(error(with_ds(ds(ds_swizzle_b32, 1, 0, 0, 0, 0x8000))), "no error");
+    EXPECT_EQ(error(with_ds(ds(ds_swizzle_b32, 1, 0, 0, 0, 0x8000)), {.pgm_rsrc2 = 5u << 1}),
+              "no error");  // it does not use the LDS
+    EXPECT_EQ(error(with_ds(ds(ds_swizzle_b32, 1, 0, 0, 0, 0x8000, true))),
+              "GDS is not supported yet at offset 0x0 (word 0xd8d68000)");
     EXPECT_EQ(error(with_ds(ds(ds_add_u64, 0, 0, 2))),
               "unsupported instruction ds_add_u64 at offset 0x0 (word 0xd9000000)");
     EXPECT_EQ(error(with_ds(ds(ds_read_b32, 1, 0, 0, 0, 0, true))),

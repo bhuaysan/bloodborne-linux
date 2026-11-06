@@ -1185,12 +1185,17 @@ private:
     // plus the offset field. An access outside the LDS reads 0 and is dropped; the clamp that M0
     // sets on the hardware is ignored. Writes and atomics run only in active lanes.
     void ds(const Instruction& inst) {
+        const bool swizzle = inst.name == "ds_swizzle_b32";
         const auto d = detail::classify_ds(inst.name);
-        if (!d) {
+        if (!d && !swizzle) {
             unsupported();
         }
         if ((inst.flags & flag::gds) != 0) {
             fail("GDS is not supported yet");
+        }
+        if (swizzle) {
+            ds_swizzle(inst);
+            return;
         }
         if (d->kind == detail::DsKind::nop) {
             return;
@@ -1220,6 +1225,34 @@ private:
                 }
             }
         }
+    }
+
+    // ds_swizzle_b32: lane i takes the VGPR of another lane of its wave, or 0 when that lane is
+    // inactive. It does not touch the LDS. The 16-bit pattern (offset1:offset0) has two modes. With
+    // bit 15 set it is a quad permutation: bits 2k+1:2k pick the lane of the quad that lane k of
+    // each aligned quad reads. Otherwise it is a bit mask on the lane within its group of 32:
+    // source = ((i & and) | or) ^ xor, with and in bits 4:0, or in bits 9:5 and xor in bits 14:10.
+    // The FFT and rotate modes are GFX9 and later. A source in another subgroup reads 0
+    // (lane-local mode, see shuffle()).
+    void ds_swizzle(const Instruction& inst) {
+        const unsigned pattern = inst.mem_offset & 0xffff;
+        const auto constant = [&](unsigned v) { return b_.constant_u32(v); };
+        const auto land = [&](Id a, Id b) { return b_.op(Op::OpBitwiseAnd, u32_, {a, b}); };
+        Id source;
+        if ((pattern & 0x8000) != 0) {
+            const Id shift = b_.op(Op::OpShiftLeftLogical, u32_,
+                                   {land(lane_, constant(3)), constant(1)});
+            const Id pick = b_.op(Op::OpBitFieldUExtract, u32_,
+                                  {constant(pattern & 0xff), shift, constant(2)});
+            source = b_.op(Op::OpBitwiseOr, u32_, {land(lane_, constant(~3u)), pick});
+        } else {
+            const Id kept = land(lane_, constant(0x20 | (pattern & 0x1f)));
+            const Id with_or = b_.op(Op::OpBitwiseOr, u32_, {kept, constant(pattern >> 5 & 0x1f)});
+            source = b_.op(Op::OpBitwiseXor, u32_, {with_or, constant(pattern >> 10 & 0x1f)});
+        }
+        const Id value = b_.op(Op::OpSelect, u32_,
+                               {active(), read(inst.src[0]), b_.constant_u32(0)});
+        write_vector(inst.dst[0], shuffle(value, source));
     }
 
     unsigned lds_dwords() {
@@ -1481,15 +1514,33 @@ private:
     // `value` in wave lane `lane`, which must be uniform in the subgroup, or 0 when that lane
     // belongs to another subgroup.
     Id broadcast(Id value, Id lane) {
+        const auto [from, inside] = subgroup_lane(lane);
+        const Id r = b_.op(Op::OpGroupNonUniformBroadcast, u32_,
+                           {b_.constant_u32(spirv_word(spv::Scope::Subgroup)), value, from});
+        return b_.op(Op::OpSelect, u32_, {inside, r, b_.constant_u32(0)});
+    }
+
+    // `value` of wave lane `lane` (any value per lane), or 0 when that lane belongs to another
+    // subgroup.
+    Id shuffle(Id value, Id lane) {
+        b_.capability(spv::Capability::GroupNonUniformShuffle);
+        const auto [from, inside] = subgroup_lane(lane);
+        const Id r = b_.op(Op::OpGroupNonUniformShuffle, u32_,
+                           {b_.constant_u32(spirv_word(spv::Scope::Subgroup)), value, from});
+        return b_.op(Op::OpSelect, u32_, {inside, r, b_.constant_u32(0)});
+    }
+
+    // The invocation of this subgroup that is wave lane `lane` (0 when there is none), and whether
+    // the lane is in the subgroup.
+    struct SubgroupLane {
+        Id from, inside;
+    };
+    SubgroupLane subgroup_lane(Id lane) {
         cross_lane();
         const Id local = b_.op(Op::OpISub, u32_, {lane, subgroup_base()});
         const Id inside = b_.op(Op::OpULessThan, bool_,
                                 {local, load(u32_, builtin(spv::BuiltIn::SubgroupSize))});
-        const Id c0 = b_.constant_u32(0);
-        const Id from = b_.op(Op::OpSelect, u32_, {inside, local, c0});
-        const Id r = b_.op(Op::OpGroupNonUniformBroadcast, u32_,
-                           {b_.constant_u32(spirv_word(spv::Scope::Subgroup)), value, from});
-        return b_.op(Op::OpSelect, u32_, {inside, r, c0});
+        return {b_.op(Op::OpSelect, u32_, {inside, local, b_.constant_u32(0)}), inside};
     }
 
     // The wave lane of subgroup invocation 0. It assumes that a subgroup covers consecutive
