@@ -573,7 +573,7 @@ TEST_F(TranslateExec, LdsAtomics) {
     }
     rsub = 30 - rsub;  // the extra one from lane 0 (an even count of them would undo itself)
     const std::uint32_t expected[16] = {
-        n * (n + 1) / 2, 0u - n * (n + 1) / 2, ~0u, xor_all, 0, 5, n - 1, 0u - 64, 63,
+        n * (n + 1) / 2, 0u - n * (n + 1) / 2, ~0u, xor_all, 0, 5, ~0u, 0u - 64, 63,
         out[9], inc, dec, rsub, (0xf0f0'f0f0 & ~0x00ff'00ffu) | 0x1200'3400, 9, n};
     for (std::uint32_t i = 0; i < 16; ++i) {
         EXPECT_EQ(out[i], expected[i]) << "dword " << i;

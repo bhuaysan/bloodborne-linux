@@ -38,7 +38,7 @@ ds_or_b32 v30, v5 offset:8
 ds_xor_b32 v30, v4 offset:12
 ds_and_b32 v30, v6 offset:16
 ds_min_u32 v30, v7 offset:20
-ds_max_u32 v30, v0 offset:24
+ds_max_u32 v30, v9 offset:24        ; 0xffffffff unsigned, 63 signed
 ds_min_i32 v30, v9 offset:28
 ds_max_i32 v30, v9 offset:32
 ds_wrxchg_rtn_b32 v12, v30, v4 offset:36
