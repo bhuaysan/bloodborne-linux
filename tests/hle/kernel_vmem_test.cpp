@@ -388,6 +388,29 @@ TEST(KernelVmem, OnlyAMapIntoAReservationReplacesIt) {
     EXPECT_EQ(vmem::restore_reservation(r, page_size), EINVAL);
 }
 
+TEST(KernelVmem, AFailedMapIntoAReservationLeavesItReserved) {
+    std::uintptr_t r = 0;
+    ASSERT_EQ(vmem::reserve(0, 2 * page_size, page_size, r), 0);
+    // A file mapping without a descriptor: the host refuses it, and the range stays reserved.
+    vmem::Mapping m = anonymous(1);
+    m.address = r;
+    m.fixed = true;
+    m.into_reservation = true;
+    m.host_flags = MAP_SHARED;
+    std::uintptr_t out = 0;
+    EXPECT_EQ(vmem::map(m, out), EBADF);
+    const auto region = vmem::find(r);
+    ASSERT_TRUE(region);
+    EXPECT_TRUE(region->reserved);
+    EXPECT_EQ(region->start, r);
+    EXPECT_EQ(region->end, r + 2 * page_size);
+    // So a map into it still succeeds.
+    m.host_flags = MAP_PRIVATE | MAP_ANONYMOUS;
+    ASSERT_EQ(vmem::map(m, out), 0);
+    EXPECT_EQ(out, r);
+    EXPECT_EQ(sceKernelMunmap(ptr(r), 2 * page_size), 0);
+}
+
 TEST(KernelVmem, ImportsResolveToTheImplementations) {
     const auto resolve = [](const char* library, const char* nid) {
         return bb::hle::resolve({nid, library, "libkernel", bb::loader::stt_func});

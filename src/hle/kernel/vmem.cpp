@@ -153,8 +153,16 @@ int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
         // MAP_FIXED replaces the reservation in one call, so no other mapping can come between.
         at = ::mmap(hint, m.length, *prot, m.host_flags | MAP_FIXED, m.fd, m.fd_offset);
         if (at == MAP_FAILED) {
+            // A failed MAP_FIXED may already have unmapped the range (ENOMEM at the host's map
+            // count limit, for one), so reserve it again. If that fails too, the range is no
+            // longer reserved on the host, and the table must not say it is: a later map into
+            // it would replace whatever the host put there in the meantime.
             const int error = errno;
-            ::mmap(hint, m.length, PROT_NONE, reservation_flags | MAP_FIXED, -1, 0);
+            if (::mmap(hint, m.length, PROT_NONE, reservation_flags | MAP_FIXED, -1, 0) ==
+                MAP_FAILED) {
+                log("map {:#x}-{:#x}: failed, and the reservation is lost", m.address, end);
+                erase_range(m.address, end);
+            }
             return error;
         }
         erase_range(m.address, end);
