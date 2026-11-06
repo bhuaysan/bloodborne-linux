@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <initializer_list>
+#include <map>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -14,6 +16,7 @@
 #include "gpu/gcn/encode.hpp"
 #include "gpu/gcn/fetch.hpp"
 #include "gpu/gcn/gcn.hpp"
+#include "gpu/gcn/spirv_module.hpp"
 #include "gpu/gcn/spirv_val.hpp"
 #include "gpu/gcn/translate.hpp"
 
@@ -113,6 +116,120 @@ TEST(GcnFetch, VertexShaderTranslates) {
     if (have_spirv_val()) {
         EXPECT_EQ(validate(returned.spirv), "");
     }
+}
+
+// A return address that a module writes: the offset added to the draw block's code_address, and
+// the variables that its low and high dwords are stored to.
+struct ReturnAddress {
+    std::uint64_t offset = 0;
+    std::uint32_t low = 0;
+    std::uint32_t high = 0;
+
+    bool operator==(const ReturnAddress&) const = default;
+};
+
+// What a module does with the draw block, followed through the ids: the variables that the
+// prologue stores the user-data dwords into (by dword), and the return addresses.
+struct DrawUses {
+    std::map<std::uint64_t, std::uint32_t> user_data;
+    std::vector<ReturnAddress> returns;
+};
+
+DrawUses draw_uses(const Words& spirv) {
+    using spv::Op;
+    constexpr std::uint64_t not_constant = ~std::uint64_t{0};
+    std::map<std::uint32_t, std::uint64_t> constants;  // by id
+    const auto value = [&](std::uint32_t id) {
+        const auto it = constants.find(id);
+        return it == constants.end() ? not_constant : it->second;
+    };
+    // The push constant's variables, its member and that member's load: the draw block's address.
+    std::set<std::uint32_t> push, push_chains, push_loads, draws;
+    std::map<std::uint32_t, std::uint64_t> user_chains, user_loads;  // the dword by id
+    std::set<std::uint32_t> code_chains, code_loads;                // code_address
+    std::map<std::uint32_t, std::uint64_t> sums;      // code_address plus a constant, by id
+    std::map<std::uint32_t, std::uint32_t> shifted;   // a sum shifted right by 32: the sum's id
+    std::map<std::uint32_t, std::uint32_t> lows, highs;  // a sum's dwords: the sum's id
+    std::map<std::uint32_t, ReturnAddress> returns;      // by the sum's id
+    DrawUses out;
+    for (const auto inst : instructions(spirv)) {
+        if (is(inst, Op::OpConstant) && inst.size() >= 4) {
+            constants[inst[2]] = inst[3] | (inst.size() == 5 ? std::uint64_t{inst[4]} << 32 : 0);
+        } else if (is(inst, Op::OpVariable) &&
+                   inst[3] == static_cast<std::uint32_t>(spv::StorageClass::PushConstant)) {
+            push.insert(inst[2]);
+        } else if (is(inst, Op::OpAccessChain)) {  // type, id, base, indices
+            if (push.contains(inst[3])) {
+                push_chains.insert(inst[2]);
+            } else if (draws.contains(inst[3]) && inst.size() == 6 && value(inst[4]) == 0) {
+                user_chains[inst[2]] = value(inst[5]);
+            } else if (draws.contains(inst[3]) && inst.size() == 5 && value(inst[4]) == 2) {
+                code_chains.insert(inst[2]);
+            }
+        } else if (is(inst, Op::OpLoad)) {  // type, id, pointer
+            if (push_chains.contains(inst[3])) {
+                push_loads.insert(inst[2]);
+            } else if (user_chains.contains(inst[3])) {
+                user_loads[inst[2]] = user_chains[inst[3]];
+            } else if (code_chains.contains(inst[3])) {
+                code_loads.insert(inst[2]);
+            }
+        } else if (is(inst, Op::OpConvertUToPtr) && push_loads.contains(inst[3])) {
+            draws.insert(inst[2]);
+        } else if (is(inst, Op::OpIAdd) && inst.size() == 5) {
+            const auto sum = [&](std::uint32_t code, std::uint32_t offset) {
+                if (code_loads.contains(code) && value(offset) != not_constant) {
+                    sums[inst[2]] = value(offset);
+                }
+            };
+            sum(inst[3], inst[4]);
+            sum(inst[4], inst[3]);
+        } else if (is(inst, Op::OpShiftRightLogical) && sums.contains(inst[3]) &&
+                   value(inst[4]) == 32) {
+            shifted[inst[2]] = inst[3];
+        } else if (is(inst, Op::OpUConvert)) {
+            if (sums.contains(inst[3])) {
+                lows[inst[2]] = inst[3];
+            } else if (shifted.contains(inst[3])) {
+                highs[inst[2]] = shifted[inst[3]];
+            }
+        } else if (is(inst, Op::OpStore)) {  // pointer, object
+            if (user_loads.contains(inst[2])) {
+                out.user_data[user_loads[inst[2]]] = inst[1];
+            } else if (lows.contains(inst[2])) {
+                returns[lows[inst[2]]].low = inst[1];
+            } else if (highs.contains(inst[2])) {
+                returns[highs[inst[2]]].high = inst[1];
+            }
+        }
+    }
+    for (auto& [sum, r] : returns) {
+        r.offset = sums[sum];
+        out.returns.push_back(r);
+    }
+    return out;
+}
+
+// The return address is the draw block's code_address plus the offset after the call, its low
+// dword in the call's first destination SGPR and its high dword in the second. Running a vertex
+// shader waits for the graphics runner, so the value is followed through the module.
+TEST(GcnFetch, ReturnAddressGoesIntoTheDestination) {
+    const auto uses = draw_uses(translate(vs, fetch, vertex_key).spirv);
+    ASSERT_TRUE(uses.user_data.contains(0) && uses.user_data.contains(1));
+    EXPECT_NE(uses.user_data.at(0), uses.user_data.at(1));
+    EXPECT_EQ(uses.returns,
+              (std::vector<ReturnAddress>{{8, uses.user_data.at(0), uses.user_data.at(1)}}));
+    // A later call returns further on.
+    const Words later = cat({{s_nop, s_nop, s_nop}, vs});
+    EXPECT_EQ(draw_uses(translate(later, fetch, vertex_key).spirv).returns,
+              (std::vector<ReturnAddress>{{20, uses.user_data.at(0), uses.user_data.at(1)}}));
+    // Another pair: s[4:5], here filled with user data too so that its variables are known.
+    const ShaderKey six = {.stage = Stage::vertex, .pgm_rsrc2 = 6u << 1};
+    const Words other = {sop1(33, 4, 0), s_endpgm};  // s_swappc_b64 s[4:5], s[0:1]
+    const auto into = draw_uses(translate(other, Words{sop1(32, 0, 4)}, six).spirv);
+    ASSERT_TRUE(into.user_data.contains(4) && into.user_data.contains(5));
+    EXPECT_EQ(into.returns,
+              (std::vector<ReturnAddress>{{4, into.user_data.at(4), into.user_data.at(5)}}));
 }
 
 // The message of the GcnError that translating `program` with `fetch_code` throws, and its offset.
