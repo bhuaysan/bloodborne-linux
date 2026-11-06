@@ -4,10 +4,6 @@
 #include <pthread.h>
 #include <sys/mman.h>
 
-#ifdef __SANITIZE_ADDRESS__
-#include <sanitizer/lsan_interface.h>
-#endif
-
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -30,10 +26,12 @@
 #include "hle/prx_init.hpp"
 #include "loader/load_set.hpp"
 #include "support/game.hpp"
+#include "support/leaks.hpp"
 
 namespace {
 
 using bb::hle::PrxNext;
+using bb::test::scan_for_leaks;
 
 // ---- without the game --------------------------------------------------------------------------
 
@@ -120,17 +118,6 @@ private:
     std::mutex mutex_;
     std::map<std::string, int> calls_;
 };
-
-// Game memory holds pointers to runtime objects (e.g. the host mutex behind a guest mutex), and
-// LeakSanitizer doesn't scan mappings of our own. Registers the mappings that can hold them.
-void scan_for_leaks(std::uintptr_t start, std::size_t size) {
-#ifdef __SANITIZE_ADDRESS__
-    __lsan_register_root_region(reinterpret_cast<const void*>(start), size);
-#else
-    static_cast<void>(start);
-    static_cast<void>(size);
-#endif
-}
 
 // The load set, linked and initialised once per process: the HLE registry takes one load set.
 // Never destroyed, so the game's memory stays mapped until LeakSanitizer has scanned it.
