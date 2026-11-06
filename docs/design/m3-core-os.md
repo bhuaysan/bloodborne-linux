@@ -93,7 +93,7 @@ The process basics live in `src/hle/kernel/process.cpp`. Call sites are in libc.
 
 ## Time
 
-Wall clock from `CLOCK_REALTIME`, every counter from `CLOCK_MONOTONIC`, sleeps through `clock_nanosleep`. Clock ids and the counter frequency are confirmed from the game's use. libSceRtc is implemented from the game's call sites only (see Naming). Its dates and microsecond ticks are in [rtc.md](../formats/rtc.md) and `src/hle/system/date_time.cpp` (in `bbhlesystem`); the tick epoch and the time zone are our choices there, since the code shows neither.
+Wall clock from `CLOCK_REALTIME`, every counter from `CLOCK_MONOTONIC`, sleeps through `clock_nanosleep`. Clock ids and the counter frequency are confirmed from the game's use. libSceRtc was first implemented from the game's call sites only (see Naming). Its dates and microsecond ticks are in [rtc.md](../formats/rtc.md) and `src/hle/system/date_time.cpp` (in `bbhlesystem`); the tick epoch and the time zone are our choices there, since the code shows neither.
 
 - `src/hle/kernel/time.cpp`. Sleeps are relative `clock_nanosleep` calls on `CLOCK_MONOTONIC`. An interrupted sleep is not restarted: `nanosleep` and `usleep` fail with `EINTR` (`nanosleep` fills the remainder, libc's `sleep` loops on it, libc.prx 0x61f5), `sceKernelUsleep` returns the sce code of `EINTR` (its callers ignore the result and read the clock again), libScePosix `sleep` returns the unslept seconds rounded up.
 - No call site reads a counter frequency. The two unnamed counters count from the runtime's start: `4J2sUJmuHZQ` in microseconds (libc's `clock` returns it), `-2IRUCO--PM` in nanoseconds (its callers use it only modulo a ring size). Units and call sites are in [kernel-imports.md](../formats/kernel-imports.md#time).
@@ -147,7 +147,7 @@ One logger in `bbcommon` (`src/common/log.hpp`): levels, channels, the thread na
 
 ## Naming
 
-NIDs without a matched name are implemented under a descriptive C++ name and registered by NID, with a comment that the name is unknown. They get no row in `symbols/nids.csv`, which holds matched names only. libSceRtc, libSceSaveData and libSceSaveDataDialog were written from the game's call sites only and without Sony-style names, under the earlier policy's exposure log; #226 lifts that.
+NIDs without a matched name are implemented under a descriptive C++ name and registered by NID, with a comment that the name is unknown. They get no row in `symbols/nids.csv`, which holds matched names only. libSceRtc, libSceSaveData and libSceSaveDataDialog were first written from the game's call sites only, under the earlier policy's exposure log; since #226 they use the names in `symbols/nids.csv` like every other library.
 
 ## Open questions
 
