@@ -155,7 +155,8 @@ TEST(GcnDisassemble, EncodingsLlvmCannotExpress) {
 }
 
 // Sources that LLVM takes only as a register, or for s_cbranch_g_fork not as a literal. The operand
-// field allows any source, so the decoder accepts these and llvm-mc rejects the text.
+// field allows any source, so the decoder accepts these and llvm-mc rejects the text. The condition
+// bits count as registers only for the 32-bit sources and both s_cbranch_g_fork sources.
 TEST(GcnDisassemble, SourcesLlvmTakesOnlyAsRegisters) {
     const std::vector<Case> rejected = {
         {{sop1(32, 0, 128)}, "s_setpc_b64 0"},
@@ -163,6 +164,9 @@ TEST(GcnDisassemble, SourcesLlvmTakesOnlyAsRegisters) {
         {{sop1(50, 0, 255), 0x12345}, "s_cbranch_join 0x12345"},
         {{sop1(46, 0, 242)}, "s_movrels_b32 s0, 1.0"},
         {{sop1(47, 0, 193)}, "s_movrels_b64 s[0:1], -1"},
+        {{sop1(32, 0, 251)}, "s_setpc_b64 src_vccz"},
+        {{sop1(34, 0, 252)}, "s_rfe_b64 src_execz"},
+        {{sop1(47, 0, 253)}, "s_movrels_b64 s[0:1], src_scc"},
         {{sop2(43, 0, 255, 8), 0}, "s_cbranch_g_fork lit(0x0), s[8:9]"},
         {{sop2(43, 0, 4, 255), 0x12345}, "s_cbranch_g_fork s[4:5], 0x12345"},
     };
