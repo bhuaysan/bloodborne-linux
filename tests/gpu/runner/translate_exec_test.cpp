@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -127,6 +128,52 @@ TEST_F(TranslateExec, MaskCompare) {
             expected = expected << 1 | bit;
         }
         EXPECT_EQ(out[i], expected);
+    }
+}
+
+// Cross-lane operations in lane-local mode: a lane sees the bits of its own subgroup at their wave
+// positions, and those of the other subgroups as 0. The subgroup size is what stage 1 counts; it
+// must be a power of two in the device's range. Stage 0 checks that each subgroup covers
+// consecutive lanes from a multiple of its size (subgroup_base is uniform).
+TEST_F(TranslateExec, CrossLane) {
+    constexpr std::uint32_t m_lo = 0x8000'00d2, m_hi = 0xf0f0'f0f0, select = 0x45;
+    constexpr std::uint64_t m = std::uint64_t{m_hi} << 32 | m_lo;
+    const auto out = run("cross_lane", {m_lo, m_hi, select}, 14 * lanes);
+    const std::uint32_t size = out[lanes];
+    const DeviceInfo& info = runner_->info();
+    ASSERT_TRUE(std::has_single_bit(size) && size >= info.min_subgroup_size &&
+                size <= std::min(info.max_subgroup_size, lanes))
+        << "subgroup size " << size;
+    const auto ff1 = [](std::uint64_t x) {
+        return x == 0 ? ~0u : static_cast<std::uint32_t>(std::countr_zero(x));
+    };
+    const auto count = [](std::uint64_t x) { return static_cast<std::uint32_t>(std::popcount(x)); };
+    const std::uint32_t lane = select & 63;
+    for (std::uint32_t i = 0; i < lanes; ++i) {
+        SCOPED_TRACE(testing::Message() << "lane " << i << ", subgroup size " << size);
+        const std::uint32_t base = i & ~(size - 1);
+        const std::uint64_t window = (size == 64 ? ~0ull : (1ull << size) - 1) << base;
+        const std::uint64_t w = m & window;
+        const std::uint32_t below_20 = count(0xf'ffff & window);
+        const std::uint32_t expected[14] = {
+            base,
+            size,
+            i,
+            count(w & ((1ull << i) - 1)),
+            64 - count(w),
+            ff1(w),
+            ff1(~w),
+            w == 0 ? ~0u : static_cast<std::uint32_t>(std::countl_zero(w)),
+            ff1(w >> 32),
+            below_20 != 0 ? below_20 : 0xdead,
+            57 << 8 | 4,  // s_flbit_i32 of 0xf0f0f0f0, s_flbit_i32_i64 of 0x45
+            lane - base < size ? 0x100 | lane : 0,
+            w != 0 ? 0x100 | ff1(w) : (base == 0 ? 0x100 : 0),  // lane 0 when none is active
+            i == lane ? 7 : 0x100 | i,
+        };
+        for (std::uint32_t stage = 0; stage < 14; ++stage) {
+            EXPECT_EQ(out[stage * lanes + i], expected[stage]) << "stage " << stage;
+        }
     }
 }
 
