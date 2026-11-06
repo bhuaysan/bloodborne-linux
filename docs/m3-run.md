@@ -12,7 +12,7 @@ Three blockers stood between the entry and the main loop. All three come from th
 
 ## What runs after the main loop is reached
 
-Without `--stop-at-main-loop` the game keeps going: about 50 threads (job workers, FMOD, the render thread, network and trophy threads), the main thread spins in the frame pacer (0x2034770), and the render thread maps its compute queue, submits command buffers and flips three times in the first second. Then it waits on a condition variable; nothing executes the GPU work yet (M4).
+Without `--stop-at-main-loop` the game keeps going: about 50 threads (job workers, FMOD, the render thread, network and trophy threads), the main thread spins in the frame pacer (0x2034770), and the render thread maps its compute queue, submits command buffers and keeps flipping at about 30 per second, while nothing executes the GPU work yet (M4). Only the first three flips log at `info`; the rest log at `debug` (`--log hle.libSceVideoOut=debug`).
 
 ## Imports still stubbed
 
@@ -70,4 +70,4 @@ Names are those of `symbols/nids.csv` (hash-matched); "unknown" means no candida
 
 Notes for M4 and M5:
 - The two busiest stubs spin: the FMOD output thread calls `sceAudioOutOutput` without blocking (it should block until the port takes the buffer), and the network thread polls `sceNetEpollWait`, which returns at once. Both burn a core each; an audio output that paces and an epoll wait that honours its timeout fix that (M5, and the network module).
-- The GNM stubs on the render thread are the M4 work: command buffer state, the ring write offset `bX5IbRvECXk`, and whatever the render thread waits for after the third flip.
+- The GNM stubs on the render thread are the M4 work: command buffer state, the ring write offset `bX5IbRvECXk`, and actually executing the command buffers the render thread submits with each flip.
