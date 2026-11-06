@@ -4,8 +4,8 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstring>
-#include <unordered_map>
 
+#include "hle/handle_table.hpp"
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
 
@@ -19,46 +19,26 @@ static_assert(offsetof(GuestEvent, data) == 16 && offsetof(GuestEvent, user_data
 // The longest name kept, for logs. The game's names are short ("FlipEventQueue").
 constexpr std::size_t max_name_length = 31;
 
-struct Registry {
-    std::mutex mutex;
-    std::uint64_t next_handle = 1;
-    std::unordered_map<std::uint64_t, std::shared_ptr<EventQueue>> queues;
-};
-
-Registry& registry() {
-    static Registry& r = *new Registry;  // leaked: game threads may call in during exit
+HandleTable<EventQueue>& registry() {
+    static auto& r = *new HandleTable<EventQueue>;  // leaked: game threads may call in during exit
     return r;
 }
 
 }  // namespace
 
 std::uint64_t EventQueue::create(std::string_view name) {
-    auto queue = std::make_shared<EventQueue>(name.substr(0, max_name_length));
-    Registry& r = registry();
-    const std::lock_guard lock(r.mutex);
-    const std::uint64_t handle = r.next_handle++;
-    r.queues.emplace(handle, std::move(queue));
-    return handle;
+    return registry().insert(
+        std::make_shared<EventQueue>(name.substr(0, max_name_length)));
 }
 
 std::shared_ptr<EventQueue> EventQueue::find(std::uint64_t handle) {
-    Registry& r = registry();
-    const std::lock_guard lock(r.mutex);
-    const auto it = r.queues.find(handle);
-    return it == r.queues.end() ? nullptr : it->second;
+    return registry().find(handle);
 }
 
 bool EventQueue::remove(std::uint64_t handle) {
-    std::shared_ptr<EventQueue> queue;
-    {
-        Registry& r = registry();
-        const std::lock_guard lock(r.mutex);
-        const auto it = r.queues.find(handle);
-        if (it == r.queues.end()) {
-            return false;
-        }
-        queue = std::move(it->second);
-        r.queues.erase(it);
+    const std::shared_ptr<EventQueue> queue = registry().take(handle);
+    if (!queue) {
+        return false;
     }
     // Waiters hold their own reference, so the object outlives the registry entry.
     queue->close();

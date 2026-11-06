@@ -11,8 +11,8 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <unordered_map>
 
+#include "hle/handle_table.hpp"
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
 
@@ -125,22 +125,13 @@ private:
     bool deleted_ = false;
 };
 
-struct Registry {
-    std::mutex mutex;
-    std::uint64_t next_handle = 1;
-    std::unordered_map<std::uint64_t, std::shared_ptr<CountedSync>> objects;
-};
-
-Registry& registry() {
-    static Registry& r = *new Registry;  // leaked: game threads may call in during exit
+HandleTable<CountedSync>& registry() {
+    static auto& r = *new HandleTable<CountedSync>;  // leaked: game threads may call in during exit
     return r;
 }
 
 std::shared_ptr<CountedSync> find(std::uint64_t handle) {
-    Registry& r = registry();
-    const std::lock_guard lock(r.mutex);
-    const auto it = r.objects.find(handle);
-    return it == r.objects.end() ? nullptr : it->second;
+    return registry().find(handle);
 }
 
 // `options` is null at every call site (eboot 0xd1ad44, 0x263acee) and is ignored.
@@ -153,27 +144,17 @@ std::int32_t counted_create(std::uint64_t* out, const char* name, std::int32_t a
     if (name != nullptr && ::strnlen(name, max_name_length + 1) > max_name_length) {
         return sce_fail(ENAMETOOLONG);
     }
-    auto object = std::make_shared<CountedSync>(initial, max);
-    Registry& r = registry();
-    const std::lock_guard lock(r.mutex);
-    const std::uint64_t handle = r.next_handle++;
-    r.objects.emplace(handle, std::move(object));
+    const std::uint64_t handle =
+        registry().insert(std::make_shared<CountedSync>(initial, max));
     std::memcpy(out, &handle, sizeof handle);
     return 0;
 }
 
 // Waiters wake with EACCES.
 std::int32_t counted_destroy(std::uint64_t handle) {
-    std::shared_ptr<CountedSync> object;
-    {
-        Registry& r = registry();
-        const std::lock_guard lock(r.mutex);
-        const auto it = r.objects.find(handle);
-        if (it == r.objects.end()) {
-            return sce_fail(ESRCH);
-        }
-        object = std::move(it->second);
-        r.objects.erase(it);
+    const std::shared_ptr<CountedSync> object = registry().take(handle);
+    if (!object) {
+        return sce_fail(ESRCH);
     }
     object->close();
     return 0;
