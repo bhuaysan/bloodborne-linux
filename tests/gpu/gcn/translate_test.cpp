@@ -326,6 +326,13 @@ TEST(GcnTranslate, BufferMemoryErrors) {
                     .starts_with("unsupported instruction buffer_load_ubyte at offset"));
     EXPECT_TRUE(message(mubuf(12, 3, 1, 4, 128, 0, buf::offen | buf::tfe))
                     .starts_with("buffer_load_dword with tfe or lds is not supported yet at"));
+    // addr64 takes no index or offset VGPR (Table 8.2); the decoder only sees the two address
+    // VGPRs, so the flags are what tells.
+    for (const auto flags : {buf::addr64 | buf::idxen, buf::addr64 | buf::offen}) {
+        EXPECT_TRUE(message(mubuf(12, 3, 1, 4, 128, 0, flags))
+                        .starts_with("buffer_load_dword with addr64 and idxen or offen is not "
+                                     "allowed at"));
+    }
 }
 
 // The float instructions take neg, abs, omod and clamp where the source or result is a float,

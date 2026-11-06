@@ -329,8 +329,10 @@ std::vector<std::uint32_t> memory_user_data(std::uint32_t stride, std::uint32_t 
 }
 
 // s_load_* and s_buffer_load_*, run with EXEC = 0. The V# covers 24 bytes, as 24 raw bytes or as 3
-// records of 8 (unverified), 22 raw bytes (a dword at byte 20 is inside, one at 24 is not), or
-// 4 KiB. s_buffer_load_* reads 0 for each dword that is not inside it.
+// records of 8 (the size is stride * num_records, 7.2.2 and Table 8.5), 22 raw bytes (a dword at
+// byte 20 is inside, one at 24 is not), or 4 KiB. s_buffer_load_* reads 0 for each dword that is
+// not inside it. The dword at byte 24 is outside in both 24-byte cases: the clamp is `>=` for a
+// stride too, where the manual's `>` would let it through.
 TEST_F(TranslateExec, ScalarMemory) {
     // The table dword that each value is read from: the first 8 by s_load_*, the others by
     // s_buffer_load_*. The offset of value 7 and of the last two is in an SGPR, in bytes: 36, 36
@@ -350,23 +352,30 @@ TEST_F(TranslateExec, ScalarMemory) {
 }
 
 // Untyped MUBUF dword loads and stores: offen, idxen, both, a dword pair, addr64, soffset, and
-// lanes that are inactive or out of range. The range rule (docs/design/graphics.md): each dword
-// is checked on its own. A raw access (no idxen, or stride 0) is inside when offset + 4 * d <
-// size, with size = num_records bytes (stride 0) or num_records * stride (unverified); a
-// structured one (idxen and a stride) when index < num_records, whatever its offset. Loads outside
-// read 0, stores outside are dropped, addr64 is not checked, and soffset never counts.
+// lanes that are inactive or out of range. The range rule is Sea Islands ISA 8.1.5.3, checked per
+// dword. With a stride of 0, offset + soffset >= num_records (bytes) is out of range, whatever the
+// index, and a soffset beyond the size is always out (the subtraction of the manual does not wrap).
+// With a stride, an access is out of range when index >= num_records, or with idxen when the
+// offset is not below the stride; without idxen the index is 0 and the offset is not checked.
+// Loads outside read 0, stores outside are dropped, addr64 is not checked.
 TEST_F(TranslateExec, BufferMemory) {
-    constexpr std::uint32_t soffset = 16, store_records = 0x22a;  // 554 bytes, not a multiple of 4
-    constexpr std::uint32_t sentinel = 0x77, far_offset = 0x44;   // offset:0x40 plus a VGPR of 4
-    // The raw size 102 cuts the pair of lane 25 after its first dword (100 < 102, 104 >= 102).
-    for (const auto [stride, records] : {std::pair{0u, 102u}, {16u, 20u}}) {
-        SCOPED_TRACE(testing::Message() << "stride " << stride << " records " << records);
-        const std::uint32_t size = records * std::max(stride, 1u);
-        const auto raw = [&](std::uint32_t offset, std::uint32_t dword = 0) {
-            return offset + 4 * dword < size;
-        };
-        const auto structured = [&](std::uint32_t index, std::uint32_t offset) {
-            return stride != 0 ? index < records : raw(offset);
+    constexpr std::uint32_t store_records = 0x22a;  // 554 bytes, not a multiple of 4
+    constexpr std::uint32_t sentinel = 0x77, far_offset = 0x44;  // offset:0x40 plus a VGPR of 4
+    struct Config {
+        std::uint32_t stride, records, soffset;
+    };
+    // The raw size 102 cuts the pair of lane 25 after its first dword (100 < 102, 104 >= 102). In
+    // the raw size 104 lane 20 at soffset 16 is exactly at the size (24 + 80). A table of 0
+    // records and a stride is out for everything. The soffset 0x1000 is beyond the size of 8.
+    for (const auto [stride, records, soffset] :
+         {Config{0, 102, 16}, {0, 104, 16}, {0, 8, 0x1000}, {16, 20, 16}, {16, 0, 16}}) {
+        SCOPED_TRACE(testing::Message() << "stride " << stride << " records " << records
+                                        << " soffset " << soffset);
+        const auto inside = [&](std::uint32_t index, bool idxen, std::uint32_t offset,
+                                std::uint32_t dword, std::uint32_t soff) {
+            offset += 4 * dword;
+            return stride == 0 ? std::uint64_t{offset} + soff < records
+                               : index < records && (!idxen || offset < stride);
         };
         const auto data = [](bool ok, std::uint32_t address) {
             return ok ? data_word(address / 4) : 0u;
@@ -376,17 +385,25 @@ TEST_F(TranslateExec, BufferMemory) {
         const auto slot = [&](std::uint32_t k, std::uint32_t i) { return out[k * lanes + i]; };
         for (std::uint32_t i = 0; i < lanes; ++i) {
             SCOPED_TRACE(testing::Message() << "lane " << i);
-            // offen: soffset moves the address, not the check
-            EXPECT_EQ(slot(0, i), data(raw(4 * i + 8), soffset + 4 * i + 8));
-            // idxen: index against num_records
-            EXPECT_EQ(slot(1, i), data(structured(i, 0), i * stride));
-            // idxen and offen with an offset beyond the stride: not part of the check
-            EXPECT_EQ(slot(2, i), data(structured(i, far_offset), i * stride + far_offset));
+            const std::uint32_t at = i * stride;
+            // offen with soffset: part of the check with a stride of 0, otherwise only of the address
+            EXPECT_EQ(slot(0, i), data(inside(0, false, 4 * i + 8, 0, soffset), soffset + 4 * i + 8));
+            // idxen: the index against num_records
+            EXPECT_EQ(slot(1, i), data(inside(i, true, 0, 0, 0), at));
+            // idxen and offen with an offset beyond the stride
+            EXPECT_EQ(slot(2, i), data(inside(i, true, far_offset, 0, 0), at + far_offset));
             const bool exec = i < 32 && (i & 7) < 4;  // exec_lo = 0x0f0f0f0f, exec_hi = 0
-            EXPECT_EQ(slot(3, i), exec ? data(raw(4 * i), 4 * i) : sentinel);
-            EXPECT_EQ(slot(4, i), data(raw(4 * i), 4 * i));  // pair, a dword at a time
-            EXPECT_EQ(slot(5, i), data(raw(4 * i, 1), 4 * i + 4));
+            EXPECT_EQ(slot(3, i), exec ? data(inside(0, false, 4 * i, 0, 0), 4 * i) : sentinel);
+            // a pair with offen and no idxen, a dword at a time: no offset check with a stride
+            EXPECT_EQ(slot(4, i), data(inside(0, false, 4 * i, 0, 0), 4 * i));
+            EXPECT_EQ(slot(5, i), data(inside(0, false, 4 * i, 1, 0), 4 * i + 4));
             EXPECT_EQ(slot(6, i), data_word(i));  // addr64: never checked
+            // the offset against the stride 16: 12 is inside, 16 is not, and the pair from 12 is
+            // cut between its dwords
+            EXPECT_EQ(slot(7, i), data(inside(i, true, 12, 0, 0), at + 12));
+            EXPECT_EQ(slot(8, i), data(inside(i, true, 16, 0, 0), at + 16));
+            EXPECT_EQ(slot(9, i), data(inside(i, true, 12, 0, 0), at + 12));
+            EXPECT_EQ(slot(10, i), data(inside(i, true, 12, 1, 0), at + 16));
         }
         // The stores: one dword per lane, and a pair per lane at 0x200 + 8 * lane. The size cuts
         // the pair of lane 5 (bytes 552 and 556) after its first dword, and that dword ends past

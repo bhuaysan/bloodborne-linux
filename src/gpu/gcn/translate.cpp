@@ -949,7 +949,7 @@ private:
 
     // SMRD, in every lane: s_load_dword* reads at a 64-bit address from an SGPR pair, with no
     // range check. s_buffer_load_dword* reads through a V# in four SGPRs, and each dword that
-    // is not inside the buffer (`in_range`) reads as 0. The offset is in dwords when it is the
+    // is not inside the buffer (`scalar_in_range`) reads as 0. The offset is in dwords when it is the
     // instruction's immediate or the literal that follows it, and in bytes when it is an SGPR (the
     // low 2 bits are ignored).
     void scalar_memory(const Instruction& inst) {
@@ -975,19 +975,18 @@ private:
         for (unsigned d = 0; d < inst.dst[0].dwords; ++d) {
             const Id address = add(add(guest, c64(4 * d)), bias_);
             write_scalar(inst.dst[0],
-                         buffer ? guarded_load(in_range(v, offset, d), address)
+                         buffer ? guarded_load(scalar_in_range(v, offset, d), address)
                                 : load_global(u32_, device_pointer(address), 4),
                          d);
         }
     }
 
     // MUBUF loads and stores of dwords, untyped, in active lanes (docs/design/graphics.md,
-    // "Resources and memory"). The byte offset is the instruction's, plus the VGPR offset with
-    // `offen`; with `idxen` the VGPR index adds index * stride; soffset only moves the address
-    // and is never part of the range check. Each dword is checked on its own: raw (no `idxen`, or
-    // a stride of 0) by `in_range` on the offset, structured (`idxen` and a stride) by index <
-    // num_records, with no check of the offset. `addr64` adds a 64-bit VGPR address and is not
-    // range-checked. Out-of-range loads read 0 and out-of-range stores are dropped.
+    // "Resources and memory"). The address is base + soffset + index * stride + offset (8.1.5.1),
+    // with the instruction's 12-bit offset plus the VGPR under `offen`, and the VGPR index under
+    // `idxen`. Each dword is checked on its own by `buffer_in_range`. `addr64` adds a 64-bit VGPR
+    // address (and soffset) and is not range-checked (Table 8.2). Out-of-range loads read 0 and
+    // out-of-range stores are dropped.
     void buffer_memory(const Instruction& inst) {
         const std::string_view name = inst.name;
         const bool load = name.starts_with("buffer_load_dword");
@@ -997,36 +996,32 @@ private:
         if ((inst.flags & (flag::tfe | flag::lds)) != 0) {
             fail(std::format("{} with tfe or lds is not supported yet", name));
         }
+        const bool addr64 = (inst.flags & flag::addr64) != 0;
+        const bool idxen = (inst.flags & flag::idxen) != 0;
+        if (addr64 && (idxen || (inst.flags & flag::offen) != 0)) {
+            fail(std::format("{} with addr64 and idxen or offen is not allowed", name));
+        }
         const Operand& data = load ? inst.dst[0] : inst.src[0];
         const Operand* a = &inst.src[load ? 0 : 1];
         const Vsharp v = vsharp(a[1]);
-        Id guest = b_.op(Op::OpIAdd, u64_, {v.base, b_.op(Op::OpUConvert, u64_, {read(a[2])})});
+        const Id soffset = b_.op(Op::OpUConvert, u64_, {read(a[2])});
+        Id guest = add(v.base, soffset);
         Id offset = c64(inst.mem_offset), index = c64(0);
         unsigned next = 0;
-        if ((inst.flags & flag::addr64) != 0) {
-            guest = b_.op(Op::OpIAdd, u64_, {guest, read64(a[0])});
+        if (addr64) {
+            guest = add(guest, read64(a[0]));
         }
-        if ((inst.flags & flag::idxen) != 0) {
+        if (idxen) {
             index = b_.op(Op::OpUConvert, u64_, {read(a[0], next++)});
         }
         if ((inst.flags & flag::offen) != 0) {
-            offset = b_.op(Op::OpIAdd, u64_,
-                           {offset, b_.op(Op::OpUConvert, u64_, {read(a[0], next++)})});
+            offset = add(offset, b_.op(Op::OpUConvert, u64_, {read(a[0], next++)}));
         }
         guest = add(guest, add(offset, b_.op(Op::OpIMul, u64_, {index, v.stride})));
-        const bool checked = (inst.flags & flag::addr64) == 0;
-        const bool by_index = (inst.flags & flag::idxen) != 0;
-        const Id structured = b_.op(Op::OpINotEqual, bool_, {v.stride, c64(0)});
-        const Id index_ok = b_.op(Op::OpULessThan, bool_, {index, v.records});
         for (unsigned d = 0; d < data.dwords; ++d) {
             const Id address = add(add(guest, c64(4 * d)), bias_);
-            Id ok = b_.constant_bool(true);
-            if (checked) {
-                ok = in_range(v, offset, d);
-                if (by_index) {
-                    ok = b_.op(Op::OpSelect, bool_, {structured, index_ok, ok});
-                }
-            }
+            const Id ok = addr64 ? b_.constant_bool(true)
+                                 : buffer_in_range(v, soffset, index, offset, idxen, d);
             const Id cond = b_.op(Op::OpLogicalAnd, bool_, {active(), ok});
             if (load) {
                 write_vector(data, guarded_load(cond, address), d);
@@ -1036,9 +1031,9 @@ private:
         }
     }
 
-    // The fields of a V#: its 48-bit base address, its stride, num_records and its size in bytes.
+    // The fields of a V#: its 48-bit base address, its stride and num_records (all u64).
     struct Vsharp {
-        Id base = 0, stride = 0, records = 0, size = 0;  // u64
+        Id base = 0, stride = 0, records = 0;
     };
     Vsharp vsharp(const Operand& o) {
         const Id dw1 = read(o, 1);
@@ -1052,20 +1047,43 @@ private:
                                 {dw1, b_.constant_u32(16), b_.constant_u32(14)});
         v.stride = b_.op(Op::OpUConvert, u64_, {stride});
         v.records = b_.op(Op::OpUConvert, u64_, {read(o, 2)});
-        // The size is num_records bytes for a stride of 0. For a stride, the unit of num_records
-        // is taken to be records (unverified for a raw access, see docs/design/graphics.md).
-        const Id unit = b_.op(Op::OpSelect, u64_,
-                              {b_.op(Op::OpIEqual, bool_, {stride, b_.constant_u32(0)}),
-                               c64(1), v.stride});
-        v.size = b_.op(Op::OpIMul, u64_, {v.records, unit});
         return v;
     }
 
-    // The raw range rule: dword `d` of an access at byte `offset` of the buffer is inside when
-    // offset + 4 * d < size. The access is not all-or-nothing: each dword of a pair or a quad is
-    // checked on its own.
-    Id in_range(const Vsharp& v, Id offset, unsigned d) {
-        return b_.op(Op::OpULessThan, bool_, {add(offset, c64(4 * d)), v.size});
+    // The MUBUF range check of dword `d` of an access (Sea Islands ISA 8.1.5.3, p. 8-8). `offset`
+    // is the byte offset (the instruction's plus the VGPR) and `index` the index (0 without
+    // `idxen`), both without 4 * d. A stride of 0 makes `num_records` a byte size, and the access
+    // is out of range when offset + soffset >= num_records. The manual writes the left side as
+    // `offset >= num_records - soffset`; the sum in 64 bits is the same without the wrap of the
+    // subtraction, so a soffset beyond the size is always out of range. Otherwise the access is
+    // out of range when index >= num_records, or, with `idxen`, when the offset is not below the
+    // stride (`add_tid_enable` is rejected by check_buffer_descriptor). Without `idxen` the
+    // index is 0 and the offset is not checked at all, even with a stride. soffset is not part of
+    // the check with a stride. "x2" and "x4" are checked per component, so the offset of dword
+    // `d` includes 4 * d.
+    Id buffer_in_range(const Vsharp& v, Id soffset, Id index, Id offset, bool idxen,
+                       unsigned d) {
+        const Id at = add(offset, c64(4 * d));
+        const Id raw = b_.op(Op::OpULessThan, bool_, {add(at, soffset), v.records});
+        Id structured = b_.op(Op::OpULessThan, bool_, {index, v.records});
+        if (idxen) {
+            structured = b_.op(Op::OpLogicalAnd, bool_,
+                               {structured, b_.op(Op::OpULessThan, bool_, {at, v.stride})});
+        }
+        return b_.op(Op::OpSelect, bool_,
+                     {b_.op(Op::OpINotEqual, bool_, {v.stride, c64(0)}), structured, raw});
+    }
+
+    // The clamp of s_buffer_load_dword* (7.2.2, p. 7-2): dword `d` of an access at byte `offset`
+    // reads 0 when offset + 4 * d >= size, with size = num_records bytes for a stride of 0 and
+    // stride * num_records otherwise (the size in bytes of Table 8.5's footnote). The manual's
+    // clamp for a stride is `offset > size`, which would let the dword at `size` read from
+    // outside the buffer; we use `>=` for both cases, like the MUBUF check. Checked per dword.
+    Id scalar_in_range(const Vsharp& v, Id offset, unsigned d) {
+        const Id unit = b_.op(Op::OpSelect, u64_,
+                              {b_.op(Op::OpIEqual, bool_, {v.stride, c64(0)}), c64(1), v.stride});
+        return b_.op(Op::OpULessThan, bool_,
+                     {add(offset, c64(4 * d)), b_.op(Op::OpIMul, u64_, {v.records, unit})});
     }
 
     // Runs `body` in the lanes where `cond` holds, as a selection.
