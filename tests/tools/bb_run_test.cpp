@@ -1,8 +1,16 @@
-// bb-run's command line and entry arguments (src/tools/run_options.hpp).
+// bb-run's command line and entry arguments (src/tools/run_options.hpp), and the bb-run binary
+// itself, without the game and on it.
+
+#include <stdlib.h>
+#include <sys/wait.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <format>
+#include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -10,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include "support/game.hpp"
 #include "tools/run_options.hpp"
 
 namespace {
@@ -88,6 +97,141 @@ TEST(EntryArgs, MatchesTheEntrysReads) {
     EXPECT_EQ(argv[1], nullptr);
     EXPECT_EQ(sizeof args, 24U);
     bb::tools::entry_exit_handler();  // does nothing, and returns
+}
+
+// ---- the binary ---------------------------------------------------------------------------------
+
+struct Result {
+    int status;          // the exit status, -1 when the process didn't exit normally
+    std::string output;  // standard output and standard error
+};
+
+// Runs `command` through /bin/sh and captures its standard output and standard error.
+Result run(const std::string& command) {
+    FILE* pipe = popen((command + " 2>&1").c_str(), "r");
+    if (pipe == nullptr) {
+        return {-1, "popen failed"};
+    }
+    std::string output;
+    char buffer[4096];
+    while (const std::size_t n = std::fread(buffer, 1, sizeof buffer, pipe)) {
+        output.append(buffer, n);
+    }
+    const int status = pclose(pipe);
+    return {WIFEXITED(status) ? WEXITSTATUS(status) : -1, output};
+}
+
+// `s` as a single-quoted shell word.
+std::string quote(const std::string& s) {
+    std::string out = "'";
+    for (const char c : s) {
+        out += c == '\'' ? std::string("'\\''") : std::string(1, c);
+    }
+    return out + "'";
+}
+
+// A fresh directory outside the checkout (RuntimeDirs refuses directories inside it), removed at
+// the end of the test.
+class TempDir {
+public:
+    TempDir() {
+        std::string pattern =
+            (std::filesystem::temp_directory_path() / "bb-run-test-XXXXXX").string();
+        if (mkdtemp(pattern.data()) == nullptr) {
+            throw std::runtime_error("mkdtemp failed");
+        }
+        path_ = pattern;
+    }
+    ~TempDir() { std::filesystem::remove_all(path_); }
+    TempDir(const TempDir&) = delete;
+    TempDir& operator=(const TempDir&) = delete;
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
+
+// Runs bb-run with `args` in `dir`, with the XDG base directories below it and without BB_LOG
+// and BB_GAME_DIR.
+Result run_bb_run(const TempDir& dir, const std::string& args) {
+    const std::string d = dir.path().string();
+    return run(std::format("cd {} && env -u BB_LOG -u BB_GAME_DIR XDG_DATA_HOME={} "
+                           "XDG_CACHE_HOME={} XDG_CONFIG_HOME={} XDG_STATE_HOME={} {} {}",
+                           quote(d), quote(d + "/data"), quote(d + "/cache"),
+                           quote(d + "/config"), quote(d + "/state"), quote(BB_RUN_PATH), args));
+}
+
+TEST(BbRun, PrintsTheUsage) {
+    const TempDir dir;
+    const Result help = run_bb_run(dir, "--help");
+    EXPECT_EQ(help.status, 0);
+    EXPECT_EQ(help.output, bb::tools::run_usage);
+    const Result bad = run_bb_run(dir, "--frobnicate");
+    EXPECT_EQ(bad.status, 2);
+    EXPECT_TRUE(bad.output.starts_with("bb-run: unknown argument \"--frobnicate\"\nusage: "))
+        << bad.output;
+}
+
+TEST(BbRun, NeedsAGameDirectory) {
+    const TempDir dir;  // no local.env in it, no BB_GAME_DIR
+    const Result r = run_bb_run(dir, "");
+    EXPECT_EQ(r.status, 2);
+    EXPECT_NE(r.output.find("set BB_GAME_DIR"), std::string::npos) << r.output;
+    EXPECT_FALSE(std::filesystem::exists(dir.path() / "state")) << "no log file before the game";
+}
+
+// --stop-at-main-loop arrives with the main-loop probe (#105).
+TEST(BbRun, RefusesStopAtMainLoopForNow) {
+    const TempDir dir;
+    const Result r = run_bb_run(dir, "--stop-at-main-loop --game-dir /nonexistent");
+    EXPECT_EQ(r.status, 2);
+    EXPECT_NE(r.output.find("--stop-at-main-loop is not available yet"), std::string::npos)
+        << r.output;
+}
+
+// The whole log file in the logs directory below `dir`, which must hold exactly one.
+std::string read_log_file(const TempDir& dir) {
+    const std::filesystem::path logs = dir.path() / "state/bloodborne-linux/logs";
+    std::vector<std::filesystem::path> files;
+    for (const auto& entry : std::filesystem::directory_iterator(logs)) {
+        files.push_back(entry.path());
+    }
+    if (files.size() != 1) {
+        return std::format("{} log files", files.size());
+    }
+    std::ifstream in(files[0]);
+    std::ostringstream out;
+    out << in.rdbuf();
+    return out.str();
+}
+
+// Starts the game: the PRX init and the entry run, and the eboot's first imports log their calls
+// (libSceSysmodule's load of libSceAppContent, the first HLE call of the eboot's init, at its
+// 0x2026149). The run ends with the game's status or with the timeout's.
+TEST(BbRunGame, RunsTheEntry) {
+    BB_REQUIRE_GAME(game);
+    const TempDir dir;
+    const Result r = run_bb_run(dir, "--timeout 10 --profile test --game-dir " +
+                                         quote(game.string()));
+    ASSERT_NE(r.status, -1) << r.output;
+    EXPECT_NE(r.status, 1) << r.output;
+    for (const std::string_view line :
+         {"libc.prx: initialised", "run: calling the entry", "profile test",
+          "hle.libSceSysmodule: load module 0xb4 (libSceAppContent) (caller 0x12026149)"}) {
+        EXPECT_NE(r.output.find(line), std::string::npos) << line << "\n" << r.output;
+    }
+    if (r.status == bb::tools::timeout_status) {
+        EXPECT_NE(r.output.find("timeout: the game still runs after 10 s"), std::string::npos)
+            << r.output;
+    } else {
+        EXPECT_NE(r.output.find(std::format("_exit({})", r.status)), std::string::npos)
+            << r.output;
+    }
+    // The log file has the lines too, and the save data root of the profile exists.
+    const std::string log = read_log_file(dir);
+    EXPECT_NE(log.find("run: calling the entry"), std::string::npos) << log;
+    EXPECT_TRUE(std::filesystem::is_directory(dir.path() /
+                                              "data/bloodborne-linux/profiles/test/savedata"));
 }
 
 }  // namespace
