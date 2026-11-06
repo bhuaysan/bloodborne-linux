@@ -240,9 +240,6 @@ TEST_F(TranslateExec, FloatEdgeCases) {
     }
 }
 
-// The SALU arithmetic with its SCC results (collected into one word, the first one highest), the
-// SOPK forms, s_cselect_b32, and s_not_b64 and s_wqm_b64 on a lane mask. Every lane stores the
-// same scalar results.
 // The integer VALU against the same arithmetic on the host: the multiplies (the 24-bit ones read
 // the low 24 bits of their sources), bit fields (also a field that reaches past bit 31), the
 // shifts (the count is taken modulo 32, or 64), min, max, median and the 64-bit shifts.
@@ -288,6 +285,9 @@ TEST_F(TranslateExec, IntegerAlu) {
     }
 }
 
+// The SALU arithmetic with its SCC results (collected into one word, the first one highest), the
+// SOPK forms, s_cselect_b32, s_add_i32, s_sub_i32, s_min_*, s_max_* and s_mul_i32 (stages 16 to
+// 24), and s_not_b64 and s_wqm_b64 on a lane mask. Every lane stores the same scalar results.
 TEST_F(TranslateExec, ScalarArithmetic) {
     if (!runner_->info().subgroup_quad) {  // s_wqm_b64 swaps within the quad
         GTEST_SKIP() << "no quad subgroup operations in compute";
