@@ -150,16 +150,28 @@ int create_thread(Thread** thread, const Cell* attr, ThreadEntry entry, void* ar
     pthread_attr_t host;
     pthread_attr_init(&host);
     int error = pthread_attr_setstacksize(&host, t->attributes.stack_size + thread_stack_reserve);
-    if (error == 0) {
-        error = pthread_create(&t->host, &host, start, t.get());
-    }
-    pthread_attr_destroy(&host);
     if (error != 0) {
+        pthread_attr_destroy(&host);
         return error;
     }
-    const std::lock_guard lock(table().mutex);
-    table().threads.insert(t.get());
-    *thread = t.release();
+
+    // The handle is published before the thread starts, as glibc stores its pthread_t: the entry
+    // may read its handle variable, or pass its own handle on to be joined or detached, at once.
+    Thread* const previous = *thread;
+    {
+        const std::lock_guard lock(table().mutex);
+        table().threads.insert(t.get());
+    }
+    *thread = t.get();
+    error = pthread_create(&t->host, &host, start, t.get());
+    pthread_attr_destroy(&host);
+    if (error != 0) {
+        *thread = previous;
+        const std::lock_guard lock(table().mutex);
+        table().threads.erase(t.get());
+        return error;
+    }
+    t.release();  // join_thread frees it
     return 0;
 }
 

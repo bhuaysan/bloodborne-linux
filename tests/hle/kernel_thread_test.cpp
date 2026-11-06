@@ -11,7 +11,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <latch>
 #include <thread>
 
 #include <gtest/gtest.h>
@@ -169,19 +168,30 @@ TEST(Thread, AStackSizeTheHostCantGiveFailsTheCreate) {
 
 // ---- handles -----------------------------------------------------------------------------------
 
-std::latch* handle_stored = nullptr;
+TEST(Thread, TheHandleIsStoredBeforeTheThreadStarts) {
+    // The entry reads the handle variable at once, as game code may.
+    for (int i = 0; i < 20; ++i) {
+        Handle thread = nullptr;
+        ASSERT_EQ(create(
+                      &thread, nullptr,
+                      [](void* handle) -> void* { return *static_cast<Handle*>(handle); },
+                      &thread, nullptr),
+                  0);
+        void* value = nullptr;
+        ASSERT_EQ(join(thread, &value), 0);
+        EXPECT_EQ(value, thread);
+    }
+}
+
 Handle joins_itself = nullptr;
 
 void* join_self(void*) {
-    handle_stored->wait();
+    // No wait for the creator: the handle and the thread table entry exist before the start.
     return reinterpret_cast<void*>(static_cast<std::intptr_t>(join(joins_itself, nullptr)));
 }
 
 TEST(Thread, JoiningTheCallingThreadIsADeadlock) {
-    std::latch stored(1);
-    handle_stored = &stored;
     ASSERT_EQ(create(&joins_itself, nullptr, join_self, nullptr, nullptr), 0);
-    stored.count_down();
     void* value = nullptr;
     ASSERT_EQ(join(joins_itself, &value), 0);
     EXPECT_EQ(reinterpret_cast<std::intptr_t>(value), edeadlk);
