@@ -24,6 +24,8 @@ using namespace bb::test::vk;
 
 constexpr std::uint64_t base = 0x12'0000'0000;  // guest address of the output
 constexpr std::uint32_t lanes = 64;
+constexpr std::uint64_t data_offset = 0x1400;  // the memory programs' table, after their output
+constexpr std::uint32_t data_word(std::uint32_t i) { return 0xd0000 + i; }
 
 class TranslateExec : public testing::Test {
 protected:
@@ -36,12 +38,18 @@ protected:
     }
 
     // Runs the program with user_data = {output address, then `inputs`} and returns the first
-    // `words` dwords of the output.
+    // `words` dwords of the guest memory, 0x2000 bytes with the table of the memory programs
+    // (data_word) at data_offset.
     std::vector<std::uint32_t> run(std::string_view name, std::vector<std::uint32_t> inputs,
                                    std::uint32_t words) {
-        const auto translation =
-            bb::gcn::translate(bb::test::gcn::program_words(name), {}, {.pgm_rsrc2 = 5u << 1});
-        auto memory = runner_->guest_memory(base, 0x1000);
+        const auto translation = bb::gcn::translate(
+            bb::test::gcn::program_words(name), {},
+            {.pgm_rsrc2 = bb::test::gcn::program_user_sgprs(name) << 1});
+        auto memory = runner_->guest_memory(base, 0x2000);
+        for (std::uint32_t i = 0; i < 0x200; ++i) {
+            const std::uint32_t word = data_word(i);
+            std::memcpy(memory.data() + data_offset + 4 * i, &word, 4);
+        }
         DrawBlock draw;
         draw.user_data = {static_cast<std::uint32_t>(base), static_cast<std::uint32_t>(base >> 32)};
         std::ranges::copy(inputs, draw.user_data.begin() + 2);
@@ -173,6 +181,39 @@ TEST_F(TranslateExec, CrossLane) {
         };
         for (std::uint32_t stage = 0; stage < 14; ++stage) {
             EXPECT_EQ(out[stage * lanes + i], expected[stage]) << "stage " << stage;
+        }
+    }
+}
+
+// The user data of the memory programs: the output, the table through a pointer, and the V# of a
+// buffer at the table (stride, number of records).
+std::vector<std::uint32_t> memory_user_data(std::uint32_t stride, std::uint32_t records) {
+    const std::uint64_t table = base + data_offset;
+    return {static_cast<std::uint32_t>(table),
+            static_cast<std::uint32_t>(table >> 32),
+            static_cast<std::uint32_t>(table),
+            static_cast<std::uint32_t>(table >> 32) | stride << 16,
+            records,
+            0};
+}
+
+// s_load_* and s_buffer_load_*, run with EXEC = 0. The V# covers 24 bytes, as 24 raw bytes or as 3
+// records of 8 (unverified), 22 raw bytes (a dword at byte 20 is inside, one at 24 is not), or
+// 4 KiB. s_buffer_load_* reads 0 for each dword that is not inside it.
+TEST_F(TranslateExec, ScalarMemory) {
+    // The table dword that each value is read from: the first 8 by s_load_*, the others by
+    // s_buffer_load_*. The offset of value 7 and of the last two is in an SGPR, in bytes: 36, 36
+    // and 19 (the low 2 bits are ignored).
+    constexpr std::uint32_t index[18] = {1, 2, 3, 4, 5, 6, 7, 9, 1, 5, 6, 4, 5, 6, 7, 0x40, 9, 4};
+    for (const auto [stride, records] : {std::pair{0u, 24u}, {0u, 22u}, {8u, 3u}, {0u, 0x1000u}}) {
+        SCOPED_TRACE(testing::Message() << "stride " << stride << " records " << records);
+        const auto out = run("mem_smrd", memory_user_data(stride, records), 18 * lanes);
+        for (std::uint32_t k = 0; k < 18; ++k) {
+            const bool inside = k < 8 || records == 0x1000 || index[k] < 6;
+            for (std::uint32_t i = 0; i < lanes; ++i) {
+                ASSERT_EQ(out[k * lanes + i], inside ? data_word(index[k]) : 0u)
+                    << "value " << k << " lane " << i;
+            }
         }
     }
 }

@@ -284,6 +284,9 @@ private:
             case Format::flat:
                 flat(inst);
                 break;
+            case Format::smrd:
+                scalar_memory(inst);
+                break;
             default:
                 unsupported();
             }
@@ -519,23 +522,115 @@ private:
         if (inst.name != "flat_store_dword") {
             unsupported();
         }
-        const Id high = b_.op(Op::OpShiftLeftLogical, u64_,
-                              {b_.op(Op::OpUConvert, u64_, {read(inst.src[0], 1)}),
-                               b_.constant_u32(32)});
-        const Id guest = b_.op(Op::OpBitwiseOr, u64_,
-                               {high, b_.op(Op::OpUConvert, u64_, {read(inst.src[0], 0)})});
-        const Id pointer = b_.op(Op::OpConvertUToPtr, global_pointer(u32_),
-                                 {b_.op(Op::OpIAdd, u64_, {guest, bias_})});
-        const Id data = read(inst.src[1]);
-        const Id guard = active();
+        guarded_store(active(), b_.op(Op::OpIAdd, u64_, {read64(inst.src[0]), bias_}),
+                      read(inst.src[1]));
+    }
+
+    // SMRD, in every lane: s_load_dword* reads at a 64-bit address from an SGPR pair, with no
+    // range check. s_buffer_load_dword* reads through a V# in four SGPRs, and each dword that
+    // is not inside the buffer (`in_range`) reads as 0. The offset is in dwords when it is the
+    // instruction's immediate or the literal that follows it, and in bytes when it is an SGPR (the
+    // low 2 bits are ignored).
+    void scalar_memory(const Instruction& inst) {
+        const std::string_view name = inst.name;
+        const bool buffer = name.starts_with("s_buffer_load_dword");
+        if (!buffer && !name.starts_with("s_load_dword")) {
+            unsupported();
+        }
+        const Operand& o = inst.src[1];
+        Id offset;
+        if (o.kind == OperandKind::scalar) {
+            offset = b_.op(Op::OpUConvert, u64_,
+                           {b_.op(Op::OpBitwiseAnd, u32_, {read(o), b_.constant_u32(~3u)})});
+        } else {
+            offset = b_.op(Op::OpShiftLeftLogical, u64_,
+                           {b_.op(Op::OpUConvert, u64_, {read(o)}), b_.constant_u32(2)});
+        }
+        Vsharp v;
+        if (buffer) {
+            v = vsharp(inst.src[0]);
+        }
+        const Id guest = b_.op(Op::OpIAdd, u64_, {buffer ? v.base : read64(inst.src[0]), offset});
+        for (unsigned d = 0; d < inst.dst[0].dwords; ++d) {
+            const Id address = add(add(guest, c64(4 * d)), bias_);
+            write_scalar(inst.dst[0],
+                         buffer ? guarded_load(in_range(v, offset, d), address)
+                                : load_global(u32_, device_pointer(address), 4),
+                         d);
+        }
+    }
+
+    // The fields of a V#: its 48-bit base address, its stride and its size in bytes.
+    struct Vsharp {
+        Id base = 0, stride = 0, size = 0;  // u64
+    };
+    Vsharp vsharp(const Operand& o) {
+        const Id dw1 = read(o, 1);
+        const Id high = b_.op(Op::OpBitwiseAnd, u32_, {dw1, b_.constant_u32(0xffff)});
+        Vsharp v;
+        v.base = b_.op(Op::OpBitwiseOr, u64_,
+                       {b_.op(Op::OpShiftLeftLogical, u64_,
+                              {b_.op(Op::OpUConvert, u64_, {high}), b_.constant_u32(32)}),
+                        b_.op(Op::OpUConvert, u64_, {read(o, 0)})});
+        const Id stride = b_.op(Op::OpBitFieldUExtract, u32_,
+                                {dw1, b_.constant_u32(16), b_.constant_u32(14)});
+        v.stride = b_.op(Op::OpUConvert, u64_, {stride});
+        // The size is num_records bytes for a stride of 0. For a stride, the unit of num_records
+        // is taken to be records (unverified, see docs/design/graphics.md).
+        const Id unit = b_.op(Op::OpSelect, u64_,
+                              {b_.op(Op::OpIEqual, bool_, {stride, b_.constant_u32(0)}),
+                               c64(1), v.stride});
+        v.size = b_.op(Op::OpIMul, u64_,
+                       {b_.op(Op::OpUConvert, u64_, {read(o, 2)}), unit});
+        return v;
+    }
+
+    // The raw range rule: dword `d` of an access at byte `offset` of the buffer is inside when
+    // offset + 4 * d < size. The access is not all-or-nothing: each dword of a pair or a quad is
+    // checked on its own.
+    Id in_range(const Vsharp& v, Id offset, unsigned d) {
+        return b_.op(Op::OpULessThan, bool_, {add(offset, c64(4 * d)), v.size});
+    }
+
+    // Runs `body` in the lanes where `cond` holds, as a selection.
+    template <class F>
+    void when(Id cond, F&& body) {
         const Id then = b_.id();
         const Id merge = b_.id();
         b_.op_void(Op::OpSelectionMerge, {merge, spirv_word(spv::SelectionControlMask::MaskNone)});
-        b_.op_void(Op::OpBranchConditional, {guard, then, merge});
+        b_.op_void(Op::OpBranchConditional, {cond, then, merge});
         b_.begin_block(then);
-        b_.op_void(Op::OpStore, {pointer, data, spirv_word(spv::MemoryAccessMask::Aligned), 4});
+        body();
         b_.op_void(Op::OpBranch, {merge});
         b_.begin_block(merge);
+    }
+
+    // A dword at a device address where `cond` holds, 0 elsewhere; an address that `cond`
+    // excludes is never touched. Accesses are 4-byte aligned, as the compilers emit them.
+    Id guarded_load(Id cond, Id address) {
+        const Id result = b_.local_variable(b_.type_pointer(SC::Function, u32_));
+        store(result, b_.constant_u32(0));
+        when(cond, [&] { store(result, load_global(u32_, device_pointer(address), 4)); });
+        return load(u32_, result);
+    }
+    void guarded_store(Id cond, Id address, Id value) {
+        when(cond, [&] {
+            b_.op_void(Op::OpStore, {device_pointer(address), value,
+                                     spirv_word(spv::MemoryAccessMask::Aligned), 4});
+        });
+    }
+    Id device_pointer(Id address) { return b_.op(Op::OpConvertUToPtr, global_pointer(u32_), {address}); }
+    Id add(Id a, Id b) { return b_.op(Op::OpIAdd, u64_, {a, b}); }
+    Id c64(std::uint64_t value) {
+        return b_.constant(u64_, {static_cast<std::uint32_t>(value),
+                                  static_cast<std::uint32_t>(value >> 32)});
+    }
+    // The first two dwords of a source as a u64.
+    Id read64(const Operand& o) {
+        const Id high = b_.op(Op::OpShiftLeftLogical, u64_,
+                              {b_.op(Op::OpUConvert, u64_, {read(o, 1)}), b_.constant_u32(32)});
+        return b_.op(Op::OpBitwiseOr, u64_,
+                     {high, b_.op(Op::OpUConvert, u64_, {read(o, 0)})});
     }
 
     // Dword `dword` of a source operand, as a u32.
@@ -548,6 +643,8 @@ private:
                 return mask_value(c & ~1u)[c & 1];
             }
             return load(u32_, value_sgpr(o.code + dword));
+        case OperandKind::offset:
+            return b_.constant_u32(o.value);
         case OperandKind::constant:
         case OperandKind::literal:
             return b_.constant_u32(constant_word(o, dword));

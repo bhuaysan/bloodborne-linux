@@ -49,6 +49,10 @@ fs::path programs_dir() {
     return BB_GCN_PROGRAMS_DIR;
 }
 
+unsigned program_user_sgprs(std::string_view name) {
+    return name.starts_with("mem_") ? 13 : 5;
+}
+
 std::vector<std::string> program_names() {
     std::set<std::string> names;
     for (const auto& entry : fs::directory_iterator(programs_dir())) {

@@ -20,6 +20,10 @@ std::vector<std::string> program_names();
 // words of a line separated by one space. Throws std::runtime_error naming the line otherwise.
 std::vector<std::vector<std::uint32_t>> parse_hex(std::string_view text);
 
+// The number of user SGPRs a program expects: the memory programs (mem_*) have 13, in s0 to s12,
+// and the others have 5 (the masks go above them).
+unsigned program_user_sgprs(std::string_view name);
+
 // The instructions of programs_dir()/<name>.hex, and all their words in order.
 std::vector<std::vector<std::uint32_t>> program_instructions(std::string_view name);
 std::vector<std::uint32_t> program_words(std::string_view name);

@@ -44,7 +44,8 @@ TEST(GcnTranslate, ProgramsPassSpirvVal) {
     }
     for (const auto& name : program_names()) {
         SCOPED_TRACE(name);
-        const auto translation = translate(program_words(name), {}, key5);
+        const auto translation =
+            translate(program_words(name), {}, {.pgm_rsrc2 = program_user_sgprs(name) << 1});
         EXPECT_EQ(validate(translation.spirv), "");
         EXPECT_EQ(translation.interface.wave_size_dependent, name == "cross_lane");
         EXPECT_EQ(translation.interface.mask_round_trip, name == "cross_lane");  // s[8:9]
