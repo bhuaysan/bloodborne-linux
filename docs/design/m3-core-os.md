@@ -147,7 +147,7 @@ One logger in `bbcommon` (`src/common/log.hpp`): levels, channels, the thread na
 
 ## Naming
 
-NIDs without a matched name are implemented under a descriptive C++ name and registered by NID, with a comment that the name is unknown. They get no row in `symbols/nids.csv`, which holds matched names only. libSceRtc, libSceSaveData and libSceSaveDataDialog were first written from the game's call sites only, under the earlier policy's exposure log; since #226 they use the names in `symbols/nids.csv` like every other library.
+NIDs without a matched name are implemented under a descriptive C++ name and registered by NID, with a comment that the name is unknown. A NID with a matched name carries that name in its comment instead (`tools/nidtable/test_hle_name_comments.py` checks both against `symbols/nids.csv`). The unmatched NIDs get no row in `symbols/nids.csv`, which holds matched names only. libSceRtc, libSceSaveData and libSceSaveDataDialog were first written from the game's call sites only, under the earlier policy's exposure log; since #226 they use the names in `symbols/nids.csv` like every other library.
 
 ## Open questions
 

@@ -40,12 +40,12 @@ std::int32_t sceHttpCreateTemplate(std::int32_t http_context, const char* user_a
 // an 8-byte field; 0xfd1dec and 0xfd2844 read it back as a qword.
 std::int32_t sceHttpCreateEpoll(std::int32_t http_context, std::uint64_t* handle);
 
-// NID s2-NPIvz+iA, name unknown. 0xfd1d41 calls it as (template id, 1) right after creating the
-// template and ignores the result. Returns 0.
+// NID s2-NPIvz+iA, sceHttpSetNonblock. 0xfd1d41 calls it as (template id, 1) right after creating
+// the template and ignores the result. Returns 0.
 std::int32_t http_template_set_int(std::int32_t http_template, std::int32_t value);
 
-// NID EY28T2bkN7k, name unknown. 0xfd1ed5 calls it as (template id, string, string, 0) and
-// reports success when the result is 0. Returns 0.
+// NID EY28T2bkN7k, sceHttpAddRequestHeader. 0xfd1ed5 calls it as (template id, string, string, 0)
+// and reports success when the result is 0. Returns 0.
 std::int32_t http_template_set_string_pair(std::int32_t http_template, const char* first,
                                            const char* second, std::int32_t mode);
 
@@ -70,9 +70,9 @@ inline constexpr std::int32_t net_ctl_offline = static_cast<std::int32_t>(0x8000
 // handles 1 as the other known state; 0xcb83d4 stores the state when the call returns 0.
 std::int32_t sceNpGetState(std::int32_t user_id, std::int32_t* state);
 
-// NID A2CQ3kgSopQ, name unknown. 0x1fb704f passes a 0x18-byte block and ignores the result. The
-// caller fills it at 0x1fb6fc6..0x1fb7047: its own size (0x18) as a qword at +0, a byte from a
-// table at +8, a 32-bit value at +0xc and a qword (a table entry or 0) at +0x10. Returns 0.
+// NID A2CQ3kgSopQ, sceNpSetContentRestriction. 0x1fb704f passes a 0x18-byte block and ignores the
+// result. The caller fills it at 0x1fb6fc6..0x1fb7047: its own size (0x18) as a qword at +0, a byte
+// from a table at +8, a 32-bit value at +0xc and a qword (a table entry or 0) at +0x10. Returns 0.
 std::int32_t np_manager_sized_request(const void* block);
 
 }  // namespace bb::hle::net

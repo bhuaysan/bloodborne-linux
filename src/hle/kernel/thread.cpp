@@ -283,7 +283,7 @@ int set_priority(Thread* thread, int priority) {
     return error;
 }
 
-// 1tKyG7RlMJo (name unknown): (thread, int* priority). The eboot reads the priority before it
+// 1tKyG7RlMJo (scePthreadGetprio): (thread, int* priority). The eboot reads the priority before it
 // changes it (0x263b59d); Fios's wrappers return it for a thread and for Self (0x2ec5b, 0x2eca3).
 int get_priority(Thread* thread, int* priority) {
     if (priority == nullptr) {

@@ -82,8 +82,9 @@ void reset_playgo() {
 
 BB_HLE_FUNCTION("libScePlayGo", "ts6GlZOKRrE", playgo_initialize);
 BB_HLE_FUNCTION("libScePlayGo", "M1Gma1ocrGE", playgo_open);
-BB_HLE_FUNCTION("libScePlayGo", "73fF1MFU8hA", playgo_get_chunk_ids);     // name unknown
-BB_HLE_FUNCTION("libScePlayGo", "uWIYLFkkwqk", playgo_get_chunk_states);  // name unknown
-BB_HLE_FUNCTION("libScePlayGo", "4AAcTU9R3XM", playgo_set_mode);          // name unknown
+BB_HLE_FUNCTION("libScePlayGo", "73fF1MFU8hA", playgo_get_chunk_ids);     // scePlayGoGetChunkId
+BB_HLE_FUNCTION("libScePlayGo", "uWIYLFkkwqk", playgo_get_chunk_states);  // scePlayGoGetLocus
+// scePlayGoSetInstallSpeed
+BB_HLE_FUNCTION("libScePlayGo", "4AAcTU9R3XM", playgo_set_mode);
 
 }  // namespace bb::hle::system

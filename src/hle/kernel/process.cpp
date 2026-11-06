@@ -139,9 +139,9 @@ std::int32_t sys_ctl(const std::int32_t* name, std::uint32_t name_length, void* 
     return posix_fail(ENOENT);
 }
 
-// 959qrazPIrg, name unknown: the eboot's process parameters. libc.prx's preinit (0x5b0) calls it
-// first (0x1f8f7, in the check function 0x1f8f0) and takes the game's allocator tables from the
-// block (docs/formats/kernel-imports.md). Nothing else in the load set imports it.
+// 959qrazPIrg, sceKernelGetProcParam: the eboot's process parameters. libc.prx's preinit (0x5b0)
+// calls it first (0x1f8f7, in the check function 0x1f8f0) and takes the game's allocator tables
+// from the block (docs/formats/kernel-imports.md). Nothing else in the load set imports it.
 const void* process_parameters() {
     const std::uintptr_t block = process_parameters_block.load(std::memory_order_acquire);
     if (block == 0) {
@@ -168,7 +168,7 @@ std::int32_t signal_mask(std::int32_t how, const void* set, void* old_set) {
     return 0;
 }
 
-// 6xVpy0Fdq+I, name unknown: the sigprocmask of libc's setjmp (0x2fcc6: how 1, set null, old set
+// 6xVpy0Fdq+I, _sigprocmask: the sigprocmask of libc's setjmp (0x2fcc6: how 1, set null, old set
 // at +0x48 of the jmp_buf) and longjmp (0x2fd17: how 3, set from +0x48, old set null). It takes
 // the arguments of sigprocmask and behaves like our signal_mask.
 // longjmp pushes two registers before its call (0x2fd00, 0x2fd01), so we are entered with
@@ -201,9 +201,9 @@ std::int32_t signal_return(const void* context) {
 
 // ---- status reports and exit -----------------------------------------------------------------
 
-// OMDRKKAZ8I4, name unknown: libc.prx reports an error code (0xa00200xx, the second argument
-// always 0). At least one caller cannot continue: the wrapper at 0x1f560 has no code after the
-// call (it falls into padding), so libc treats the report as the end of the process. We log and
+// OMDRKKAZ8I4, sceKernelDebugRaiseException: libc.prx reports an error code (0xa00200xx, the second
+// argument always 0). At least one caller cannot continue: the wrapper at 0x1f560 has no code after
+// the call (it falls into padding), so libc treats the report as the end of the process. We log and
 // abort, after flushing.
 [[noreturn]] void report_fatal_status(std::uint32_t code, std::uint64_t argument) {
     std::fflush(nullptr);
@@ -212,9 +212,9 @@ std::int32_t signal_return(const void* context) {
                                            argument));
 }
 
-// zE-wXIZjLoM, name unknown: libc.prx reports a code and continues. Its exit paths call it right
-// before _exit (0x5ff2a with 0xa0020003 for status 0 and 0xa0020004 otherwise, 0x5ff8a), so it
-// must return.
+// zE-wXIZjLoM, sceKernelDebugRaiseExceptionOnReleaseMode: libc.prx reports a code and continues.
+// Its exit paths call it right before _exit (0x5ff2a with 0xa0020003 for status 0 and 0xa0020004
+// otherwise, 0x5ff8a), so it must return.
 void report_status(std::uint32_t code, std::uint64_t argument) {
     log(LogLevel::info, BB_CALLER(), "status report {:#x} ({:#x})", code, argument);
 }
@@ -243,12 +243,15 @@ BB_HLE_FUNCTION("libkernel", "Ou3iL1abvng", bb::hle::kernel::stack_check_fail);
 BB_HLE_FUNCTION("libkernel", "HoLVWNanBBc", bb::hle::kernel::get_pid);
 BB_HLE_DATA("libkernel", "djxxOmW6-aw", bb::hle::kernel::fill_progname);
 BB_HLE_FUNCTION("libkernel", "DFmMT80xcNI", bb::hle::kernel::sys_ctl);
-BB_HLE_FUNCTION("libkernel", "959qrazPIrg", bb::hle::kernel::process_parameters);  // name unknown
+// sceKernelGetProcParam
+BB_HLE_FUNCTION("libkernel", "959qrazPIrg", bb::hle::kernel::process_parameters);
 BB_HLE_FUNCTION("libkernel", "VADc3MNQ3cM", bb::hle::kernel::signal_handler);
 BB_HLE_FUNCTION("libkernel", "aPcyptbOiZs", bb::hle::kernel::signal_mask);
-BB_HLE_FUNCTION("libkernel", "6xVpy0Fdq+I", bb::hle::kernel::jmp_signal_mask);  // name unknown
+BB_HLE_FUNCTION("libkernel", "6xVpy0Fdq+I", bb::hle::kernel::jmp_signal_mask);  // _sigprocmask
 BB_HLE_FUNCTION("libkernel", "VkTAsrZDcJ0", bb::hle::kernel::signal_fill_set);
 BB_HLE_FUNCTION("libkernel", "mo0bFmWppIw", bb::hle::kernel::signal_return);
-BB_HLE_FUNCTION("libkernel", "OMDRKKAZ8I4", bb::hle::kernel::report_fatal_status);  // name unknown
-BB_HLE_FUNCTION("libkernel", "zE-wXIZjLoM", bb::hle::kernel::report_status);  // name unknown
+// sceKernelDebugRaiseException
+BB_HLE_FUNCTION("libkernel", "OMDRKKAZ8I4", bb::hle::kernel::report_fatal_status);
+// sceKernelDebugRaiseExceptionOnReleaseMode
+BB_HLE_FUNCTION("libkernel", "zE-wXIZjLoM", bb::hle::kernel::report_status);
 BB_HLE_FUNCTION("libkernel", "6Z83sYWFlA8", bb::hle::kernel::exit_process);

@@ -43,7 +43,9 @@ std::int32_t app_content_get_addcont_count(std::uint32_t /*arg*/, void* /*list*/
 }
 
 BB_HLE_FUNCTION("libSceAppContent", "R9lA82OraNs", app_content_initialize);
-BB_HLE_FUNCTION("libSceAppContent", "99b82IKXpH4", app_content_get_int);  // name unknown
-BB_HLE_FUNCTION("libSceAppContent", "xnd8BJzAxmk", app_content_get_addcont_count);  // name unknown
+// sceAppContentAppParamGetInt
+BB_HLE_FUNCTION("libSceAppContent", "99b82IKXpH4", app_content_get_int);
+// sceAppContentGetAddcontInfoList
+BB_HLE_FUNCTION("libSceAppContent", "xnd8BJzAxmk", app_content_get_addcont_count);
 
 }  // namespace bb::hle::system

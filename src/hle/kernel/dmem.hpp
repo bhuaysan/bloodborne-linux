@@ -43,8 +43,8 @@ int restore_allocations(const std::vector<AllocatedRange>& baseline);
 
 namespace bb::hle::kernel {
 
-// The guest entry points; names unknown (docs/formats/kernel-imports.md, "Virtual and direct
-// memory"). They return 0 or an sce error code.
+// The guest entry points (docs/formats/kernel-imports.md, "Virtual and direct memory"), named in
+// symbols/nids.csv. They return 0 or an sce error code.
 
 // pO96TwzOm5E: dmem::total_size.
 std::uint64_t direct_memory_size();

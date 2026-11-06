@@ -132,7 +132,7 @@ std::int32_t sceKernelMunmap(void* address, std::uint64_t length);
 std::int32_t sceKernelMprotect(const void* address, std::uint64_t length, int prot);
 std::int32_t sceKernelMlock(const void* address, std::uint64_t length);
 
-// Names unknown (docs/formats/kernel-imports.md, "Virtual and direct memory").
+// Names in symbols/nids.csv (docs/formats/kernel-imports.md, "Virtual and direct memory").
 
 // mL8NDH86iQI: maps anonymous memory. *address is a hint in and the mapping out.
 std::int32_t map_named_anonymous(void** address, std::uint64_t length, int prot, int flags,

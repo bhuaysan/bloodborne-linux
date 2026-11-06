@@ -1,6 +1,7 @@
 // Kernel time and sleep (docs/design/m3-core-os.md, "Time"). The wall clock comes from
 // CLOCK_REALTIME, every counter from CLOCK_MONOTONIC, sleeps go through clock_nanosleep. The units
-// of the unnamed imports, with their call sites, are in docs/formats/kernel-imports.md.
+// of the imports that only symbols/nids.csv names, with their call sites, are in
+// docs/formats/kernel-imports.md.
 #pragma once
 
 #include <cstdint>
@@ -51,7 +52,7 @@ std::uint32_t guest_sleep(std::uint32_t seconds);
 std::int32_t sceKernelGettimeofday(GuestTimeval* tv);
 std::int32_t sceKernelUsleep(std::uint32_t microseconds);
 
-// Unnamed libkernel imports (names unknown, see docs/formats/kernel-imports.md).
+// Libkernel imports whose names are only in symbols/nids.csv (docs/formats/kernel-imports.md).
 
 // 4J2sUJmuHZQ: microseconds since the runtime started.
 std::uint64_t process_time_usec();

@@ -89,11 +89,13 @@ BB_HLE_FUNCTION("libSceSsl", "hdpVEUDFW3s", sceSslInit);
 BB_HLE_FUNCTION("libSceHttp", "A9cVMUtEp4Y", sceHttpInit);
 BB_HLE_FUNCTION("libSceHttp", "0gYjPTR-6cY", sceHttpCreateTemplate);
 BB_HLE_FUNCTION("libSceHttp", "6381dWF+xsQ", sceHttpCreateEpoll);
-BB_HLE_FUNCTION("libSceHttp", "s2-NPIvz+iA", http_template_set_int);         // name unknown
-BB_HLE_FUNCTION("libSceHttp", "EY28T2bkN7k", http_template_set_string_pair);  // name unknown
+BB_HLE_FUNCTION("libSceHttp", "s2-NPIvz+iA", http_template_set_int);         // sceHttpSetNonblock
+// sceHttpAddRequestHeader
+BB_HLE_FUNCTION("libSceHttp", "EY28T2bkN7k", http_template_set_string_pair);
 BB_HLE_FUNCTION("libSceNetCtl", "uBPlr0lbuiI", sceNetCtlGetState);
 BB_HLE_FUNCTION("libSceNetCtl", "obuxdTiwkF8", sceNetCtlGetInfo);
 BB_HLE_FUNCTION("libSceNpManager", "eQH7nWPcAgc", sceNpGetState);
-BB_HLE_FUNCTION("libSceNpManager", "A2CQ3kgSopQ", np_manager_sized_request);  // name unknown
+// sceNpSetContentRestriction
+BB_HLE_FUNCTION("libSceNpManager", "A2CQ3kgSopQ", np_manager_sized_request);
 
 }  // namespace bb::hle::net

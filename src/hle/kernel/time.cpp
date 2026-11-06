@@ -217,10 +217,10 @@ BB_HLE_FUNCTION("libkernel", "yS8U2TGCe1A", bk::guest_nanosleep);
 BB_HLE_FUNCTION("libkernel", "hHlZQUnlxSM", bk::guest_getrusage);
 BB_HLE_FUNCTION("libkernel", "ejekcaNQNq0", bk::sceKernelGettimeofday);
 BB_HLE_FUNCTION("libkernel", "1jfXLRVzisc", bk::sceKernelUsleep);
-BB_HLE_FUNCTION("libkernel", "4J2sUJmuHZQ", bk::process_time_usec);    // name unknown
-BB_HLE_FUNCTION("libkernel", "-2IRUCO--PM", bk::process_counter_nsec);  // name unknown
-BB_HLE_FUNCTION("libkernel", "QBi7HCK03hw", bk::clock_gettime_sce);     // name unknown
-BB_HLE_FUNCTION("libkernel", "kOcnerypnQA", bk::local_time_offsets);    // name unknown
+BB_HLE_FUNCTION("libkernel", "4J2sUJmuHZQ", bk::process_time_usec);    // sceKernelGetProcessTime
+BB_HLE_FUNCTION("libkernel", "-2IRUCO--PM", bk::process_counter_nsec);  // sceKernelReadTsc
+BB_HLE_FUNCTION("libkernel", "QBi7HCK03hw", bk::clock_gettime_sce);     // sceKernelClockGettime
+BB_HLE_FUNCTION("libkernel", "kOcnerypnQA", bk::local_time_offsets);    // sceKernelGettimezone
 BB_HLE_FUNCTION("libScePosix", "n88vx3C5nW8", bk::posix_gettimeofday);
 BB_HLE_FUNCTION("libScePosix", "0wu33hunNdE", bk::guest_sleep);
 BB_HLE_FUNCTION("libScePosix", "QcteRwbsnV0", bk::guest_usleep);

@@ -1,7 +1,7 @@
 // Event queues: the game creates, waits on and deletes them; our own HLE modules (video out,
 // later audio) trigger events on them (docs/design/m3-core-os.md, "Sync"). The record layout
 // and the results are in docs/formats/kernel-abi.md, "Event queue". The libkernel names of the
-// three entry points are unknown (docs/design/m3-core-os.md, "Naming").
+// three entry points are in symbols/nids.csv (sceKernelCreateEqueue, Delete, Wait).
 #pragma once
 
 #include <chrono>

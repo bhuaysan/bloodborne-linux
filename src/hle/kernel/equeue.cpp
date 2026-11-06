@@ -162,9 +162,9 @@ std::int32_t equeue_wait(std::uint64_t handle, GuestEvent* events, std::int32_t 
 
 }  // namespace kernel
 
-// Names unknown (docs/design/m3-core-os.md, "Naming"); behaviour in docs/formats/kernel-abi.md.
-BB_HLE_FUNCTION("libkernel", "D0OdFMjp46I", kernel::equeue_create);
-BB_HLE_FUNCTION("libkernel", "jpFjmgAC5AE", kernel::equeue_delete);
-BB_HLE_FUNCTION("libkernel", "fzyMKs9kim0", kernel::equeue_wait);
+// Names from symbols/nids.csv; behaviour in docs/formats/kernel-abi.md.
+BB_HLE_FUNCTION("libkernel", "D0OdFMjp46I", kernel::equeue_create);  // sceKernelCreateEqueue
+BB_HLE_FUNCTION("libkernel", "jpFjmgAC5AE", kernel::equeue_delete);  // sceKernelDeleteEqueue
+BB_HLE_FUNCTION("libkernel", "fzyMKs9kim0", kernel::equeue_wait);    // sceKernelWaitEqueue
 
 }  // namespace bb::hle

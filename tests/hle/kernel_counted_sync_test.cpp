@@ -1,4 +1,4 @@
-// The counted sync object, called through its registered NIDs (names unknown).
+// The counted sync object, called through its registered NIDs (the sceKernel*Sema functions).
 
 #include <atomic>
 #include <chrono>

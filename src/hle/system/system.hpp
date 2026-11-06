@@ -63,12 +63,13 @@ std::string user_name();
 std::int32_t user_service_initialize(const void* params);
 std::int32_t user_service_terminate();
 std::int32_t user_service_get_event(void* event);
-// Name unknown (NID CdWp0oHWGr0): writes the id of the user to *id.
+// sceUserServiceGetInitialUser (NID CdWp0oHWGr0): writes the id of the user to *id.
 std::int32_t user_service_get_user_id(std::int32_t* id);
-// Name unknown (NID fPhymKNvK-A): writes the logged-in users to list[0..3], -1 for empty.
+// sceUserServiceGetLoginUserIdList (NID fPhymKNvK-A): writes the logged-in users to list[0..3], -1
+// for empty.
 std::int32_t user_service_get_user_list(std::int32_t* list);
-// Name unknown (NID 1xxcMiGu2fo): writes the user's name to buf, cut to size - 1 bytes and
-// NUL-terminated (the game passes 0x11, 0x2161cd0).
+// sceUserServiceGetUserName (NID 1xxcMiGu2fo): writes the user's name to buf, cut to size - 1 bytes
+// and NUL-terminated (the game passes 0x11, 0x2161cd0).
 std::int32_t user_service_get_user_name(std::int32_t id, char* buf, std::size_t size);
 
 // --- libSceSystemService --------------------------------------------------------------------
@@ -89,14 +90,14 @@ inline constexpr std::int32_t system_language_english_us = 1;
 // (0x178a412, 0x1e76a83). The rest of the caller's buffer is left alone.
 std::int32_t system_service_get_status(void* status);
 std::int32_t system_service_receive_event(void* event);
-// Name unknown (NID fZo48un7LK4): an integer by id. The game asks only for id 1 (nine sites,
-// e.g. 0x14ef12e), and maps the value through a 21-entry table.
+// sceSystemServiceParamGetInt (NID fZo48un7LK4): an integer by id. The game asks only for id 1
+// (nine sites, e.g. 0x14ef12e), and maps the value through a 21-entry table.
 std::int32_t system_service_get_int(std::int32_t id, std::int32_t* value);
-// Name unknown (NID -+3hY+y8bNo): takes a URL (0x2037030 passes a web page of the game) and an
-// int. Logged, success.
+// sceSystemServiceLaunchWebBrowser (NID -+3hY+y8bNo): takes a URL (0x2037030 passes a web page of
+// the game) and an int. Logged, success.
 std::int32_t system_service_open_url(const char* url, std::int32_t arg);
-// Name unknown (NID Vo5V8KAwCmk): no arguments, result ignored (0x19d4632, 0x2036fc0). Logged,
-// success.
+// sceSystemServiceHideSplashScreen (NID Vo5V8KAwCmk): no arguments, result ignored (0x19d4632,
+// 0x2036fc0). Logged, success.
 std::int32_t system_service_notify(void);
 
 // --- libSceAppContent -----------------------------------------------------------------------
@@ -111,7 +112,7 @@ inline constexpr std::int32_t app_content_bb_error_invalid_argument =
 inline constexpr std::int32_t app_param_keys = 5;
 
 std::int32_t app_content_initialize(const void* init_params, void* boot_params);
-// Name unknown (NID 99b82IKXpH4): an integer by key (app_param_value).
+// sceAppContentAppParamGetInt (NID 99b82IKXpH4): an integer by key (app_param_value).
 std::int32_t app_content_get_int(std::int32_t key, std::int32_t* value);
 
 // The values of keys 0 to 4.
@@ -123,9 +124,9 @@ std::int32_t app_content_get_int(std::int32_t key, std::int32_t* value);
 //   0x56a0250, 0x56a0254 are referenced only by the calls).
 inline constexpr std::int32_t app_param_value[app_param_keys] = {0, 13, 0, 0, 0};
 
-// Name unknown (NID xnd8BJzAxmk): writes the number of add-on content items to *count (0). The
-// game passes (0, list, list size, count) and only reads the list when the count is non-zero
-// (0x1fb67cf, 0x1fb6818).
+// sceAppContentGetAddcontInfoList (NID xnd8BJzAxmk): writes the number of add-on content items to
+// *count (0). The game passes (0, list, list size, count) and only reads the list when the count is
+// non-zero (0x1fb67cf, 0x1fb6818).
 std::int32_t app_content_get_addcont_count(std::uint32_t arg, void* list, std::uint32_t list_size,
                                            std::uint32_t* count);
 
@@ -149,14 +150,15 @@ inline constexpr std::int8_t playgo_chunk_installed = 3;
 
 std::int32_t playgo_initialize(const void* params);
 std::int32_t playgo_open(std::int32_t* handle, const void* params);
-// Name unknown (NID 73fF1MFU8hA): writes up to `max` chunk ids and their number (the game passes
-// room for 100, 0x1fdeb04).
+// scePlayGoGetChunkId (NID 73fF1MFU8hA): writes up to `max` chunk ids and their number (the game
+// passes room for 100, 0x1fdeb04).
 std::int32_t playgo_get_chunk_ids(std::int32_t handle, std::uint16_t* ids, std::uint32_t max,
                                   std::uint32_t* count);
-// Name unknown (NID uWIYLFkkwqk): writes one state byte per chunk id (0x1fdeb30).
+// scePlayGoGetLocus (NID uWIYLFkkwqk): writes one state byte per chunk id (0x1fdeb30).
 std::int32_t playgo_get_chunk_states(std::int32_t handle, const std::uint16_t* ids,
                                      std::uint32_t count, std::int8_t* states);
-// Name unknown (NID 4AAcTU9R3XM): the game passes a mode 0, 1 or 2 (0x1fdec10). Logged, success.
+// scePlayGoSetInstallSpeed (NID 4AAcTU9R3XM): the game passes a mode 0, 1 or 2 (0x1fdec10). Logged,
+// success.
 std::int32_t playgo_set_mode(std::int32_t handle, std::int32_t mode);
 
 // --- libSceDiscMap (imported by libSceFios2 only) -------------------------------------------
@@ -164,8 +166,8 @@ std::int32_t playgo_set_mode(std::int32_t handle, std::int32_t mode);
 // Ours: libSceFios2 tests only for non-zero (libSceFios2 0x29c74, 0x2a386).
 inline constexpr std::int32_t disc_map_bb_error_not_mapped = static_cast<std::int32_t>(0x80ff0401);
 
-// Name unknown (NID lbQKqsERhtE): (path, ?, ?, int* out). libSceFios2 (0x2d721 to 0x2d73e)
-// reports "remapped" only for result 0 with *out != 0, so we return 0 with *out = 0.
+// sceDiscMapIsRequestOnHDD (NID lbQKqsERhtE): (path, ?, ?, int* out). libSceFios2 (0x2d721 to
+// 0x2d73e) reports "remapped" only for result 0 with *out != 0, so we return 0 with *out = 0.
 std::int32_t disc_map_is_remapped(const char* path, std::uint64_t arg1, std::uint64_t arg2,
                                   std::int32_t* out);
 // Name unknown (NID ioKMruft1ek): (path, offset, size, out, out, out). For a non-zero result

@@ -41,8 +41,8 @@ std::int32_t sceVideoOutOpen(std::int32_t user_id, std::int32_t type, std::int32
 // (0x26d636b..0x26d6a9b) ignore the result.
 std::int32_t sceVideoOutClose(std::int32_t handle);
 
-// NID CBiu4mCE1DA, name unknown. 0x26d61ee calls it as (handle, 0) right after the open and
-// fails on a negative result. Returns 0 for an open port.
+// NID CBiu4mCE1DA, sceVideoOutSetFlipRate. 0x26d61ee calls it as (handle, 0) right after the open
+// and fails on a negative result. Returns 0 for an open port.
 std::int32_t video_out_configure(std::int32_t handle, std::int32_t value);
 
 // Registers queue `equeue` for the port's flip events, with `user_data` for the events.
@@ -87,33 +87,35 @@ inline constexpr std::size_t flip_count_offset = 0x18;
 
 // libSceGnmDriver. Each call reports success and nothing runs: command buffers and rings are M4.
 
-// NID zwY0YV91TTI, name unknown. Submits `count` draw command buffers (addresses and sizes in
-// bytes) and as many optional second buffers (null at 0x26b0c23). Called from 12 sites, e.g.
-// 0x1094a02 and 0x26b0c23. Returns 0.
+// NID zwY0YV91TTI, sceGnmSubmitCommandBuffers. Submits `count` draw command buffers (addresses and
+// sizes in bytes) and as many optional second buffers (null at 0x26b0c23). Called from 12 sites,
+// e.g. 0x1094a02 and 0x26b0c23. Returns 0.
 std::int32_t gnm_submit(std::uint32_t count, const std::uint64_t* draw,
                         const std::uint32_t* draw_sizes, const std::uint64_t* second,
                         const std::uint32_t* second_sizes);
 
-// NID iCO804ZgzdA, name unknown. The same arguments as gnm_submit (0x1094c2f, 0x26bb94b).
-// 0x26bb950 treats every result but 0x80d13fff as success. Returns 0.
+// NID iCO804ZgzdA, sceGnmValidateCommandBuffers. The same arguments as gnm_submit (0x1094c2f,
+// 0x26bb94b). 0x26bb950 treats every result but 0x80d13fff as success. Returns 0.
 std::int32_t gnm_submit_other(std::uint32_t count, const std::uint64_t* draw,
                               const std::uint32_t* draw_sizes, const std::uint64_t* second,
                               const std::uint32_t* second_sizes);
 
-// NID xbxNatawohc, name unknown. gnm_submit followed by sceVideoOutSubmitFlip(handle, index,
-// mode, arg). It has 8 call sites (0x1094f98, 0x10953a8, 0x1096775, 0x109c300, 0x11fb4f8,
-// 0x11fb644, 0x26b0dff, 0x26b0ee2); 0x26b0dd5..0x26b0dff, 0x26b0eba..0x26b0ee2 and 0x1094f98
-// pass the port handle in r9 and the rest on the stack. Returns the flip's result.
+// NID xbxNatawohc, sceGnmSubmitAndFlipCommandBuffers. gnm_submit followed by
+// sceVideoOutSubmitFlip(handle, index, mode, arg). It has 8 call sites (0x1094f98, 0x10953a8,
+// 0x1096775, 0x109c300, 0x11fb4f8, 0x11fb644, 0x26b0dff, 0x26b0ee2); 0x26b0dd5..0x26b0dff,
+// 0x26b0eba..0x26b0ee2 and 0x1094f98 pass the port handle in r9 and the rest on the stack. Returns
+// the flip's result.
 std::int32_t gnm_submit_and_flip(std::uint32_t count, const std::uint64_t* draw,
                                  const std::uint32_t* draw_sizes, const std::uint64_t* second,
                                  const std::uint32_t* second_sizes, std::int32_t handle,
                                  std::int32_t index, std::int32_t mode, std::int64_t arg);
 
-// NID 29oKvKXzEZo, name unknown. Maps a compute queue on the game's ring (docs/formats/gnm.md,
-// "Compute queues"): `(int, int, ring address, ring size in dwords, read-pointer address)`. Its
-// wrapper 0x1089a80 stores a non-negative result as the queue id and clears the read pointer;
-// 0x108c7b0 then treats id 0 as a failed map, and the render thread's device creation gives up
-// (0x26b1216). Returns the next id, from 1. Nothing reads the ring yet (M4).
+// NID 29oKvKXzEZo, sceGnmMapComputeQueue. Maps a compute queue on the game's ring
+// (docs/formats/gnm.md, "Compute queues"): `(int, int, ring address, ring size in dwords,
+// read-pointer address)`. Its wrapper 0x1089a80 stores a non-negative result as the queue id and
+// clears the read pointer; 0x108c7b0 then treats id 0 as a failed map, and the render thread's
+// device creation gives up (0x26b1216). Returns the next id, from 1. Nothing reads the ring yet
+// (M4).
 std::int32_t gnm_map_compute_queue(std::uint32_t, std::uint32_t, const void* ring,
                                    std::uint32_t ring_dwords, std::uint32_t* read_pointer);
 

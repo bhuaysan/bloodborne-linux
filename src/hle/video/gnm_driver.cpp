@@ -60,10 +60,13 @@ std::int32_t sceGnmSubmitDone() {
     return 0;
 }
 
-BB_HLE_FUNCTION("libSceGnmDriver", "zwY0YV91TTI", gnm_submit);           // name unknown
-BB_HLE_FUNCTION("libSceGnmDriver", "iCO804ZgzdA", gnm_submit_other);     // name unknown
-BB_HLE_FUNCTION("libSceGnmDriver", "xbxNatawohc", gnm_submit_and_flip);  // name unknown
-BB_HLE_FUNCTION("libSceGnmDriver", "29oKvKXzEZo", gnm_map_compute_queue);  // name unknown
+// sceGnmSubmitCommandBuffers
+BB_HLE_FUNCTION("libSceGnmDriver", "zwY0YV91TTI", gnm_submit);
+// sceGnmValidateCommandBuffers
+BB_HLE_FUNCTION("libSceGnmDriver", "iCO804ZgzdA", gnm_submit_other);
+// sceGnmSubmitAndFlipCommandBuffers
+BB_HLE_FUNCTION("libSceGnmDriver", "xbxNatawohc", gnm_submit_and_flip);
+BB_HLE_FUNCTION("libSceGnmDriver", "29oKvKXzEZo", gnm_map_compute_queue);  // sceGnmMapComputeQueue
 BB_HLE_FUNCTION("libSceGnmDriver", "yvZ73uQUqrk", sceGnmSubmitDone);
 
 }  // namespace bb::hle::video

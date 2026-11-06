@@ -67,8 +67,11 @@ std::int32_t system_service_notify(void) {
 
 BB_HLE_FUNCTION("libSceSystemService", "rPo6tV8D9bM", system_service_get_status);
 BB_HLE_FUNCTION("libSceSystemService", "656LMQSrg6U", system_service_receive_event);
-BB_HLE_FUNCTION("libSceSystemService", "fZo48un7LK4", system_service_get_int);   // name unknown
-BB_HLE_FUNCTION("libSceSystemService", "-+3hY+y8bNo", system_service_open_url);  // name unknown
-BB_HLE_FUNCTION("libSceSystemService", "Vo5V8KAwCmk", system_service_notify);    // name unknown
+// sceSystemServiceParamGetInt
+BB_HLE_FUNCTION("libSceSystemService", "fZo48un7LK4", system_service_get_int);
+// sceSystemServiceLaunchWebBrowser
+BB_HLE_FUNCTION("libSceSystemService", "-+3hY+y8bNo", system_service_open_url);
+// sceSystemServiceHideSplashScreen
+BB_HLE_FUNCTION("libSceSystemService", "Vo5V8KAwCmk", system_service_notify);
 
 }  // namespace bb::hle::system

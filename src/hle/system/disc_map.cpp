@@ -41,7 +41,7 @@ std::int32_t disc_map_map_range(const char* path, std::uint64_t /*offset*/,
     return disc_map_bb_error_not_mapped;
 }
 
-BB_HLE_FUNCTION("libSceDiscMap", "lbQKqsERhtE", disc_map_is_remapped);  // name unknown
-BB_HLE_FUNCTION("libSceDiscMap", "ioKMruft1ek", disc_map_map_range);    // name unknown
+BB_HLE_FUNCTION("libSceDiscMap", "lbQKqsERhtE", disc_map_is_remapped);  // sceDiscMapIsRequestOnHDD
+BB_HLE_FUNCTION("libSceDiscMap", "ioKMruft1ek", disc_map_map_range);  // name unknown
 
 }  // namespace bb::hle::system

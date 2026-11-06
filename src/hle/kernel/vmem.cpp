@@ -703,10 +703,11 @@ BB_HLE_FUNCTION("libScePosix", "k+AXqu2-eBc", guest_getpagesize);
 BB_HLE_FUNCTION("libkernel", "cQke9UuBQOk", sceKernelMunmap);
 BB_HLE_FUNCTION("libkernel", "vSMAm3cxYTY", sceKernelMprotect);
 BB_HLE_FUNCTION("libkernel", "3k6kx-zOOSQ", sceKernelMlock);
-BB_HLE_FUNCTION("libkernel", "mL8NDH86iQI", map_named_anonymous);  // name unknown
-BB_HLE_FUNCTION("libkernel", "IWIBBdTHit4", map_anonymous);        // name unknown
-BB_HLE_FUNCTION("libkernel", "teiItL2boFw", release_anonymous);    // name unknown
-BB_HLE_FUNCTION("libkernel", "rVjRvHJ0X6c", query_mapping);        // name unknown
-BB_HLE_FUNCTION("libkernel", "WFcfL2lzido", mapping_protection);   // name unknown
+// sceKernelMapNamedFlexibleMemory
+BB_HLE_FUNCTION("libkernel", "mL8NDH86iQI", map_named_anonymous);
+BB_HLE_FUNCTION("libkernel", "IWIBBdTHit4", map_anonymous);        // sceKernelMapFlexibleMemory
+BB_HLE_FUNCTION("libkernel", "teiItL2boFw", release_anonymous);    // sceKernelReleaseFlexibleMemory
+BB_HLE_FUNCTION("libkernel", "rVjRvHJ0X6c", query_mapping);        // sceKernelVirtualQuery
+BB_HLE_FUNCTION("libkernel", "WFcfL2lzido", mapping_protection);   // sceKernelQueryMemoryProtection
 
 }  // namespace bb::hle::kernel

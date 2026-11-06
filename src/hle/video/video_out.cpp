@@ -275,7 +275,7 @@ std::int32_t sceVideoOutGetFlipStatus(std::int32_t handle, void* status) {
 
 BB_HLE_FUNCTION("libSceVideoOut", "Up36PTk687E", sceVideoOutOpen);
 BB_HLE_FUNCTION("libSceVideoOut", "uquVH4-Du78", sceVideoOutClose);
-BB_HLE_FUNCTION("libSceVideoOut", "CBiu4mCE1DA", video_out_configure);  // name unknown
+BB_HLE_FUNCTION("libSceVideoOut", "CBiu4mCE1DA", video_out_configure);  // sceVideoOutSetFlipRate
 BB_HLE_FUNCTION("libSceVideoOut", "HXzjK9yI30k", sceVideoOutAddFlipEvent);
 BB_HLE_FUNCTION("libSceVideoOut", "i6-sR91Wt-4", sceVideoOutSetBufferAttribute);
 BB_HLE_FUNCTION("libSceVideoOut", "w3BY+tAEiQY", sceVideoOutRegisterBuffers);

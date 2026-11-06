@@ -1,6 +1,6 @@
-// The counted sync object: five unnamed libkernel imports (docs/design/m3-core-os.md, "Sync";
-// call sites and results in docs/formats/kernel-abi.md, "Counted sync object"). Names unknown
-// (docs/design/m3-core-os.md, "Naming"), so the C++ names describe what the calls do.
+// The counted sync object: five libkernel imports (docs/design/m3-core-os.md, "Sync"; call sites
+// and results in docs/formats/kernel-abi.md, "Counted sync object"), the sceKernel*Sema functions
+// of symbols/nids.csv. The C++ names describe what the calls do.
 
 #include <cerrno>
 #include <chrono>
@@ -191,9 +191,8 @@ std::int32_t counted_post(std::uint64_t handle, std::int32_t n) {
 
 namespace k = bb::hle::kernel;
 
-// Names unknown (docs/design/m3-core-os.md, "Naming").
-BB_HLE_FUNCTION("libkernel", "188x57JYp0g", k::counted_create);
-BB_HLE_FUNCTION("libkernel", "R1Jvn8bSCW8", k::counted_destroy);
-BB_HLE_FUNCTION("libkernel", "Zxa0VhQVTsk", k::counted_wait);
-BB_HLE_FUNCTION("libkernel", "12wOHk8ywb0", k::counted_try_wait);
-BB_HLE_FUNCTION("libkernel", "4czppHBiriw", k::counted_post);
+BB_HLE_FUNCTION("libkernel", "188x57JYp0g", k::counted_create);    // sceKernelCreateSema
+BB_HLE_FUNCTION("libkernel", "R1Jvn8bSCW8", k::counted_destroy);   // sceKernelDeleteSema
+BB_HLE_FUNCTION("libkernel", "Zxa0VhQVTsk", k::counted_wait);      // sceKernelWaitSema
+BB_HLE_FUNCTION("libkernel", "12wOHk8ywb0", k::counted_try_wait);  // sceKernelPollSema
+BB_HLE_FUNCTION("libkernel", "4czppHBiriw", k::counted_post);      // sceKernelSignalSema

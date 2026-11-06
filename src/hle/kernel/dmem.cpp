@@ -385,12 +385,12 @@ std::int32_t map_direct_batch(const BatchEntry* entries, std::int32_t count, std
     return 0;
 }
 
-BB_HLE_FUNCTION("libkernel", "pO96TwzOm5E", direct_memory_size);  // name unknown
-BB_HLE_FUNCTION("libkernel", "rTXw65xmLIA", allocate_direct);     // name unknown
-BB_HLE_FUNCTION("libkernel", "L-Q3LEjIbgA", map_direct);          // name unknown
-BB_HLE_FUNCTION("libkernel", "MBuItvba6z8", release_direct);      // name unknown
-BB_HLE_FUNCTION("libkernel", "BC+OG5m9+bw", direct_memory_type);  // name unknown
-BB_HLE_FUNCTION("libkernel", "7oxv3PPCumo", reserve_range);       // name unknown
-BB_HLE_FUNCTION("libkernel", "2SKEx6bSq-4", map_direct_batch);    // name unknown
+BB_HLE_FUNCTION("libkernel", "pO96TwzOm5E", direct_memory_size);  // sceKernelGetDirectMemorySize
+BB_HLE_FUNCTION("libkernel", "rTXw65xmLIA", allocate_direct);     // sceKernelAllocateDirectMemory
+BB_HLE_FUNCTION("libkernel", "L-Q3LEjIbgA", map_direct);          // sceKernelMapDirectMemory
+BB_HLE_FUNCTION("libkernel", "MBuItvba6z8", release_direct);      // sceKernelReleaseDirectMemory
+BB_HLE_FUNCTION("libkernel", "BC+OG5m9+bw", direct_memory_type);  // sceKernelGetDirectMemoryType
+BB_HLE_FUNCTION("libkernel", "7oxv3PPCumo", reserve_range);       // sceKernelReserveVirtualRange
+BB_HLE_FUNCTION("libkernel", "2SKEx6bSq-4", map_direct_batch);    // sceKernelBatchMap
 
 }  // namespace bb::hle::kernel

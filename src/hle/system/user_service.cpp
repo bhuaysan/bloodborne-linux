@@ -116,8 +116,11 @@ void reset_user_service() {
 BB_HLE_FUNCTION("libSceUserService", "j3YMu1MVNNo", user_service_initialize);
 BB_HLE_FUNCTION("libSceUserService", "bwFjS+bX9mA", user_service_terminate);
 BB_HLE_FUNCTION("libSceUserService", "yH17Q6NWtVg", user_service_get_event);
-BB_HLE_FUNCTION("libSceUserService", "CdWp0oHWGr0", user_service_get_user_id);    // name unknown
-BB_HLE_FUNCTION("libSceUserService", "fPhymKNvK-A", user_service_get_user_list);  // name unknown
-BB_HLE_FUNCTION("libSceUserService", "1xxcMiGu2fo", user_service_get_user_name);  // name unknown
+// sceUserServiceGetInitialUser
+BB_HLE_FUNCTION("libSceUserService", "CdWp0oHWGr0", user_service_get_user_id);
+// sceUserServiceGetLoginUserIdList
+BB_HLE_FUNCTION("libSceUserService", "fPhymKNvK-A", user_service_get_user_list);
+// sceUserServiceGetUserName
+BB_HLE_FUNCTION("libSceUserService", "1xxcMiGu2fo", user_service_get_user_name);
 
 }  // namespace bb::hle::system
