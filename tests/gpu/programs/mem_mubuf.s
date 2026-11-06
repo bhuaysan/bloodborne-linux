@@ -3,7 +3,9 @@
 ; loads with offen, idxen, both, as a dword pair and with addr64 (v10-v12, v14-v15, v19), and
 ; once more with only some lanes active (v13). With idxen and offen it also loads at the offsets
 ; 12 and 16 and as a pair from 12 (v22-v25), which are on both sides of a stride of 16. The loads
-; start from 0x77, to tell a dropped access from a zero. Then it stores with offen and as a pair.
+; with offen alone (v10), with idxen and offen at offset 12 (v22) and with addr64 (v19) use s12 as
+; soffset, the others 0. The loads start from 0x77, to tell a dropped access from a zero. Then it
+; stores with offen and as a pair.
 ; It writes the loaded values to out[64 * k + i].
 v_lshlrev_b32_e32 v1, 2, v0             ; v1 = 4i
 v_or_b32_e32 v2, s0, v1                 ; v[2:3] = &out[i]
@@ -25,13 +27,13 @@ buffer_load_dword v11, v0, s[4:7], 0 idxen
 v_mov_b32_e32 v6, v0                    ; v[6:7] = index i, offset 4 (0x44 with the immediate)
 v_mov_b32_e32 v7, 4
 buffer_load_dword v12, v[6:7], s[4:7], 0 idxen offen offset:0x40
-buffer_load_dword v22, v[6:7], s[4:7], 0 idxen offen offset:8    ; offset 4 + 8
+buffer_load_dword v22, v[6:7], s[4:7], s12 idxen offen offset:8  ; offset 4 + 8
 buffer_load_dword v23, v[6:7], s[4:7], 0 idxen offen offset:12   ; offset 4 + 12
 buffer_load_dwordx2 v[24:25], v[6:7], s[4:7], 0 idxen offen offset:8
 buffer_load_dwordx2 v[14:15], v1, s[4:7], 0 offen
 v_mov_b32_e32 v20, v1                   ; v[20:21] = 4i
 v_mov_b32_e32 v21, 0
-buffer_load_dword v19, v[20:21], s[4:7], 0 addr64
+buffer_load_dword v19, v[20:21], s[4:7], s12 addr64
 s_mov_b32 exec_lo, 0x0f0f0f0f
 s_mov_b32 exec_hi, 0
 buffer_load_dword v13, v1, s[4:7], 0 offen

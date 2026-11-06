@@ -386,8 +386,10 @@ TEST_F(TranslateExec, BufferMemory) {
         for (std::uint32_t i = 0; i < lanes; ++i) {
             SCOPED_TRACE(testing::Message() << "lane " << i);
             const std::uint32_t at = i * stride;
-            // offen with soffset: part of the check with a stride of 0, otherwise only of the address
-            EXPECT_EQ(slot(0, i), data(inside(0, false, 4 * i + 8, 0, soffset), soffset + 4 * i + 8));
+            // offen with soffset: part of the check with a stride of 0, otherwise only of the
+            // address
+            EXPECT_EQ(slot(0, i),
+                      data(inside(0, false, 4 * i + 8, 0, soffset), soffset + 4 * i + 8));
             // idxen: the index against num_records
             EXPECT_EQ(slot(1, i), data(inside(i, true, 0, 0, 0), at));
             // idxen and offen with an offset beyond the stride
@@ -397,10 +399,13 @@ TEST_F(TranslateExec, BufferMemory) {
             // a pair with offen and no idxen, a dword at a time: no offset check with a stride
             EXPECT_EQ(slot(4, i), data(inside(0, false, 4 * i, 0, 0), 4 * i));
             EXPECT_EQ(slot(5, i), data(inside(0, false, 4 * i, 1, 0), 4 * i + 4));
-            EXPECT_EQ(slot(6, i), data_word(i));  // addr64: never checked
+            // addr64: never checked, soffset is added to the address. The table ends before the
+            // soffset 0x1000, where the memory is zero.
+            EXPECT_EQ(slot(6, i), soffset < 0x1000 ? data_word(i + soffset / 4) : 0u);
             // the offset against the stride 16: 12 is inside, 16 is not, and the pair from 12 is
-            // cut between its dwords
-            EXPECT_EQ(slot(7, i), data(inside(i, true, 12, 0, 0), at + 12));
+            // cut between its dwords. Slot 7 has a soffset: with a stride it is only part of the
+            // address, so the offset 12 stays inside the stride 16 whatever the soffset.
+            EXPECT_EQ(slot(7, i), data(inside(i, true, 12, 0, soffset), at + 12 + soffset));
             EXPECT_EQ(slot(8, i), data(inside(i, true, 16, 0, 0), at + 16));
             EXPECT_EQ(slot(9, i), data(inside(i, true, 12, 0, 0), at + 12));
             EXPECT_EQ(slot(10, i), data(inside(i, true, 12, 1, 0), at + 16));
