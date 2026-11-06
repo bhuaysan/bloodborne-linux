@@ -165,10 +165,7 @@ TEST(TlsHelper, IsTheLibkernelImplementation) {
 TEST(TlsGame, HelperBlocksHoldTheLoadSetsTemplates) {
     BB_REQUIRE_GAME(game);
     bb::loader::LoadSet set = bb::loader::map_load_set(game);
-    bb::hle::link(set);  // registers the TLS templates
-    for (bb::loader::LoadedModule& m : set.modules) {
-        m.image.finalize_protection();
-    }
+    bb::hle::prepare(set);  // registers the TLS templates
     const bb::loader::TlsTemplate& eboot = *set.modules[0].image.tls;
     EXPECT_EQ(eboot.mem_size, eboot_tls_size);
     EXPECT_EQ(eboot.align, eboot_tls_align);

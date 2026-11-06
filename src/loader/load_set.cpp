@@ -67,13 +67,17 @@ Image map_prx(const std::filesystem::path& game_dir, std::string_view name, std:
     return map_elf(read_prx(game_dir, name), base);
 }
 
-LoadedModule& LoadSet::eboot() {
-    for (LoadedModule& m : modules) {
+const LoadedModule& LoadSet::eboot() const {
+    for (const LoadedModule& m : modules) {
         if (m.id == eboot_module_id) {
             return m;
         }
     }
     throw std::logic_error("the load set has no eboot");
+}
+
+LoadedModule& LoadSet::eboot() {
+    return const_cast<LoadedModule&>(std::as_const(*this).eboot());
 }
 
 LoadSet map_load_set(const std::filesystem::path& game_dir, std::uintptr_t base) {

@@ -143,9 +143,8 @@ const Initialised& initialised(const std::filesystem::path& game) {
     static std::once_flag once;
     std::call_once(once, [&] {
         auto* s = new Initialised{bb::loader::map_load_set(game), {}, {}};
-        bb::hle::link(s->set);
-        for (bb::loader::LoadedModule& m : s->set.modules) {
-            m.image.finalize_protection();
+        bb::hle::prepare(s->set);
+        for (const bb::loader::LoadedModule& m : s->set.modules) {
             for (const bb::loader::Segment& seg : m.image.segments) {
                 if ((seg.prot & PROT_WRITE) != 0) {
                     scan_for_leaks(m.image.runtime(seg.link_addr), seg.mem_size);

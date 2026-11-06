@@ -164,10 +164,7 @@ int main(int argc, char** argv) {
     }
     try {
         LoadSet set = map_load_set(*game_dir);
-        bb::hle::link(set);
-        for (LoadedModule& module : set.modules) {
-            module.image.finalize_protection();
-        }
+        bb::hle::prepare(set);
         for (const LoadedModule& module : set.modules) {
             print(module);
         }

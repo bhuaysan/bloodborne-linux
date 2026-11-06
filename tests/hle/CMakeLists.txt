@@ -1,4 +1,4 @@
-bb_add_test(hle_test SOURCES hle_test.cpp LIBS bbhle)
+bb_add_test(hle_test SOURCES hle_test.cpp handle_table_test.cpp LIBS bbhle)
 bb_add_test(hle_net_test SOURCES net_test.cpp LIBS bbhlenet bbhle)
 bb_add_test(hle_system_test SOURCES system_test.cpp LIBS bbhle bbhlesystem)
 bb_add_test(hle_date_time_test SOURCES date_time_test.cpp LIBS bbhle bbhlesystem)

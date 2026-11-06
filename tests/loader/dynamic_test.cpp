@@ -785,6 +785,12 @@ TEST(RelocateGame, RelocatesTheEboot) {
     image.finalize_protection();
 }
 
+TEST(LoadSet, EbootThrowsWithoutAnEboot) {
+    LoadSet set;
+    EXPECT_THROW(set.eboot(), std::logic_error);
+    EXPECT_THROW(std::as_const(set).eboot(), std::logic_error);
+}
+
 // Maps eboot, libSceFios2 and libc one after the other, with module ids 1 to 3, and relocates
 // them with fake imports. libc.prx also exports 4 STT_TLS symbols, which exports() skips.
 TEST(LoadSetGame, MapsAndRelocatesTheLoadSet) {
@@ -794,6 +800,7 @@ TEST(LoadSetGame, MapsAndRelocatesTheLoadSet) {
     const LoadedModule& eboot = set.modules[0];
     const LoadedModule& fios2 = set.modules[1];
     const LoadedModule& libc = set.modules[2];
+    EXPECT_EQ(&set.eboot(), &eboot);
     EXPECT_EQ(eboot.file, "eboot.bin");
     EXPECT_EQ(eboot.id, eboot_module_id);
     EXPECT_EQ(eboot.image.base, default_base);
@@ -832,10 +839,7 @@ TEST(LinkGame, BindsTheLoadSet) {
     BB_REQUIRE_GAME(game);
     LoadSet set = map_load_set(game);
     ASSERT_EQ(set.modules.size(), 3U);
-    bb::hle::link(set);  // throws for any import that can't be bound or relocation not applied
-    for (LoadedModule& m : set.modules) {
-        m.image.finalize_protection();
-    }
+    bb::hle::prepare(set);  // throws for any import that can't be bound or relocation not applied
     const LoadedModule& libc = set.modules[2];
 
     // Resolves the imports nothing references, too, and counts each NID once per library.
