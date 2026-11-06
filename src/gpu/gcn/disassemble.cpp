@@ -2,6 +2,7 @@
 // words with llvm-mc, except for the encodings that LLVM's syntax can't express (see the
 // known differences under "Disassembler" in the "Interface" section of docs/design/graphics.md).
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -64,13 +65,16 @@ std::string scalar(unsigned c, unsigned dwords) {
 }
 
 // Whether llvm-mc would encode a literal of this value as an inline constant instead. On 64-bit
-// operands it reads the 32-bit literal as a 64-bit integer, so only 0 to 64 are inline there.
-bool inlinable(std::uint32_t value, unsigned dwords) {
+// operands it reads the 32-bit literal as a 64-bit integer, so only 0 to 64 are inline there. On
+// the 64-bit operands of the vector formats it also inlines the high dwords of the f64 constants.
+bool inlinable(std::uint32_t value, unsigned dwords, bool vector) {
     if (value <= 64) {
         return true;
     }
     if (dwords != 1) {
-        return false;
+        return vector && std::ranges::any_of(float_constants, [&](double d) {
+                   return value == std::bit_cast<std::uint64_t>(d) >> 32;
+               });
     }
     if (value >= 0xfffffff0) {  // -16 to -1
         return true;
@@ -169,6 +173,7 @@ enum class Literal {
     immediate,  // s_setreg_imm32_b32: always a literal, printed like LLVM prints it
     hex,        // SMRD offsets: LLVM encodes 255 or less in the immediate form, with or without
                 // lit()
+    vector,     // VOP1, VOP2, VOPC: as `lit`, with inline constants also on 64-bit operands
 };
 
 std::string operand(const Operand& op, Literal literal) {
@@ -186,7 +191,8 @@ std::string operand(const Operand& op, Literal literal) {
         if (literal == Literal::immediate) {
             return immediate(op.value);
         }
-        if (literal == Literal::lit && inlinable(op.value, op.dwords)) {
+        if ((literal == Literal::lit || literal == Literal::vector) &&
+            inlinable(op.value, op.dwords, literal == Literal::vector)) {
             return std::format("lit({:#x})", op.value);
         }
         return std::format("{:#x}", op.value);
@@ -214,8 +220,11 @@ std::string operand(const Operand& op, Literal literal) {
 }  // namespace
 
 std::string disassemble(const Instruction& inst) {
+    const bool vector =
+        inst.format == Format::vop2 || inst.format == Format::vop1 || inst.format == Format::vopc;
     const Literal literal = inst.format == Format::sopk   ? Literal::immediate
                             : inst.format == Format::smrd ? Literal::hex
+                            : vector                      ? Literal::vector
                                                           : Literal::lit;
     std::string out(inst.name);
     const char* separator = " ";

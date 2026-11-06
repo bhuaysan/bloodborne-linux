@@ -1,6 +1,8 @@
-// VOP1: decoding of words encoded by hand from the Sea Islands ISA manual.
+// VOP1: decoding and disassembly of words encoded by hand from the Sea Islands ISA manual, and a
+// round trip of every opcode in the table through llvm-mc.
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -8,6 +10,7 @@
 
 #include "gpu/gcn/encode.hpp"
 #include "gpu/gcn/gcn.hpp"
+#include "gpu/gcn/llvm_mc.hpp"
 
 namespace {
 
@@ -65,6 +68,105 @@ TEST(GcnVop, Errors) {
     for (const auto& words : bad) {
         SCOPED_TRACE(words[0]);
         EXPECT_THROW(decode(words, Until::code_end), GcnError);
+    }
+}
+
+struct Case {
+    std::vector<std::uint32_t> words;
+    std::string text;
+};
+
+const std::vector<Case> cases = {
+    {{vop1(1, 1, v + 2)}, "v_mov_b32_e32 v1, v2"},
+    {{vop1(1, 1, 242)}, "v_mov_b32_e32 v1, 1.0"},
+    {{vop1(1, 1, 255), 0x41200000}, "v_mov_b32_e32 v1, 0x41200000"},
+    {{vop1(1, 1, 255), 0x3f800000}, "v_mov_b32_e32 v1, lit(0x3f800000)"},
+    {{vop1(1, 1, 255), 0xfffffff0}, "v_mov_b32_e32 v1, lit(0xfffffff0)"},
+    {{vop1(1, 1, code::exec + 1)}, "v_mov_b32_e32 v1, exec_hi"},
+    {{vop1(1, 255, code::scc)}, "v_mov_b32_e32 v255, src_scc"},
+    {{vop1(1, 1, code::ttmp0 + 3)}, "v_mov_b32_e32 v1, ttmp3"},
+    {{vop1(4, 254, v + 1)}, "v_cvt_f64_i32_e32 v[254:255], v1"},
+    {{vop1(15, 1, 2)}, "v_cvt_f32_f64_e32 v1, s[2:3]"},
+    {{vop1(15, 1, 244)}, "v_cvt_f32_f64_e32 v1, 2.0"},
+    {{vop1(15, 1, 208)}, "v_cvt_f32_f64_e32 v1, -16"},
+    {{vop1(15, 1, 255), 0x12345678}, "v_cvt_f32_f64_e32 v1, 0x12345678"},
+    {{vop1(15, 1, 255), 0x40000000}, "v_cvt_f32_f64_e32 v1, lit(0x40000000)"},
+    {{vop1(15, 1, 255), 5}, "v_cvt_f32_f64_e32 v1, lit(0x5)"},
+    {{vop1(2, code::vcc, v + 1)}, "v_readfirstlane_b32 vcc_lo, v1"},
+    {{vop1(0, 0, 0)}, "v_nop"},
+    {{vop1(65, 0, 0)}, "v_clrexcp"},
+};
+
+std::string text(const std::vector<std::uint32_t>& words) {
+    auto insts = decode(words, Until::code_end);
+    EXPECT_EQ(insts.size(), 1u);
+    return disassemble(insts.at(0));
+}
+
+TEST(GcnVop, Text) {
+    std::vector<std::string> lines;
+    for (const Case& c : cases) {
+        EXPECT_EQ(text(c.words), c.text) << c.words[0];
+        lines.push_back(c.text);
+    }
+    if (!have_llvm_mc()) {
+        GTEST_SKIP() << "llvm-mc not found";
+    }
+    const auto assembled = assemble(lines);
+    for (std::size_t i = 0; i < cases.size(); ++i) {
+        EXPECT_EQ(assembled[i].words, cases[i].words) << cases[i].text;
+    }
+}
+
+// Encodings that LLVM's syntax can't express: the decoder accepts what the fields allow.
+TEST(GcnVop, EncodingsLlvmRejects) {
+    const std::vector<Case> rejected = {
+        {{vop1(9, 1, v + 2)}, "v_mov_fed_b32_e32 v1, v2"},          // no gfx7 syntax
+        {{vop1(2, code::m0, v + 1)}, "v_readfirstlane_b32 m0, v1"},  // m0 as destination
+        {{vop1(2, 1, 133)}, "v_readfirstlane_b32 s1, 5"},  // a source other than a VGPR
+        {{vop1(2, 1, 2)}, "v_readfirstlane_b32 s1, s2"},
+    };
+    for (const Case& c : rejected) {
+        SCOPED_TRACE(c.text);
+        EXPECT_EQ(text(c.words), c.text);
+        if (have_llvm_mc()) {
+            EXPECT_THROW(assemble({c.text}), std::runtime_error);
+        }
+    }
+}
+
+// One encoding per VOP1 opcode, with v2 as vdst and v4 as src0 (s1 as destination of
+// v_readfirstlane_b32), except for v_mov_fed_b32, which has no gfx7 syntax in LLVM.
+std::vector<std::uint32_t> every_vop1_opcode() {
+    std::vector<std::uint32_t> words;
+    for (unsigned op = 0; op < 256; ++op) {
+        // v_nop and v_clrexcp don't use the fields, and LLVM sets them to 0.
+        const bool none = op == 0 || op == 65;
+        const std::uint32_t w = vop1(op, none ? 0 : op == 2 ? 1 : 2, none ? 0 : v + 4);
+        try {
+            if (one({w}).name != "v_mov_fed_b32_e32") {
+                words.push_back(w);
+            }
+        } catch (const GcnError&) {
+        }
+    }
+    return words;
+}
+
+TEST(GcnVop, RoundTripEveryOpcode) {
+    const auto words = every_vop1_opcode();
+    const auto insts = decode(words, Until::code_end);
+    EXPECT_EQ(insts.size(), 65u);  // opcodes 0-26 and 32-70, without v_mov_fed_b32
+    if (!have_llvm_mc()) {
+        GTEST_SKIP() << "llvm-mc not found";
+    }
+    std::vector<std::string> lines;
+    for (const Instruction& inst : insts) {
+        lines.push_back(disassemble(inst));
+    }
+    const auto assembled = assemble(lines);
+    for (std::size_t i = 0; i < insts.size(); ++i) {
+        EXPECT_EQ(assembled[i].words, std::vector<std::uint32_t>{words[i]}) << lines[i];
     }
 }
 
