@@ -163,6 +163,10 @@ TEST(GcnStages, ErrorsNameWhatIsUnsupported) {
               "USER_SGPR 17 is more than 16");
     EXPECT_EQ(error({vop2(3, 1, 256, 2)}, {.stage = Stage::vertex, .pgm_rsrc1 = 1u << 12}),
               "PGM_RSRC1 0x1000: this float mode is not supported");
+    // ds_read_b32 v1, v0 and s_barrier: the LDS and the workgroup are compute-only so far.
+    EXPECT_EQ(error({0xd8d80000u, 0x01000000u}, vertex_key),
+              "the LDS in a graphics stage is not supported yet");
+    EXPECT_EQ(error({sopp(10)}, vertex_key), "s_barrier in a graphics stage is not supported yet");
 }
 
 }  // namespace

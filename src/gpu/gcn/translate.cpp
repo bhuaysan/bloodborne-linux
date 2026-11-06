@@ -1153,8 +1153,12 @@ private:
                      {high, b_.op(Op::OpUConvert, u64_, {read(o, 0)})});
     }
 
-    // s_barrier: every wave of the workgroup waits, and its LDS writes become visible.
+    // s_barrier: every wave of the workgroup waits, and its LDS writes become visible. The LDS
+    // and the workgroup are compute-only so far; a graphics stage has neither in SPIR-V.
     void barrier() {
+        if (graphics()) {
+            fail("s_barrier in a graphics stage is not supported yet");
+        }
         b_.op_void(Op::OpControlBarrier,
                    {b_.constant_u32(spirv_word(spv::Scope::Workgroup)),
                     b_.constant_u32(spirv_word(spv::Scope::Workgroup)),
@@ -1190,6 +1194,9 @@ private:
         }
         if (d->kind == detail::DsKind::nop) {
             return;
+        }
+        if (graphics()) {
+            fail("the LDS in a graphics stage is not supported yet");
         }
         wave_size_dependent_ = true;
         wave_sync();
