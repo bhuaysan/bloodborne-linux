@@ -279,11 +279,11 @@ TEST(GcnTranslate, FloatModes) {
 
 // GCN rounds the result of every float instruction and only v_fma_f32 fuses a multiply and an
 // add, so the translated add, subtract and multiply (the mads, the omod multiply and the
-// legacy multiply included) all carry NoContraction. float_alu uses them all.
+// legacy multiply included) all carry NoContraction. float_alu and float_edge use them all.
 TEST(GcnTranslate, FloatArithmeticIsNotContracted) {
     constexpr std::uint16_t op_decorate = 71, op_fadd = 129, op_fsub = 131, op_fmul = 133;
     constexpr std::uint32_t no_contraction = 42;
-    for (const char* name : {"float_alu"}) {
+    for (const char* name : {"float_alu", "float_edge"}) {
         SCOPED_TRACE(name);
         const auto spirv = translate(program_words(name), {}, key5).spirv;
         std::set<std::uint32_t> decorated;

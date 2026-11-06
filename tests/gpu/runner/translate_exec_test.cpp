@@ -5,8 +5,8 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <cmath>
 #include <cstdint>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -49,12 +49,13 @@ protected:
 
     // Runs the program with user_data = {output address, then `inputs`} and returns the first
     // `words` dwords of the guest memory, 0x3000 bytes with the table of the memory programs
-    // (data_word) at data_offset.
+    // (data_word) at data_offset. `pgm_rsrc1` is the key's float mode.
     std::vector<std::uint32_t> run(std::string_view name, std::vector<std::uint32_t> inputs,
-                                   std::uint32_t words) {
+                                   std::uint32_t words, std::uint32_t pgm_rsrc1 = 0) {
         const auto translation = bb::gcn::translate(
             bb::test::gcn::program_words(name), {},
-            {.pgm_rsrc2 = bb::test::gcn::program_user_sgprs(name) << 1});
+            {.pgm_rsrc1 = pgm_rsrc1,
+             .pgm_rsrc2 = bb::test::gcn::program_user_sgprs(name) << 1});
         auto memory = runner_->guest_memory(base, 0x3000);
         for (std::uint32_t i = 0; i < 0x200; ++i) {
             const std::uint32_t word = data_word(i);
@@ -183,6 +184,55 @@ TEST_F(TranslateExec, FloatAlu) {
                 EXPECT_EQ(out[stage * lanes + i], expected[stage])
                     << "stage " << stage << ", lane " << i << ", x " << x;
             }
+        }
+    }
+}
+
+// NaN operands, infinities and saturation, the legacy multiply, a mad that must not be fused
+// next to an fma that is, and clamp and rounding under three float modes: the default (round to
+// nearest even), DX10_CLAMP alone, and round toward zero alone. The last one runs only when the
+// device reports shaderRoundingModeRTZFloat32, since the module would be invalid otherwise.
+TEST_F(TranslateExec, FloatEdgeCases) {
+    constexpr std::uint32_t stages = 13, dx10_clamp = 1u << 21, round_to_zero = 3u << 12;
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    const auto f32 = [](std::uint32_t bits) { return std::bit_cast<float>(bits); };
+    const auto u32 = [](float f) { return std::bit_cast<std::uint32_t>(f); };
+    std::vector<std::uint32_t> modes = {0u, dx10_clamp};
+    if (runner_->info().round_rtz_f32) {
+        modes.push_back(round_to_zero);
+    }
+    for (const std::uint32_t mode : modes) {
+        const bool dx10 = (mode & dx10_clamp) != 0;
+        const bool zero = (mode & round_to_zero) != 0;
+        const auto out = run("float_edge", {}, stages * lanes, mode);
+        for (std::uint32_t i = 0; i < lanes; ++i) {
+            SCOPED_TRACE(testing::Message() << "mode " << mode << ", lane " << i);
+            const float x = static_cast<float>(i) - 32;
+            const float a = i % 2 == 1 ? nan : x, b = i / 2 % 2 == 1 ? nan : 2.5f;
+            const float cs[] = {inf, -inf, nan, 3e9f};
+            const float c = cs[i % 4];  // the program's c
+            const auto at = [&](std::uint32_t stage) { return out[stage * lanes + i]; };
+            const auto check_float = [&](std::uint32_t stage, float expected) {  // any NaN
+                if (std::isnan(expected)) {
+                    EXPECT_TRUE(std::isnan(f32(at(stage)))) << "stage " << stage;
+                } else {
+                    EXPECT_EQ(at(stage), u32(expected)) << "stage " << stage;
+                }
+            };
+            check_float(0, std::isnan(a) ? b : (std::isnan(b) ? a : std::min(a, b)));
+            check_float(1, std::isnan(a) ? b : (std::isnan(b) ? a : std::max(a, b)));
+            check_float(2, std::isnan(a) ? (dx10 ? 0.0f : nan) : std::clamp(a, 0.0f, 1.0f));
+            EXPECT_EQ(at(3), std::isnan(c) ? 0u : (c < 0 ? 0x8000'0000u : 0x7fff'ffffu));
+            EXPECT_EQ(at(4), std::isnan(c) || c < 0 ? 0u : (c < inf ? 3'000'000'000u : ~0u));
+            check_float(5, 1.0f);
+            check_float(6, i % 4 == 3 ? 1.0f : nan);  // 0 * inf and 0 * NaN
+            check_float(7, 2.0f);
+            EXPECT_EQ(at(8), 0u);
+            EXPECT_EQ(at(9), u32(0x1p-24f));
+            EXPECT_EQ(at(10), 0u);
+            EXPECT_EQ(at(11), zero ? 0x3f80'0000u : 0x3f80'0001u);
+            EXPECT_EQ(at(12), zero ? 0x4c00'0000u : 0x4c00'0001u);
         }
     }
 }
