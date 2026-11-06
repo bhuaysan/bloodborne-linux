@@ -259,7 +259,10 @@ No game initialization code runs: not `DT_INIT`, `DT_PREINIT_ARRAY`, `DT_INIT_AR
 After loading, the harness takes a **baseline snapshot** of all writable memory it owns:
 - the image's writable segments (data and `.bss`, about 6 MiB),
 - the data-import blocks,
+- the regions its caller passes (`extra`), for state outside the image: with the load set loaded, the PRXs' writable segments, the game's heap and the test thread's TLS ([m3-core-os.md](m3-core-os.md#memory), "Harness"),
 - the **arena**, an mmap'd region of 16 MiB that the harness owns for test inputs.
+
+A region is either **dense**, every byte copied and compared, or **sparse**: a shared mapping of a sparse file, such as direct memory (the 116 MiB heap of the game's allocator is a view of the direct memory memfd). For a sparse region the harness keeps only the pages that are data in the file, found with `lseek(SEEK_DATA/SEEK_HOLE)`, since a hole reads zero. The restore punches a hole (`fallocate(FALLOC_FL_PUNCH_HOLE)`) into every data page the baseline didn't have and copies the baseline's pages back; the comparison looks only at the pages that are data after either call, and reads a page that is a hole as zeros rather than through the mapping, which would allocate it. So a sparse region costs time and memory in proportion to the pages a test touches, not to its size. Unlike page residency (`mincore`), the file's data/hole map doesn't depend on whether a page is in memory: tmpfs reports a swapped-out page as data. A sparse region's address, file offset and size must be multiples of the host page size (the constructor throws `std::invalid_argument` otherwise).
 
 ### Harness and arena
 
@@ -277,8 +280,17 @@ struct StubCall {
     const hle::StubInfo* stub;
     std::array<std::uint64_t, 6> args;  // rdi, rsi, rdx, rcx, r8, r9
 };
+struct Region {
+    std::string name;                // in the report
+    std::byte* data;
+    std::size_t size;
+    std::uint64_t link;              // link address of data for an image segment, else 0
+    bool is_image;                   // reported as link addresses, else as offsets
+    int fd = -1;                     // sparse: the file that data maps, and data's offset in it
+    std::uint64_t fd_offset = 0;
+};
 class Harness : private hle::StubObserver {  // installs itself as the stub observer
-    explicit Harness(loader::Image& image);  // takes the baseline
+    explicit Harness(loader::Image& image, std::vector<Region> extra = {});  // takes the baseline
     Arena& arena();
     void restore();                  // baseline back into every region, arena allocation at 0,
                                      // empty stub log
