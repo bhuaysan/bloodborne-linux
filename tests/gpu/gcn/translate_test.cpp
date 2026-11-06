@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -91,7 +92,7 @@ TEST(GcnTranslate, WaveSizeDependence) {
     for (const unsigned op : {6, 7, 8, 9}) {  // s_cbranch_vccz, vccnz, execz, execnz
         EXPECT_TRUE(dependent({sopp(op, 1), sopp(0)})) << op;
     }
-    EXPECT_TRUE(dependent(ds(ds_read_b32, 1, 0)));           // ds_read_b32 v1, v0 (subgroup barrier)
+    EXPECT_TRUE(dependent(ds(ds_read_b32, 1, 0)));           // ds_read_b32 v1, v0
 }
 
 // A value written to VCC or an SGPR mask pair and read back as a value sets mask_round_trip, also
@@ -141,6 +142,43 @@ TEST(GcnTranslate, MaskRoundTrip) {
     EXPECT_TRUE(round_trip({value_s8, saveexec, saveexec, read_s10}));
     EXPECT_TRUE(round_trip({value_s8, saveexec, {sop1(4, 12, 126)}, {sop1(3, 6, 12)}}));  // = exec
     EXPECT_FALSE(round_trip({cmp, saveexec, read_s10}));  // s[8:9] holds a lane mask
+}
+
+// The LDS accesses and barriers of a module in order: W a store to the LDS, R a load from it, S a
+// barrier of subgroup execution scope and G one of workgroup scope.
+std::string lds_events(const std::vector<std::uint32_t>& module) {
+    std::map<std::uint32_t, std::uint32_t> constants;  // id -> value
+    std::set<std::uint32_t> lds;                       // the LDS variable and pointers into it
+    std::string events;
+    for (std::size_t at = 5; at < module.size(); at += module[at] >> 16) {  // 5 header words
+        const auto op = static_cast<spv::Op>(module[at] & 0xffff);
+        const auto word = [&](std::size_t k) { return module[at + k]; };
+        if (op == spv::Op::OpConstant) {
+            constants[word(2)] = word(3);
+        } else if (op == spv::Op::OpVariable &&
+                   word(3) == static_cast<std::uint32_t>(spv::StorageClass::Workgroup)) {
+            lds.insert(word(2));
+        } else if (op == spv::Op::OpAccessChain && lds.contains(word(3))) {
+            lds.insert(word(2));
+        } else if (op == spv::Op::OpStore && lds.contains(word(1))) {
+            events += 'W';
+        } else if (op == spv::Op::OpLoad && lds.contains(word(3))) {
+            events += 'R';
+        } else if (op == spv::Op::OpControlBarrier) {
+            const auto scope = static_cast<spv::Scope>(constants.at(word(1)));
+            events += scope == spv::Scope::Subgroup    ? 'S'
+                      : scope == spv::Scope::Workgroup ? 'G'
+                                                       : '?';
+        }
+    }
+    return events;
+}
+
+// Lanes of a wave see each other's earlier DS accesses with no s_barrier, so every DS instruction
+// waits for the subgroup first (wave_sync). Lavapipe runs a subgroup in lockstep, so only the
+// structure of the module tells: lds_wave writes, reads, writes and reads again.
+TEST(GcnTranslate, DsInstructionsWaitForTheSubgroup) {
+    EXPECT_EQ(lds_events(translate(program_words("lds_wave"), {}, key5).spirv), "SWSRSWSR");
 }
 
 // Scalar ALU, a loop on SCC, and the vector ALU in VOP1, VOP2 and VOP3 encodings.
