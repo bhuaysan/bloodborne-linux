@@ -2,6 +2,8 @@
 // "Exports go through bb::hle").
 #pragma once
 
+#include <functional>
+
 #include "loader/load_set.hpp"
 
 namespace bb::hle {
@@ -13,5 +15,11 @@ namespace bb::hle {
 // Throws as register_export, loader::relocate and register_tls_modules do; the images are then
 // unusable.
 void link(loader::LoadSet& set);
+
+// Prepares a mapped load set to run: link(set), then `patch` on the eboot's image (bb-run applies
+// the hooks there; empty for none), then finalize_protection on every module. Returns the eboot's
+// image. Throws as link does, and std::logic_error for a set without an eboot.
+loader::Image& prepare(loader::LoadSet& set,
+                       const std::function<void(loader::Image& eboot)>& patch = {});
 
 }  // namespace bb::hle

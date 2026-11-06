@@ -37,4 +37,17 @@ void link(loader::LoadSet& set) {
     kernel::register_tls_modules(set);
 }
 
+loader::Image& prepare(loader::LoadSet& set,
+                       const std::function<void(loader::Image& eboot)>& patch) {
+    link(set);
+    loader::Image& eboot = set.eboot().image;
+    if (patch) {
+        patch(eboot);
+    }
+    for (loader::LoadedModule& m : set.modules) {
+        m.image.finalize_protection();
+    }
+    return eboot;
+}
+
 }  // namespace bb::hle

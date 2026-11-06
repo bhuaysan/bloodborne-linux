@@ -25,7 +25,7 @@ protected:
     void SetUp() override;
 
     loader::LoadSet& load_set() { return *set_; }
-    loader::Image& image() { return set_->modules.front().image; }  // the eboot
+    loader::Image& image() { return set_->eboot().image; }
     harness::Harness& harness() { return *harness_; }
 
 private:

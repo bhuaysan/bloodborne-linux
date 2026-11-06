@@ -22,7 +22,6 @@
 #include <format>
 #include <iostream>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -41,7 +40,6 @@
 #include "hle/system/system.hpp"
 #include "hook/hook.hpp"
 #include "loader/load_set.hpp"
-#include "loader/relocate.hpp"
 #include "tools/main_loop_probe.hpp"
 #include "tools/run_options.hpp"
 
@@ -187,20 +185,11 @@ int start(const bb::tools::RunOptions& options) {
 
     // Never destroyed: the game runs in it until the process ends.
     auto* game = new Game{bb::loader::map_load_set(*game_dir)};
-    bb::hle::link(game->set);
-    for (bb::loader::LoadedModule& m : game->set.modules) {
-        if (m.id == bb::loader::eboot_module_id) {
-            game->eboot = &m.image;
-        }
-    }
-    if (game->eboot == nullptr) {
-        throw std::logic_error("the load set has no eboot");
-    }
-    bb::hook::apply(*game->eboot, bb::hook::replacements());
-    bb::common::log(LogLevel::info, channel, "{} hooks applied", bb::hook::replacements().size());
-    for (bb::loader::LoadedModule& m : game->set.modules) {
-        m.image.finalize_protection();
-    }
+    game->eboot = &bb::hle::prepare(game->set, [](bb::loader::Image& eboot) {
+        bb::hook::apply(eboot, bb::hook::replacements());
+        bb::common::log(LogLevel::info, channel, "{} hooks applied",
+                        bb::hook::replacements().size());
+    });
     bb::game::set_image(game->eboot);
     bb::hle::kernel::check_eboot_tls();
 

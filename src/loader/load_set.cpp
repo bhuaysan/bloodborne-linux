@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <format>
 #include <span>
+#include <stdexcept>
 #include <utility>
 
 #include "common/memory.hpp"
@@ -64,6 +65,15 @@ std::vector<Export> exports(const Image& image) {
 
 Image map_prx(const std::filesystem::path& game_dir, std::string_view name, std::uintptr_t base) {
     return map_elf(read_prx(game_dir, name), base);
+}
+
+LoadedModule& LoadSet::eboot() {
+    for (LoadedModule& m : modules) {
+        if (m.id == eboot_module_id) {
+            return m;
+        }
+    }
+    throw std::logic_error("the load set has no eboot");
 }
 
 LoadSet map_load_set(const std::filesystem::path& game_dir, std::uintptr_t base) {

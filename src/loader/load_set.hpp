@@ -42,6 +42,9 @@ struct LoadedModule {
 // Every module of the load set, in loading order. Owns the images.
 struct LoadSet {
     std::vector<LoadedModule> modules;
+
+    // The module with eboot_module_id. Throws std::logic_error if there is none.
+    LoadedModule& eboot();
 };
 
 // Maps the eboot at `base` (map_eboot), then each of load_set_prxs (map_prx) at the next address

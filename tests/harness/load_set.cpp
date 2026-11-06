@@ -176,17 +176,15 @@ struct Loaded {
 
 Loaded* load(const std::filesystem::path& game) {
     auto* l = new Loaded{loader::map_load_set(game), std::nullopt, std::nullopt};
-    hle::link(l->set);
+    loader::Image& eboot = hle::prepare(l->set);
     // Game memory holds pointers to runtime objects, such as the host mutexes behind libc's.
-    for (loader::LoadedModule& m : l->set.modules) {
-        m.image.finalize_protection();
+    for (const loader::LoadedModule& m : l->set.modules) {
         for (const loader::Segment& s : m.image.segments) {
             if ((s.prot & PROT_WRITE) != 0) {
                 scan_for_leaks(m.image.runtime(s.link_addr), s.mem_size);
             }
         }
     }
-    loader::Image& eboot = l->set.modules.front().image;
     game::set_image(&eboot);
     hle::run_prx_init(l->set);
     // The game's allocator maps its heap on the first allocation and keeps it.
