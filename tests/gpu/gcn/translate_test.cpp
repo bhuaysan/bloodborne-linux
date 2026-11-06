@@ -165,8 +165,8 @@ std::string error(const std::vector<std::uint32_t>& code, const ShaderKey& key =
 }
 
 TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
-    EXPECT_EQ(error({vopc(0x01, 256, 1), s_endpgm}),  // v_cmp_lt_f32_e32 vcc, v0, v1
-              "unsupported instruction v_cmp_lt_f32_e32 at offset 0x0 (word 0x7c020300)");
+    EXPECT_EQ(error({vopc(0x21, 256, 1), s_endpgm}),  // v_cmp_lt_f64_e32 vcc, v[0:1], v[1:2]
+              "unsupported instruction v_cmp_lt_f64_e32 at offset 0x0 (word 0x7c420300)");
     EXPECT_EQ(error({vop1(42, 1, 256), s_endpgm}),  // v_rcp_f32_e32 v1, v0
               "unsupported instruction v_rcp_f32_e32 at offset 0x0 (word 0x7e025500)");
     EXPECT_EQ(error({sop1(3, 0, 108), s_endpgm}),  // s_mov_b32 s0, tba_lo

@@ -187,6 +187,29 @@ TEST_F(TranslateExec, FloatAlu) {
     }
 }
 
+// All 16 float compare conditions with NaN operands, the VOP3 form with modifiers, and v_cmpx.
+TEST_F(TranslateExec, FloatCompare) {
+    const auto out = run("float_cmp", {}, 3 * lanes);
+    for (std::uint32_t i = 0; i < lanes; ++i) {
+        SCOPED_TRACE(testing::Message() << "lane " << i);
+        const float a = 0.0f;
+        const float b = i % 8 == 7 ? std::numeric_limits<float>::quiet_NaN()
+                                   : static_cast<float>(i) - 32;
+        const bool conditions[16] = {
+            false, a < b, a == b, a <= b, a > b, a < b || a > b, a >= b, a == a && b == b,
+            a != a || b != b, !(a >= b), !(a < b || a > b), !(a > b), !(a <= b), !(a == b),
+            !(a < b), true,
+        };
+        std::uint32_t expected = 0;
+        for (const bool bit : conditions) {
+            expected = expected << 1 | bit;
+        }
+        EXPECT_EQ(out[i], expected);
+        EXPECT_EQ(out[lanes + i], -std::fabs(b) < -1.0f ? 1u : 0u);
+        EXPECT_EQ(out[2 * lanes + i], b < 0 ? 5u : 0u);
+    }
+}
+
 // Cross-lane operations in lane-local mode: a lane sees the bits of its own subgroup at their wave
 // positions, and those of the other subgroups as 0. The subgroup size is what stage 1 counts; it
 // must be a power of two in the device's range. Stage 0 checks that each subgroup covers

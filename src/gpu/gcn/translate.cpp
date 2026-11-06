@@ -122,6 +122,36 @@ constexpr VectorOp vector_ops[] = {
     {"v_lshlrev_b32", Op::OpShiftLeftLogical, true},  // by the low 5 bits
 };
 
+// A float compare, v_cmp[x]_<cond>_f32. The ordered conditions are false when an operand is NaN,
+// the "n" ones are the negations of the ordered ones (true on NaN). o and u test for NaN.
+struct FloatCompare {
+    std::string_view cond;
+    Op op;
+};
+constexpr FloatCompare float_compares[] = {
+    {"lt", Op::OpFOrdLessThan},          {"eq", Op::OpFOrdEqual},
+    {"le", Op::OpFOrdLessThanEqual},     {"gt", Op::OpFOrdGreaterThan},
+    {"lg", Op::OpFOrdNotEqual},          {"ge", Op::OpFOrdGreaterThanEqual},
+    {"nge", Op::OpFUnordLessThan},       {"nlg", Op::OpFUnordEqual},
+    {"ngt", Op::OpFUnordLessThanEqual},  {"nle", Op::OpFUnordGreaterThan},
+    {"neq", Op::OpFUnordNotEqual},       {"nlt", Op::OpFUnordGreaterThanEqual},
+};
+
+// The condition and the v_cmpx flag of a float compare's name, empty condition for another name.
+struct ParsedFloatCompare {
+    std::string_view cond;
+    bool writes_exec = false;
+};
+ParsedFloatCompare parse_float_compare(std::string_view name) {
+    for (const bool x : {false, true}) {
+        const std::string_view prefix = x ? "v_cmpx_" : "v_cmp_";
+        if (name.starts_with(prefix) && name.ends_with("_f32")) {
+            return {name.substr(prefix.size(), name.size() - prefix.size() - 4), x};
+        }
+    }
+    return {};
+}
+
 // Float VALU operations on two sources, `rev` swaps them.
 struct FloatBinary {
     std::string_view name;
@@ -664,8 +694,13 @@ private:
         return inst.neg != 0 || inst.abs != 0 || inst.omod != 0 || (inst.flags & flag::clamp) != 0;
     }
 
-    // The float VALU instructions. Returns false for any other instruction.
+    // The float VALU instructions (not the masks: float compares write one). Returns false for
+    // any other instruction.
     bool float_vector(const Instruction& inst, std::string_view name) {
+        if (const auto cmp = parse_float_compare(name); !cmp.cond.empty()) {
+            float_compare(cmp, inst);
+            return true;
+        }
         const Id f32 = b_.type_float(32);
         const auto src = [&](unsigned i) { return float_source(inst, i); };
         const auto ext = [&](GLSLstd450 f, std::initializer_list<Id> args) {
@@ -737,6 +772,34 @@ private:
             write_vector(inst.dst[0], b_.op(Op::OpBitcast, u32_, {float_result(inst, r)}));
         }
         return true;
+    }
+
+    void float_compare(const ParsedFloatCompare& c, const Instruction& inst) {
+        if (inst.omod != 0 || (inst.flags & flag::clamp) != 0) {
+            fail(std::format("modifiers of {} are not supported yet", inst.name));
+        }
+        note_float();
+        Id result;
+        const Id a = float_source(inst, 0), b = float_source(inst, 1);
+        if (c.cond == "f" || c.cond == "tru") {
+            result = b_.constant_bool(c.cond == "tru");
+        } else if (c.cond == "o" || c.cond == "u") {  // OpOrdered needs the Kernel capability
+            result = b_.op(Op::OpLogicalOr, bool_, {is_nan(a), is_nan(b)});
+            if (c.cond == "o") {
+                result = b_.op(Op::OpLogicalNot, bool_, {result});
+            }
+        } else {
+            const auto* cmp = std::ranges::find(float_compares, c.cond, &FloatCompare::cond);
+            if (cmp == std::end(float_compares)) {
+                unsupported();
+            }
+            result = b_.op(cmp->op, bool_, {a, b});
+        }
+        const Id r = b_.op(Op::OpLogicalAnd, bool_, {active(), result});
+        write_mask(inst.dst[0], r);
+        if (c.writes_exec) {
+            store(mask_exec(), r);
+        }
     }
 
     // Source `i` as an f32, with its abs and neg modifiers.
