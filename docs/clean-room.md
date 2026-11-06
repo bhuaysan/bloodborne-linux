@@ -34,7 +34,7 @@ The project is licensed under GPL-2.0-or-later ([LICENSE](../LICENSE)). Code fro
 - **A file under several licenses** (`A OR B`) may be used under any allowed one of them; record which in the credit row. These rules cover code copied into the repository, not system libraries we link against (the Vulkan loader, glibc).
 - **Adapted code** in our files keeps the original file's copyright and license notices unchanged in a header comment, and adds an SPDX tag of its license, a `// Source: <project> <path> @<commit>` line and a `// Changed for bloodborne-linux, <date>` line. Where the original header only refers to a license file, or the file has no header and the project's `LICENSE`/`COPYING` applies, that license file (with its copyright lines) goes into `third_party/<project>/` and the header points to it. GPL-2.0 §2(a) and LGPL-2.1 §2(b) require that notice of changes; we use it for every license.
 - **Upstream preferred.** Take code from the project's own repository or release, and record the commit.
-- **Credit.** Record every source in [references.md](references.md) in the same change that uses it. Code sources go into its code sources table: project and commit, license of the files, files or pages used, what was taken (facts or code), where it is used, and the date.
+- **Credit.** Record every source in [references.md](references.md) in the same change that uses it. Code sources go into its code sources table: project and commit, license of the files, files or pages used, what was taken (facts or code), where it is used, and the date. One row per source and use, appended to that source's group.
 
 If a source's license or status is unclear, don't copy from it. Ask the maintainer.
 
