@@ -20,3 +20,4 @@ target_link_libraries(kernel_tls_test PRIVATE bbeboottls)
 # New threads run the eboot TLS check.
 target_link_libraries(kernel_thread_test PRIVATE bbeboottls)
 target_link_libraries(kernel_thread_extras_test PRIVATE bbeboottls)
+target_link_libraries(kernel_thread_specific_test PRIVATE bbeboottls)
