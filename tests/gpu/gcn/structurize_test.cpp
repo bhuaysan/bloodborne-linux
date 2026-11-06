@@ -233,4 +233,46 @@ TEST(GcnStructurize, IrreducibleGraphs) {
           {{{1, {true, false}}, {3, {true, false, true}}, {4, {true}}}, {{4, {true, true}}}, {}});
 }
 
+TEST(GcnStructurize, RandomGraphs) {
+    // Random programs of nops, s_endpgm, forward s_branch and conditional branches anywhere.
+    // Once a script runs out, conditions are false, so every loop ends.
+    std::uint32_t seed = 12345;
+    const auto random = [&](std::uint32_t n) {
+        seed = seed * 1664525u + 1013904223u;
+        return (seed >> 8) % n;
+    };
+    int irreducible = 0;
+    for (int round = 0; round < 500; ++round) {
+        const auto n = 4 + random(10);
+        std::vector<std::uint32_t> words;
+        for (std::uint32_t i = 0; i + 1 < n; ++i) {
+            const std::uint32_t kind = random(20);
+            const auto at = static_cast<int>(i);
+            if (kind < 8) {
+                words.push_back(sopp(nop));
+            } else if (kind == 8) {
+                words.push_back(sopp(endpgm));
+            } else if (kind < 11) {
+                words.push_back(br(branch, at, at + 1 + static_cast<int>(random(n - i - 1))));
+            } else {
+                words.push_back(br(scc0 + random(6), at, static_cast<int>(random(n))));
+            }
+        }
+        words.push_back(sopp(endpgm));
+        const Cfg cfg = build_cfg(decode(words, Until::code_end));
+        irreducible += analyze(cfg).reducible ? 0 : 1;
+        std::vector<Script> scripts(3);
+        for (Script& script : scripts) {
+            for (std::uint32_t b = 0; b < cfg.blocks.size(); ++b) {
+                for (std::uint32_t k = random(4); k > 0; --k) {
+                    script[b].push_back(random(2) == 0);
+                }
+            }
+        }
+        SCOPED_TRACE(round);
+        check(words, scripts);
+    }
+    EXPECT_GT(irreducible, 20);
+}
+
 }  // namespace
