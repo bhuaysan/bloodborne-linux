@@ -524,6 +524,39 @@ TEST_F(TranslateExec, LdsBetweenLanesOfAWave) {
     }
 }
 
+// Bytes, halfwords and 64 to 128 bits. Neighbouring lanes write bytes of one dword at the same
+// time, and many lanes write the same byte or halfword with a bit of their own: one of them must
+// win whole, not all of them or-ed together. Accesses at and past the end of the LDS read 0 and
+// write nothing.
+TEST_F(TranslateExec, LdsNarrowWideAndOutOfRange) {
+    constexpr std::uint32_t n = 128;
+    const auto out = run("lds_narrow", {}, 12 * n, 0, n);
+    const auto byte = [](std::uint32_t i) { return ((i + 1) | 0x80) & 0xff; };
+    for (std::uint32_t i = 0; i < n; ++i) {
+        SCOPED_TRACE(testing::Message() << "lane " << i);
+        EXPECT_EQ(out[i], byte(i));
+        EXPECT_EQ(out[n + i], 0xffff'ff00 | byte(i));
+        EXPECT_EQ(out[2 * n + i], byte(i) << 8 | byte(i));
+        EXPECT_EQ(out[3 * n + i], 0xffff'0000 | byte(i) << 8 | byte(i));
+        EXPECT_EQ(out[4 * n + i], byte(i & ~1u) | byte(i | 1) << 8);
+        EXPECT_EQ(out[5 * n + i], i + 1);
+        EXPECT_EQ(out[6 * n + i], i + 3);
+        EXPECT_EQ(out[7 * n + i], i + 2);
+        EXPECT_EQ(out[8 * n + i], 0u);
+        EXPECT_EQ(out[9 * n + i], 0u);
+        // Lane j writes the bit j % 8 to the byte j % 4 and the bit j % 16 to the halfword j % 2.
+        // The lanes of one address agree on the winner, and it is the bit of one of them.
+        const auto won = [&](std::uint32_t index, std::uint32_t slot, std::uint32_t slots) {
+            const std::uint32_t v = out[index * n + i];
+            EXPECT_EQ(v, out[index * n + slot]) << "lanes disagree";
+            EXPECT_TRUE(std::has_single_bit(v) && std::countr_zero(v) % slots == slot)
+                << "not one lane's value: " << v;
+        };
+        won(10, i % 4, 4);
+        won(11, i % 2, 2);
+    }
+}
+
 TEST_F(TranslateExec, ScalarLoopAndSkips) {
     const auto out = run("scalar_loop", {5, 0x8000'0001}, lanes + 1);
     for (std::uint32_t i = 0; i < lanes; ++i) {

@@ -1147,7 +1147,7 @@ private:
         if (d->kind == detail::DsKind::nop) {
             return;
         }
-        if (d->kind == detail::DsKind::atomic || d->bytes < 4) {
+        if (d->kind == detail::DsKind::atomic) {
             unsupported();
         }
         wave_size_dependent_ = true;
@@ -1162,9 +1162,9 @@ private:
                 if (d->kind == detail::DsKind::read) {
                     Operand dst = inst.dst[0];
                     dst.code += n * dwords + k;
-                    write_vector(dst, lds_read(at, k));
+                    write_vector(dst, lds_read(at, *d, k));
                 } else {
-                    lds_write(at, read(inst.src[1 + n], k), k);
+                    lds_write(at, *d, read(inst.src[1 + n], k), k);
                 }
             }
         }
@@ -1199,16 +1199,76 @@ private:
                 in_range};
     }
 
-    // Dword `k` of an access at `address`.
-    Id lds_read(Id address, unsigned k) {
+    // Dword `k` of an access at `address`; a sub-dword read extracts and extends its bytes.
+    Id lds_read(Id address, const detail::DsOperation& d, unsigned k) {
         const auto [pointer, in_range] = lds_ref(address, k);
-        return b_.op(Op::OpSelect, u32_, {in_range, load(u32_, pointer), b_.constant_u32(0)});
+        Id value = b_.op(Op::OpSelect, u32_,
+                         {in_range, load(u32_, pointer), b_.constant_u32(0)});
+        if (d.bytes < 4) {
+            const Id shift = byte_shift(address);
+            value = b_.op(d.is_signed ? Op::OpBitFieldSExtract : Op::OpBitFieldUExtract, u32_,
+                          {value, shift, b_.constant_u32(8 * d.bytes)});
+        }
+        return value;
     }
 
-    void lds_write(Id address, Id value, unsigned k) {
+    void lds_write(Id address, const detail::DsOperation& d, Id value, unsigned k) {
         const auto [pointer, in_range] = lds_ref(address, k);
         const Id guard = b_.op(Op::OpLogicalAnd, bool_, {active(), in_range});
-        when(guard, [&] { b_.op_void(Op::OpStore, {pointer, value}); });
+        when(guard, [&] {
+            if (d.bytes >= 4) {
+                b_.op_void(Op::OpStore, {pointer, value});
+                return;
+            }
+            // Other lanes write other bytes of this dword, or this byte, at the same time. Merge
+            // this lane's bits in one atomic update: each write is whole, and of the lanes that
+            // write the same byte one wins, as on the hardware.
+            const Id shift = byte_shift(address);
+            const Id mask = b_.constant_u32((1u << (8 * d.bytes)) - 1);
+            const Id kept = b_.op(Op::OpNot, u32_,
+                                  {b_.op(Op::OpShiftLeftLogical, u32_, {mask, shift})});
+            const Id bits = b_.op(Op::OpShiftLeftLogical, u32_,
+                                  {b_.op(Op::OpBitwiseAnd, u32_, {value, mask}), shift});
+            atomic_update(pointer, [&](Id v) {
+                return b_.op(Op::OpBitwiseOr, u32_,
+                             {b_.op(Op::OpBitwiseAnd, u32_, {v, kept}), bits});
+            });
+        });
+    }
+
+    // The bit offset of the byte at `address` in its dword.
+    Id byte_shift(Id address) {
+        return b_.op(Op::OpShiftLeftLogical, u32_,
+                     {b_.op(Op::OpBitwiseAnd, u32_, {address, b_.constant_u32(3)}),
+                      b_.constant_u32(3)});
+    }
+
+    // Replaces the dword at `pointer` by f(old) atomically, as a loop on a compare-and-swap, and
+    // returns the old value.
+    template <typename F>
+    Id atomic_update(Id pointer, F f) {
+        const Id scope = b_.constant_u32(spirv_word(spv::Scope::Workgroup));
+        const Id none = b_.constant_u32(0);
+        // The other lanes update the dword atomically at the same time, so the first read is an
+        // atomic one too, or it would race with them. A stale value is fixed by the loop.
+        const Id current = b_.local_variable(b_.type_pointer(SC::Function, u32_));
+        store(current, b_.op(Op::OpAtomicLoad, u32_, {pointer, scope, none}));
+        const Id header = b_.id(), body = b_.id(), cont = b_.id(), merge = b_.id();
+        b_.op_void(Op::OpBranch, {header});
+        b_.begin_block(header);
+        b_.op_void(Op::OpLoopMerge, {merge, cont, spirv_word(spv::LoopControlMask::MaskNone)});
+        b_.op_void(Op::OpBranch, {body});
+        b_.begin_block(body);
+        const Id old = load(u32_, current);
+        const Id seen = b_.op(Op::OpAtomicCompareExchange, u32_,
+                              {pointer, scope, none, none, f(old), old});
+        store(current, seen);
+        b_.op_void(Op::OpBranchConditional,
+                   {b_.op(Op::OpIEqual, bool_, {seen, old}), merge, cont});
+        b_.begin_block(cont);
+        b_.op_void(Op::OpBranch, {header});
+        b_.begin_block(merge);
+        return old;
     }
 
     // Dword `dword` of a source operand, as a u32.
