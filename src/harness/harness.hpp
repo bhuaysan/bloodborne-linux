@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <map>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -62,11 +63,18 @@ private:
 
 // A block of memory that the harness restores and compares.
 struct Region {
-    std::string name;  // "image", "arena" or "data block <library> <nid>"
+    std::string name;  // "image", "arena", "data block <library> <nid>" or the caller's
     std::byte* data;
     std::size_t size;
     std::uint64_t link;  // link address of data for an image segment, else 0
     bool is_image;       // reported as link addresses, else as offsets
+    // For a shared mapping of a sparse file, such as direct memory: the file and the offset of
+    // data in it. data, fd_offset and size are multiples of the host page size. The harness then
+    // keeps and compares only the pages that are data in the file (the holes read zero), and the
+    // restore punches holes where the baseline had them, so the cost follows the pages a test
+    // touches.
+    int fd = -1;
+    std::uint64_t fd_offset = 0;
 };
 
 // What one comparison found. True when nothing differs; report() then is empty.
@@ -91,12 +99,13 @@ struct StubCall {
 };
 
 // Takes the baseline of `image` (mapped and relocated) on construction: its writable segments,
-// the data blocks that bb::hle::resolve created so far, and the arena. Applies no hooks and runs
-// no init code. Records the stub calls while it exists, so only one harness may exist at a time:
-// throws std::logic_error if another stub observer (such as another harness) is installed.
+// the data blocks that bb::hle::resolve created so far, the `extra` regions and the arena. Applies
+// no hooks and runs no init code. Records the stub calls while it exists, so only one harness may
+// exist at a time: throws std::logic_error if another stub observer (such as another harness) is
+// installed, std::invalid_argument for a region with an fd that isn't page-aligned.
 class Harness : private hle::StubObserver {
 public:
-    explicit Harness(loader::Image& image);
+    explicit Harness(loader::Image& image, std::vector<Region> extra = {});
     ~Harness() override;
 
     Arena& arena() { return arena_; }
@@ -168,7 +177,17 @@ private:
         }
     }
 
+    // The contents of one region: every byte, or for a region with an fd its data pages by
+    // offset in the region.
+    struct Contents {
+        std::vector<std::byte> bytes;
+        std::map<std::size_t, std::vector<std::byte>> pages;
+    };
+
     void on_call(const hle::StubInfo& stub, const std::uint64_t args[6]) override;
+    // Copies region i into `out`, reusing its buffers.
+    void take(std::size_t i, Contents& out) const;
+    void compare_region(std::size_t i, Result& result, std::size_t& ranges) const;
     // Saves the regions and the stub log after the original's call.
     void keep_original();
     // Compares the regions and the stub log after the replacement's call with the saved ones.
@@ -178,7 +197,7 @@ private:
     loader::Image& image_;
     Arena arena_;
     std::vector<Region> regions_;
-    std::vector<std::vector<std::byte>> baseline_, after_original_;
+    std::vector<Contents> baseline_, after_original_;
     std::vector<StubCall> log_, original_log_;
     std::unordered_map<std::string, int> arity_;  // by hle::import_key
     // The start and end of the stack of the thread that last ran compare_log, and that thread.
