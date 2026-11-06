@@ -100,7 +100,7 @@ Guest paths are mapped through a mount table. Everything else is refused with `E
 | Guest | Host | Access |
 |---|---|---|
 | `/app0/…` | `$BB_GAME_DIR/…` | read-only; writes fail with `EROFS` |
-| save data mount points handed out by our libSceSaveData | `$XDG_DATA_HOME/bloodborne-linux/profiles/<profile>/savedata/<n>/` | read-write |
+| save data mount points handed out by our libSceSaveData (`/savedata0`, `/savedata1`, …) | `$XDG_DATA_HOME/bloodborne-linux/profiles/<profile>/savedata/<dir>/`, `<dir>` the directory name the game passes (`SPRJ0000` to `SPRJ0009`) | read-write |
 | temporary mount | `$XDG_CACHE_HOME/bloodborne-linux/profiles/<profile>/temp/` | read-write |
 | `/hostapp/…` (debug output) | refused | logged |
 
