@@ -9,10 +9,11 @@
 
 namespace bb::tools {
 
-// The frame pacer: its link address and its length, from its FDE. It reads the wall clock through
-// libScePosix gettimeofday once or more per tick, and the tick runs only in main's loop.
+// The frame pacer: its link address and its length, from its FDE (game_eboot_test checks it).
+// It reads the wall clock through libScePosix gettimeofday once or more per tick, and the tick
+// runs only in main's loop.
 inline constexpr std::uint64_t frame_pacer = 0x2034770;
-inline constexpr std::uint64_t frame_pacer_size = 0x820;
+inline constexpr std::uint64_t frame_pacer_size = 0x84c;
 
 // The number of frame pacer calls that means the main loop is reached.
 inline constexpr unsigned main_loop_calls = 60;

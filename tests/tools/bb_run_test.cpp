@@ -105,7 +105,7 @@ TEST(EntryArgs, MatchesTheEntrysReads) {
 // ---- the main-loop probe ------------------------------------------------------------------------
 
 TEST(MainLoopProbe, CoversTheFramePacer) {
-    EXPECT_EQ(bb::tools::frame_pacer + bb::tools::frame_pacer_size, 0x2034f90U);
+    EXPECT_EQ(bb::tools::frame_pacer + bb::tools::frame_pacer_size, 0x2034fbcU);
     EXPECT_EQ(bb::tools::main_loop_calls, 60U);
 }
 
