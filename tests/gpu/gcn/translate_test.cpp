@@ -412,6 +412,20 @@ TEST(GcnTranslate, FloatModes) {
     EXPECT_EQ(build(0, add), (std::vector<std::uint32_t>{nan, rte, flush}));
     EXPECT_EQ(build(3u << 16 | 3u << 12, add), (std::vector<std::uint32_t>{nan, rtz, preserve}));
     EXPECT_EQ(build(0, {s_endpgm}), std::vector<std::uint32_t>{});  // no float instruction
+    // A typed load converts through f32 in every number format but UINT and SINT: a half float's
+    // infinities, NaNs and -0 need the modes, an integer load needs none.
+    const auto typed = [&](unsigned dfmt, unsigned nfmt) {
+        auto code = mtbuf(0, 3, 1, 4, 128, 0, dfmt, nfmt, buf::offen);
+        code.push_back(s_endpgm);
+        return build(0, code);
+    };
+    const std::vector<std::uint32_t> float_modes = {nan, rte, flush};
+    EXPECT_EQ(typed(5, 7), float_modes);  // 16_16, FLOAT
+    EXPECT_EQ(typed(10, 0), float_modes);  // 8_8_8_8, UNORM
+    EXPECT_EQ(typed(5, 1), float_modes);  // 16_16, SNORM
+    EXPECT_EQ(typed(10, 3), float_modes);  // 8_8_8_8, SSCALED
+    EXPECT_EQ(typed(5, 4), std::vector<std::uint32_t>{});  // 16_16, UINT
+    EXPECT_EQ(typed(5, 5), std::vector<std::uint32_t>{});  // 16_16, SINT
     for (const std::uint32_t rsrc1 : {1u << 12, 2u << 12, 1u << 16, 2u << 16}) {
         EXPECT_EQ(error(add, {.pgm_rsrc1 = rsrc1, .pgm_rsrc2 = 5u << 1}),
                   std::format("PGM_RSRC1 {:#x}: this float mode is not supported at "

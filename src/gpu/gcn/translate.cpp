@@ -1177,6 +1177,12 @@ private:
             raw[d] = guarded_load(cond, b_.op(Op::OpBitwiseAnd, u64_, {where(4 * d), c64(~3ull)}));
         }
         const auto value = FormatEmitter(b_, u32_).decode(inst.dfmt, inst.nfmt, raw);
+        if (inst.nfmt != nfmt::uint_ && inst.nfmt != nfmt::sint) {
+            // The other number formats convert through f32 (or unpack a half float). The float
+            // modes keep a half float's infinities, NaNs and -0 on the way; no conversion makes an
+            // f32 denormal, and the 16-bit integers convert exactly.
+            note_float();
+        }
         for (unsigned c = 0; c < data.dwords; ++c) {
             // Zero raw bits are not a zero component in every number format (SNORM_OGL).
             write_vector(data, b_.op(Op::OpSelect, u32_, {inside_buffer, value[c], zero}), c);

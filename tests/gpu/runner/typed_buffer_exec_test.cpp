@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -51,10 +52,17 @@ std::vector<Field> fields(unsigned dfmt) {
     }
 }
 
+// The half float `h` as an f32. A NaN becomes the quiet NaN of its sign (the table plants no other).
 float half_to_float(std::uint32_t h) {
     const int e = (h >> 10) & 31;
     const float m = static_cast<float>(h & 1023);
-    const float v = e == 0 ? std::ldexp(m, -24) : std::ldexp(1024 + m, e - 25);
+    float v;
+    if (e == 31) {
+        v = m == 0 ? std::numeric_limits<float>::infinity()
+                   : std::numeric_limits<float>::quiet_NaN();
+    } else {
+        v = e == 0 ? std::ldexp(m, -24) : std::ldexp(1024 + m, e - 25);
+    }
     return (h & 0x8000) != 0 ? -v : v;
 }
 
@@ -93,7 +101,8 @@ protected:
         }
         // The table: 16 bytes per lane, the first lanes all 0, all 1 and all 0x80. The second KB
         // repeats it with bit 14 of every 16-bit value cleared, so that a half float is never
-        // infinite or NaN.
+        // infinite or NaN, except where the next lines plant them: the 16_16 FLOAT load of
+        // offset 1024 reads the first two halves of each lane there.
         std::uint32_t x = 0x2545f491;
         for (std::uint32_t i = 0; i < 1024; ++i) {
             x ^= x << 13, x ^= x >> 17, x ^= x << 5;
@@ -105,6 +114,16 @@ protected:
         std::copy_n(table_.begin(), 1024, table_.begin() + 1024);
         for (std::uint32_t i = 1025; i < table_size; i += 2) {
             table_[i] &= 0xbf;
+        }
+        const std::uint16_t special[][2] = {
+            {0x7c00, 0xfc00},  // +Inf, -Inf
+            {0x8000, 0x0000},  // -0, +0
+            {0x7e00, 0xfe00},  // quiet NaNs
+            {0x7c00, 0x8000},  // +Inf, -0
+            {0xfc00, 0x7e00},  // -Inf, NaN
+        };
+        for (std::uint32_t i = 0; i < std::size(special); ++i) {
+            std::memcpy(&table_[1024 + 16 * (4 + i)], special[i], 4);
         }
     }
 
