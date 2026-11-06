@@ -1,6 +1,7 @@
 // The vector memory formats (internal to bbgcn): MUBUF, MTBUF, MIMG and EXP, in memory.cpp.
 // Their instructions are two dwords; the fields that aren't operands go to Instruction::mem_offset
-// and ::flags (MTBUF also ::dfmt and ::nfmt; MIMG keeps its dmask and EXP its target in mem_offset).
+// and ::flags (MTBUF also ::dfmt and ::nfmt; MIMG keeps its dmask and EXP its target in
+// mem_offset).
 #pragma once
 
 #include <cstddef>

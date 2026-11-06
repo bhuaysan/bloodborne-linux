@@ -1,6 +1,6 @@
-// MUBUF, MTBUF, MIMG and EXP (Sea Islands ISA manual, "Microcode Formats"): the opcode tables, written
-// from the opcode lists with regular families built in loops, the decoders, and the fields in
-// LLVM's gfx7 syntax. Bits that the manual marks as reserved are ignored.
+// MUBUF, MTBUF, MIMG and EXP (Sea Islands ISA manual, "Microcode Formats"): the opcode tables,
+// written from the opcode lists with regular families built in loops, the decoders, and the fields
+// in LLVM's gfx7 syntax. Bits that the manual marks as reserved are ignored.
 
 #include <algorithm>
 #include <array>
@@ -125,8 +125,9 @@ void set(ImgTable& t, unsigned op, std::string name, MemKind kind, unsigned addr
 
 ImgTable make_mimg() {
     ImgTable t;
-    constexpr std::array<const char*, 6> loads = {"load",         "load_mip",     "load_pck",
-                                                  "load_pck_sgn", "load_mip_pck", "load_mip_pck_sgn"};
+    constexpr std::array<const char*, 6> loads = {"load",         "load_mip",
+                                                  "load_pck",     "load_pck_sgn",
+                                                  "load_mip_pck", "load_mip_pck_sgn"};
     for (unsigned i = 0; i < loads.size(); ++i) {
         set(t, i, std::string("image_") + loads[i], MemKind::load);
     }
@@ -147,7 +148,8 @@ ImgTable make_mimg() {
     for (unsigned o = 0; o < 2; ++o) {
         for (unsigned c = 0; c < 2; ++c) {
             for (unsigned m = 0; m < 8; ++m) {
-                const std::string suffix = std::string(c ? "_c" : "") + variants[m] + (o ? "_o" : "");
+                const std::string suffix =
+                    std::string(c ? "_c" : "") + variants[m] + (o ? "_o" : "");
                 const unsigned addr = 1 + c + o + extra[m];
                 const unsigned op = o * 16 + c * 8 + m;
                 set(t, 32 + op, "image_sample" + suffix, MemKind::sample, addr);
