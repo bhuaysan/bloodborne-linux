@@ -20,18 +20,19 @@ How the game's GPU work reaches Vulkan: the shader translator (GCN → SPIR-V), 
 src/gpu/
   gcn/     bbgcn    decoder, disassembler, analysis, translator, SPIR-V builder (no Vulkan, no loader)
   pm4/     bbpm4    PM4 packets, parser and GPU register mirror (second wave)
-  vk/      bbvk     Vulkan backend: device, memory, pipelines, presentation (later wave)
+  vk/      bbvk     Vulkan backend: device core (#269); memory, pipelines, presentation later
 src/tools/bb-gcn    command line: disassemble or translate one shader binary
 tools/shaderbnd/    Python: extracts the shaders from the game's archives into analysis/
 tests/gpu/gcn/      bbgcn unit, corpus and execution tests (one directory per target, as in runtime.md)
 tests/gpu/pm4/      bbpm4 tests on synthetic streams
 tests/gpu/runner/   bbcomputerunner: the test-only Vulkan compute runner on lavapipe, and the translator's execution tests (built only with Vulkan)
 tests/gpu/programs/ our GCN test programs: assembly source plus assembled words as hex text
+tests/gpu/vk/       bbvk tests: device choice, and the device core on lavapipe (built only with Vulkan)
 ```
 
 Dependencies:
 - `bbgcn` depends only on `bbcommon`, so it builds and tests without Vulkan.
-- `bbvk` depends on `bbgcn` and `bbpm4`.
+- `bbvk` depends on `bbgcn` and `bbpm4`. So far (the device core, #269) it needs only `bbcommon` and Vulkan, and `src/gpu/CMakeLists.txt` builds it only when `find_package(Vulkan)` finds Vulkan.
 - The HLE modules for `libSceGnmDriver` and `libSceVideoOut` (later wave) get their own `OBJECT` library on top of `bbvk`, so the harness test binaries that link `bbhle` don't pull in Vulkan.
 
 Namespaces: `bb::gcn`, `bb::pm4`, `bb::vk`.
@@ -589,6 +590,21 @@ Commit `ff1b7a2e87eef8f301377e0cabbbeeeb73cc3b49`, all GPL-2.0-or-later except `
 
 Fetch shaders need nothing from shadPS4: our translator inlines them.
 
+### bbvk device core (item 14, as built)
+
+Part 1 of #269: `src/gpu/vk/device.*`, tests in `tests/gpu/vk/device_test.cpp`.
+
+- `Instance::create(why)` makes a Vulkan 1.3 instance with no layers or extensions; the presentation item adds the surface extensions. Without one it returns nothing and `why` gives the `VkResult`.
+- `Device::create(instance, options, why)` lists the physical devices and calls `choose_device` on what each one lacks. The automatic choice takes the first suitable device by type: discrete, integrated, virtual, CPU, other; within a type, enumeration order. `DeviceOptions::device` is a selector: only devices whose name contains it, ignoring case, are considered, with the same order among them (`"llvmpipe"` picks lavapipe in the tests). Nothing fits: `why` says "no Vulkan device", "no Vulkan device matches \"…\"", or lists each considered device with the first requirement it lacks. `bb-run` gets an option for the selector with the presentation item.
+- A device is suitable with: Vulkan 1.3; `VK_EXT_external_memory_host` and `VK_KHR_shader_maximal_reconvergence`; the features `shaderInt64`, `sparseBinding`, `sparseResidencyBuffer`, `bufferDeviceAddress`, `timelineSemaphore`, `subgroupBroadcastDynamicId`, `synchronization2`, `dynamicRendering`, `subgroupSizeControl`, `computeFullSubgroups` and `shaderMaximalReconvergence`; the basic, vote, ballot and shuffle subgroup operations in compute; a queue family with graphics and compute; and sparse binding in that family or in a family of its own. These are the compute runner's requirements plus the backend's (sparse residency and host memory import for the mirror, timeline semaphores and synchronization2 for the scheduler, dynamic rendering for the pipelines). Only these features are enabled, no others (`robustBufferAccess` stays off).
+- Queues: `graphics()` is queue 0 of the first family with graphics and compute; the GPU thread records everything there. `sparse()` is queue 0 of the first family whose flags are only sparse binding, if there is one, otherwise the graphics queue itself. RADV on the reference machine has such a family (family 4; families 0 graphics and 1 compute also offer sparse binding), lavapipe has one family with everything. Each `Queue` has a mutex to hold around `vkQueue*` calls, since the two may be the same queue.
+- `properties()` keeps the core, 1.1, 1.2 and 1.3 properties (`pNext` cleared) and `minImportedHostPointerAlignment` (4 KiB on lavapipe and RADV).
+- The test creates lavapipe through the selector, with `VK_LOADER_DRIVERS_SELECT=*lvp*` unless the environment sets it, and skips without an instance or a lavapipe device. It defines the same `leak:pthread_once` suppression as the compute runner. A manual run on the reference machine picked the RX 7800 XT (RADV) automatically, with the sparse-only family.
+
+Part 2 of #269 (a follow-up branch, kept apart for the 500-line limit):
+- `Scheduler` over the graphics queue: one timeline semaphore; `commands()` begins a command buffer on first use; `flush()` ends it with a barrier from all device writes to host reads and submits it with `vkQueueSubmit2`, signalling the next value (1, 2, …), and returns that value (with nothing recorded it submits nothing and returns the last value); `completed()` reads the semaphore; `wait(value, timeout)` waits and refuses a value never submitted; `finish()`; `defer(function)` runs a function once the work recorded so far has completed (to destroy objects the work uses); command buffers are reused once their value is reached. One thread uses it; other threads may wait on its semaphore.
+- The compute runner moves onto `Instance`, `Device` and `Scheduler`: its own instance, device choice, feature chains, command pool and fence go, its `DeviceInfo` comes from `properties()`, and the LeakSanitizer suppression moves into one test object library shared by the Vulkan test binaries. `Device` gets `memory_type(allowed, flags)` and the memory properties for the runner's buffers.
+
 ### Items
 
 Each item is one issue of at most 500 lines of code and tests. "Design" items are written in the main thread.
@@ -598,7 +614,7 @@ Each item is one issue of at most 500 lines of code and tests. "Design" items ar
 | 11 (#266) | **Maintainer: packages.** `SDL3-devel` locally and in CI, which builds in a Fedora 44 container (Ubuntu 24.04 has no SDL3 package and too old Vulkan headers). The window target is built only when SDL3 is found. | – |
 | 12 (#267) | **AMD register and PM4 headers** unchanged in `third_party/amd-gcn/`, own PR; the packet-name check of gnm.md against them. | – |
 | 13 (#268) | **Design spike: GPU memory mirror.** Sparse buffers below `maxBufferSize` (2 GiB by default) over a window range, bias table or consecutive addresses, host-pointer imports bound into them on RADV and lavapipe, binding granularity against 16 KiB mappings, a compute test reading CPU-written data through the bias. Result: "GPU memory mirror" above (dma-bufs of the memfd, 2 GiB buffers, bias table, 64 KiB blocks). | – |
-| 14 (#269) | **`bbvk` device core.** Instance, device choice (a discrete GPU first, lavapipe for tests), required features (Vulkan 1.3, buffer device address, sparse residency, dma-buf import: `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf`, with `vkGetPhysicalDeviceExternalBufferProperties` reporting dma-buf importable for sparse storage buffers with device addresses), queues, a timeline-semaphore scheduler. Shares setup with the test runner. | – |
+| 14 (#269) | **`bbvk` device core.** Instance, device choice (a discrete GPU first, lavapipe for tests), required features (Vulkan 1.3, buffer device address, sparse residency, dma-buf import: `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf`, with `vkGetPhysicalDeviceExternalBufferProperties` reporting dma-buf importable for sparse storage buffers with device addresses), queues, a timeline-semaphore scheduler. Shares setup with the test runner. Split in two (above): part 1 the device core, part 2 the scheduler and the runner on top. | – |
 | 15 (#270) | **PM4 parser core** (`bbpm4`). Headers, type-2 filler, register spaces and mirror, `NOP` tags, `INDIRECT_BUFFER`, `REWIND`, `CONTEXT_CONTROL`, `CLEAR_STATE`, unknown-opcode log. Synthetic streams. | 12 |
 | 16 (#271) | **Stage register imports.** `sceGnmSet{Vs,Ps,Cs,Es,Gs,Hs,Ls}Shader` and their "unchanged" variants, layouts checked against the shader files. | 12 |
 | 17 (#272) | **Constant engine.** CE RAM, `WRITE_CONST_RAM`, `DUMP_CONST_RAM`, `INDIRECT_BUFFER_CONST`, the CE/DE counters, DCB and CCB as two streams. | 18 |
