@@ -557,6 +557,44 @@ TEST_F(TranslateExec, LdsNarrowWideAndOutOfRange) {
     }
 }
 
+// The LDS atomics: every lane applies the same operation to a dword, or its own operand. The
+// result of the ones that don't commute doesn't depend on the order, because the lanes' operands
+// are equal. The exchange returns are checked as a whole: what the lanes got plus what is left
+// is what was put in.
+TEST_F(TranslateExec, LdsAtomics) {
+    constexpr std::uint32_t n = 128;
+    const auto out = run("lds_atomic", {}, 4 * n, 0, n);
+    std::uint32_t xor_all = 0, inc = 8, dec = 2, rsub = 100;
+    for (std::uint32_t i = 0; i < n; ++i) {
+        xor_all ^= i + 1;
+        inc = inc >= 10 ? 0 : inc + 1;
+        dec = dec == 0 || dec > 5 ? 5 : dec - 1;
+        rsub = 30 - rsub;
+    }
+    const std::uint32_t expected[16] = {
+        n * (n + 1) / 2, 0u - n * (n + 1) / 2, ~0u, xor_all, 0, 5, n - 1, 0u - 64, 63,
+        out[9], inc, dec, rsub, (0xf0f0'f0f0 & ~0x00ff'00ffu) | 0x1200'3400, 9, n};
+    for (std::uint32_t i = 0; i < 16; ++i) {
+        EXPECT_EQ(out[i], expected[i]) << "dword " << i;
+    }
+    EXPECT_GE(out[9], 1u);
+    EXPECT_LE(out[9], n);
+    std::uint32_t exchanged = out[9], swapped = 0;
+    std::vector<std::uint32_t> added;
+    for (std::uint32_t i = 0; i < n; ++i) {
+        exchanged += out[n + i];
+        swapped += out[2 * n + i] == 5;
+        EXPECT_EQ(out[2 * n + i] == 5 || out[2 * n + i] == 9, true) << "lane " << i;
+        added.push_back(out[3 * n + i]);
+    }
+    EXPECT_EQ(exchanged, n * (n + 1) / 2);
+    EXPECT_EQ(swapped, 1u);  // the first lane swaps 5 for 9, the others find 9
+    std::ranges::sort(added);
+    for (std::uint32_t i = 0; i < n; ++i) {
+        EXPECT_EQ(added[i], i);
+    }
+}
+
 TEST_F(TranslateExec, ScalarLoopAndSkips) {
     const auto out = run("scalar_loop", {5, 0x8000'0001}, lanes + 1);
     for (std::uint32_t i = 0; i < lanes; ++i) {

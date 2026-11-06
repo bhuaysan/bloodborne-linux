@@ -1147,12 +1147,13 @@ private:
         if (d->kind == detail::DsKind::nop) {
             return;
         }
-        if (d->kind == detail::DsKind::atomic) {
-            unsupported();
-        }
         wave_size_dependent_ = true;
         wave_sync();
         const Id address = read(inst.src[0]);
+        if (d->kind == detail::DsKind::atomic) {
+            ds_atomic(inst, *d, address);
+            return;
+        }
         const unsigned dwords = std::max(1u, d->bytes / 4u);
         for (unsigned n = 0; n < (d->pair ? 2u : 1u); ++n) {
             const unsigned field = d->pair ? (inst.mem_offset >> (8 * n)) & 0xff : inst.mem_offset;
@@ -1241,6 +1242,70 @@ private:
         return b_.op(Op::OpShiftLeftLogical, u32_,
                      {b_.op(Op::OpBitwiseAnd, u32_, {address, b_.constant_u32(3)}),
                       b_.constant_u32(3)});
+    }
+
+    // The 32-bit LDS atomics: add, sub, rsub, inc, dec, min, max, and, or, xor, mskor, wrxchg and
+    // cmpst. With a return value, VDST gets the dword from before the operation. The ones that
+    // have no SPIR-V atomic update the dword in a compare-and-swap loop.
+    void ds_atomic(const Instruction& inst, const detail::DsOperation& d, Id address) {
+        using A = detail::DsAtomic;
+        const Id at = b_.op(Op::OpIAdd, u32_, {address, b_.constant_u32(inst.mem_offset)});
+        const auto [pointer, in_range] = lds_ref(at, 0);
+        const Id data = read(inst.src[1]);  // data0
+        const Id data1 = inst.num_src > 2 ? read(inst.src[2]) : 0;
+        const Id scope = b_.constant_u32(spirv_word(spv::Scope::Workgroup));
+        const Id none = b_.constant_u32(0);
+        const auto direct = [&](Op op) { return b_.op(op, u32_, {pointer, scope, none, data}); };
+        const Id result = b_.local_variable(b_.type_pointer(SC::Function, u32_));
+        store(result, b_.constant_u32(0));
+        when(b_.op(Op::OpLogicalAnd, bool_, {active(), in_range}), [&] {
+            Id old = 0;
+            switch (d.op) {
+            case A::add: old = direct(Op::OpAtomicIAdd); break;
+            case A::sub: old = direct(Op::OpAtomicISub); break;
+            case A::smin: old = direct(Op::OpAtomicSMin); break;
+            case A::smax: old = direct(Op::OpAtomicSMax); break;
+            case A::umin: old = direct(Op::OpAtomicUMin); break;
+            case A::umax: old = direct(Op::OpAtomicUMax); break;
+            case A::bit_and: old = direct(Op::OpAtomicAnd); break;
+            case A::bit_or: old = direct(Op::OpAtomicOr); break;
+            case A::bit_xor: old = direct(Op::OpAtomicXor); break;
+            case A::exchange: old = direct(Op::OpAtomicExchange); break;
+            case A::cmpst:  // MEM = MEM == data0 ? data1 : MEM
+                old = b_.op(Op::OpAtomicCompareExchange, u32_,
+                            {pointer, scope, none, none, data1, data});
+                break;
+            default:
+                old = atomic_update(pointer, [&](Id v) { return updated(d.op, v, data, data1); });
+            }
+            store(result, old);
+        });
+        if (d.returns) {
+            write_vector(inst.dst[0], load(u32_, result));
+        }
+    }
+
+    // The new value of the dword `v` for the operations that need a compare-and-swap loop.
+    Id updated(detail::DsAtomic op, Id v, Id data, Id data1) {
+        const auto u = [&](Op o, Id x, Id y) { return b_.op(o, u32_, {x, y}); };
+        const auto test = [&](Op o, Id x, Id y) { return b_.op(o, bool_, {x, y}); };
+        const Id zero = b_.constant_u32(0);
+        switch (op) {
+        case detail::DsAtomic::rsub:
+            return u(Op::OpISub, data, v);
+        case detail::DsAtomic::inc:  // wraps to 0 after data
+            return b_.op(Op::OpSelect, u32_,
+                         {test(Op::OpUGreaterThanEqual, v, data), zero,
+                          u(Op::OpIAdd, v, b_.constant_u32(1))});
+        case detail::DsAtomic::dec:  // wraps to data after 0 and above data
+            return b_.op(Op::OpSelect, u32_,
+                         {b_.op(Op::OpLogicalOr, bool_, {test(Op::OpIEqual, v, zero),
+                                                         test(Op::OpUGreaterThan, v, data)}),
+                          data, u(Op::OpISub, v, b_.constant_u32(1))});
+        default:  // mskor: (MEM & ~data0) | data1
+            return u(Op::OpBitwiseOr, u(Op::OpBitwiseAnd, v, b_.op(Op::OpNot, u32_, {data})),
+                     data1);
+        }
     }
 
     // Replaces the dword at `pointer` by f(old) atomically, as a loop on a compare-and-swap, and

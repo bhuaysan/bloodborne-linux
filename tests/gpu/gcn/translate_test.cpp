@@ -205,6 +205,16 @@ TEST(GcnTranslate, SubDwordWritesAreOneCompareSwapLoop) {
     EXPECT_EQ(count(spv::Op::OpAtomicOr), 0u);
 }
 
+// The atomics that update their dword in a compare-and-swap loop (inc, dec, rsub, mskor) start
+// from an atomic load: a plain one would race with the other lanes' atomics.
+TEST(GcnTranslate, CompareSwapLoopsStartWithAnAtomicLoad) {
+    const auto atomic_loads = [](std::string_view name) {
+        return count_ops(translate(program_words(name), {}, key5).spirv, spv::Op::OpAtomicLoad);
+    };
+    EXPECT_EQ(atomic_loads("lds_atomic"), 4u);
+    EXPECT_EQ(atomic_loads("lds_rw"), 0u);
+}
+
 // Scalar ALU, a loop on SCC, and the vector ALU in VOP1, VOP2 and VOP3 encodings.
 TEST(GcnTranslate, AluAndBranchesPassSpirvVal) {
     if (!have_spirv_val()) {
