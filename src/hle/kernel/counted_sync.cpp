@@ -1,4 +1,4 @@
-// The counted sync object: four unnamed libkernel imports (docs/design/m3-core-os.md, "Sync";
+// The counted sync object: five unnamed libkernel imports (docs/design/m3-core-os.md, "Sync";
 // call sites and results in docs/formats/kernel-abi.md, "Counted sync object"). Names unknown
 // (docs/design/m3-core-os.md, "Naming"), so the C++ names describe what the calls do.
 
