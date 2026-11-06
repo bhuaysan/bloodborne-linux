@@ -107,8 +107,14 @@ Matched 1784 of 3000 (NID, library) pairs. **Firmware imports of the static load
   - libkernel rose from 20 to 91 of 140, libSceNet from 20 to 35 of 35, and libSceAvPlayer to 14 of 16.
   - Net and several smaller libraries are complete: AudioOut, AudioIn, Mouse, MsgDialog, ImeDialog, NpSignaling, NpCommerce, NpProfileDialog, Ssl, Sysmodule and CommonDialog.
 - **Bundled PRXs:** the first names in four of the five extra PRXs, for example `sceFaceDetection`, `sceHandDetection` and `sceHeadTrackerInitialize`.
-- **Still weak:**
-  - libSceGnmDriver has 2 of 50. Its names need more or rarer words than the vocabulary has. They are left to the GNM work, where the game's use of each function will suggest names.
-  - The libraries in `NO_DERIVE_LIBRARIES` stay at 0 by design.
+- **Still weak:** libSceGnmDriver had 2 of 50 at this point. Its names need more or rarer words than the vocabulary has.
 
 `sceSysmoduleLoadModule` is now named. With it, the question of the five extra bundled PRXs is answered in [imports.md](imports.md#modules-loaded-at-runtime).
+
+### With a public name list
+
+Matched 1998 of 3000 (NID, library) pairs, up from 1794. **Firmware imports of the static load set: 528 of 539.** The list is shadPS4's `LIB_FUNCTION` registrations at commit `0d5f273` (`shadps4-0d5f273`, 5155 candidate names).
+- **204 new rows**, all with the label `shadps4-0d5f273`. Most are libSceGnmDriver (48, now 50 of 50), libkernel (38, now 132 of 140), the Np libraries (libSceNpMatching2 15, libSceNpManager 11, libSceNpScore 10, libSceNpWebApi 8, libSceNpUtility 7), libSceHttp 10, and the five libraries of the former exposure log.
+- **Former exposure-log libraries:** libSceRtc 10 of 10, libSceSaveData 11 of 11 and libSceSaveDataDialog 4 of 4. The eboot imports nothing from libSceRegMgr or libSceRemoteplay, so there is nothing to name there.
+- **Derivation rules on the five libraries:** `derive.py` ran without the exclusion, and with `--ignore-source shadps4-0d5f273` so that the list's thousands of words don't blow up the search (a first run without it was still in round 1 after 24 minutes on 4 cores). It found no name that the list lacks. It did find 13 of the 25 names of the former exposure-log libraries on its own: libSceRtc 2 of 10, libSceSaveData 7 of 11 and libSceSaveDataDialog 4 of 4. Those rows carry both labels. The rules also reached many names that were already matched, so their rows gained the list's label.
+- **Still unmatched:** 882 of libc.prx's 2140 NIDs, 44 of libSceSmart's 48, 21 of libSceFios2's 165, 19 of libSceFace's 29, 18 of libSceLibcInternal's 70 and 8 of libkernel's 140.
