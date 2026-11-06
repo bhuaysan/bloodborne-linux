@@ -543,7 +543,7 @@ TEST_F(TranslateExec, LdsNarrowWideAndOutOfRange) {
         EXPECT_EQ(out[6 * n + i], i + 3);
         EXPECT_EQ(out[7 * n + i], i + 2);
         EXPECT_EQ(out[8 * n + i], 0u);
-        EXPECT_EQ(out[9 * n + i], 0u);
+        EXPECT_EQ(out[9 * n + i], 0x5a5a'5a5au);
         // Lane j writes the bit j % 8 to the byte j % 4 and the bit j % 16 to the halfword j % 2.
         // The lanes of one address agree on the winner, and it is the bit of one of them.
         const auto won = [&](std::uint32_t index, std::uint32_t slot, std::uint32_t slots) {

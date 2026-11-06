@@ -6,7 +6,8 @@ v_lshlrev_b32_e32 v1, 2, v0
 v_or_b32_e32 v2, s0, v1             ; v[2:3] = &out[i]
 v_mov_b32_e32 v3, s1
 v_mov_b32_e32 v30, 0
-ds_write_b32 v1, v30                ; dwords 0-127 = 0
+v_mov_b32_e32 v39, 0x5a5a5a5a
+ds_write_b32 v1, v39                ; dwords 0-127 = 0x5a5a5a5a (so a clamped read is not 0)
 v_add_i32_e32 v4, vcc, 0x1800, v0   ; the byte 6144 + i holds (i + 1) | 0x80
 v_add_i32_e32 v5, vcc, 1, v0
 v_or_b32_e32 v5, 0x80, v5
@@ -39,7 +40,7 @@ v_mov_b32_e32 v27, 0x3000           ; the first byte past the LDS
 v_mov_b32_e32 v28, 0xdead
 ds_write_b32 v27, v28               ; dropped
 v_mov_b32_e32 v26, 7
-ds_read_b32 v26, v27                ; 0
+ds_read_b32 v26, v27                ; 0, not dword 0
 v_and_b32_e32 v12, -2, v0
 v_add_i32_e32 v12, vcc, 0x1800, v12 ; the halfword of the two bytes 2k and 2k + 1
 s_waitcnt lgkmcnt(0)
@@ -51,7 +52,7 @@ ds_read_i16 v11, v6
 ds_read_u16 v14, v12
 ds_read_b128 v[20:23], v13
 ds_read_b64 v[24:25], v13 offset:8
-ds_read_b32 v29, v30                ; dword 0 is still 0 after the dropped write
+ds_read_b32 v29, v30                ; dword 0 is still 0x5a5a5a5a after the dropped write
 ds_read_u8 v37, v32
 ds_read_u16 v38, v34
 s_waitcnt lgkmcnt(0)
