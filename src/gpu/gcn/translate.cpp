@@ -1180,7 +1180,8 @@ private:
         if (inst.nfmt != nfmt::uint_ && inst.nfmt != nfmt::sint) {
             // The other number formats convert through f32 (or unpack a half float). The float
             // modes keep a half float's infinities, NaNs and -0 on the way; no conversion makes an
-            // f32 denormal, and the 16-bit integers convert exactly.
+            // f32 denormal, and the 16-bit integers convert exactly. The rounding mode does reach
+            // the divisions of the normalized formats (a known difference, see the design note).
             note_float();
         }
         for (unsigned c = 0; c < data.dwords; ++c) {
