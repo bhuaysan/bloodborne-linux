@@ -48,6 +48,11 @@ ShaderKey default_key(unsigned type) {
     return {};
 }
 
+// The fetch subroutine the vertex shaders call. The run time reads it from user data, and the
+// archives hold none, so offline the call goes to an empty one (s_setpc_b64 s[0:1]): the VS's
+// attribute VGPRs keep their initial 0, and the translation goes on after the call.
+const Words empty_fetch = {sop1(32, 0, 0)};
+
 // The message without the position GcnError appends, for grouping.
 std::string without_position(const std::string& message) {
     return message.substr(0, message.find(" at offset "));
@@ -109,7 +114,7 @@ struct Outcome {
 Outcome translate_program(const Words& code, unsigned type, bool validate_module) {
     Outcome out;
     try {
-        const auto translation = translate(code, {}, default_key(type));
+        const auto translation = translate(code, empty_fetch, default_key(type));
         out.translated = true;
         out.wave_size_dependent = translation.interface.wave_size_dependent;
         if (validate_module) {
@@ -339,6 +344,15 @@ TEST(GcnCoverage, ProgramOutcomes) {
         EXPECT_EQ(compute.message, "exp in a compute shader") << "type " << type;
         EXPECT_EQ(compute.blocker, "exp") << "type " << type;
     }
+
+    // The vertex key calls the empty fetch subroutine; the compute key stops at the call.
+    const Words call = {sop1(33, 0, 0), s_endpgm};  // s_swappc_b64 s[0:1], s[0:1]
+    const Outcome vertex = translate_program(call, 1, true);
+    EXPECT_TRUE(vertex.translated) << vertex.message;
+    EXPECT_EQ(vertex.invalid, "");
+    const Outcome compute = translate_program(call, 0, true);
+    EXPECT_EQ(compute.message, "unsupported instruction s_swappc_b64");
+    EXPECT_EQ(compute.blocker, "s_swappc_b64");
 }
 
 TEST(GcnCoverage, KindOfNamesTheInstruction) {
