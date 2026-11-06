@@ -190,6 +190,26 @@ TEST(GcnStages, ProgramsPassSpirvVal) {
     }
 }
 
+// s_wqm_b64 in a pixel shader is the same two quad swaps as in compute: a fragment shader's
+// quads are its 2x2 pixel quads, helper invocations included.
+TEST(GcnStages, PixelWholeQuadMode) {
+    Words code = {sop1(10, 126, 126)};  // s_wqm_b64 exec, exec
+    const auto out = xport(0xf, 0, 0, 1, 2, 3, xp::done | xp::vm);  // exp mrt0 v0-v3 done vm
+    code.insert(code.end(), out.begin(), out.end());
+    code.push_back(s_endpgm);
+    const auto ps = translate(code, {}, pixel_key());
+    if (have_spirv_val()) {
+        EXPECT_EQ(validate(ps.spirv), "");
+    }
+    EXPECT_EQ(count(ps.spirv, spv::Op::OpEntryPoint, 1, 4), 1);  // Fragment
+    EXPECT_EQ(count(ps.spirv, spv::Op::OpGroupNonUniformQuadSwap), 2);
+    EXPECT_EQ(count(ps.spirv, spv::Op::OpCapability, 1,
+                    static_cast<std::uint32_t>(spv::Capability::GroupNonUniformQuad)),
+              1);
+    EXPECT_EQ(count(ps.spirv, spv::Op::OpDemoteToHelperInvocation), 1);
+    EXPECT_TRUE(ps.interface.wave_size_dependent);  // the SCC is any over the subgroup
+}
+
 // A default value is the same at the three vertices, so v_interp_mov_f32 of its differences P10
 // and P20 gives 0 and only p0 gives the value (attr3 is 1111 in pixel_key).
 TEST(GcnStages, DefaultValueDifferencesAreZero) {
