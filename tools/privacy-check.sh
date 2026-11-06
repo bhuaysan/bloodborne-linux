@@ -1,7 +1,7 @@
 #!/bin/sh
 # Checks the commits on a branch before they are pushed or merged:
 # authorship, agent and game files, file sizes, personal data in added
-# lines and commit messages, and AI attribution.
+# lines and commit messages, AI attribution, and commit subject length.
 #
 # Usage: tools/privacy-check.sh [<base>]   (default: origin/main)
 # Checks every commit in <base>..HEAD and the file list of HEAD. Exit status 1 on any
@@ -61,6 +61,9 @@ fi
 # an assignment, so set -e stops the check if git log can't walk the range
 msgs="$(git log --format=%B "$range")"
 check_message "$msgs" "a commit message"
+for c in $(git rev-list "$range"); do
+    check_subject "$(git log -1 --format=%s "$c")" final
+done
 
 [ "$FAILED" -eq 0 ] || exit 1
 echo "privacy check clean: $range"

@@ -69,3 +69,23 @@ check_message() {
         fail "$2 contains AI attribution"
     fi
 }
+
+SUBJECT_LIMIT=72
+
+# Fails if a commit subject is 72 characters or longer (AGENTS.md: under
+# 72). Exempt: Revert and merge commits. Autosquash subjects (fixup!,
+# squash!, amend!) are fine while committing but must not reach main.
+# $1: the subject, $2: "final" for commits that are about to be merged.
+check_subject() {
+    case "$1" in
+        'fixup! '*|'squash! '*|'amend! '*)
+            [ "${2:-}" = final ] &&
+                fail "autosquash commit must be squashed before merging: $1"
+            return 0 ;;
+        'Revert "'*|'Merge '*) return 0 ;;
+    esac
+    subject_len="$(printf '%s' "$1" | wc -m | tr -d ' ')"
+    if [ "$subject_len" -ge "$SUBJECT_LIMIT" ]; then
+        fail "commit subject is $subject_len characters, the limit is under $SUBJECT_LIMIT: $1"
+    fi
+}

@@ -1,9 +1,12 @@
 #!/bin/sh
-# Checks the commit message for personal data and AI attribution.
+# Checks the commit message for personal data, AI attribution and a subject
+# of 72 characters or more.
 . "$(dirname "$0")/privacy-lib.sh"
 FAILED=0
 msg_file="$1"
-check_message "$(grep -v '^#' "$msg_file")" "commit message"
+msg="$(grep -v '^#' "$msg_file" || true)"
+check_message "$msg" "commit message"
+check_subject "$(printf '%s\n' "$msg" | sed -n 1p)"
 
 [ "$FAILED" -eq 0 ] || exit 1
 exit 0
