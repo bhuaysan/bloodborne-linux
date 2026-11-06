@@ -65,7 +65,6 @@ public:
     void erase(CondWaiter* w) {
         (w->prev != nullptr ? w->prev->next : first_) = w->next;
         (w->next != nullptr ? w->next->prev : last_) = w->prev;
-        w->prev = w->next = nullptr;
     }
 
     // Removes and returns the first waiter. The queue must not be empty.

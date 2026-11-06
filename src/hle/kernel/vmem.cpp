@@ -370,8 +370,7 @@ int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
         const std::scoped_lock lock(table_mutex);
         error = map_locked(m, *prot, reserved, out);
     }
-    // Logged after the lock is released, so lines from different threads may come out of the
-    // table's order. Accepted: they are debug lines.
+    // After the lock: threads may log out of table order (accepted, debug lines only).
     if (error == 0) {
         log(LogLevel::debug, "map {:#x}-{:#x} prot {:#x} flags {:#x} '{}'", out, out + m.length,
             m.prot, m.flags, m.name);

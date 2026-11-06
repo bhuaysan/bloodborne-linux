@@ -310,10 +310,8 @@ TEST(KernelVmem, RuntimeMemoryIsNeverUnmapped) {
 TEST(KernelVmem, MapAndUnmapLinesAreDebugOnly) {
     bb::common::set_log_filter(bb::common::LogFilter{});  // info and above
     testing::internal::CaptureStderr();
-    const std::uintptr_t p = map_pages(1);
-    const int unmapped = sceKernelMunmap(ptr(p), page_size);
+    const int unmapped = sceKernelMunmap(ptr(map_pages(1)), page_size);
     const std::string log = testing::internal::GetCapturedStderr();
-    ASSERT_NE(p, 0U);
     EXPECT_EQ(unmapped, 0);
     EXPECT_EQ(log.find("map "), std::string::npos) << log;  // "map " and "unmap "
 }

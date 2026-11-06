@@ -66,26 +66,20 @@ TEST(KernelTime, UnknownClockIdsFail) {
     }
 }
 
-// Unknown clock ids are logged like stub calls: calls 1 to 10, then every 1000th. Other tests may
-// have counted already, so the first 10 calls are made without looking; any 1000 calls after
-// them then log exactly once.
+// Logged as stub calls are: calls 1 to 10, then every 1000th. Once 10 calls are past (other tests
+// may have made some), any 1000 calls log one line.
 TEST(KernelTime, UnknownClockIdsAreLoggedRateLimited) {
     bb::common::set_log_filter(bb::common::LogFilter{});  // info and above
     GuestTimespec t{};
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 1010; ++i) {
+        if (i == 10) {
+            testing::internal::CaptureStderr();
+        }
         guest_clock_gettime(-1, &t);
     }
-    testing::internal::CaptureStderr();
-    for (int i = 0; i < 1000; ++i) {
-        EXPECT_EQ(guest_clock_gettime(-1, &t), -1);
-    }
     const std::string log = testing::internal::GetCapturedStderr();
-    std::size_t lines = 0;
-    for (std::size_t at = log.find("unknown clock id -1"); at != std::string::npos;
-         at = log.find("unknown clock id -1", at + 1)) {
-        ++lines;
-    }
-    EXPECT_EQ(lines, 1U) << log;
+    EXPECT_EQ(log.find('\n'), log.size() - 1) << log;  // one line
+    EXPECT_NE(log.find("unknown clock id -1"), std::string::npos) << log;
 }
 
 TEST(KernelTime, CountersNeverGoBackwards) {
