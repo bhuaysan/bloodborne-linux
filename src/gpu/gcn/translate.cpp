@@ -1020,33 +1020,11 @@ private:
         if ((inst.flags & (flag::tfe | flag::lds)) != 0) {
             fail(std::format("{} with tfe or lds is not supported yet", name));
         }
-        const bool addr64 = (inst.flags & flag::addr64) != 0;
-        const bool idxen = (inst.flags & flag::idxen) != 0;
-        if (addr64 && (idxen || (inst.flags & flag::offen) != 0)) {
-            fail(std::format("{} with addr64 and idxen or offen is not allowed", name));
-        }
         const Operand& data = load ? inst.dst[0] : inst.src[0];
-        const Operand* a = &inst.src[load ? 0 : 1];
-        const Vsharp v = vsharp(a[1]);
-        const Id soffset = b_.op(Op::OpUConvert, u64_, {read(a[2])});
-        Id guest = add(v.base, soffset);
-        Id offset = c64(inst.mem_offset), index = c64(0);
-        unsigned next = 0;
-        if (addr64) {
-            guest = add(guest, read64(a[0]));
-        }
-        if (idxen) {
-            index = b_.op(Op::OpUConvert, u64_, {read(a[0], next++)});
-        }
-        if ((inst.flags & flag::offen) != 0) {
-            offset = add(offset, b_.op(Op::OpUConvert, u64_, {read(a[0], next++)}));
-        }
-        guest = add(guest, add(offset, b_.op(Op::OpIMul, u64_, {index, v.stride})));
+        const BufferAccess m = buffer_access(inst, &inst.src[load ? 0 : 1]);
         for (unsigned d = 0; d < data.dwords; ++d) {
-            const Id address = add(add(guest, c64(4 * d)), bias_);
-            const Id ok = addr64 ? b_.constant_bool(true)
-                                 : buffer_in_range(v, soffset, index, offset, idxen, d);
-            const Id cond = b_.op(Op::OpLogicalAnd, bool_, {active(), ok});
+            const Id address = add(add(m.guest, c64(4 * d)), bias_);
+            const Id cond = b_.op(Op::OpLogicalAnd, bool_, {active(), inside(m, d)});
             if (load) {
                 write_vector(data, guarded_load(cond, address), d);
             } else {
@@ -1096,6 +1074,50 @@ private:
         }
         return b_.op(Op::OpSelect, bool_,
                      {b_.op(Op::OpINotEqual, bool_, {v.stride, c64(0)}), structured, raw});
+    }
+
+    // An MUBUF or MTBUF access: the address of its element and what its range check needs.
+    struct BufferAccess {
+        Vsharp v;
+        Id guest = 0;    // u64: the address without the bias
+        Id soffset = 0;  // u64
+        Id offset = 0;   // u64: the instruction's offset plus the VGPR's under `offen`
+        Id index = 0;    // u64: the VGPR index under `idxen`, else 0
+        bool addr64 = false, idxen = false;
+    };
+
+    // The address and range check of an instruction whose vaddr, V# and soffset operands are
+    // a[0] to a[2]: base + soffset + index * stride + offset (see buffer_memory).
+    BufferAccess buffer_access(const Instruction& inst, const Operand* a) {
+        BufferAccess m;
+        m.addr64 = (inst.flags & flag::addr64) != 0;
+        m.idxen = (inst.flags & flag::idxen) != 0;
+        if (m.addr64 && (m.idxen || (inst.flags & flag::offen) != 0)) {
+            fail(std::format("{} with addr64 and idxen or offen is not allowed", inst.name));
+        }
+        m.v = vsharp(a[1]);
+        m.soffset = b_.op(Op::OpUConvert, u64_, {read(a[2])});
+        m.guest = add(m.v.base, m.soffset);
+        m.offset = c64(inst.mem_offset);
+        m.index = c64(0);
+        unsigned next = 0;
+        if (m.addr64) {
+            m.guest = add(m.guest, read64(a[0]));
+        }
+        if (m.idxen) {
+            m.index = b_.op(Op::OpUConvert, u64_, {read(a[0], next++)});
+        }
+        if ((inst.flags & flag::offen) != 0) {
+            m.offset = add(m.offset, b_.op(Op::OpUConvert, u64_, {read(a[0], next++)}));
+        }
+        m.guest = add(m.guest, add(m.offset, b_.op(Op::OpIMul, u64_, {m.index, m.v.stride})));
+        return m;
+    }
+
+    // Whether dword `d` of the access is inside the buffer; `addr64` is not range-checked.
+    Id inside(const BufferAccess& m, unsigned d) {
+        return m.addr64 ? b_.constant_bool(true)
+                        : buffer_in_range(m.v, m.soffset, m.index, m.offset, m.idxen, d);
     }
 
     // The clamp of s_buffer_load_dword* (7.2.2, p. 7-2): dword `d` of an access at byte `offset`

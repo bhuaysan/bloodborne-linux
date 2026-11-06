@@ -77,7 +77,8 @@ bool intersect(State& into, const State& other) {
 }  // namespace
 
 const Operand* buffer_descriptor(const Instruction& inst) {
-    if (inst.format == Format::mubuf && inst.num_src >= 3) {
+    const bool buffer = inst.format == Format::mubuf || inst.format == Format::mtbuf;
+    if (buffer && inst.num_src >= 3) {
         return &inst.src[inst.num_src - 2];  // the descriptor and soffset come last
     }
     if (inst.format == Format::smrd && std::string_view(inst.name).starts_with("s_buffer_load")) {

@@ -65,6 +65,12 @@ TEST(GcnDescriptors, SourcesAreForgotten) {
               std::vector<Path>{});
 }
 
+// MTBUF names its V# like MUBUF does.
+TEST(GcnDescriptors, MtbufSource) {
+    EXPECT_EQ(buffer_sources(join({mtbuf(0, 3, 1, 4, 128, 0, 4, 7, buf::offen), {s_endpgm}})),
+              std::vector<Path>{{4}});
+}
+
 // A V# with swizzle_enable (dword 1 bit 31), add_tid_enable (dword 3 bit 23, bit 119 of the
 // descriptor, Table 8.5) or heap (dword 3 bit 26, bit 122) is a GcnError until those modes are
 // implemented; the other bits of those dwords, such as the cache swizzle (bit 62) and the stride,
