@@ -11,7 +11,7 @@ Each value names its source:
 - **libc NNNN**, **eboot NNNN**, **Fios NNNN**: a use in `libc.prx`, the eboot or `libSceFios2.prx` of the pinned build, at that link address. The address is where the value appears as a constant or offset. Read from our standard-ELF rewrites with objdump.
 - **no use found**: the value comes from the source before it only. Nothing in the three files of the load set was found to use it, so it is not confirmed.
 
-Imports named below are those of `symbols/nids.csv`. Where only a NID is given, it has no row there. The **errno-location import** `9BcDykPmo1I` is `__error`; it returns the calling thread's `int*` errno (see [Errno storage](#errno-storage)).
+Import names below are those of `symbols/nids.csv`. A bare NID in this note is only an identifier and does not imply that `nids.csv` lacks a row for it. The **errno-location import** `9BcDykPmo1I` is `__error`; it returns the calling thread's `int*` errno (see [Errno storage](#errno-storage)).
 
 ## errno
 
