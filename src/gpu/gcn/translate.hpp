@@ -63,8 +63,10 @@ struct Translation {
 };
 
 // Translates the program at the start of `code` into a SPIR-V 1.6 module with the entry point
-// "main". `fetch` is the vertex stages' fetch subroutine (unused in compute). Throws GcnError for
-// an instruction or key that isn't supported, naming it.
+// "main". `fetch` is the code of the vertex stage's fetch subroutine, from the address in user-data
+// dwords 0-1, which may extend past its s_setpc_b64; it is inlined at the program's s_swappc_b64
+// and ignored in the other stages and in a program without the call. Throws GcnError for an
+// instruction or key that isn't supported, naming it.
 Translation translate(std::span<const std::uint32_t> code, std::span<const std::uint32_t> fetch,
                       const ShaderKey& key);
 

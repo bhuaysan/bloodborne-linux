@@ -24,6 +24,7 @@
 #include "gpu/gcn/buffer_format.hpp"
 #include "gpu/gcn/cfg.hpp"
 #include "gpu/gcn/descriptors.hpp"
+#include "gpu/gcn/fetch.hpp"
 #include "gpu/gcn/gcn.hpp"
 #include "gpu/gcn/lds.hpp"
 #include "gpu/gcn/spirv_builder.hpp"
@@ -199,8 +200,16 @@ constexpr std::uint32_t rsrc1_dx10_clamp = 1u << 21;
 
 class Translator final : public detail::StageRegisters {
 public:
-    Translator(std::span<const std::uint32_t> code, const ShaderKey& key)
-        : code_(code), key_(key), program_(decode(code)), cfg_(build_cfg(program_)) {}
+    // The vertex stage's fetch subroutine is inlined at its call. Elsewhere s_swappc_b64 stays
+    // an unsupported instruction.
+    Translator(std::span<const std::uint32_t> code, std::span<const std::uint32_t> fetch,
+               const ShaderKey& key)
+        : code_(code),
+          key_(key),
+          program_(decode(code)),
+          fetch_(key.stage == Stage::vertex ? detail::inline_fetch(program_, fetch)
+                                            : detail::FetchSite{}),
+          cfg_(build_cfg(program_)) {}
 
     Translation run() {
         check_key();
@@ -355,14 +364,14 @@ private:
         const Id c0 = b_.constant_u32(0);
         const Id address = load(u64_, b_.op(Op::OpAccessChain,
                                             b_.type_pointer(SC::PushConstant, u64_), {push, c0}));
-        const Id draw = b_.op(Op::OpConvertUToPtr, global_pointer(draw_t), {address});
+        draw_ = b_.op(Op::OpConvertUToPtr, global_pointer(draw_t), {address});
         for (unsigned k = 0; k < user_sgprs(); ++k) {
             const Id p = b_.op(Op::OpAccessChain, global_pointer(u32_),
-                               {draw, c0, b_.constant_u32(k)});
+                               {draw_, c0, b_.constant_u32(k)});
             store(sgpr(k), load_global(u32_, p, 4));
         }
         bias_ = load_global(
-            u64_, b_.op(Op::OpAccessChain, global_pointer(u64_), {draw, b_.constant_u32(1)}), 8);
+            u64_, b_.op(Op::OpAccessChain, global_pointer(u64_), {draw_, b_.constant_u32(1)}), 8);
 
         if (graphics()) {
             lane_ = load(u32_, builtin(spv::BuiltIn::SubgroupLocalInvocationId));
@@ -461,7 +470,9 @@ private:
     void scalar(const Instruction& inst) {
         const std::string_view name = inst.name;
         const Operand& dst = inst.dst[0];
-        if (name == "s_mov_b64" && is_mask(dst)) {
+        if (static_cast<std::uint32_t>(&inst - program_.data()) == fetch_.call) {
+            return_address(inst);
+        } else if (name == "s_mov_b64" && is_mask(dst)) {
             mask_copy(dst, inst.src[0]);
         } else if (name == "s_mov_b32" || name == "s_mov_b64") {
             const unsigned dwords = name == "s_mov_b64" ? 2 : 1;
@@ -504,6 +515,19 @@ private:
         } else {
             unsupported();
         }
+    }
+
+    // The s_swappc_b64 whose fetch subroutine follows inline: its destination gets the address
+    // of the next instruction, the guest's return address, from the draw block's code_address.
+    void return_address(const Instruction& inst) {
+        const Id code = load_global(
+            u64_, b_.op(Op::OpAccessChain, global_pointer(u64_), {draw_, b_.constant_u32(2)}), 8);
+        const Id address = add(code, c64(inst.offset + 4 * inst.size));
+        write_scalar(inst.dst[0], b_.op(Op::OpUConvert, u32_, {address}), 0);
+        write_scalar(inst.dst[0],
+                     b_.op(Op::OpUConvert, u32_,
+                           {b_.op(Op::OpShiftRightLogical, u64_, {address, b_.constant_u32(32)})}),
+                     1);
     }
 
     // The SOP1 counts of a 32- or 64-bit source: s_bcnt0/1 count the clear or set bits (SCC: the
@@ -1772,7 +1796,15 @@ private:
                      {pointer, spirv_word(spv::MemoryAccessMask::Aligned), align});
     }
 
+    // An error in an inlined fetch instruction is at the call and names the instruction's
+    // offset in the fetch code.
     [[noreturn]] void fail(const std::string& message) const override {
+        const auto index = static_cast<std::uint32_t>(inst_ - program_.data());
+        if (fetch_.inlined(index)) {
+            throw GcnError(std::format("fetch subroutine: {} at offset {:#x}", message,
+                                       fetch_.offsets[index - fetch_.call - 1]),
+                           inst_->offset, code_[inst_->offset / 4]);
+        }
         throw GcnError(message, inst_->offset, code_[inst_->offset / 4]);
     }
     [[noreturn]] void unsupported() const {
@@ -1782,11 +1814,13 @@ private:
     std::span<const std::uint32_t> code_;
     const ShaderKey& key_;
     std::vector<Instruction> program_;
+    detail::FetchSite fetch_;
     Cfg cfg_;
     SpirvBuilder b_;
     detail::StageIo stage_{b_, key_, *this};
     Id bool_ = 0, u32_ = 0, u64_ = 0;
     Id lane_ = 0, bias_ = 0, lds_ = 0;
+    Id draw_ = 0;  // the draw block's pointer
     std::vector<Id> interface_;
     std::map<unsigned, Id> sgprs_, vgprs_, bools_;  // bools_: masks and SCC by operand code
     std::map<std::uint32_t, Id> builtins_;
@@ -1803,8 +1837,7 @@ private:
 
 Translation translate(std::span<const std::uint32_t> code, std::span<const std::uint32_t> fetch,
                       const ShaderKey& key) {
-    static_cast<void>(fetch);  // the vertex stages' fetch subroutine, not inlined yet
-    return Translator(code, key).run();
+    return Translator(code, fetch, key).run();
 }
 
 }  // namespace bb::gcn

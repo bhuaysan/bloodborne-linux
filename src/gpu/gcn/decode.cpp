@@ -283,6 +283,12 @@ std::vector<Instruction> decode(std::span<const std::uint32_t> code, Until until
         if (until == Until::program_end && is_endpgm(inst) && inst.offset >= furthest) {
             return out;
         }
+        if (until == Until::subroutine_end && is_setpc(inst)) {
+            return out;
+        }
+    }
+    if (until == Until::subroutine_end) {
+        throw GcnError("no s_setpc_b64", static_cast<std::uint32_t>(code.size() * 4), 0);
     }
     if (until == Until::program_end) {
         throw GcnError("no s_endpgm at or beyond the furthest branch target",
@@ -302,6 +308,10 @@ std::optional<std::uint32_t> branch_target(const Instruction& inst) {
 
 bool is_endpgm(const Instruction& inst) {
     return inst.format == Format::sopp && inst.opcode == 1;
+}
+
+bool is_setpc(const Instruction& inst) {
+    return inst.format == Format::sop1 && inst.opcode == 32;
 }
 
 }  // namespace bb::gcn

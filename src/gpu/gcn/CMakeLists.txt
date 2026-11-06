@@ -9,6 +9,7 @@ add_library(bbgcn STATIC
     decode.cpp
     disassemble.cpp
     ds_flat.cpp
+    fetch.cpp
     lds.cpp
     memory.cpp
     opcodes.cpp

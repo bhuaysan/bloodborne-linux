@@ -128,10 +128,12 @@ struct Instruction {
 enum class Until {
     program_end,  // the first s_endpgm at or beyond the furthest branch target
     code_end,     // every word of the code
+    subroutine_end,  // the first s_setpc_b64, the return of a subroutine (the fetch subroutine)
 };
 
-// Decodes the program at the start of `code`. With Until::program_end, `code` may extend past the
-// program, and running out of code before the end is an error. Throws GcnError.
+// Decodes the program at the start of `code`. With Until::program_end and Until::subroutine_end,
+// `code` may extend past the program, and running out of code before the end is an error. Throws
+// GcnError.
 std::vector<Instruction> decode(std::span<const std::uint32_t> code,
                                 Until until = Until::program_end);
 
@@ -142,5 +144,6 @@ std::string disassemble(const Instruction& inst);
 std::optional<std::uint32_t> branch_target(const Instruction& inst);
 
 bool is_endpgm(const Instruction& inst);
+bool is_setpc(const Instruction& inst);  // s_setpc_b64
 
 }  // namespace bb::gcn
