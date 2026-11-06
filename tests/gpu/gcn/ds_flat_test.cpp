@@ -125,6 +125,10 @@ TEST(GcnDsFlat, AssemblesToTheSameWords) {
     const auto assembled = assemble(lines);
     for (std::size_t i = 0; i < cases.size(); ++i) {
         EXPECT_EQ(assembled[i].words, cases[i].words) << cases[i].text;
+        // LLVM prints the ds_swizzle_b32 pattern in its swizzle() form, we print the number.
+        if (!cases[i].text.starts_with("ds_swizzle_b32")) {
+            EXPECT_EQ(assembled[i].text, cases[i].text);
+        }
     }
 }
 
