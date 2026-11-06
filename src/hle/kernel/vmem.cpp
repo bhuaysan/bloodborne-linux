@@ -33,6 +33,9 @@ void log(std::format_string<Args...> format, Args&&... args) {
 // Larger lengths can't be mapped on x86-64 and would overflow the alignment arithmetic.
 constexpr std::uint64_t max_length = std::uint64_t{1} << 47;
 
+// The host flags of a reservation: address space only, no memory committed.
+constexpr int reservation_flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+
 constexpr std::uint64_t round_up(std::uint64_t value) {
     return (value + page_size - 1) & ~(page_size - 1);
 }
@@ -60,8 +63,16 @@ void split_at(std::uintptr_t at) {
     table.emplace(at, std::move(tail));
 }
 
-// Whether guest mappings cover [start, end) without a hole. Needs table_mutex.
-bool covered(std::uintptr_t start, std::uintptr_t end) {
+// Splits at both ends and removes the regions in [start, end). Needs table_mutex.
+void erase_range(std::uintptr_t start, std::uintptr_t end) {
+    split_at(start);
+    split_at(end);
+    table.erase(table.lower_bound(start), table.lower_bound(end));
+}
+
+// Whether guest mappings cover [start, end) without a hole; with `reservations`, reservations
+// only. Needs table_mutex.
+bool covered(std::uintptr_t start, std::uintptr_t end, bool reservations = false) {
     auto it = table.upper_bound(start);
     if (it == table.begin()) {
         return false;
@@ -70,9 +81,26 @@ bool covered(std::uintptr_t start, std::uintptr_t end) {
     std::uintptr_t at = start;
     for (; it != table.end() && it->second.start <= at; ++it) {
         if (it->second.end > at) {
+            if (reservations && !it->second.reserved) {
+                return false;
+            }
             at = it->second.end;
         }
         if (at >= end) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Whether a reservation overlaps [start, end). Needs table_mutex.
+bool holds_reservation(std::uintptr_t start, std::uintptr_t end) {
+    auto it = table.upper_bound(start);
+    if (it != table.begin()) {
+        --it;
+    }
+    for (; it != table.end() && it->second.start < end; ++it) {
+        if (it->second.reserved && it->second.end > start) {
             return true;
         }
     }
@@ -99,12 +127,11 @@ int check_range(std::uintptr_t start, std::uint64_t length, std::uintptr_t& end)
         return EINVAL;
     }
     end = start + round_up(length);
-    return covered(start, end) ? 0 : EINVAL;
+    return end > start && covered(start, end) ? 0 : EINVAL;
 }
 
-}  // namespace
-
-int map(const Mapping& m, std::uintptr_t& out) {
+// map() and reserve(): `reserved` marks the region as a reservation.
+int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
     if (m.length == 0 || m.length % page_size != 0 || m.length > max_length ||
         m.alignment < page_size || m.alignment > max_length ||
         (m.alignment & (m.alignment - 1)) != 0 || (m.fixed && m.address % page_size != 0)) {
@@ -117,7 +144,21 @@ int map(const Mapping& m, std::uintptr_t& out) {
     const std::scoped_lock lock(table_mutex);
     void* const hint = reinterpret_cast<void*>(m.address);
     void* at = MAP_FAILED;
-    if (m.fixed) {
+    if (m.fixed && m.into_reservation) {
+        const std::uintptr_t end = m.address + m.length;
+        if (end < m.address || !covered(m.address, end, true)) {
+            log("map {:#x}-{:#x}: not all reserved", m.address, end);
+            return EINVAL;
+        }
+        // MAP_FIXED replaces the reservation in one call, so no other mapping can come between.
+        at = ::mmap(hint, m.length, *prot, m.host_flags | MAP_FIXED, m.fd, m.fd_offset);
+        if (at == MAP_FAILED) {
+            const int error = errno;
+            ::mmap(hint, m.length, PROT_NONE, reservation_flags | MAP_FIXED, -1, 0);
+            return error;
+        }
+        erase_range(m.address, end);
+    } else if (m.fixed) {
         at = ::mmap(hint, m.length, *prot, m.host_flags | MAP_FIXED_NOREPLACE, m.fd, m.fd_offset);
         if (at != MAP_FAILED && at != hint) {  // a kernel before 4.17 took it as a hint
             ::munmap(at, m.length);
@@ -153,9 +194,44 @@ int map(const Mapping& m, std::uintptr_t& out) {
         return errno;
     }
     out = reinterpret_cast<std::uintptr_t>(at);
-    table.insert_or_assign(out, Region{out, out + m.length, m.prot, m.flags, m.offset, m.name});
+    table.insert_or_assign(out,
+                           Region{out, out + m.length, m.prot, m.flags, m.offset, m.name, reserved});
     log("map {:#x}-{:#x} prot {:#x} flags {:#x} '{}'", out, out + m.length, m.prot, m.flags,
         m.name);
+    return 0;
+}
+
+}  // namespace
+
+int map(const Mapping& m, std::uintptr_t& out) {
+    return map_region(m, false, out);
+}
+
+int reserve(std::uintptr_t hint, std::uint64_t length, std::uint64_t alignment,
+            std::uintptr_t& out) {
+    Mapping m;
+    m.address = hint;
+    m.length = length;
+    m.host_flags = reservation_flags;
+    m.flags = 0;
+    m.alignment = alignment;
+    m.name = "reserved";
+    return map_region(m, true, out);
+}
+
+int restore_reservation(std::uintptr_t start, std::uint64_t length) {
+    const std::scoped_lock lock(table_mutex);
+    std::uintptr_t end = 0;
+    if (const int error = check_range(start, length, end)) {
+        return error;
+    }
+    if (::mmap(reinterpret_cast<void*>(start), end - start, PROT_NONE,
+               reservation_flags | MAP_FIXED, -1, 0) == MAP_FAILED) {
+        return errno;
+    }
+    erase_range(start, end);
+    table.emplace(start, Region{start, end, 0, 0, 0, "reserved", true});
+    log("reserve again {:#x}-{:#x}", start, end);
     return 0;
 }
 
@@ -168,9 +244,7 @@ int unmap(std::uintptr_t start, std::uint64_t length) {
     if (::munmap(reinterpret_cast<void*>(start), end - start) != 0) {
         return errno;
     }
-    split_at(start);
-    split_at(end);
-    table.erase(table.lower_bound(start), table.lower_bound(end));
+    erase_range(start, end);
     log("unmap {:#x}-{:#x}", start, end);
     return 0;
 }
@@ -184,6 +258,9 @@ int protect(std::uintptr_t start, std::uint64_t length, int prot) {
     std::uintptr_t end = 0;
     if (const int error = check_range(start, length, end)) {
         return error;
+    }
+    if (holds_reservation(start, end)) {
+        return EINVAL;
     }
     if (::mprotect(reinterpret_cast<void*>(start), end - start, *host) != 0) {
         return errno;
