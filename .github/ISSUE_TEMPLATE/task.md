@@ -18,4 +18,4 @@ labels: []
 
 ## Sources consulted
 
-<!-- External sources used (also add them to docs/references.md). Source and license rules: docs/clean-room.md (only leaked SDK material is off-limits; copied code needs a GPL-2.0-or-later-compatible license). -->
+<!-- External sources used (also add them to docs/references.md). Source and license rules: docs/clean-room.md (only leaked SDK material is off-limits; copied code needs a license on its allow-list). -->

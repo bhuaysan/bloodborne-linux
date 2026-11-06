@@ -31,7 +31,8 @@ The project is licensed under GPL-2.0-or-later ([LICENSE](../LICENSE)). Code fro
   - MPL-2.0, in files of their own, when the file is not marked "Incompatible With Secondary Licenses".
 - **Facts only, no copied code**, from GPL-2.0-only, GPL-3.0, LGPL-3.0, Apache-2.0 and AGPL code, non-commercial licenses (e.g. CC-BY-NC) and unlicensed files. GPL-2.0-only code would make the program GPL-2.0-only, and GPL-3.0, LGPL-3.0 and Apache-2.0 code would make it GPL-3.0; a GPL-2.0-only and a GPL-3.0/Apache-2.0 piece can't be combined at all. Reusing such code needs a maintainer decision that changes the line above first.
 - **Whole files** go unchanged into `third_party/<project>/` together with their license text.
-- **Adapted code** in our files keeps the original copyright lines and gets an SPDX tag of its license, a `// Source: <project> <path> @<commit>` line and a `// Changed for bloodborne-linux, <date>` line in a header comment. GPL-2.0 §2(a) and LGPL-2.1 §2(b) require that notice of changes; we use it for every license.
+- **A file under several licenses** (`A OR B`) may be used under any allowed one of them; record which in the credit row. These rules cover code copied into the repository, not system libraries we link against (the Vulkan loader, glibc).
+- **Adapted code** in our files keeps the original file's copyright and license notices unchanged in a header comment, and adds an SPDX tag of its license, a `// Source: <project> <path> @<commit>` line and a `// Changed for bloodborne-linux, <date>` line. Where the original header only refers to a license file, the license text goes into `third_party/<project>/` and the header points to it. GPL-2.0 §2(a) and LGPL-2.1 §2(b) require that notice of changes; we use it for every license.
 - **Upstream preferred.** Take code from the project's own repository or release, and record the commit.
 - **Credit.** Record every source in [references.md](references.md) in the same change that uses it. Code sources go into its code sources table: project and commit, license of the files, files or pages used, what was taken (facts or code), where it is used, and the date.
 
@@ -51,7 +52,7 @@ Commit a NID only together with what we know about it: a matched name in `symbol
 
 | Date | Change |
 |---|---|
-| 2026-11-06 | Maintainer decision: the clean-room approach is dropped. Every public source is allowed except leaked Sony SDK material and copies of game data. NID names may come from public NID lists and emulator code. The project moves from MIT to GPL-2.0-or-later, so GPL code (for example from PS4 emulators) may be reused with its notices. |
+| 2026-11-06 | Maintainer decision: the clean-room approach is dropped. Every public source is allowed except leaked Sony SDK material and copies of game data. NID names may come from public NID lists and emulator code. The project moves from MIT to GPL-2.0-or-later, so GPL-2.0-or-later code (for example from PS4 emulators) may be reused with its notices. |
 | 2026-11-05 | Maintainer decision: the four code source categories are allowed under license rules. Previously, emulator source and FromSoftware format material were off-limits, and driver source was not allowed. Modding material about the games stays off-limits but is now named in detail. NID name tables are off-limits from any source, and reading an emulator's HLE code for a library puts that library under the exposure-log handling. Tools run as programs are allowed, except tools from off-limits projects. AMD's Sea Islands documentation is named explicitly. |
 
 ## Exposure log
