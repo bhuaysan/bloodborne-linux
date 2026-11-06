@@ -35,12 +35,32 @@ jobs:
           sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libgtest-dev \
               spirv-headers spirv-tools libvulkan-dev mesa-vulkan-drivers
 
+      # The window and presentation code needs SDL3 (docs/design/graphics.md),
+      # which Ubuntu 24.04 doesn't package. Build the release the reference
+      # machine uses from its source archive; the checksum is the digest GitHub
+      # lists for that release asset. No tests or examples, shared library only.
+      - name: Build SDL3
+        env:
+          SDL_VERSION: 3.4.18
+          SDL_SHA256: 9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/sdl3.tar.gz" \
+              "https://github.com/libsdl-org/SDL/releases/download/release-${SDL_VERSION}/SDL3-${SDL_VERSION}.tar.gz"
+          echo "${SDL_SHA256}  $RUNNER_TEMP/sdl3.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/sdl3.tar.gz" -C "$RUNNER_TEMP"
+          cmake -S "$RUNNER_TEMP/SDL3-${SDL_VERSION}" -B "$RUNNER_TEMP/sdl3-build" -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_STATIC=OFF
+          cmake --build "$RUNNER_TEMP/sdl3-build"
+          sudo cmake --install "$RUNNER_TEMP/sdl3-build"
+          sudo ldconfig
+
       - name: Check the graphics packages
         run: |
           test -f /usr/include/spirv/unified1/spirv.hpp11
           command -v spirv-val
           test -f /usr/include/vulkan/vulkan.h
           ls /usr/share/vulkan/icd.d/lvp_icd*.json
+          test -f /usr/local/include/SDL3/SDL.h
 
       - name: Configure
         run: cmake --preset "${{ matrix.preset }}" -DBB_WERROR=ON

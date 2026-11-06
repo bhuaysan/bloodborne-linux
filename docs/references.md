@@ -12,6 +12,7 @@ One row per source and use. A change that uses a source adds its own row (or row
 | [REA](https://github.com/morluto/rea) 6.8.0 | MIT | Agent-driven reverse engineering workflow on top of Ghidra |
 | PyGhidra 3.1.0 and JPype 1.5.2 (bundled with Ghidra) | Apache-2.0 | Running headless Ghidra scripts in Python 3 (`tools/ghidra-sync`) |
 | [actions/checkout](https://github.com/actions/checkout) v7.0.1 (pinned by commit SHA) | MIT | Checking out the repository in the GitHub Actions CI (`.github/workflows/ci.yml`) |
+| [SDL](https://github.com/libsdl-org/SDL) 3.4.18 (`SDL3-devel` locally, built from the release archive `SDL3-3.4.18.tar.gz` in CI, checksum pinned) | Zlib | Window and Vulkan surface for presentation (`docs/design/graphics.md`, second wave); CI builds it in `.github/workflows/ci.yml` |
 | GNU binutils (`objdump`, `readelf`, `ld --verbose`) | GPL-3.0 | Quick inspection of ELF files |
 | GNU binutils (`objdump`, `readelf`, `ld --verbose`) | GPL-3.0 | `objdump` 2.46 over byte ranges of the eboot for the GNM survey (`docs/formats/gnm.md`) |
 | GNU binutils (`objdump`, `readelf`, `ld --verbose`) | GPL-3.0 | the order of the TLS input sections in ld's default linker script, for the eboot's TLS reservation (`src/hle/eboot_tls/eboot_tls.S`, 2026-11-05) |
