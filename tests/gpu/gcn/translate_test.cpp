@@ -50,7 +50,8 @@ TEST(GcnTranslate, ProgramsPassSpirvVal) {
         // ballots and any(...) over the subgroup, for the SCC after a lane mask operation
         EXPECT_EQ(translation.interface.wave_size_dependent,
                   name == "cross_lane" || name == "mask_exec" || name == "mask_scc");
-        EXPECT_EQ(translation.interface.mask_round_trip, name == "cross_lane");  // s[8:9]
+        // s[8:9] of cross_lane; the mask programs keep only lane masks in their mask pairs
+        EXPECT_EQ(translation.interface.mask_round_trip, name == "cross_lane");
     }
 }
 
@@ -77,8 +78,9 @@ TEST(GcnTranslate, WaveSizeDependence) {
 }
 
 // A value written to VCC or an SGPR mask pair and read back as a value sets mask_round_trip, also
-// when s_mov_b64 copies it to the pair that is read, or writes a constant other than 0 and -1;
-// either one alone doesn't, a copy the other way doesn't, and neither does EXEC.
+// when s_mov_b64, s_<op>_b64 or s_<op>_saveexec_b64 (through EXEC) moves it to the pair that is
+// read, or when s_mov_b64 or s_<op>_b64 writes a constant other than 0 and -1; either one alone
+// doesn't, a copy the other way doesn't, and neither does EXEC.
 TEST(GcnTranslate, MaskRoundTrip) {
     const auto round_trip = [](const std::vector<std::vector<std::uint32_t>>& parts) {
         std::vector<std::uint32_t> code;
@@ -106,6 +108,22 @@ TEST(GcnTranslate, MaskRoundTrip) {
     EXPECT_TRUE(round_trip({cmp, {sop1(4, 8, 133)}, read_s8}));   // s_mov_b64 s[8:9], 5
     EXPECT_FALSE(round_trip({cmp, {sop1(4, 8, 128)}, read_s8}));  // s_mov_b64 s[8:9], 0
     EXPECT_FALSE(round_trip({cmp, {sop1(4, 8, 193)}, read_s8}));  // s_mov_b64 s[8:9], -1
+
+    // The SALU bitwise family moves its sources' bits into its destination: both sources of
+    // s_<op>_b64, and the source of s_<op>_saveexec_b64 through EXEC into a later saved EXEC.
+    const std::vector<std::uint32_t> value_s8 = {sop1(3, 8, 0)};   // s8 = s0
+    const std::vector<std::uint32_t> read_s10 = {sop1(3, 6, 10)};  // s6 = s10
+    // s_and_b64 s[10:11] with s[8:9] or s[12:13] and -1
+    EXPECT_TRUE(round_trip({value_s8, {sop2(15, 10, 8, 193)}, read_s10}));
+    EXPECT_TRUE(round_trip({value_s8, {sop2(15, 10, 193, 8)}, read_s10}));
+    EXPECT_FALSE(round_trip({value_s8, {sop2(15, 10, 12, 193)}, read_s10}));
+    EXPECT_TRUE(round_trip({{sop2(17, 8, 10, 133)}, read_s8}));   // s_or_b64 s[8:9], s[10:11], 5
+    EXPECT_FALSE(round_trip({{sop2(17, 8, 10, 193)}, read_s8}));  // s_or_b64 s[8:9], s[10:11], -1
+    // s_and_saveexec_b64 s[10:11], s[8:9]
+    const std::vector<std::uint32_t> saveexec = {sop1(36, 10, 8)};
+    EXPECT_TRUE(round_trip({value_s8, saveexec, saveexec, read_s10}));
+    EXPECT_TRUE(round_trip({value_s8, saveexec, {sop1(4, 12, 126)}, {sop1(3, 6, 12)}}));  // = exec
+    EXPECT_FALSE(round_trip({cmp, saveexec, read_s10}));  // s[8:9] holds a lane mask
 }
 
 // Scalar ALU, a loop on SCC, and the vector ALU in VOP1, VOP2 and VOP3 encodings.

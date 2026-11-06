@@ -42,6 +42,9 @@ constexpr std::uint32_t rsrc2_unsupported = 1u << 0 | 0xfu << 7 | 3u << 11;
 constexpr std::uint16_t op_cbranch_scc0 = 4;
 constexpr std::uint16_t op_cbranch_scc1 = 5;
 
+// EXEC as a 64-bit operand, the implicit source and destination of the saveexec forms.
+constexpr Operand exec_operand{.kind = OperandKind::scalar, .dwords = 2, .code = code::exec};
+
 // The bitwise family of the SALU, in the order of its opcodes (s_<name>_b32, _b64, _saveexec_b64).
 constexpr std::string_view bitwise_names[] = {"and", "or", "xor", "andn2", "orn2", "nand", "nor",
                                               "xnor"};
@@ -363,10 +366,14 @@ private:
             write_scalar(dst, r);
             store(scc(), b_.op(Op::OpINotEqual, bool_, {r, b_.constant_u32(0)}));
         } else if (const auto op = bitwise_op(name, "_b64")) {
+            mask_flow(inst.src[0], dst);
+            mask_flow(inst.src[1], dst);
             const Id r = combine(*op, bool_, read_mask(inst.src[0]), read_mask(inst.src[1]));
             write_mask(dst, r);
             store(scc(), any(r));
         } else if (const auto op = bitwise_op(name, "_saveexec_b64")) {  // dst = EXEC first
+            mask_flow(inst.src[0], exec_operand);
+            mask_flow(exec_operand, dst);
             const Id old = active();
             const Id r = combine(*op, bool_, read_mask(inst.src[0]), old);
             write_mask(dst, old);
@@ -818,7 +825,7 @@ private:
     }
 
     // Whether a value written to VCC or an SGPR mask pair is read back as a value, from that pair
-    // or from one that s_mov_b64 copies it to, directly or through other pairs (flow-insensitive,
+    // or from one that mask_flow() moves it to, directly or through other pairs (flow-insensitive,
     // like the type pass): typically a compiler reusing a pair for other data.
     bool round_trip() const {
         std::set<unsigned> reached = value_writes_;
@@ -936,16 +943,23 @@ private:
         store(value_sgpr(c), value);
     }
 
-    // s_mov_b64 to a mask. A copy from another mask pair is recorded for mask_round_trip, and so
-    // is a constant other than 0 and -1, whose bits are a value rather than a uniform lane bit.
+    // s_mov_b64 to a mask.
     void mask_copy(const Operand& dst, const Operand& src) {
+        mask_flow(src, dst);
+        write_mask(dst, read_mask(src));
+    }
+
+    // The bits of the mask source `src` go into the mask `dst` (s_mov_b64, the SALU bitwise
+    // family, saveexec through EXEC). For mask_round_trip, a mask source is recorded as a copy,
+    // and a constant other than 0 and -1, whose bits are a value rather than a uniform lane bit,
+    // as a value written to `dst`.
+    void mask_flow(const Operand& src, const Operand& dst) {
         if (is_mask(src)) {
             mask_copies_.emplace(src.code, dst.code);
         } else if (src.kind == OperandKind::constant && !uniform_constant(src) &&
                    dst.code != code::exec) {
             value_writes_.insert(dst.code);
         }
-        write_mask(dst, read_mask(src));
     }
 
     void write_mask(const Operand& o, Id value) {
@@ -1015,7 +1029,7 @@ private:
     std::set<unsigned> mask_sgprs_;                 // the first SGPR of each mask pair
     const Instruction* inst_ = nullptr;
     std::set<unsigned> value_writes_, value_reads_;  // mask pairs written or read as values
-    std::multimap<unsigned, unsigned> mask_copies_;  // s_mov_b64 between mask pairs: source, dest
+    std::multimap<unsigned, unsigned> mask_copies_;  // mask_flow() between masks: source, dest
     bool uses_subgroup_ = false;
     bool wave_size_dependent_ = false;
 };
