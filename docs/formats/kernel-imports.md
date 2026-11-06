@@ -44,16 +44,16 @@ The other NIDs stay unnamed. The FreeBSD manual page lists and the derivation ru
 |---|---|---|
 | `W0Hpm2X0uPE` | eboot, libSceFios2.prx | Sets a priority-like thread attribute *(survey)* |
 | `1tKyG7RlMJo` | eboot, libSceFios2.prx | Thread attribute call, as far as its call sites show *(survey)* |
-| `12wOHk8ywb0` | eboot | Thread attribute call, as far as its call sites show *(survey)* |
 
 ### Counted sync object and event queue
 
 | NID | Callers | Behaviour |
 |---|---|---|
-| `188x57JYp0g` | eboot | Create a counted sync object: name, attribute 1 or 2, initial count, maximum count *(survey)* |
-| `R1Jvn8bSCW8` | eboot | Destroy it *(survey)* |
-| `Zxa0VhQVTsk` | eboot | Wait: count, timeout pointer *(survey)* |
-| `4czppHBiriw` | eboot | Post: count *(survey)* |
+| `188x57JYp0g` | eboot | Create a counted sync object: name, order 1 or 2, initial count, maximum count ([kernel-abi.md](kernel-abi.md#counted-sync-object)) |
+| `R1Jvn8bSCW8` | eboot | Destroy it ([kernel-abi.md](kernel-abi.md#counted-sync-object)) |
+| `Zxa0VhQVTsk` | eboot | Wait: count, timeout pointer ([kernel-abi.md](kernel-abi.md#counted-sync-object)) |
+| `12wOHk8ywb0` | eboot | Wait without blocking: count. Its only call site (0x263afc2) is in the counted sync wrapper, so the survey's "thread attribute call" was wrong ([kernel-abi.md](kernel-abi.md#counted-sync-object)) |
+| `4czppHBiriw` | eboot | Post: count ([kernel-abi.md](kernel-abi.md#counted-sync-object)) |
 | `D0OdFMjp46I` | eboot | Create an event queue with a name ([kernel-abi.md](kernel-abi.md#event-queue)) |
 | `jpFjmgAC5AE` | eboot | Delete an event queue ([kernel-abi.md](kernel-abi.md#event-queue)) |
 | `fzyMKs9kim0` | eboot | Wait on an event queue: queue, event array, capacity, `&count`, timeout pointer ([kernel-abi.md](kernel-abi.md#event-queue)) |
