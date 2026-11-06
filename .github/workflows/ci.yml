@@ -61,6 +61,7 @@ jobs:
           test -f /usr/include/vulkan/vulkan.h
           ls /usr/share/vulkan/icd.d/lvp_icd*.json
           test -f /usr/local/include/SDL3/SDL.h
+          ls /usr/local/lib*/cmake/SDL3/SDL3Config.cmake
 
       - name: Configure
         run: cmake --preset "${{ matrix.preset }}" -DBB_WERROR=ON
