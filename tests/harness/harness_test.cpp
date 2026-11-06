@@ -1,9 +1,14 @@
 #include "harness/harness.hpp"
 
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <initializer_list>
 #include <iterator>
 #include <span>
@@ -16,6 +21,7 @@
 
 #include <gtest/gtest.h>
 
+#include "common/memory.hpp"
 #include "game/image.hpp"
 #include "hle/hle.hpp"
 #include "loader/elf.hpp"
@@ -368,6 +374,103 @@ TEST_F(HarnessTest, CapsTheListedRanges) {
     EXPECT_EQ(r.report().find("+0x180"), std::string::npos) << r.report();
     expect_report(r, "memory: 10 differing ranges in all\n");
     EXPECT_EQ(std::ranges::count(r.report(), '\n'), 9) << r.report();
+}
+
+// A shared mapping of a sparse memfd of 8 host pages, like direct memory. Page 1 starts with
+// four bytes 0x5a; the other pages are holes.
+struct SparseFile {
+    static constexpr std::size_t pages = 8;
+    const std::size_t page = bb::common::page_size();
+    const int fd = memfd_create("harness-test", MFD_CLOEXEC);
+    std::byte* data = nullptr;
+
+    SparseFile() {
+        EXPECT_GE(fd, 0);
+        EXPECT_EQ(ftruncate(fd, static_cast<off_t>(pages * page)), 0);
+        data = static_cast<std::byte*>(
+            mmap(nullptr, pages * page, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
+        EXPECT_NE(data, MAP_FAILED);
+        std::memset(data + page, 0x5a, 4);
+    }
+    ~SparseFile() {
+        munmap(data, pages * page);
+        close(fd);
+    }
+    bb::harness::Region region() const { return {"file", data, pages * page, 0, false, fd, 0}; }
+    // Whether page `i` is data in the file rather than a hole.
+    bool is_data(std::size_t i) const {
+        return lseek(fd, static_cast<off_t>(i * page), SEEK_DATA) == static_cast<off_t>(i * page);
+    }
+    void punch(std::size_t i) const {
+        EXPECT_EQ(fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+                            static_cast<off_t>(i * page), static_cast<off_t>(page)),
+                  0);
+    }
+};
+
+SparseFile* sparse = nullptr;  // the file of the running test, for the replacements
+
+TEST(HarnessSparseTest, RestorePunchesTheHolesBack) {
+    SparseFile file;
+    Image image = load();
+    Harness harness{image, {file.region()}};
+    file.data[3 * file.page] = std::byte{1};
+    file.punch(1);
+    EXPECT_TRUE(file.is_data(3));
+    EXPECT_FALSE(file.is_data(1));
+    harness.restore();
+    EXPECT_FALSE(file.is_data(3));
+    EXPECT_EQ(file.data[3 * file.page], std::byte{0});
+    EXPECT_TRUE(file.is_data(1));
+    EXPECT_EQ(file.data[file.page + 3], std::byte{0x5a});
+    EXPECT_EQ(file.data[file.page + 4], std::byte{0});
+}
+
+// Two bytes across the end of page 1, into the hole of page 2.
+int writes_across_pages(int* p) {
+    sparse->data[2 * sparse->page - 1] = std::byte{1};
+    sparse->data[2 * sparse->page] = std::byte{2};
+    return read_write(p);
+}
+
+int punches_page_1(int* p) {
+    sparse->punch(1);
+    return read_write(p);
+}
+
+// Holes read zero, and a hole and a data page compare by their bytes.
+TEST(HarnessSparseTest, ComparesOnlyTheDataPages) {
+    SparseFile file;
+    sparse = &file;
+    Image image = load();
+    loaded = &image;
+    Harness harness{image, {file.region()}};
+    const Result same = harness.compare<int(int*)>(read_write_at, &read_write, two_ints);
+    EXPECT_TRUE(same) << same.report();
+    const std::size_t end = 2 * file.page;
+    expect_report(harness.compare<int(int*)>(read_write_at, &writes_across_pages, two_ints),
+                  std::format("memory: file +{:#x}..+{:#x} differs: original 00 00, replacement "
+                              "01 02\n",
+                              end - 1, end + 1));
+    expect_report(harness.compare<int(int*)>(read_write_at, &punches_page_1, two_ints),
+                  std::format("memory: file +{:#x}..+{:#x} differs: original 5a 5a 5a 5a, "
+                              "replacement 00 00 00 00\n",
+                              file.page, file.page + 4));
+    harness.restore();
+    EXPECT_FALSE(file.is_data(2));
+    loaded = nullptr;
+    sparse = nullptr;
+}
+
+TEST(HarnessSparseTest, RefusesAnUnalignedRegion) {
+    SparseFile file;
+    Image image = load();
+    bb::harness::Region region = file.region();
+    region.size -= 1;
+    EXPECT_THROW(Harness(image, {region}), std::invalid_argument);
+    region = file.region();
+    region.fd_offset = 0x10;
+    EXPECT_THROW(Harness(image, {region}), std::invalid_argument);
 }
 
 }  // namespace

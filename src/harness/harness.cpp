@@ -1,10 +1,16 @@
 #include "harness/harness.hpp"
 
+#include <fcntl.h>
 #include <pthread.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstring>
+#include <iterator>
+#include <optional>
+#include <ranges>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
@@ -48,6 +54,46 @@ struct Normalized {
     std::uint64_t value;  // the offset in the region, or the raw value
     bool operator==(const Normalized&) const = default;
 };
+
+// The data in the file of `r` (Region::fd) as page-aligned [start, end) offsets in `r`, in order.
+// The rest are holes, which read zero.
+std::vector<std::pair<std::size_t, std::size_t>> data_ranges(const Region& r) {
+    std::vector<std::pair<std::size_t, std::size_t>> ranges;
+    const auto start = static_cast<off_t>(r.fd_offset), end = start + static_cast<off_t>(r.size);
+    auto fail = [&] {
+        throw std::system_error(errno, std::generic_category(), "harness: lseek " + r.name);
+    };
+    for (off_t at = start; at < end;) {
+        const off_t data = lseek(r.fd, at, SEEK_DATA);
+        if (data < 0 && errno == ENXIO) {  // no data after `at`
+            break;
+        }
+        if (data < 0) {
+            fail();
+        }
+        if (data >= end) {
+            break;
+        }
+        const off_t hole = lseek(r.fd, data, SEEK_HOLE);
+        if (hole < 0) {
+            fail();
+        }
+        const auto page = static_cast<off_t>(common::page_size());
+        ranges.emplace_back((data & ~(page - 1)) - start,
+                            ((std::min(hole, end) + page - 1) & ~(page - 1)) - start);
+        at = hole;
+    }
+    return ranges;
+}
+
+// Makes [at, at + length) of `r` a hole in its file, so it reads zero and holds no memory.
+void punch(const Region& r, std::size_t at, std::size_t length) {
+    if (length != 0 && fallocate(r.fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+                                 static_cast<off_t>(r.fd_offset + at),
+                                 static_cast<off_t>(length)) != 0) {
+        throw std::system_error(errno, std::generic_category(), "harness: fallocate " + r.name);
+    }
+}
 
 void show_log(Result& result, std::string_view side, const std::vector<StubCall>& log) {
     for (std::size_t i = 0; i < std::min(log.size(), max_shown_calls); ++i) {
@@ -95,7 +141,7 @@ std::byte* Arena::bytes(std::span<const std::byte> b) {
     return p;
 }
 
-Harness::Harness(loader::Image& image) : image_(image) {
+Harness::Harness(loader::Image& image, std::vector<Region> extra) : image_(image) {
     for (const loader::Segment& s : image.segments) {
         if (s.prot & PROT_WRITE) {
             regions_.push_back({"image", reinterpret_cast<std::byte*>(image.runtime(s.link_addr)),
@@ -106,9 +152,19 @@ Harness::Harness(loader::Image& image) : image_(image) {
         regions_.push_back({std::format("data block {} {}", b.library, b.nid), b.data,
                             hle::data_block_size, 0, false});
     }
+    std::ranges::move(extra, std::back_inserter(regions_));
     regions_.push_back({"arena", arena_.data(), Arena::size, 0, false});
+    const std::size_t page = common::page_size();
     for (const Region& r : regions_) {
-        baseline_.emplace_back(r.data, r.data + r.size);
+        if (r.fd >= 0 && ((reinterpret_cast<std::uintptr_t>(r.data) | r.fd_offset | r.size) &
+                          (page - 1)) != 0) {
+            throw std::invalid_argument(
+                std::format("harness: region {} is not aligned to the page size", r.name));
+        }
+    }
+    baseline_.resize(regions_.size());
+    for (std::size_t i = 0; i < regions_.size(); ++i) {
+        take(i, baseline_[i]);
     }
     if (hle::StubObserver* previous = hle::set_stub_observer(this)) {
         hle::set_stub_observer(previous);
@@ -133,58 +189,141 @@ void Harness::on_call(const hle::StubInfo& stub, const std::uint64_t args[6]) {
 }
 
 void Harness::restore() {
+    const std::size_t page = common::page_size();
     for (std::size_t i = 0; i < regions_.size(); ++i) {
-        std::memcpy(regions_[i].data, baseline_[i].data(), regions_[i].size);
+        const Region& r = regions_[i];
+        const Contents& b = baseline_[i];
+        if (r.fd < 0) {
+            std::memcpy(r.data, b.bytes.data(), r.size);
+            continue;
+        }
+        // Holes where the baseline had them, then its data pages back.
+        for (const auto& [start, end] : data_ranges(r)) {
+            std::size_t hole = start;
+            for (std::size_t at = start; at <= end; at += page) {
+                if (at == end || b.pages.contains(at)) {
+                    punch(r, hole, at - hole);
+                    hole = at + page;
+                }
+            }
+        }
+        for (const auto& [at, bytes] : b.pages) {
+            std::memcpy(r.data + at, bytes.data(), page);
+        }
     }
     arena_.reset();
     log_.clear();
 }
 
+void Harness::take(std::size_t i, Contents& out) const {
+    const Region& r = regions_[i];
+    if (r.fd < 0) {
+        out.bytes.resize(r.size);  // sized once and reused after: the regions never change
+        std::memcpy(out.bytes.data(), r.data, r.size);
+        return;
+    }
+    const std::size_t page = common::page_size();
+    out.pages.clear();
+    for (const auto& [start, end] : data_ranges(r)) {
+        for (std::size_t at = start; at < end; at += page) {
+            out.pages[at].assign(r.data + at, r.data + at + page);
+        }
+    }
+}
+
 void Harness::keep_original() {
-    // Sized on the first compare and reused after: the regions never change.
     after_original_.resize(regions_.size());
     for (std::size_t i = 0; i < regions_.size(); ++i) {
-        after_original_[i].resize(regions_[i].size);
-        std::memcpy(after_original_[i].data(), regions_[i].data, regions_[i].size);
+        take(i, after_original_[i]);
     }
     original_log_ = log_;
 }
 
 void Harness::compare_state(Result& result) const {
-    const std::size_t page = common::page_size();
     std::size_t ranges = 0;
     for (std::size_t i = 0; i < regions_.size(); ++i) {
-        const Region& r = regions_[i];
-        const std::byte *orig = after_original_[i].data(), *repl = r.data;
-        for (std::size_t at = 0; at < r.size;) {
-            if (at % page == 0 && r.size - at >= page &&
-                std::memcmp(orig + at, repl + at, page) == 0) {
-                at += page;
-                continue;
-            }
-            if (orig[at] == repl[at]) {
-                ++at;
-                continue;
-            }
-            const std::size_t start = at;
-            while (at < r.size && orig[at] != repl[at]) {
-                ++at;
-            }
-            if (++ranges <= max_ranges) {
-                // Link addresses for the image, offsets for the others.
-                const std::string_view sign = r.is_image ? "" : "+";
-                result.add(std::format("memory: {} {}{:#x}..{}{:#x} differs: original {}, "
-                                       "replacement {}",
-                                       r.name, sign, r.link + start, sign, r.link + at,
-                                       show_bytes(orig + start, at - start),
-                                       show_bytes(repl + start, at - start)));
-            }
-        }
+        compare_region(i, result, ranges);
     }
     if (ranges > max_ranges) {
         result.add(std::format("memory: {} differing ranges in all", ranges));
     }
     compare_log(result);
+}
+
+void Harness::compare_region(std::size_t i, Result& result, std::size_t& ranges) const {
+    const Region& r = regions_[i];
+    const Contents& o = after_original_[i];
+    const std::size_t page = common::page_size();
+    // The pages to compare, in order: all of them, or those that are data on either side.
+    std::vector<std::size_t> pages, now;
+    if (r.fd < 0) {
+        for (std::size_t at = 0; at < r.size; at += page) {
+            pages.push_back(at);
+        }
+    } else {
+        for (const auto& [start, end] : data_ranges(r)) {
+            for (std::size_t at = start; at < end; at += page) {
+                now.push_back(at);
+            }
+        }
+        std::ranges::set_union(now, o.pages | std::views::keys, std::back_inserter(pages));
+    }
+    static const std::vector<std::byte> zeros(page);
+    auto original = [&](std::size_t at) {
+        if (r.fd < 0) {
+            return o.bytes.data() + at;
+        }
+        const auto it = o.pages.find(at);
+        return it == o.pages.end() ? zeros.data() : it->second.data();
+    };
+    auto replacement = [&](std::size_t at) -> const std::byte* {
+        // A hole reads zero, and reading it through the mapping would allocate a page.
+        return r.fd < 0 || std::ranges::binary_search(now, at) ? r.data + at : zeros.data();
+    };
+    auto shown = [&](auto& side, std::size_t start, std::size_t end) {
+        std::array<std::byte, max_shown_bytes> bytes{};
+        for (std::size_t k = 0; k < std::min(end - start, max_shown_bytes); ++k) {
+            const std::size_t at = start + k;
+            bytes[k] = side(at - at % page)[at % page];
+        }
+        return show_bytes(bytes.data(), end - start);
+    };
+    std::optional<std::size_t> open;  // the start of the differing range being read
+    std::size_t done = 0;             // the end of the last page compared
+    auto close = [&](std::size_t end) {
+        if (++ranges <= max_ranges) {
+            // Link addresses for the image, offsets for the others.
+            const std::string_view sign = r.is_image ? "" : "+";
+            result.add(std::format("memory: {} {}{:#x}..{}{:#x} differs: original {}, "
+                                   "replacement {}",
+                                   r.name, sign, r.link + *open, sign, r.link + end,
+                                   shown(original, *open, end), shown(replacement, *open, end)));
+        }
+        open.reset();
+    };
+    for (const std::size_t at : pages) {
+        if (open && at != done) {
+            close(done);
+        }
+        const std::size_t n = std::min(page, r.size - at);
+        const std::byte *a = original(at), *b = replacement(at);
+        done = at + n;
+        if (!open && std::memcmp(a, b, n) == 0) {
+            continue;
+        }
+        for (std::size_t k = 0; k < n; ++k) {
+            if ((a[k] != b[k]) != open.has_value()) {
+                if (open) {
+                    close(at + k);
+                } else {
+                    open = at + k;
+                }
+            }
+        }
+    }
+    if (open) {
+        close(done);
+    }
 }
 
 void Harness::compare_log(Result& result) const {
