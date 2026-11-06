@@ -14,6 +14,7 @@
 
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
+#include "hle/kernel/process.hpp"
 #include "loader/dynamic.hpp"
 
 namespace {
@@ -75,6 +76,20 @@ TEST(KernelProcess, ProcessIdAndName) {
     const char* name = nullptr;
     std::memcpy(&name, block, sizeof name);
     EXPECT_STREQ(name, "eboot.bin");
+}
+
+TEST(KernelProcess, ProcessParametersAreTheBlockTheRuntimeSet) {
+    auto* parameters = function<const void*()>("959qrazPIrg");
+    testing::internal::CaptureStderr();
+    EXPECT_EQ(parameters(), nullptr);
+    const std::string log = testing::internal::GetCapturedStderr();
+    EXPECT_NE(log.find("before they were set"), std::string::npos) << log;
+
+    const std::uint64_t block[8] = {0x40};  // the eboot's starts with its size
+    bb::hle::kernel::set_process_parameters(reinterpret_cast<std::uintptr_t>(block));
+    EXPECT_EQ(parameters(), block);
+    std::thread([&] { EXPECT_EQ(parameters(), block); }).join();
+    bb::hle::kernel::set_process_parameters(0);
 }
 
 using SysctlFn = std::int32_t(const std::int32_t*, std::uint32_t, void*, std::uint64_t*,

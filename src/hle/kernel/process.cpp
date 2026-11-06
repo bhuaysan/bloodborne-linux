@@ -1,5 +1,6 @@
 // libkernel process basics that libc.prx and the eboot call during start-up: errno, the stack
-// guard, the process id and name, signals and exit (docs/design/m3-core-os.md, "Process").
+// guard, the process id and name, the process parameters, signals and exit
+// (docs/design/m3-core-os.md, "Process").
 // Call sites are link addresses in libc.prx unless the eboot is named.
 
 #include <sys/random.h>
@@ -20,11 +21,14 @@
 
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
+#include "hle/kernel/process.hpp"
 
 namespace bb::hle::kernel {
 namespace {
 
 constexpr std::string_view library = "libkernel";
+
+std::atomic<std::uintptr_t> process_parameters_block{0};
 
 // A guest sigset_t: 128 bits. libc.prx keeps the old mask of sigprocmask in the 16 bytes below
 // its stack guard (0x53f78) and the setjmp mask at +0x48 of a 0x58-byte jmp_buf (0x2fcc2).
@@ -127,6 +131,17 @@ std::int32_t sys_ctl(const std::int32_t* name, std::uint32_t name_length, void* 
     return posix_fail(ENOENT);
 }
 
+// 959qrazPIrg, name unknown: the eboot's process parameters. libc.prx's preinit (0x5b0) calls it
+// first (0x1f8f7, in the check function 0x1f8f0) and takes the game's allocator tables from the
+// block (docs/formats/kernel-imports.md). Nothing else in the load set imports it.
+const void* process_parameters() {
+    const std::uintptr_t block = process_parameters_block.load(std::memory_order_acquire);
+    if (block == 0) {
+        log(BB_CALLER(), "process parameters requested before they were set");
+    }
+    return reinterpret_cast<const void*>(block);
+}
+
 // ---- signals ---------------------------------------------------------------------------------
 // None of these touch the host's signal state: game code gets no signals delivered (M3).
 
@@ -204,6 +219,11 @@ void report_status(std::uint32_t code, std::uint64_t argument) {
 }
 
 }  // namespace
+
+void set_process_parameters(std::uintptr_t block) {
+    process_parameters_block.store(block, std::memory_order_release);
+}
+
 }  // namespace bb::hle::kernel
 
 BB_HLE_FUNCTION("libkernel", "9BcDykPmo1I", bb::hle::kernel::error_location);
@@ -212,6 +232,7 @@ BB_HLE_FUNCTION("libkernel", "Ou3iL1abvng", bb::hle::kernel::stack_check_fail);
 BB_HLE_FUNCTION("libkernel", "HoLVWNanBBc", bb::hle::kernel::get_pid);
 BB_HLE_DATA("libkernel", "djxxOmW6-aw", bb::hle::kernel::fill_progname);
 BB_HLE_FUNCTION("libkernel", "DFmMT80xcNI", bb::hle::kernel::sys_ctl);
+BB_HLE_FUNCTION("libkernel", "959qrazPIrg", bb::hle::kernel::process_parameters);  // name unknown
 BB_HLE_FUNCTION("libkernel", "VADc3MNQ3cM", bb::hle::kernel::signal_handler);
 BB_HLE_FUNCTION("libkernel", "aPcyptbOiZs", bb::hle::kernel::signal_mask);
 BB_HLE_FUNCTION("libkernel", "6xVpy0Fdq+I", bb::hle::kernel::jmp_signal_mask);  // name unknown
