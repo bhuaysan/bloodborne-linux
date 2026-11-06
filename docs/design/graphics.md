@@ -19,11 +19,12 @@ How the game's GPU work reaches Vulkan: the shader translator (GCN → SPIR-V), 
 ```
 src/gpu/
   gcn/     bbgcn    decoder, disassembler, analysis, translator, SPIR-V builder (no Vulkan, no loader)
-  pm4/     bbpm4    PM4 parser and GPU register state (later wave)
+  pm4/     bbpm4    PM4 packets, parser and GPU register mirror (second wave)
   vk/      bbvk     Vulkan backend: device, memory, pipelines, presentation (later wave)
 src/tools/bb-gcn    command line: disassemble or translate one shader binary
 tools/shaderbnd/    Python: extracts the shaders from the game's archives into analysis/
 tests/gpu/gcn/      bbgcn unit, corpus and execution tests (one directory per target, as in runtime.md)
+tests/gpu/pm4/      bbpm4 tests on synthetic streams
 tests/gpu/runner/   bbcomputerunner: the test-only Vulkan compute runner on lavapipe, and the translator's execution tests (built only with Vulkan)
 tests/gpu/programs/ our GCN test programs: assembly source plus assembled words as hex text
 ```
@@ -548,6 +549,7 @@ The game reaches its main loop (M3). On the render thread it binds shaders, buil
 - **Draws** take a snapshot from the register mirror: ShaderKey per stage, fetch code from the vertex stage's user data dwords 0–1, render targets, blend, depth, stencil, raster and primitive state. Pipelines are cached by that key and use dynamic rendering. The format, blend, compare, cull and topology tables may be adapted from shadPS4's `renderer_vulkan/liverpool_to_vk.cpp`.
 - **Presentation.** A window and Vulkan surface from SDL3 (zlib, the system package `SDL3-devel`; CI builds in a Fedora 44 container). The existing video-out flip thread completes flips per tick; on each flip the presenter blits the display buffer's image to the swapchain. Submit-and-flip queues the flip behind the submission's work, as shadPS4's `PatchFlipRequest` does with the 64-dword `0x68750777` NOP.
 - **Unknown packets** are logged once per opcode, among them 0x8C and 0x8D, which have no name yet. `NOP` payloads tagged `0x6875xxxx` are skipped; the parser records the tag for the trace.
+- **Parser core (item 15, #270).** Item 15 lands in parts: first the register mirror (`registers.hpp`) and the packet headers (`packet.hpp`), then the parser described here. `bb::pm4::Parser` runs a `Stream` against one `RegisterMirror` and returns `done`, `waiting` or `error`. A `Stream` is a stack of up to four buffer positions (the submitted buffer and three nested `INDIRECT_BUFFER`s); a waiting or failing stream keeps its position at that packet, so the next run starts there. A chained `INDIRECT_BUFFER` (bit 20 of its size dword) replaces the current buffer, as in shadPS4. The size of a packet is taken before it runs. A type-3 count of 0x3FFF means an empty body (a one-dword `NOP`). Type-2 dwords are filler; type-0 packets are skipped and logged once like unknown opcodes; a type-1 header, a truncated packet or a body too short for its opcode stops the stream with `error`. The four `SET_*_REG` packets fill the mirror (offset in bits 0-15, CI's index bits ignored); values past the end of a space are dropped and logged once per space. The spaces are config 0x2000-0x2BFF, SH 0x2C00-0x2FFF, context 0xA000-0xA3FF and uconfig 0xC000-0xFFFF, which hold every register of their kind in AMD's offset header. `REWIND` waits until bit 31 of its body (read with acquire) is set. `CONTEXT_CONTROL` is recorded only (we never load or shadow registers). `CLEAR_STATE` writes the context defaults, which the GPU thread installs with the default hardware state (item 18); until then they are zero. The predicate bit is decoded, and predicated packets run until `SET_PREDICATION` exists. Instead of storing `NOP` tags, the parser hands every packet that ran to an optional trace callback, and `nop_tag` decodes a `0x6875xxxx` tag from it.
 - **Clip space** (`PA_CL_CLIP_CNTL`, depth range, viewport orientation) is settled in the pipeline-state item against a known draw of the game.
 - **Debugging.** `--gpu-trace` logs per frame the packets, draws and dispatches with their key state; RenderDoc can capture the Vulkan side.
 
