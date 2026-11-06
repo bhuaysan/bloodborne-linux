@@ -1,5 +1,5 @@
 // The vector memory formats (internal to bbgcn), MUBUF so far, in memory.cpp. Their instructions
-// are two dwords, and the fields that aren't operands go to Instruction::mem.
+// are two dwords; the fields that aren't operands go to Instruction::mem_offset and ::flags.
 #pragma once
 
 #include <cstddef>

@@ -139,11 +139,12 @@ TEST(GcnMemory, EncodingsLlvmCannotExpress) {
         {mubuf(50, 1, 0, 4, 1, 0, buf::tfe), "buffer_atomic_add v1, off, s[4:7], s1 tfe"},
         {mubuf(12, 1, 2, 4, 1, 0, buf::addr64 | buf::offen),
          "buffer_load_dword v1, v[2:3], s[4:7], s1 offen addr64"},
-        {mubuf(12, 0, 0, 4, 1, 0, buf::lds | buf::tfe),
+        {mubuf(12, 255, 0, 4, 1, 0, buf::lds | buf::tfe),
          "buffer_load_dword off, s[4:7], s1 lds tfe"},
         {mubuf(13, 0, 0, 4, 1, 0, buf::lds), "buffer_load_dwordx2 off, s[4:7], s1 lds"},
         // Fields that an instruction doesn't use don't appear in the text.
         {mubuf(113, 1, 2, 4, 1), "buffer_wbinvl1"},
+        {mubuf(14, 253, 0, 4, 1, 0, buf::lds), "buffer_load_dwordx4 off, s[4:7], s1 lds"},
     };
     for (const Case& c : differ) {
         SCOPED_TRACE(c.text);

@@ -179,11 +179,10 @@ Instruction decode_memory(std::span<const std::uint32_t> code, std::size_t index
     if (lds && !load) {
         ops.fail("lds bit on a store or atomic");
     }
-    const Operand data = ops.vgpr(bits(w1, 8, 8), info.data + (load && tfe ? 1 : 0));
     if (!load) {
-        inst.src[inst.num_src++] = data;
-    } else if (!lds) {
-        inst.dst[inst.num_dst++] = data;
+        inst.src[inst.num_src++] = ops.vgpr(bits(w1, 8, 8), info.data);
+    } else if (!lds) {  // a load into LDS doesn't use vdata, so its field isn't checked
+        inst.dst[inst.num_dst++] = ops.vgpr(bits(w1, 8, 8), info.data + (tfe ? 1 : 0));
     }
     // The address: an index, an offset, both (index first), or a 64-bit address.
     const unsigned addr = inst.flags & flag::addr64
