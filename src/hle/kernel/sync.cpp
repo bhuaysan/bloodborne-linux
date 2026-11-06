@@ -1,7 +1,7 @@
 // libkernel and libScePosix mutexes, mutex attributes, rwlocks and condition variables on glibc
 // primitives (docs/design/m3-core-os.md, "Sync"; values in docs/formats/kernel-abi.md, "Mutexes
-// and rwlocks" and "Condition variables"). The core functions return a host errno; the sce and POSIX entry points translate it
-// into their own error form.
+// and rwlocks" and "Condition variables"). The core functions return a host errno; the sce and
+// POSIX entry points translate it into their own error form.
 
 #include "hle/kernel/sync.hpp"
 
@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <ctime>
+#include <list>
 #include <mutex>
 
 #include "hle/hle.hpp"
@@ -42,13 +43,26 @@ struct Rwlock {
     static int create_default(Cell* cell);
 };
 
-// `waiters` counts the threads in a wait, so that destroy can refuse with EBUSY: glibc's
-// pthread_cond_destroy would block until they leave instead.
+// A thread in a condition variable wait. It sleeps on its own host condition variable until a
+// signal or broadcast sets `woken`, or its deadline passes.
+struct CondWaiter {
+    pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
+    bool woken = false;
+};
+
+// The waiters are kept by hand rather than in a glibc condition variable, so that destroy knows
+// which ones are still blocked. `blocked` holds them in arrival order; signal and broadcast move
+// them out and count them in `leaving` until they have left our bookkeeping. Destroy refuses with
+// EBUSY only while a waiter is blocked, and otherwise waits for the leaving ones on `drained`:
+// they leave before they take the guest mutex back, so the destroying thread may hold it. All
+// fields are guarded by `state`.
 struct Cond {
     static constexpr std::uint64_t tag_value = 0x646e6f635f5f6262;  // "bb__cond"
     std::uint64_t tag = tag_value;
-    pthread_cond_t host;
-    std::atomic<int> waiters{0};
+    pthread_mutex_t state = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t drained = PTHREAD_COND_INITIALIZER;
+    std::list<CondWaiter*> blocked;
+    int leaving = 0;
 
     static int create_default(Cell* cell);
 };
@@ -320,16 +334,10 @@ int rwlock_timed(Cell* rwlock, std::uint32_t usec) {
 
 // ---- condition variables -------------------------------------------------------------------
 // The guest object is one 8-byte cell, like a mutex (docs/formats/kernel-abi.md, "Condition
-// variables"). The host condition variable waits on the host mutex behind the guest mutex.
+// variables"). A waiter releases the host mutex behind the guest mutex while it sleeps.
 
 int create_cond(Cell* cell) {
-    auto* c = new Cond;
-    const int error = pthread_cond_init(&c->host, nullptr);
-    if (error != 0) {
-        delete c;
-        return error;
-    }
-    atomic(cell).store(reinterpret_cast<Cell>(c), std::memory_order_release);
+    atomic(cell).store(reinterpret_cast<Cell>(new Cond), std::memory_order_release);
     return 0;
 }
 
@@ -343,15 +351,40 @@ int cond_init(Cell* cond, const void* /*attr*/) {
     return cond == nullptr ? EINVAL : create_cond(cond);
 }
 
-int cond_destroy(Cell* cond) {
-    return destroy<Cond>(cond, [](Cond* c) {
-        return c->waiters.load() != 0 ? EBUSY : pthread_cond_destroy(&c->host);
-    });
+// Busy only while a waiter is blocked. Waiters that a signal or broadcast has released are
+// waited for, as glibc's pthread_cond_destroy does.
+int destroy_host_cond(Cond* c) {
+    pthread_mutex_lock(&c->state);
+    if (!c->blocked.empty()) {
+        pthread_mutex_unlock(&c->state);
+        return EBUSY;
+    }
+    while (c->leaving != 0) {
+        pthread_cond_wait(&c->drained, &c->state);
+    }
+    pthread_mutex_unlock(&c->state);
+    pthread_cond_destroy(&c->drained);
+    pthread_mutex_destroy(&c->state);
+    return 0;
 }
 
-// Calls `wait(host cond, host mutex)` with the waiter counted.
-template <class Wait>
-int cond_wait_with(Cell* cond, Cell* mutex, Wait wait) {
+int cond_destroy(Cell* cond) {
+    return destroy<Cond>(cond, destroy_host_cond);
+}
+
+// Moves the first blocked waiter to the leaving ones and wakes it. Called with `state` held.
+void release_first(Cond* c) {
+    CondWaiter* w = c->blocked.front();
+    c->blocked.pop_front();
+    w->woken = true;
+    ++c->leaving;
+    pthread_cond_signal(&w->wake);
+}
+
+// Releases the guest mutex, sleeps until woken or until `sleep(wake, state)` times out, and takes
+// the guest mutex back. `sleep` returns 0 or ETIMEDOUT, as pthread_cond_clockwait does.
+template <class Sleep>
+int cond_wait_with(Cell* cond, Cell* mutex, Sleep sleep) {
     int error = 0;
     Cond* c = lookup<Cond>(cond, &error);
     if (c == nullptr) {
@@ -361,9 +394,28 @@ int cond_wait_with(Cell* cond, Cell* mutex, Wait wait) {
     if (m == nullptr) {
         return error;
     }
-    ++c->waiters;
-    error = wait(&c->host, m);
-    --c->waiters;
+    CondWaiter self;
+    pthread_mutex_lock(&c->state);
+    // A signaller that holds the guest mutex takes `state` after us, so it sees this waiter.
+    // An error-checking guest mutex refuses the unlock with EPERM if this thread doesn't hold it.
+    if (error = pthread_mutex_unlock(m); error != 0) {
+        pthread_mutex_unlock(&c->state);
+        return error;
+    }
+    const auto position = c->blocked.insert(c->blocked.end(), &self);
+    while (!self.woken) {
+        if (sleep(&self.wake, &c->state) == ETIMEDOUT && !self.woken) {
+            c->blocked.erase(position);
+            error = ETIMEDOUT;
+            break;
+        }
+    }
+    if (self.woken && --c->leaving == 0) {
+        pthread_cond_broadcast(&c->drained);
+    }
+    pthread_mutex_unlock(&c->state);
+    pthread_cond_destroy(&self.wake);
+    pthread_mutex_lock(m);
     return error;
 }
 
@@ -392,11 +444,32 @@ int cond_timedwait_abs(Cell* cond, Cell* mutex, const GuestTimespec* abstime) {
     });
 }
 
-template <int (*Op)(pthread_cond_t*)>
-int cond_op(Cell* cond) {
+int cond_signal(Cell* cond) {
     int error = 0;
     Cond* c = lookup<Cond>(cond, &error);
-    return c != nullptr ? Op(&c->host) : error;
+    if (c == nullptr) {
+        return error;
+    }
+    pthread_mutex_lock(&c->state);
+    if (!c->blocked.empty()) {
+        release_first(c);
+    }
+    pthread_mutex_unlock(&c->state);
+    return 0;
+}
+
+int cond_broadcast(Cell* cond) {
+    int error = 0;
+    Cond* c = lookup<Cond>(cond, &error);
+    if (c == nullptr) {
+        return error;
+    }
+    pthread_mutex_lock(&c->state);
+    while (!c->blocked.empty()) {
+        release_first(c);
+    }
+    pthread_mutex_unlock(&c->state);
+    return 0;
 }
 
 // ---- entry points --------------------------------------------------------------------------
@@ -479,12 +552,12 @@ BB_HLE_FUNCTION("libkernel", "2Tb92quprl0", k::sce_cond_init);
 BB_HLE_FUNCTION("libkernel", "g+PZd2hiacg", k::Sce<k::cond_destroy>::call);
 BB_HLE_FUNCTION("libkernel", "WKAXJ4XBPQ4", k::Sce<k::cond_wait>::call);
 BB_HLE_FUNCTION("libkernel", "BmMjYxmew1w", k::Sce<k::cond_timedwait_usec>::call);
-BB_HLE_FUNCTION("libkernel", "kDh-NfxgMtE", k::Sce<k::cond_op<pthread_cond_signal>>::call);
-BB_HLE_FUNCTION("libkernel", "JGgj7Uvrl+A", k::Sce<k::cond_op<pthread_cond_broadcast>>::call);
+BB_HLE_FUNCTION("libkernel", "kDh-NfxgMtE", k::Sce<k::cond_signal>::call);
+BB_HLE_FUNCTION("libkernel", "JGgj7Uvrl+A", k::Sce<k::cond_broadcast>::call);
 
 BB_HLE_FUNCTION("libScePosix", "0TyVk4MSLt0", k::Posix<k::cond_init>::call);
 BB_HLE_FUNCTION("libScePosix", "RXXqi4CtF8w", k::Posix<k::cond_destroy>::call);
 BB_HLE_FUNCTION("libScePosix", "Op8TBGY5KHg", k::Posix<k::cond_wait>::call);
 BB_HLE_FUNCTION("libScePosix", "27bAgiJmOh0", k::Posix<k::cond_timedwait_abs>::call);
-BB_HLE_FUNCTION("libScePosix", "2MOy+rUfuhQ", k::Posix<k::cond_op<pthread_cond_signal>>::call);
-BB_HLE_FUNCTION("libScePosix", "mkx2fVhNMsg", k::Posix<k::cond_op<pthread_cond_broadcast>>::call);
+BB_HLE_FUNCTION("libScePosix", "2MOy+rUfuhQ", k::Posix<k::cond_signal>::call);
+BB_HLE_FUNCTION("libScePosix", "mkx2fVhNMsg", k::Posix<k::cond_broadcast>::call);
