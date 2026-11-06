@@ -49,7 +49,7 @@ The other NIDs stay unnamed. The FreeBSD manual page lists and the derivation ru
 
 | NID | Callers | Behaviour |
 |---|---|---|
-| `188x57JYp0g` | eboot | Create a counted sync object: name, order 1 or 2, initial count, maximum count ([kernel-abi.md](kernel-abi.md#counted-sync-object)) |
+| `188x57JYp0g` | eboot | Create a counted sync object: name, attribute 1 or 2, initial count, maximum count ([kernel-abi.md](kernel-abi.md#counted-sync-object)) |
 | `R1Jvn8bSCW8` | eboot | Destroy it ([kernel-abi.md](kernel-abi.md#counted-sync-object)) |
 | `Zxa0VhQVTsk` | eboot | Wait: count, timeout pointer ([kernel-abi.md](kernel-abi.md#counted-sync-object)) |
 | `12wOHk8ywb0` | eboot | Wait without blocking: count. Its only call site (0x263afc2) is in the counted sync wrapper, so the survey's "thread attribute call" was wrong ([kernel-abi.md](kernel-abi.md#counted-sync-object)) |

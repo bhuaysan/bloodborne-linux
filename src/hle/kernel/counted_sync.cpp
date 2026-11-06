@@ -19,9 +19,11 @@
 namespace bb::hle::kernel {
 namespace {
 
-// Wake orders that create accepts. Both wake waiters in the order of their requests here.
-constexpr std::int32_t order_fifo = 1;
-constexpr std::int32_t order_priority = 2;
+// The two attribute values that create accepts: every call site passes one of them, and the
+// eboot's message for EINVAL from create names an invalid attribute (0x263ad1e). Their meaning is
+// unknown, and both behave the same here: waiters are served in the order of their requests.
+constexpr std::int32_t attribute_1 = 1;
+constexpr std::int32_t attribute_2 = 2;
 
 // Longer names are refused with ENAMETOOLONG (our limit; the game's names are short).
 constexpr std::size_t max_name_length = 31;
@@ -142,9 +144,9 @@ std::shared_ptr<CountedSync> find(std::uint64_t handle) {
 }
 
 // `options` is null at every call site (eboot 0xd1ad44, 0x263acee) and is ignored.
-std::int32_t counted_create(std::uint64_t* out, const char* name, std::int32_t order,
+std::int32_t counted_create(std::uint64_t* out, const char* name, std::int32_t attribute,
                             std::int32_t initial, std::int32_t max, const void* /*options*/) {
-    if (out == nullptr || (order != order_fifo && order != order_priority) || max < 1 ||
+    if (out == nullptr || (attribute != attribute_1 && attribute != attribute_2) || max < 1 ||
         initial < 0 || initial > max) {
         return sce_fail(EINVAL);
     }

@@ -35,9 +35,9 @@ auto* const post = fn<std::int32_t(std::uint64_t, std::int32_t)>("4czppHBiriw");
 constexpr int esrch = 3, eacces = 13, ebusy = 16, einval = 22, etimedout = 60,
               enametoolong = 63;
 
-std::uint64_t make(std::int32_t initial, std::int32_t max, std::int32_t order = 1) {
+std::uint64_t make(std::int32_t initial, std::int32_t max, std::int32_t attribute = 1) {
     std::uint64_t handle = 0;
-    EXPECT_EQ(create(&handle, "", order, initial, max, nullptr), 0);
+    EXPECT_EQ(create(&handle, "", attribute, initial, max, nullptr), 0);
     EXPECT_NE(handle, 0u);
     return handle;
 }
