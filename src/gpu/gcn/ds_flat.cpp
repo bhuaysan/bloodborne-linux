@@ -154,7 +154,8 @@ std::vector<FlatOp> make_flat() {
     for (unsigned i = 4; i < loads.size(); ++i) {
         set(t, 24 + i, {std::string("flat_store_") + loads[i].first, 0, loads[i].second});
     }
-    // Atomics at 48-64, and their 64-bit forms at 80-96. 52 is unused.
+    // Atomics at 48-64, and their 64-bit forms at 80-96. 52 and 84 (rsub) are left out because
+    // LLVM rejects flat_atomic_rsub for gfx7.
     constexpr std::array<const char*, 17> atomics = {
         "swap", "cmpswap", "add", "sub", nullptr, "smin", "umin", "smax", "umax",
         "and",  "or",      "xor", "inc", "dec",   "fcmpswap", "fmin", "fmax"};

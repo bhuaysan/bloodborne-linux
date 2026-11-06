@@ -41,7 +41,8 @@ const std::vector<OpInfo>& opcodes(Format format);
 // DS and FLAT (ds_flat.cpp). Both are 2 dwords long and have their own opcode tables.
 bool is_ds_flat(std::uint32_t word);
 Instruction decode_ds_flat(std::span<const std::uint32_t> code, std::size_t index);
-std::string ds_flat_modifiers(const Instruction& inst);  // " offset:16 gds", or empty
+// " offset:16 gds" (DS), " glc slc" (FLAT), or empty
+std::string ds_flat_modifiers(const Instruction& inst);
 
 // The operand with 8-bit operand code `c` and `dwords` dwords of the instruction at code[index],
 // as in a scalar source field. A literal comes from code[index + 1]. Throws GcnError.
