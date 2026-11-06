@@ -23,7 +23,9 @@ constexpr std::size_t guest_name_max = 255;
 constexpr std::string_view hostapp = "hostapp";
 
 Resolved fail(int host_errno) {
-    return {{}, guest_errno(host_errno).value()};
+    Resolved r;
+    r.error = guest_errno(host_errno).value();
+    return r;
 }
 
 // "/name" with one component that is neither "." nor "..". Returns the name.
@@ -148,7 +150,7 @@ Resolved PathMap::resolve(std::string_view guest, Access access) {
     if (!relative.empty() && (guest.ends_with('/') || guest.ends_with("/."))) {
         host += "/";
     }
-    return {std::move(host), 0};
+    return {std::move(host), 0, std::string(parts[0]), relative.empty()};
 }
 
 void PathMap::log_refused(const std::string& first, std::string_view why) {

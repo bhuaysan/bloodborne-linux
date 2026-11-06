@@ -126,6 +126,22 @@ TEST_F(PathMapTest, WritableMountsAndUnmount) {
     EXPECT_EQ(map_.resolve("/savedata0/x", Access::read).error, guest(ENOENT));
 }
 
+TEST_F(PathMapTest, NamesTheMountAndItsRoot) {
+    ASSERT_TRUE(map_.mount("/savedata0", save_));
+    Resolved r = map_.resolve("//savedata0/./sub/", Access::write);
+    EXPECT_EQ(r.mount, "savedata0");
+    EXPECT_FALSE(r.mount_root);
+    r = map_.resolve("/savedata0/sub/..", Access::write);
+    EXPECT_EQ(r.mount, "savedata0");
+    EXPECT_TRUE(r.mount_root);
+    r = map_.resolve("/app0/", Access::read);
+    EXPECT_EQ(r.mount, "app0");
+    EXPECT_TRUE(r.mount_root);
+    r = map_.resolve("/nowhere/x", Access::read);
+    EXPECT_EQ(r.mount, "");
+    EXPECT_FALSE(r.mount_root);
+}
+
 TEST_F(PathMapTest, MalformedOrReservedMountPointsThrow) {
     for (const char* point : {"", "savedata0", "/", "/a/b", "/..", "/.", "/app0", "/hostapp"}) {
         EXPECT_THROW(map_.mount(point, save_), std::invalid_argument) << point;

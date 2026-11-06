@@ -24,6 +24,8 @@ enum class Access { read, write };
 struct Resolved {
     std::filesystem::path host;  // empty on failure
     int error = 0;               // guest errno, 0 on success
+    std::string mount;           // the mount's name without "/" ("app0"), empty on failure
+    bool mount_root = false;     // the path names the mount point itself
     explicit operator bool() const { return error == 0; }
 };
 
