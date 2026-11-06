@@ -311,44 +311,62 @@ TEST_F(TranslateExec, CrossLane) {
 
 // ds_swizzle_b32 in lane-local mode: the source lane is worked out from the pattern as in the ISA
 // (a quad permutation, or ((i & and) | or) ^ xor within the 32 lanes), and it reads 0 when that
-// lane is inactive or in another subgroup. Lane i holds i + 1. The last two stages run with the
-// lane 3 of each quad inactive: that lane keeps its old value and is read as 0.
-TEST_F(TranslateExec, DsSwizzle) {
-    // The pattern of stages 1 to 11 (the program's offsets); stages 10 and 11 run masked.
-    constexpr std::uint32_t patterns[11] = {0x801b, 0x80aa, 0x8071, 0x041f, 0x401f, 0x7c1f,
-                                            0x0000, 0x0103, 0x0e0f, 0x801b, 0x041f};
-    const auto out = run("ds_swizzle", {}, 12 * lanes);
-    const std::uint32_t size = out[0];
-    const DeviceInfo& info = runner_->info();
-    ASSERT_TRUE(std::has_single_bit(size) && size >= info.min_subgroup_size &&
-                size <= std::min(info.max_subgroup_size, lanes))
-        << "subgroup size " << size;
-    const auto source = [](std::uint32_t pattern, std::uint32_t i) {
-        if (pattern & 0x8000) {
-            return (i & ~3u) | (pattern >> (2 * (i & 3)) & 3);
-        }
-        const std::uint32_t local = (((i & 31) & (pattern & 31)) | (pattern >> 5 & 31)) ^
-                                    (pattern >> 10 & 31);
-        return (i & 32) | local;
-    };
-    // Hand-worked: with 0x801b lane 5 (position 1 of the quad 4 to 7) reads position 2, lane 6.
-    EXPECT_EQ(source(0x801b, 5), 6u);
-    EXPECT_EQ(source(0x401f, 37), 37u ^ 16);
-    EXPECT_EQ(source(0x0103, 45), 32u + 8 + 1);
-    for (std::uint32_t stage = 1; stage <= 11; ++stage) {
-        const std::uint32_t pattern = patterns[stage - 1];
-        const bool masked = stage >= 10;
-        for (std::uint32_t i = 0; i < lanes; ++i) {
-            SCOPED_TRACE(testing::Message() << "stage " << stage << ", pattern " << std::hex
-                                            << pattern << ", lane " << std::dec << i
-                                            << ", subgroup size " << size);
-            const std::uint32_t j = source(pattern, i);
-            const bool readable = j / size == i / size && !(masked && (j & 3) == 3);
-            const std::uint32_t expected = masked && (i & 3) == 3 ? 0xdead : readable ? j + 1 : 0;
-            EXPECT_EQ(out[stage * lanes + i], expected);
+// lane is inactive, in another subgroup or not there (the last subgroup is not full when the
+// workgroup size is not a multiple of the subgroup size). Lane i holds i + 1. The last two stages
+// run with the lane 3 of each quad inactive: that lane keeps its old value and is read as 0.
+class DsSwizzle : public TranslateExec {
+protected:
+    // Runs the program in a workgroup of `threads` lanes and checks every stage.
+    void check(std::uint32_t threads) {
+        // The pattern of stages 1 to 11 (the program's offsets); stages 10 and 11 run masked.
+        constexpr std::uint32_t patterns[11] = {0x801b, 0x80aa, 0x8071, 0x041f, 0x401f, 0x7c1f,
+                                                0x0000, 0x0103, 0x0e0f, 0x801b, 0x041f};
+        const auto out = run("ds_swizzle", {}, 12 * lanes, 0, threads);
+        // Stage 0 is the number of lanes in the subgroup of lane i. Lane 0's subgroup is full
+        // unless the subgroup is larger than the workgroup, which only 64 can be here.
+        const std::uint32_t size = out[0] < threads ? out[0] : std::bit_ceil(threads);
+        const DeviceInfo& info = runner_->info();
+        ASSERT_TRUE(std::has_single_bit(size) && size >= info.min_subgroup_size &&
+                    size <= std::min(info.max_subgroup_size, lanes))
+            << "subgroup size " << size;
+        const auto source = [](std::uint32_t pattern, std::uint32_t i) {
+            if (pattern & 0x8000) {
+                return (i & ~3u) | (pattern >> (2 * (i & 3)) & 3);
+            }
+            const std::uint32_t local = (((i & 31) & (pattern & 31)) | (pattern >> 5 & 31)) ^
+                                        (pattern >> 10 & 31);
+            return (i & 32) | local;
+        };
+        // Hand-worked: with 0x801b lane 5 (position 1 of the quad 4 to 7) reads position 2,
+        // lane 6.
+        EXPECT_EQ(source(0x801b, 5), 6u);
+        EXPECT_EQ(source(0x401f, 37), 37u ^ 16);
+        EXPECT_EQ(source(0x0103, 45), 32u + 8 + 1);
+        for (std::uint32_t stage = 1; stage <= 11; ++stage) {
+            const std::uint32_t pattern = patterns[stage - 1];
+            const bool masked = stage >= 10;
+            for (std::uint32_t i = 0; i < threads; ++i) {
+                SCOPED_TRACE(testing::Message() << "stage " << stage << ", pattern " << std::hex
+                                                << pattern << ", lane " << std::dec << i
+                                                << ", subgroup size " << size << ", threads "
+                                                << threads);
+                const std::uint32_t j = source(pattern, i);
+                const bool readable = j / size == i / size && j < threads &&
+                                      !(masked && (j & 3) == 3);
+                const std::uint32_t expected = masked && (i & 3) == 3 ? 0xdead
+                                               : readable             ? j + 1
+                                                                      : 0;
+                EXPECT_EQ(out[stage * lanes + i], expected);
+            }
         }
     }
-}
+};
+
+TEST_F(DsSwizzle, FullWorkgroup) { check(lanes); }
+
+// 44 lanes: the last subgroup is not full at any subgroup size. Lane 40 with xor 16 or 31 has a
+// source (56 or 55) that does not exist.
+TEST_F(DsSwizzle, PartialSubgroup) { check(44); }
 
 // The user data of the memory programs: the output, the table through a pointer, the V# of a
 // buffer (stride, number of records) at the table, the V# of the buffer to store to, and soffset.

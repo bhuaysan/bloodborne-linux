@@ -1232,8 +1232,8 @@ private:
     // bit 15 set it is a quad permutation: bits 2k+1:2k pick the lane of the quad that lane k of
     // each aligned quad reads. Otherwise it is a bit mask on the lane within its group of 32:
     // source = ((i & and) | or) ^ xor, with and in bits 4:0, or in bits 9:5 and xor in bits 14:10.
-    // The FFT and rotate modes are GFX9 and later. A source in another subgroup reads 0
-    // (lane-local mode, see shuffle()).
+    // The FFT and rotate modes are GFX9 and later. A source in another subgroup, or in a
+    // subgroup that is not full and has no such lane, reads 0 (lane-local mode, see shuffle()).
     void ds_swizzle(const Instruction& inst) {
         const unsigned pattern = inst.mem_offset & 0xffff;
         const auto constant = [&](unsigned v) { return b_.constant_u32(v); };
@@ -1521,13 +1521,20 @@ private:
     }
 
     // `value` of wave lane `lane` (any value per lane), or 0 when that lane belongs to another
-    // subgroup.
+    // subgroup or does not exist. A subgroup is not full when the workgroup size is not a
+    // multiple of the subgroup size, and shuffling from an invocation that is not there is
+    // undefined, so the source must be set in the subgroup's ballot of the invocations.
     Id shuffle(Id value, Id lane) {
         b_.capability(spv::Capability::GroupNonUniformShuffle);
         const auto [from, inside] = subgroup_lane(lane);
-        const Id r = b_.op(Op::OpGroupNonUniformShuffle, u32_,
-                           {b_.constant_u32(spirv_word(spv::Scope::Subgroup)), value, from});
-        return b_.op(Op::OpSelect, u32_, {inside, r, b_.constant_u32(0)});
+        const Id scope = b_.constant_u32(spirv_word(spv::Scope::Subgroup));
+        const Id present = b_.op(Op::OpGroupNonUniformBallot, b_.type_vector(u32_, 4),
+                                 {scope, b_.constant_bool(true)});
+        const Id exists = b_.op(Op::OpGroupNonUniformBallotBitExtract, bool_,
+                                {scope, present, from});
+        const Id r = b_.op(Op::OpGroupNonUniformShuffle, u32_, {scope, value, from});
+        const Id readable = b_.op(Op::OpLogicalAnd, bool_, {inside, exists});
+        return b_.op(Op::OpSelect, u32_, {readable, r, b_.constant_u32(0)});
     }
 
     // The invocation of this subgroup that is wave lane `lane` (0 when there is none), and whether
