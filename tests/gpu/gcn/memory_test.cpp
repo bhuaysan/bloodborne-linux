@@ -381,6 +381,13 @@ TEST(GcnMemory, Image) {
     EXPECT_EQ(inst.src[0], v(2, 4));
     inst = one(mimg(17, 2, 4, 8, 0, 0x3));  // image_atomic_add
     EXPECT_EQ(inst.src[0], v(2, 2));
+    // tfe extends the vdata range of a store and an atomic too, which then lives in src[0].
+    inst = one(mimg(8, 2, 4, 8, 0, 0x3, img::tfe));  // image_store
+    EXPECT_EQ(inst.num_dst, 0);
+    EXPECT_EQ(inst.src[0], v(2, 3));
+    inst = one(mimg(17, 2, 4, 8, 0, 0x3, img::glc | img::tfe));  // image_atomic_add
+    EXPECT_EQ(inst.num_dst, 0);
+    EXPECT_EQ(inst.src[0], v(2, 3));
     inst = one(mimg(68, 2, 4, 8, 12, 0x2, img::tfe));  // image_gather4_l
     EXPECT_EQ(inst.dst[0], v(2, 5));
     inst = one(mimg(111, 2, 4, 8, 12, 0xf));  // image_sample_c_cd_cl_o
