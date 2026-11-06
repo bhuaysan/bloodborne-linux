@@ -60,6 +60,8 @@ TEST(GcnDsFlat, DecodesDsFields) {
 
 TEST(GcnDsFlat, Errors) {
     EXPECT_THROW(one(ds(21, {})), GcnError);  // unknown DS opcode
+    // FLAT (bits 31-26 = 0x37, flat_load_dword) is not decoded yet, and not taken for DS.
+    EXPECT_THROW(decode(Words{0x37u << 26 | 12u << 18, 0}, Until::code_end), GcnError);
     // A register range past v255.
     EXPECT_THROW(one(ds(255, {.vdst = 253})), GcnError);
     EXPECT_THROW(one(ds(77, {.addr = 0, .data0 = 255})), GcnError);

@@ -1,5 +1,5 @@
-// Decoder for the scalar microcode formats (Sea Islands ISA manual, "Microcode Formats"). DS and
-// FLAT are decoded in ds_flat.cpp.
+// Decoder for the scalar microcode formats (Sea Islands ISA manual, "Microcode Formats"). DS is
+// decoded in ds_flat.cpp. FLAT is not decoded yet (second part of #119).
 
 #include <algorithm>
 #include <array>
