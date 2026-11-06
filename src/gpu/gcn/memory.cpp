@@ -301,6 +301,9 @@ Instruction decode_buffer(std::span<const std::uint32_t> code, std::size_t index
 // MIMG: vdata, vaddr, the image descriptor and, for sampling, the sampler. The dmask goes to
 // mem_offset. vdata is a register per dmask bit (at least one) and a gather's four, with a status
 // register more under tfe. The address is its shortest form: see ImgOp.
+// The hardware also writes the status register under lwe alone, but LLVM's assembler counts only
+// tfe in the range of vdata, so dst keeps that range for the round trip. The translator must
+// treat an lwe instruction without tfe as writing one more VGPR after the range (graphics.md).
 Instruction decode_image(std::span<const std::uint32_t> code, std::size_t index) {
     const std::uint32_t w0 = code[index];
     Instruction inst;

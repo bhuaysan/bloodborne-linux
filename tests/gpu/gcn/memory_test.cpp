@@ -372,6 +372,10 @@ TEST(GcnMemory, Image) {
     EXPECT_EQ(inst.dst[0], v(2));
     EXPECT_EQ(inst.num_src, 2);
     EXPECT_EQ(inst.flags, flag::unorm | flag::r128 | flag::lwe);
+    // lwe alone writes a status register too, but dst keeps LLVM's range (see graphics.md).
+    inst = one(mimg(32, 1, 4, 8, 12, 0x1, img::lwe));
+    EXPECT_EQ(inst.dst[0], v(1));
+    EXPECT_EQ(inst.flags, flag::lwe);
     inst = one(mimg(8, 2, 4, 8, 0, 0xf));
     EXPECT_EQ(inst.num_dst, 0);
     EXPECT_EQ(inst.src[0], v(2, 4));
@@ -404,6 +408,9 @@ const std::vector<Case> image_cases = {
     {mimg(32, 1, 4, 8, 12, 0xf,
           img::unorm | img::glc | img::slc | img::r128 | img::tfe | img::lwe | img::da),
      "image_sample v[1:5], v4, s[8:15], s[12:15] dmask:0xf unorm glc slc r128 tfe lwe da"},
+    // lwe alone keeps the range of dmask alone, as LLVM's assembler counts only tfe.
+    {mimg(32, 1, 4, 8, 12, 0x1, img::lwe),
+     "image_sample v1, v4, s[8:15], s[12:15] dmask:0x1 lwe"},
     {mimg(8, 4, 8, 16, 0, 0x7), "image_store v[4:6], v8, s[16:23] dmask:0x7"},
     {mimg(16, 0, 4, 8, 0, 0x3, img::glc),
      "image_atomic_cmpswap v[0:1], v4, s[8:15] dmask:0x3 glc"},
