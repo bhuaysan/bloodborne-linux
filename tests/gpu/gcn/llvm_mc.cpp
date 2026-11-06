@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -15,9 +16,10 @@ namespace {
 
 namespace fs = std::filesystem;
 
-// Runs `command` through the shell and returns what it prints, with stderr.
-std::string run(const std::string& command) {
-    FILE* pipe = popen((command + " 2>&1").c_str(), "r");
+// Runs `command` through the shell and returns what it prints, with stderr unless `stderr_to`
+// redirects it (a pipe's buffering would cut a line of stdout in two with the other stream).
+std::string run(const std::string& command, const std::string& stderr_to = "&1") {
+    FILE* pipe = popen((command + " 2>" + stderr_to).c_str(), "r");
     if (pipe == nullptr) {
         throw std::runtime_error("cannot run " + command);
     }
@@ -45,11 +47,15 @@ std::vector<std::uint32_t> words(std::string_view bytes) {
     return out;
 }
 
-// Every instruction llvm-mc assembles from the source file, in order.
-std::vector<Assembled> assemble_path(const fs::path& source) {
-    const std::string output = run(std::string("'") + BB_LLVM_MC +
-                                   "' -triple=amdgcn -mcpu=bonaire -show-encoding '" +
-                                   source.string() + "'");
+std::string run_mc(const fs::path& source, std::string_view mcpu,
+                   const std::string& stderr_to = "&1") {
+    return run(std::string("'") + BB_LLVM_MC + "' -triple=amdgcn -mcpu=" + std::string(mcpu) +
+                   " -show-encoding '" + source.string() + "'",
+               stderr_to);
+}
+
+// Every instruction llvm-mc assembled from the output, in order.
+std::vector<Assembled> encodings(const std::string& output) {
     // Each line is "\t<text> ; encoding: [<bytes>]", with the text padded by spaces.
     std::vector<Assembled> out;
     std::istringstream stream(output);
@@ -61,6 +67,12 @@ std::vector<Assembled> assemble_path(const fs::path& source) {
                            words(std::string_view(line).substr(pos))});
         }
     }
+    return out;
+}
+
+// Every instruction llvm-mc assembles from the source file, in order.
+std::vector<Assembled> assemble_path(const fs::path& source) {
+    const std::string output = run_mc(source, "bonaire");
     if (output.find("error:") != std::string::npos) {
         throw std::runtime_error("llvm-mc rejected the source:\n" + output);
     }
@@ -68,7 +80,22 @@ std::vector<Assembled> assemble_path(const fs::path& source) {
     if (output.find("  fixup ") != std::string::npos) {
         throw std::runtime_error("branches need numeric offsets, not labels:\n" + output);
     }
-    return out;
+    return encodings(output);
+}
+
+// Writes the lines to a new temporary file and returns its path.
+fs::path write_source(const std::vector<std::string>& lines) {
+    std::string path = (fs::temp_directory_path() / "bb-gcn-XXXXXX").string();
+    int fd = ::mkstemp(path.data());
+    if (fd < 0) {
+        throw std::runtime_error("cannot create " + path);
+    }
+    ::close(fd);
+    std::ofstream source(path);
+    for (const auto& line : lines) {
+        source << line << '\n';
+    }
+    return path;
 }
 
 }  // namespace
@@ -86,18 +113,7 @@ std::vector<std::vector<std::uint32_t>> assemble_file(const fs::path& source) {
 }
 
 std::vector<Assembled> assemble(const std::vector<std::string>& lines) {
-    std::string path = (fs::temp_directory_path() / "bb-gcn-XXXXXX").string();
-    int fd = ::mkstemp(path.data());
-    if (fd < 0) {
-        throw std::runtime_error("cannot create " + path);
-    }
-    ::close(fd);
-    {
-        std::ofstream source(path);
-        for (const auto& line : lines) {
-            source << line << '\n';
-        }
-    }
+    const fs::path path = write_source(lines);
     std::vector<Assembled> out;
     try {
         out = assemble_path(path);
@@ -109,6 +125,57 @@ std::vector<Assembled> assemble(const std::vector<std::string>& lines) {
     if (out.size() != lines.size()) {
         throw std::runtime_error("llvm-mc gave " + std::to_string(out.size()) +
                                  " encodings for " + std::to_string(lines.size()) + " lines");
+    }
+    return out;
+}
+
+std::vector<Attempt> assemble_each(const std::vector<std::string>& lines, std::string_view mcpu) {
+    const fs::path path = write_source(lines);
+    const fs::path error_path = path.string() + ".err";
+    std::string output, errors;
+    try {
+        output = run_mc(path, mcpu, "'" + error_path.string() + "'");
+        std::ifstream stream(error_path);
+        errors.assign(std::istreambuf_iterator<char>(stream), {});
+    } catch (...) {
+        fs::remove(path);
+        fs::remove(error_path);
+        throw;
+    }
+    fs::remove(path);
+    fs::remove(error_path);
+    // "<path>:<line>:<column>: error: <message>", then the line and a caret. llvm-mc goes on with
+    // the next line and prints no encoding for this one.
+    std::vector<Attempt> out(lines.size());
+    const std::string prefix = path.string() + ":";
+    std::size_t rejected = 0;
+    std::istringstream stream(errors);
+    for (std::string line; std::getline(stream, line);) {
+        const auto error = line.find(": error: ");
+        if (!line.starts_with(prefix) || error == std::string::npos) {
+            continue;
+        }
+        const std::size_t number = std::stoul(line.substr(prefix.size()));
+        if (number == 0 || number > lines.size()) {
+            throw std::runtime_error("llvm-mc error for line " + std::to_string(number) + ":\n" +
+                                     errors);
+        }
+        if (out[number - 1].error.empty()) {
+            out[number - 1].error = line.substr(error + 9);
+            ++rejected;
+        }
+    }
+    auto assembled = encodings(output);
+    if (assembled.size() + rejected != lines.size()) {
+        throw std::runtime_error("llvm-mc gave " + std::to_string(assembled.size()) +
+                                 " encodings and " + std::to_string(rejected) + " errors for " +
+                                 std::to_string(lines.size()) + " lines");
+    }
+    auto next = assembled.begin();
+    for (auto& attempt : out) {
+        if (attempt.error.empty()) {
+            attempt.assembled = std::move(*next++);
+        }
     }
     return out;
 }

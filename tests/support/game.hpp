@@ -14,6 +14,10 @@ std::filesystem::path local_env_file();
 // BB_GAME_DIR from the environment, else from local.env. Nothing when neither sets it.
 std::optional<std::filesystem::path> game_dir();
 
+// analysis/ in the main checkout: the untracked outputs of the tools (also from a linked
+// worktree). It may not exist.
+std::filesystem::path analysis_dir();
+
 }  // namespace bb::test
 
 // Skips the current test when the game isn't available. Declares `game` as its directory.

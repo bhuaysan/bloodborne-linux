@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace bb::test::gcn {
@@ -19,6 +20,18 @@ struct Assembled {
 // Each line assembled by `llvm-mc -triple=amdgcn -mcpu=bonaire -show-encoding`.
 // Throws std::runtime_error with llvm-mc's output when it rejects a line.
 std::vector<Assembled> assemble(const std::vector<std::string>& lines);
+
+// What llvm-mc made of one line: its encoding, or `error` (llvm-mc's message) when it rejected it.
+struct Attempt {
+    Assembled assembled;
+    std::string error;
+};
+
+// Like assemble(), for every line on its own: a line llvm-mc rejects does not stop the others.
+// `mcpu` is the GPU, "bonaire" (gfx7) for the game. Throws std::runtime_error when llvm-mc's
+// output does not account for every line.
+std::vector<Attempt> assemble_each(const std::vector<std::string>& lines,
+                                   std::string_view mcpu = "bonaire");
 
 // The words of every instruction in the source file, in order. Comments and blank lines give
 // none. Throws std::runtime_error with llvm-mc's output when it rejects the source, or when a
