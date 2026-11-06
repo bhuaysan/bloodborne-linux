@@ -1,6 +1,6 @@
 # Save data
 
-What the eboot's libSceSaveData and libSceSaveDataDialog imports do, worked out only from the eboot's own call sites. Under the earlier policy both libraries were in (or derived from) its exposure log ([clean-room.md](../clean-room.md#exposure-log)), so this note and the code (`src/hle/system/save_data.{hpp,cpp}`) give NIDs and neutral descriptions, not function names; #226 lifts that. Addresses are eboot link addresses. Facts the code shows carry their addresses; values it doesn't show are **our choice**, marked as such.
+What the eboot's libSceSaveData and libSceSaveDataDialog imports do, worked out from the eboot's own call sites. The function names are the ones in `symbols/nids.csv` (the NID matches the hash of the name; source label `shadps4-0d5f273`), and the code is `src/hle/system/save_data.{hpp,cpp}`. The names are not evidence of behaviour: what each function does here comes from the call sites. Addresses are eboot link addresses. Facts the code shows carry their addresses; values it doesn't show are **our choice**, marked as such.
 
 ## How the game uses them
 
@@ -31,27 +31,27 @@ The calls sit in a small task framework at 0x283c4b0–0x2844000, created by a m
 
 **Erase** (0x283e765, 0x283e78d): user id at 0, null at 8, a pointer to the same 32-byte name at 0x10. The game calls it after a search hit in the erase task, whose byte-store twin (0x2840510) zeroes its data, so it removes the directory.
 
-**Byte store** calls take `(user id, buffer, byte count, offset)` (reads at 0x2840772, 0x2840dce, …, writes at 0x28407f7, 0x284182e, …); a non-zero result gives the game's result 8. The store starts with a 16-byte header `{adler32 of the entry sizes, slot, 0x7f7f7f7f, 0}` and 8 bytes per entry (0x2840dec, 0x2840ec1, adler32 at 0x283f0f0); a magic or slot mismatch gives result 6 (0x2841056), an adler32 mismatch result 7 (0x2840e11, 0x2841079, 0x2841093), a per-entry header mismatch 6 (0x2840ebb, 0x2840ec8, 0x284125b); with the optional 16-byte entry trailer, a trailer mismatch gives 7 (0x2840fab, 0x284127e). The set-up call `v7AAAMo0Lz4` takes `(user id, total size, 0x524-byte record)` with three strings at 0, 0x80 and 0x100 (0x28442b2); the game refuses a total over 0x100000 itself (0x283f040).
+**Byte store** calls take `(user id, buffer, byte count, offset)` (reads at 0x2840772, 0x2840dce, …, writes at 0x28407f7, 0x284182e, …); a non-zero result gives the game's result 8. The store starts with a 16-byte header `{adler32 of the entry sizes, slot, 0x7f7f7f7f, 0}` and 8 bytes per entry (0x2840dec, 0x2840ec1, adler32 at 0x283f0f0); a magic or slot mismatch gives result 6 (0x2841056), an adler32 mismatch result 7 (0x2840e11, 0x2841079, 0x2841093), a per-entry header mismatch 6 (0x2840ebb, 0x2840ec8, 0x284125b); with the optional 16-byte entry trailer, a trailer mismatch gives 7 (0x2840fab, 0x284127e). The set-up call `sceSaveDataSetupSaveDataMemory` takes `(user id, total size, 0x524-byte record)` with three strings at 0, 0x80 and 0x100 (0x28442b2); the game refuses a total over 0x100000 itself (0x283f040).
 
 ## The imports
 
-| NID | Call sites | What our runtime does |
+| Function (NID) | Call sites | What our runtime does |
 |---|---|---|
-| `ZkZhskCPXFw` | 0x283c50e, `(0x24-byte record)`; non-zero fails the game's init | succeeds |
-| `yKDy8S5yLA0` | 0x283c5ee, no arguments, result unchecked | succeeds |
-| `32HQAQdwM2o` | 0x283fe40 (load), 0x2842472, 0x2842499 (save) | mounts `<root>/<dir>` at the lowest free `/savedataN` (**our choice** of names: the game only uses the string as a prefix). A missing directory gives 0x809f0008 unless mode bit 4 is set, which creates it: that is what makes the save path's retry (0x2842481) and the load path's "no save yet" (0x283ee10) work. Bad names, a second mount of one directory and other failures give 0x809f0001 (**our choice** within the range the game treats as one error, 8) |
-| `BMR4F-Uek3E` | 14 sites, `(mount output)` | removes the mount |
-| `dyIhnXq-0SM` | 0x283e3b0 | one hit with the name if the directory exists, else none |
-| `S1GkePI17zQ` | 0x283e765, 0x283e78d | removes the directory; 0x809f0008 if it is missing, 0x809f0001 while mounted |
-| `85zul--eGXs` | 0x2842632, 0x28427c5, 0x28429a6, `(mount output, kind 1–3, text, 0x80 or 0x400)` | logs the text and keeps nothing (**our choice**) |
-| `c88Yy54Mx0w` | 0x2842ac1, `(mount output, 0x28-byte record)` | succeeds for a mounted record, keeps nothing (**our choice**) |
-| `7Bt5pBC-Aco` | store reads, see above | reads `<root>/store-<user>.bin`; bytes it doesn't hold read as zeros, so a fresh store has no header and the game reports "no save yet" |
-| `h3YURzXGSVQ` | store writes | writes into that file |
-| `v7AAAMo0Lz4` | 0x28442b2 | logs the size and succeeds |
-| `s9e3+YpRnzw` | 0x28425e7, no arguments; 0x80b80008 makes the game retry | succeeds |
-| `4tPhsP6FpDI` | 0x28432f5, `(record)`: a 0x98-byte record at rsp+0x9a0 that stores its own size at offset 0x30 (0x2843155–0x28431a1, 0x28431e2); non-zero skips the poll | fails (**our choice**: no dialog UI) |
-| `KK3Bdg1RWK0` | 0x284330a, polled every 16666 µs while it returns 2 | returns 0 |
-| `YuH2FA7azqQ` | 0x2843314, result unchecked | succeeds |
+| `sceSaveDataInitialize` (`ZkZhskCPXFw`) | 0x283c50e, `(0x24-byte record)`; non-zero fails the game's init | succeeds |
+| `sceSaveDataTerminate` (`yKDy8S5yLA0`) | 0x283c5ee, no arguments, result unchecked | succeeds |
+| `sceSaveDataMount` (`32HQAQdwM2o`) | 0x283fe40 (load), 0x2842472, 0x2842499 (save) | mounts `<root>/<dir>` at the lowest free `/savedataN` (**our choice** of names: the game only uses the string as a prefix). A missing directory gives 0x809f0008 unless mode bit 4 is set, which creates it: that is what makes the save path's retry (0x2842481) and the load path's "no save yet" (0x283ee10) work. Bad names, a second mount of one directory and other failures give 0x809f0001 (**our choice** within the range the game treats as one error, 8) |
+| `sceSaveDataUmount` (`BMR4F-Uek3E`) | 14 sites, `(mount output)` | removes the mount |
+| `sceSaveDataDirNameSearch` (`dyIhnXq-0SM`) | 0x283e3b0 | one hit with the name if the directory exists, else none |
+| `sceSaveDataDelete` (`S1GkePI17zQ`) | 0x283e765, 0x283e78d | removes the directory; 0x809f0008 if it is missing, 0x809f0001 while mounted |
+| `sceSaveDataSetParam` (`85zul--eGXs`) | 0x2842632, 0x28427c5, 0x28429a6, `(mount output, kind 1–3, text, 0x80 or 0x400)` | logs the text and keeps nothing (**our choice**) |
+| `sceSaveDataSaveIcon` (`c88Yy54Mx0w`) | 0x2842ac1, `(mount output, 0x28-byte record)` | succeeds for a mounted record, keeps nothing (**our choice**) |
+| `sceSaveDataGetSaveDataMemory` (`7Bt5pBC-Aco`) | store reads, see above | reads `<root>/store-<user>.bin`; bytes it doesn't hold read as zeros, so a fresh store has no header and the game reports "no save yet" |
+| `sceSaveDataSetSaveDataMemory` (`h3YURzXGSVQ`) | store writes | writes into that file |
+| `sceSaveDataSetupSaveDataMemory` (`v7AAAMo0Lz4`) | 0x28442b2 | logs the size and succeeds |
+| `sceSaveDataDialogInitialize` (`s9e3+YpRnzw`) | 0x28425e7, no arguments; 0x80b80008 makes the game retry | succeeds |
+| `sceSaveDataDialogOpen` (`4tPhsP6FpDI`) | 0x28432f5, `(record)`: a 0x98-byte record at rsp+0x9a0 that stores its own size at offset 0x30 (0x2843155–0x28431a1, 0x28431e2); non-zero skips the poll | fails (**our choice**: no dialog UI) |
+| `sceSaveDataDialogUpdateStatus` (`KK3Bdg1RWK0`) | 0x284330a, polled every 16666 µs while it returns 2 | returns 0 |
+| `sceSaveDataDialogTerminate` (`YuH2FA7azqQ`) | 0x2843314, result unchecked | succeeds |
 
 The dialog is only reached when a save mount fails with 0x809f000a and a task flag is set (0x2841ca0); its result record is never read back and the mount error stays the task's result (0x28432b5, 0x2843323). The runtime never returns 0x809f000a, so the dialog calls are not reached in practice. The game loads and unloads system module 0xa0 around it (0x28425ce, 0x284331e).
 

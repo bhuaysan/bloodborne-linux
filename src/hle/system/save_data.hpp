@@ -1,6 +1,6 @@
-// libSceSaveData and libSceSaveDataDialog: save directories in the profile. Written from the
-// eboot's call sites only and without Sony-style names, under the earlier source policy (#226
-// lifts that); docs/formats/savedata.md has the facts and the addresses that show them.
+// libSceSaveData and libSceSaveDataDialog: save directories in the profile. The facts come from
+// the eboot's call sites; docs/formats/savedata.md has them with the addresses that show them.
+// Function names are the ones in symbols/nids.csv.
 #pragma once
 
 #include <cstddef>

@@ -121,19 +121,29 @@ std::int32_t day_of_week(std::int32_t y, std::int32_t m, std::int32_t d) {
     return static_cast<std::int32_t>(weekday{sys_days{ymd}}.c_encoding());
 }
 
-std::int32_t date_text(char* /*buffer*/, std::int32_t /*mode*/) {
+std::int32_t date_text(char* /*buffer*/, const std::uint64_t* /*tick*/) {
     return invalid;
 }
 
-BB_HLE_FUNCTION("libSceRtc", "ZPD1YOKI+Kw", date_now);                     // name unknown
-BB_HLE_FUNCTION("libSceRtc", "8w-H19ip48I", date_to_tick);                 // name unknown
-BB_HLE_FUNCTION("libSceRtc", "ueega6v3GUw", tick_to_date);                 // name unknown
-BB_HLE_FUNCTION("libSceRtc", "bDEVVP4bTjQ", seconds_to_date);              // name unknown
-BB_HLE_FUNCTION("libSceRtc", "zO9UL3qIINQ", tick_now);                     // name unknown
-BB_HLE_FUNCTION("libSceRtc", "jMNwqYr4R-k", ticks_per_second);             // name unknown
-BB_HLE_FUNCTION("libSceRtc", "M1TvFst-jrM", tick_convert_clearing_flag);   // name unknown
-BB_HLE_FUNCTION("libSceRtc", "8Yr143yEnRo", tick_convert_setting_flag);    // name unknown
-BB_HLE_FUNCTION("libSceRtc", "CyIK-i4XdgQ", day_of_week);                  // name unknown
-BB_HLE_FUNCTION("libSceRtc", "AxHBk3eat04", date_text);                    // name unknown
+// sceRtcGetCurrentClockLocalTime
+BB_HLE_FUNCTION("libSceRtc", "ZPD1YOKI+Kw", date_now);
+// sceRtcGetTick
+BB_HLE_FUNCTION("libSceRtc", "8w-H19ip48I", date_to_tick);
+// sceRtcSetTick
+BB_HLE_FUNCTION("libSceRtc", "ueega6v3GUw", tick_to_date);
+// sceRtcSetTime_t
+BB_HLE_FUNCTION("libSceRtc", "bDEVVP4bTjQ", seconds_to_date);
+// sceRtcGetCurrentNetworkTick
+BB_HLE_FUNCTION("libSceRtc", "zO9UL3qIINQ", tick_now);
+// sceRtcGetTickResolution
+BB_HLE_FUNCTION("libSceRtc", "jMNwqYr4R-k", ticks_per_second);
+// sceRtcConvertUtcToLocalTime
+BB_HLE_FUNCTION("libSceRtc", "M1TvFst-jrM", tick_convert_clearing_flag);
+// sceRtcConvertLocalTimeToUtc
+BB_HLE_FUNCTION("libSceRtc", "8Yr143yEnRo", tick_convert_setting_flag);
+// sceRtcGetDayOfWeek
+BB_HLE_FUNCTION("libSceRtc", "CyIK-i4XdgQ", day_of_week);
+// sceRtcFormatRFC2822LocalTime
+BB_HLE_FUNCTION("libSceRtc", "AxHBk3eat04", date_text);
 
 }  // namespace bb::hle::system

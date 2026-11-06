@@ -118,7 +118,7 @@ TEST(DateTime, TickConversionsAndTextKeepTheGameOnItsDefaults) {
     EXPECT_EQ(tick_convert_setting_flag(&in, &out), 0);
     EXPECT_EQ(out, in);
     char text[8] = "keep";
-    EXPECT_NE(date_text(text, 0), 0);
+    EXPECT_NE(date_text(text, nullptr), 0);
     EXPECT_STREQ(text, "keep");
 }
 

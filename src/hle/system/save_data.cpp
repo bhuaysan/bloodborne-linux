@@ -326,20 +326,35 @@ std::int32_t save_dialog_close() {
     return save_ok;
 }
 
-BB_HLE_FUNCTION("libSceSaveData", "ZkZhskCPXFw", save_data_initialize);  // name unknown
-BB_HLE_FUNCTION("libSceSaveData", "yKDy8S5yLA0", save_data_terminate);   // name unknown
-BB_HLE_FUNCTION("libSceSaveData", "32HQAQdwM2o", save_data_mount);       // name unknown
-BB_HLE_FUNCTION("libSceSaveData", "BMR4F-Uek3E", save_data_unmount);     // name unknown
-BB_HLE_FUNCTION("libSceSaveData", "dyIhnXq-0SM", save_data_search);      // name unknown
-BB_HLE_FUNCTION("libSceSaveData", "S1GkePI17zQ", save_data_erase);       // name unknown
-BB_HLE_FUNCTION("libSceSaveData", "85zul--eGXs", save_data_set_text);    // name unknown
-BB_HLE_FUNCTION("libSceSaveData", "c88Yy54Mx0w", save_data_set_blob);    // name unknown
-BB_HLE_FUNCTION("libSceSaveData", "7Bt5pBC-Aco", save_store_read);       // name unknown
-BB_HLE_FUNCTION("libSceSaveData", "h3YURzXGSVQ", save_store_write);      // name unknown
-BB_HLE_FUNCTION("libSceSaveData", "v7AAAMo0Lz4", save_store_declare);    // name unknown
-BB_HLE_FUNCTION("libSceSaveDataDialog", "s9e3+YpRnzw", save_dialog_initialize);  // name unknown
-BB_HLE_FUNCTION("libSceSaveDataDialog", "4tPhsP6FpDI", save_dialog_open);        // name unknown
-BB_HLE_FUNCTION("libSceSaveDataDialog", "KK3Bdg1RWK0", save_dialog_status);      // name unknown
-BB_HLE_FUNCTION("libSceSaveDataDialog", "YuH2FA7azqQ", save_dialog_close);       // name unknown
+// sceSaveDataInitialize
+BB_HLE_FUNCTION("libSceSaveData", "ZkZhskCPXFw", save_data_initialize);
+// sceSaveDataTerminate
+BB_HLE_FUNCTION("libSceSaveData", "yKDy8S5yLA0", save_data_terminate);
+// sceSaveDataMount
+BB_HLE_FUNCTION("libSceSaveData", "32HQAQdwM2o", save_data_mount);
+// sceSaveDataUmount
+BB_HLE_FUNCTION("libSceSaveData", "BMR4F-Uek3E", save_data_unmount);
+// sceSaveDataDirNameSearch
+BB_HLE_FUNCTION("libSceSaveData", "dyIhnXq-0SM", save_data_search);
+// sceSaveDataDelete
+BB_HLE_FUNCTION("libSceSaveData", "S1GkePI17zQ", save_data_erase);
+// sceSaveDataSetParam
+BB_HLE_FUNCTION("libSceSaveData", "85zul--eGXs", save_data_set_text);
+// sceSaveDataSaveIcon
+BB_HLE_FUNCTION("libSceSaveData", "c88Yy54Mx0w", save_data_set_blob);
+// sceSaveDataGetSaveDataMemory
+BB_HLE_FUNCTION("libSceSaveData", "7Bt5pBC-Aco", save_store_read);
+// sceSaveDataSetSaveDataMemory
+BB_HLE_FUNCTION("libSceSaveData", "h3YURzXGSVQ", save_store_write);
+// sceSaveDataSetupSaveDataMemory
+BB_HLE_FUNCTION("libSceSaveData", "v7AAAMo0Lz4", save_store_declare);
+// sceSaveDataDialogInitialize
+BB_HLE_FUNCTION("libSceSaveDataDialog", "s9e3+YpRnzw", save_dialog_initialize);
+// sceSaveDataDialogOpen
+BB_HLE_FUNCTION("libSceSaveDataDialog", "4tPhsP6FpDI", save_dialog_open);
+// sceSaveDataDialogUpdateStatus
+BB_HLE_FUNCTION("libSceSaveDataDialog", "KK3Bdg1RWK0", save_dialog_status);
+// sceSaveDataDialogTerminate
+BB_HLE_FUNCTION("libSceSaveDataDialog", "YuH2FA7azqQ", save_dialog_close);
 
 }  // namespace bb::hle::system
