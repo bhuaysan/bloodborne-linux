@@ -3,8 +3,9 @@ target_link_libraries(bb-load PRIVATE bbhlenet bbhle bbloader bb_warnings)
 add_executable(bb-gcn bb_gcn.cpp)
 target_link_libraries(bb-gcn PRIVATE bbgcn bb_warnings)
 
-# bb-run's command line and entry arguments, a library of their own for the unit tests.
-add_library(bbrunoptions STATIC run_options.cpp)
+# bb-run's command line, entry arguments and main-loop probe, a library of their own for the unit
+# tests.
+add_library(bbrunoptions STATIC run_options.cpp main_loop_probe.cpp)
 target_link_libraries(bbrunoptions PUBLIC bbcommon PRIVATE bb_warnings)
 
 # The game runtime. The OBJECT libraries hold static registrations (HLE modules, the eboot's TLS
