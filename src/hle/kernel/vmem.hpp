@@ -24,7 +24,8 @@ inline constexpr int prot_extra = 0x30;
 
 // The guest window [window_start, window_end): every mapping without a fixed address goes there,
 // so that it fits the game's 40-bit GPU addresses. Reserved once, before the first guest mapping;
-// an unmapped range in it is reserved again instead of returned to the host. It lies in
+// an unmapped range in it is reserved again instead of returned to the host, and a range the host
+// refuses to reserve again is never placed into again. It lies in
 // AddressSanitizer's shadow gap, so ASan builds that map guest memory run with
 // protect_shadow_gap=0, and above the gap's own shadow, which ASan then maps up to 0x4091ff7000.
 inline constexpr std::uintptr_t window_start = 0x80'0000'0000;
