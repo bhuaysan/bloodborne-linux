@@ -16,8 +16,8 @@ file(GLOB BB_HLE_KERNEL_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/ke
 
 # An OBJECT library because it holds static registrations: only executables link it
 # (docs/design/runtime.md, "Static registration").
-add_library(bbhle OBJECT hle.cpp link.cpp stub_entry.S ${CMAKE_CURRENT_BINARY_DIR}/nid_table.cpp
-    ${BB_HLE_KERNEL_SOURCES})
+add_library(bbhle OBJECT hle.cpp link.cpp prx_init.cpp stub_entry.S
+    ${CMAKE_CURRENT_BINARY_DIR}/nid_table.cpp ${BB_HLE_KERNEL_SOURCES})
 target_link_libraries(bbhle PUBLIC bbloader PRIVATE bb_warnings)
 add_subdirectory(net)
 add_subdirectory(system)

@@ -4,6 +4,9 @@ bb_add_test(hle_system_test SOURCES system_test.cpp LIBS bbhle bbhlesystem)
 bb_add_test(hle_date_time_test SOURCES date_time_test.cpp LIBS bbhle bbhlesystem)
 bb_add_test(hle_save_data_test SOURCES save_data_test.cpp LIBS bbhle bbhlesystem)
 bb_add_test(hle_video_test SOURCES video_test.cpp LIBS bbhle bbhlevideo)
+# Runs the PRX initialisers, so it needs the eboot's TLS reservation (docs/design/m3-core-os.md,
+# "TLS").
+bb_add_test(hle_prx_init_test SOURCES prx_init_test.cpp LIBS bbhle bbeboottls)
 
 # One test executable per kernel module: kernel_<module>_test.cpp becomes the test
 # kernel_<module>_test, so that new kernel modules don't all edit this list.
