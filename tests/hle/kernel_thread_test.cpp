@@ -122,18 +122,31 @@ std::size_t stack_size_of(const Cell* attr) {
     return reinterpret_cast<std::size_t>(value);
 }
 
+// The most glibc hands out for a request: it reuses the cached stack of an earlier thread when
+// that one is at most four times the size, plus room for the guard page and rounding. For the
+// small sizes this stays far below the host's default thread stack (RLIMIT_STACK, 8 MiB or more).
+constexpr std::size_t largest_host_stack(std::size_t requested) {
+    return 4 * (requested + thread_stack_reserve) + 0x10000;
+}
+
 TEST(Thread, TheRequestedStackSizeIsApplied) {
-    // The host stack holds at least the requested size plus the runtime's reserve. It can be
-    // larger: glibc rounds it up and reuses the cached stack of an earlier thread when that one
-    // is up to four times the size.
-    EXPECT_GE(stack_size_of(nullptr), default_thread_stack_size + thread_stack_reserve);
+    // The host stack holds at least the requested size plus the runtime's reserve.
+    std::size_t size = stack_size_of(nullptr);
+    EXPECT_GE(size, default_thread_stack_size + thread_stack_reserve);
+    EXPECT_LE(size, largest_host_stack(default_thread_stack_size));
+
     Cell attr = 0;
     ASSERT_EQ(attr_init(&attr), 0);
-    ASSERT_EQ(attr_setstacksize(&attr, 0x100000), 0);
-    EXPECT_GE(stack_size_of(&attr), 0x100000 + thread_stack_reserve);
+    // Above any host default (glibc takes at most 32 MiB when RLIMIT_STACK is unlimited).
+    constexpr std::size_t large = 64 << 20;
+    ASSERT_EQ(attr_setstacksize(&attr, large), 0);
+    EXPECT_GE(stack_size_of(&attr), large + thread_stack_reserve);
+
     EXPECT_EQ(attr_setstacksize(&attr, min_thread_stack_size - 1), einval);
     ASSERT_EQ(attr_setstacksize(&attr, min_thread_stack_size), 0);
-    EXPECT_GE(stack_size_of(&attr), min_thread_stack_size + thread_stack_reserve);
+    size = stack_size_of(&attr);
+    EXPECT_GE(size, min_thread_stack_size + thread_stack_reserve);
+    EXPECT_LE(size, largest_host_stack(min_thread_stack_size));
     EXPECT_EQ(attr_destroy(&attr), 0);
     EXPECT_EQ(attr_destroy(&attr), einval);
 }
