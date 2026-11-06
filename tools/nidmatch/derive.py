@@ -8,9 +8,7 @@ one list to analysis/nids/candidates/ (local, regenerate any time):
 
 A library's prefixes come from its name, word by word: libSceNpMatching2 gives sceNp, sceNpMatching2
 and, without the trailing digits, sceNpMatching. libkernel gives only the bare sce, as in its
-import scePthreadAttrSetstacksize. Libraries in nidmatch.NO_DERIVE_LIBRARIES get no prefixes, their
-NIDs are never targets (not even when another library shares them), their names give no words,
-and no derived name may start with one of their prefixes.
+import scePthreadAttrSetstacksize.
 
 The words:
     sce words   CamelCase words of the matched sce* names; up to 3 per candidate
@@ -23,14 +21,19 @@ names that match, and nidmatch records them with the list's stem as the label. S
 docs/formats/nid.md for the matches that motivate each rule.
 
 Input:
-    symbols/nids.csv             matched names (rows whose only sources are derive-* are ignored)
+    symbols/nids.csv             matched names (rows whose only sources are derive-* or --ignore-source
+                                 labels are ignored)
     analysis/elf/*.elf           the pinned ELFs, loaded as for nidmatch: their NIDs per library
                                  and their identifiers
     analysis/nids/candidates/    glibc.txt, man2.txt, man3.txt from syscandidates.py and
                                  freebsd-man2.txt, freebsd-man3.txt from freebsdman.py
 
 Usage:
-    derive.py [--jobs N]
+    derive.py [--jobs N] [--ignore-source LABEL]
+
+--ignore-source keeps the names of a source out of the seed (repeatable). A big public name list
+gives the rules thousands of words, and the search grows with the cube of the word count. Ignoring
+the list keeps the run to minutes and looks only for names the list lacks.
 """
 
 from __future__ import annotations
@@ -82,13 +85,7 @@ def camel(c_name: str) -> str:
     return "".join(cap(part) for part in c_name.split("_") if part)
 
 
-def blocked_prefixes() -> tuple[str, ...]:
-    return tuple("sce" + lib.removeprefix("libSce") for lib in sorted(nm.NO_DERIVE_LIBRARIES))
-
-
 def prefixes(library: str) -> set[str]:
-    if library in nm.NO_DERIVE_LIBRARIES:
-        return set()
     if library == "libkernel":
         # Our only libkernel match with a prefix, scePthreadAttrSetstacksize, has the bare sce. No
         # match shows a prefix made from the name libkernel itself.
@@ -104,8 +101,6 @@ def prefixes(library: str) -> set[str]:
 def targets(table: nm.NidTable) -> Targets:
     out: dict[str, dict[bytes, list[str]]] = defaultdict(lambda: defaultdict(list))
     for h, libs in table.items():
-        if nm.NO_DERIVE_LIBRARIES & libs.keys():
-            continue  # nidmatch.check_derived would refuse a derived name for it
         for lib in libs:
             for prefix in prefixes(lib):
                 out[prefix][nid_digest(h)].append(lib)
@@ -153,7 +148,6 @@ class Searcher:
 
     def __init__(self, tgt: Targets, jobs: int):
         self.prefixes = sorted(tgt)
-        self.blocked = blocked_prefixes()
         set_targets(tgt)
         self.pool = Pool(jobs, initializer=set_targets, initargs=(tgt,)) if jobs > 1 else None
 
@@ -172,7 +166,7 @@ class Searcher:
         n = [w.encode("ascii") for w in new]
         work = [(p, o, n, depth) for p in self.prefixes]
         parts = self.pool.map(search, work, chunksize=1) if self.pool else map(search, work)
-        return {name for part in parts for name in part if not name.startswith(self.blocked)}
+        return {name for part in parts for name in part}
 
 
 def sce_words(names: set[str]) -> set[str]:
@@ -214,17 +208,12 @@ def derive(tgt: Targets, seed: set[str], c_names: set[str], idents: set[str],
     return {POSIX_LABEL: posix, WORDS_LABEL: found}
 
 
-def read_seed(path: Path) -> set[str]:
-    """Names in nids.csv with at least one source that is not a derivation rule. Names of the
-    libraries in NO_DERIVE_LIBRARIES are left out, so their words never feed a rule."""
-    names: set[str] = set()
-    blocked: set[str] = set()
-    for _, row in nm.nids_csv_rows(path):
-        if row["library"] in nm.NO_DERIVE_LIBRARIES:
-            blocked.add(row["name"])
-        elif any(not s.startswith(nm.DERIVED_PREFIX) for s in row["source"].split(";") if s):
-            names.add(row["name"])
-    return names - blocked
+def read_seed(path: Path, ignored: frozenset[str] = frozenset()) -> set[str]:
+    """Names in nids.csv with at least one source that is neither a derivation rule nor one of
+    the `ignored` labels."""
+    return {row["name"] for _, row in nm.nids_csv_rows(path)
+            if any(s and not s.startswith(nm.DERIVED_PREFIX) and s not in ignored
+                   for s in row["source"].split(";"))}
 
 
 def read_c_names(cand_dir: Path) -> set[str]:
@@ -245,6 +234,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1,
                         help="worker processes (default: one per CPU)")
+    parser.add_argument("--ignore-source", action="append", default=[], metavar="LABEL",
+                        help="leave the names whose only sources are LABEL out of the seed "
+                             "(repeatable)")
     args = parser.parse_args(argv)
 
     start = time.monotonic()
@@ -253,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         table = nm.load_nids(infos)
         idents = read_identifiers(elfs)
         c_names = read_c_names(nm.GENERATED_DIR)
-        seed = read_seed(nm.NIDS_CSV)
+        seed = read_seed(nm.NIDS_CSV, frozenset(args.ignore_source))
         result = derive(targets(table), seed, c_names, idents, max(1, args.jobs),
                         log=lambda msg: print(f"[{time.monotonic() - start:4.0f}s] {msg}"))
         for label, rule in ((POSIX_LABEL, "<prefix><C name in CamelCase>"),

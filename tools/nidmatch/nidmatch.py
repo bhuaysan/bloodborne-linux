@@ -3,7 +3,9 @@
 
 A NID is a hash of a symbol name (see tools/common/nid.py). A candidate name is accepted only if
 its NID equals one that the pinned ELFs import or export. This is the procedure in the NID
-section of docs/clean-room.md. Every match records the candidate sources it came from.
+section of docs/clean-room.md. Every match records the candidate sources it came from. A source
+may be any allowed one, including a public NID list or an emulator's HLE code: the hash decides,
+and the label says where the name came from (docs/formats/nid.md).
 
 Input:
     analysis/elf/*.elf            the pinned ELFs, loaded and checked by tools/elfimports:
@@ -11,8 +13,8 @@ Input:
                                   label = strings:<file stem>
     symbols/nids.csv              earlier matches, hashed again on every run (see read_nids_csv)
     symbols/candidates/*.txt      hand-picked names (committed), label = file stem
-    analysis/nids/candidates/     generated lists (local, see syscandidates.py and derive.py),
-                                  label = file stem
+    analysis/nids/candidates/     generated lists (local, see syscandidates.py, shadps4names.py
+                                  and derive.py), label = file stem
     FILE ...                      extra candidate files, label = file stem
 
 Candidate files hold one name per line. '#' starts a comment. A file's stem is its source label,
@@ -61,11 +63,6 @@ LABEL_RE = re.compile(r"[A-Za-z0-9_.+-]+")
 STRINGS_PREFIX = "strings:"
 # Labels of the lists written by derive.py.
 DERIVED_PREFIX = "derive-"
-# Libraries in the exposure log of docs/clean-room.md, plus
-# libSceSaveDataDialog, whose names start with the libSceSaveData prefix. Derivation rules skip
-# them, and a name for one of them needs a source other than a derivation rule.
-NO_DERIVE_LIBRARIES = frozenset({"libSceRemoteplay", "libSceSaveData", "libSceRegMgr", "libSceRtc",
-                                 "libSceSaveDataDialog"})
 
 
 class MatchError(Exception):
@@ -219,15 +216,6 @@ def match(table: NidTable, candidates: Candidates) -> dict[str, tuple[str, set[s
     return found
 
 
-def check_derived(table: NidTable, found: dict[str, tuple[str, set[str]]]) -> None:
-    """A derivation rule alone may not name a NID of the libraries in NO_DERIVE_LIBRARIES."""
-    for h, (name, labels) in found.items():
-        blocked = sorted(NO_DERIVE_LIBRARIES & table[h].keys())
-        if blocked and all(label.startswith(DERIVED_PREFIX) for label in labels):
-            raise MatchError(f"{name} names a NID of {', '.join(blocked)} but comes only from "
-                             f"derivation rules ({';'.join(sorted(labels))})")
-
-
 def nids_rows(table: NidTable, found: dict[str, tuple[str, set[str]]]) -> list[dict[str, str]]:
     rows = [{"nid": h, "library": lib, "name": name, "source": ";".join(sorted(labels))}
             for h, (name, labels) in found.items() for lib in table[h]]
@@ -316,7 +304,6 @@ def main(argv: list[str] | None = None) -> int:
             read_candidate_file(path, candidates)
         read_strings(elfs, candidates)
         found = match(table, candidates)
-        check_derived(table, found)
         load_set = {Path(info.name).stem for info in elfimports.static_load_set(infos)}
     except ERRORS as exc:
         return print_error(exc)

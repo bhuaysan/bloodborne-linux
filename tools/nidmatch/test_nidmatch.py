@@ -315,19 +315,29 @@ class MatchTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.fx.imp("other", "delta", "libC", module="lib", needed="lib.sprx")
 
-    def test_derived_name_of_blocked_library(self):
+    def test_public_list_label(self):
+        # A list's file stem names the list and its revision, and is the label of its matches.
+        self.fx.imp("main", "sceRtcThing", "libSceRtc")
+        listed = self.fx.root / "shadps4-0123abc.txt"
+        listed.write_text("# names of a public NID list\nsceRtcThing\nnot_a_match\n")
+        code, _, err = self.fx.run(str(listed))
+        self.assertEqual(code, 0, err)
+        row = next(r for r in self.fx.nids() if r["name"] == "sceRtcThing")
+        self.assertEqual(row["source"], "shadps4-0123abc")
+        # Without the list, the label is carried over.
+        listed.unlink()
+        self.assertEqual(self.fx.run()[0], 0)
+        self.assertIn("sceRtcThing", [r["name"] for r in self.fx.nids()])
+
+    def test_derived_name_of_formerly_excluded_library(self):
+        # The exposure log no longer restricts derived names.
         self.fx.imp("main", "sceRtcThing", "libSceRtc")
         derived = self.fx.root / "derive-words.txt"
         derived.write_text("sceRtcThing\n")
         code, _, err = self.fx.run(str(derived))
-        self.assertEqual(code, 1)
-        self.assertIn("sceRtcThing names a NID of libSceRtc but comes only from derivation", err)
-        # With an independent source as well, the name is accepted.
-        (self.fx.curated / "hand.txt").write_text("sceRtcThing  # seen in use\n")
-        code, _, err = self.fx.run(str(derived))
         self.assertEqual(code, 0, err)
         row = next(r for r in self.fx.nids() if r["name"] == "sceRtcThing")
-        self.assertEqual(row["source"], "derive-words;hand")
+        self.assertEqual(row["source"], "derive-words")
 
 
 def table_of(names_by_lib: dict[str, list[str]]) -> m.NidTable:
@@ -354,8 +364,9 @@ class DeriveTest(unittest.TestCase):
         self.assertEqual(derive.prefixes("libkernel"), {"sce"})
         self.assertEqual(derive.prefixes("libSceNet"), {"sceNet"})
         self.assertEqual(derive.prefixes("libc"), set())
-        for lib in m.NO_DERIVE_LIBRARIES:
-            self.assertEqual(derive.prefixes(lib), set(), lib)
+        self.assertEqual(derive.prefixes("libSceRtc"), {"sceRtc"})
+        self.assertEqual(derive.prefixes("libSceSaveDataDialog"),
+                         {"sceSave", "sceSaveData", "sceSaveDataDialog"})
 
     def test_new_combos_partition(self):
         old, new = [b"a", b"b"], [b"c", b"d", b"e"]
@@ -374,30 +385,19 @@ class DeriveTest(unittest.TestCase):
                           "sceFooQuuxZap",          # all words: Quux, Zap from identifiers
                           "sceFooBarOpenQuuxZap",   # 4 words: out of reach
                           "sceKernelOpenThing"],    # wrong prefix for libSceFoo
-            "libSceRtc": ["sceRtcOpen"],            # blocked
+            "libSceRtc": ["sceRtcOpen"],            # no longer excluded
         })
         seed = {"sceFooBarClose"}
         c_names = {"open", "pthread_self", "_exit", "Not_C"}
         idents = {"QuuxZap", "useQuux", "anotherZap", "lonelyWord"}
         result = derive.derive(derive.targets(table), seed, c_names, idents)
-        self.assertEqual(result[derive.POSIX_LABEL], {"scePthreadSelf", "sceExit"})
+        self.assertEqual(result[derive.POSIX_LABEL], {"scePthreadSelf", "sceExit", "sceRtcOpen"})
         self.assertEqual(result[derive.WORDS_LABEL],
-                         {"scePthreadSelf", "sceExit", "sceFooBarOpen", "sceFooQuuxZap"})
+                         {"scePthreadSelf", "sceExit", "sceFooBarOpen", "sceFooQuuxZap",
+                          "sceRtcOpen"})
         # A pool of workers finds the same names.
         self.assertEqual(derive.derive(derive.targets(table), seed, c_names, idents, jobs=2),
                          result)
-
-    def test_blocked_prefix_from_other_library(self):
-        # The bare 'sce' of libkernel could spell a libSceRtc name. Such names are dropped.
-        table = table_of({"libkernel": ["sceRtcOpen"]})
-        result = derive.derive(derive.targets(table), {"sceRtcClose"}, {"open"}, set())
-        self.assertEqual(result, {derive.POSIX_LABEL: set(), derive.WORDS_LABEL: set()})
-
-    def test_nid_shared_with_blocked_library(self):
-        # Not a target, so nidmatch.check_derived can never refuse a derived name for it.
-        table = table_of({"libSceFoo": ["sceFooOpen"]})
-        table[nid("sceFooOpen")]["libSceRtc"] = m.Use("libSceRtc")
-        self.assertEqual(derive.targets(table), {})
 
     def test_read_seed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -407,8 +407,10 @@ class DeriveTest(unittest.TestCase):
                             "x,libA,b,derive-posix;glibc\n"
                             "x,libA,c,strings:eboot\n"
                             "x,libSceRtc,d,hand\n"
-                            "x,libA,d,hand\n")
-            self.assertEqual(derive.read_seed(path), {"b", "c"})
+                            "x,libA,e,shadps4-0123abc\n")
+            self.assertEqual(derive.read_seed(path), {"b", "c", "d", "e"})
+            self.assertEqual(derive.read_seed(path, frozenset({"shadps4-0123abc", "hand"})),
+                             {"b", "c"})
             path.write_text("nid,library,name,source\nx,libA,a\n")
             with self.assertRaisesRegex(m.MatchError, "wrong number of fields"):
                 derive.read_seed(path)
