@@ -41,6 +41,10 @@ constexpr std::uint32_t rsrc2_unsupported = 1u << 0 | 0xfu << 7 | 3u << 11;
 // SOPP opcodes of the conditional branches on SCC.
 constexpr std::uint16_t op_cbranch_scc0 = 4;
 constexpr std::uint16_t op_cbranch_scc1 = 5;
+constexpr std::uint16_t op_cbranch_vccz = 6;
+constexpr std::uint16_t op_cbranch_vccnz = 7;
+constexpr std::uint16_t op_cbranch_execz = 8;
+constexpr std::uint16_t op_cbranch_execnz = 9;
 
 // EXEC as a 64-bit operand, the implicit source and destination of the saveexec forms.
 constexpr Operand exec_operand{.kind = OperandKind::scalar, .dwords = 2, .code = code::exec};
@@ -76,7 +80,7 @@ constexpr CarryOp carry_ops[] = {
     {"v_subb_u32", true, false, true},   {"v_subbrev_u32", true, true, true},
 };
 
-// An integer compare, v_cmp[x]_<cond>_<i32|u32>.
+// An integer compare, v_cmp[x]_<cond>_<i32|u32> or s_cmp_<cond>_<i32|u32>.
 struct Compare {
     std::string_view cond;
     bool is_signed;
@@ -89,8 +93,9 @@ std::optional<Compare> parse_compare(std::string_view name) {
         p = name.substr(0, end);
         name = end == std::string_view::npos ? std::string_view() : name.substr(end + 1);
     }
-    if (!name.empty() || part[0] != "v" ||
-        (part[1] != "cmp" && part[1] != "cmpx") || (part[3] != "i32" && part[3] != "u32")) {
+    if (!name.empty() || (part[0] != "v" && part[0] != "s") ||
+        (part[1] != "cmp" && !(part[1] == "cmpx" && part[0] == "v")) ||
+        (part[3] != "i32" && part[3] != "u32")) {
         return std::nullopt;
     }
     return Compare{part[2], part[3] == "i32", part[1] == "cmpx"};
@@ -301,6 +306,9 @@ private:
             case Format::sop2:
                 scalar(inst);
                 break;
+            case Format::sopc:
+                scalar_compare(inst);
+                break;
             case Format::vop1:
             case Format::vop2:
             case Format::vopc:
@@ -322,17 +330,21 @@ private:
         }
     }
 
-    // The condition of a block's conditional branch.
+    // The condition of a block's conditional branch. The branches on a mask test it over the
+    // subgroup (any), which is the wave's value only if the subgroup is the wave.
     Id condition(std::uint32_t index) {
         const Block& block = cfg_.blocks[index];
         inst_ = &program_[block.first + block.count - 1];
-        if (inst_->opcode == op_cbranch_scc0) {
-            return b_.op(Op::OpLogicalNot, bool_, {load(bool_, scc())});
+        const auto negate = [&](Id v) { return b_.op(Op::OpLogicalNot, bool_, {v}); };
+        switch (inst_->opcode) {
+        case op_cbranch_scc0: return negate(load(bool_, scc()));
+        case op_cbranch_scc1: return load(bool_, scc());
+        case op_cbranch_vccz: return negate(any(load(bool_, mask_var(code::vcc))));
+        case op_cbranch_vccnz: return any(load(bool_, mask_var(code::vcc)));
+        case op_cbranch_execz: return negate(any(active()));
+        case op_cbranch_execnz: return any(active());
+        default: unsupported();
         }
-        if (inst_->opcode != op_cbranch_scc1) {
-            unsupported();
-        }
-        return load(bool_, scc());
     }
 
     // SOP1 and SOP2. Scalar results are not predicated.
@@ -442,6 +454,15 @@ private:
                       {b_.op(Op::OpINotEqual, bool_, {w[d], b_.constant_u32(0)}), pos, r});
         }
         return r;
+    }
+
+    // SOPC: s_cmp_<cond>_<i32|u32> sets SCC.
+    void scalar_compare(const Instruction& inst) {
+        const auto compare = parse_compare(inst.name);
+        if (!compare) {
+            unsupported();
+        }
+        store(scc(), int_compare(*compare, read(inst.src[0]), read(inst.src[1])));
     }
 
     // VOP1, VOP2 and VOP3: the result is written as select(active, new, old).

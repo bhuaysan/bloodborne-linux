@@ -49,15 +49,16 @@ TEST(GcnTranslate, ProgramsPassSpirvVal) {
         EXPECT_EQ(validate(translation.spirv), "");
         // ballots and any(...) over the subgroup, for the SCC after a lane mask operation
         EXPECT_EQ(translation.interface.wave_size_dependent,
-                  name == "cross_lane" || name == "mask_exec" || name == "mask_scc");
+                  name == "cross_lane" || name == "mask_exec" || name == "mask_scc" ||
+                      name == "mask_branch");
         // s[8:9] of cross_lane; the mask programs keep only lane masks in their mask pairs
         EXPECT_EQ(translation.interface.mask_round_trip, name == "cross_lane");
     }
 }
 
-// Ballots, v_readfirstlane_b32 and v_readlane_b32 make a shader depend on the wave size and
-// declare maximal reconvergence; the lane-local v_mbcnt with a constant mask and v_writelane_b32
-// don't.
+// Ballots, v_readfirstlane_b32, v_readlane_b32 and the branches on VCC and EXEC make a shader
+// depend on the wave size and declare maximal reconvergence; the lane-local v_mbcnt with a
+// constant mask, v_writelane_b32, s_cmp and the branches on SCC don't.
 TEST(GcnTranslate, WaveSizeDependence) {
     const auto dependent = [](std::vector<std::uint32_t> code) {
         code.push_back(s_endpgm);
@@ -75,6 +76,10 @@ TEST(GcnTranslate, WaveSizeDependence) {
     EXPECT_TRUE(dependent({vop2(0x01, 6, 256 + 1, 131)}));   // v_readlane_b32 s6, v1, 3
     EXPECT_TRUE(dependent({vop1(0x02, 6, 256 + 1)}));        // v_readfirstlane_b32 s6, v1
     EXPECT_TRUE(dependent(vop3(0x123, 1, 106, 128)));        // v_mbcnt_lo_u32_b32_e64 v1, vcc_lo, 0
+    EXPECT_FALSE(dependent({sopc(4, 0, 1), sopp(5, 1), sopp(0)}));  // s_cmp_lt_i32; s_cbranch_scc1
+    for (const unsigned op : {6, 7, 8, 9}) {  // s_cbranch_vccz, vccnz, execz, execnz
+        EXPECT_TRUE(dependent({sopp(op, 1), sopp(0)})) << op;
+    }
 }
 
 // A value written to VCC or an SGPR mask pair and read back as a value sets mask_round_trip, also
@@ -166,10 +171,8 @@ TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
               "only the compute stage is translated so far at offset 0x0 (word 0x00000000)");
     EXPECT_EQ(error({sop1(4, 126, 108), s_endpgm}),  // s_mov_b64 exec, tba
               "unsupported mask operand of s_mov_b64 at offset 0x0 (word 0xbefe046c)");
-    EXPECT_EQ(error({sopc(0, 0, 1), s_endpgm}),  // s_cmp_eq_i32 s0, s1
-              "unsupported instruction s_cmp_eq_i32 at offset 0x0 (word 0xbf000100)");
-    EXPECT_EQ(error({sopp(6, 1), sopp(0), s_endpgm}),  // s_cbranch_vccz 1
-              "unsupported instruction s_cbranch_vccz at offset 0x0 (word 0xbf860001)");
+    EXPECT_EQ(error({sopc(12, 0, 1), s_endpgm}),  // s_bitcmp0_b32 s0, s1
+              "unsupported instruction s_bitcmp0_b32 at offset 0x0 (word 0xbf0c0100)");
     // v_cmp_lt_u32_e64 s[6:7], v0, v1 makes s[6:7] a mask
     const auto cmp = [](unsigned sdst, std::vector<std::uint32_t> rest) {
         auto code = vop3(0xc1, sdst, 256, 257);

@@ -329,6 +329,17 @@ TEST_F(TranslateExec, SccAndBitwiseValues) {
     }
 }
 
+// An EXEC loop that each lane leaves after i & 7 rounds (s_cbranch_execz), and the branches on VCC,
+// SCC (after s_cmp) and EXEC. Lane 3 of every 8 has the bit, so that every subgroup of 8 or more
+// lanes takes the same branches and the results don't depend on the subgroup size.
+TEST_F(TranslateExec, MaskBranches) {
+    const auto out = run("mask_branch", {0xffff'fffe, 1}, 2 * lanes);
+    for (std::uint32_t i = 0; i < lanes; ++i) {
+        EXPECT_EQ(out[i], i & 7) << "lane " << i;
+        EXPECT_EQ(out[lanes + i], 1u + 4 + 16 + 32) << "lane " << i;
+    }
+}
+
 TEST_F(TranslateExec, ScalarLoopAndSkips) {
     const auto out = run("scalar_loop", {5, 0x8000'0001}, lanes + 1);
     for (std::uint32_t i = 0; i < lanes; ++i) {
