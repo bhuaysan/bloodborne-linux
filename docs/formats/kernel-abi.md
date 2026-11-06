@@ -304,3 +304,22 @@ The default type (attribute just initialised, null attribute, static initialiser
 **Timeouts.** The timed variants (`scePthreadMutexTimedlock`, `scePthreadRwlockTimedrdlock`, `scePthreadRwlockTimedwrlock`) take a 32-bit timeout as their second argument (eboot 0x2084114, 0x207f408, 0x207f678), which the wrappers pass through unchanged. Every caller of the eboot's wrappers that passes a constant passes -1, and for -1 the wrappers call the untimed variant instead (0x2084117, 0x207f40c, 0x207f67c). The remaining callers reach them through virtual calls. So no value reaches a timed import in the paths we read, and the unit is not confirmed. We take microseconds, relative, like `sceKernelUsleep`, and wait with glibc's `pthread_mutex_clocklock` and `pthread_rwlock_clock{rd,wr}lock` against a deadline on `CLOCK_MONOTONIC`. A timeout gives `ETIMEDOUT`, which the eboot compares as 0x8002003c (0x2084150).
 
 **Results.** The sce entry points return `0x80020000 | errno`, the POSIX ones the errno number. The eboot and libraries compare: `EDEADLK` (libc 0x65ea, eboot 0x2084130, 0x207f421), `EBUSY` from trylock and destroy (libc 0x66fb, Fios 0x2e5e3, 0x2e7ae, eboot 0x20840be), `EINVAL` (eboot 0x2084137), `EAGAIN` for too many recursive locks (eboot 0x208413e), `ENOMEM` from init (eboot 0x2084037). `EPERM` comes from unlocking a mutex the thread doesn't own (error-checking and recursive types). A held rwlock is not destroyed and gives `EBUSY`, as a mutex does: glibc destroys a held rwlock without complaint (and a later unlock then hangs), so the destroy first tries a write lock itself. Unlocking an rwlock that isn't held is not detected.
+
+## Condition variables
+
+The libkernel `scePthreadCond*` imports (libc.prx, libSceFios2.prx and the eboot's two waits) and the libScePosix `pthread_cond_*` imports (the eboot), implemented in `src/hle/kernel/sync.cpp` (issue #95). No condition variable attribute function is imported.
+
+**Object size and initialiser.** One 8-byte cell holding a pointer to our object, as for a mutex. libc's lock object keeps its condition variable at `+0x10`, 8 bytes after its mutex (libc 0x64b7); the eboot allocates a 0x10-byte pair of mutex and condition variable (0x65df7, condition variable at `+0x8`, 0x65e0e). libc waits on a bss cell that nothing initialises (0xd5c90 at libc 0x60158, with the bss mutex 0xd5c70), so 0 is the static initialiser and gets an object on first use, as for mutexes. Destroying one resets its cell to 0.
+
+**Initialisation.** `scePthreadCondInit(cond, attr, name)`: libc passes a formatted name buffer (0x5f3e), libSceFios2 a constant name or none (0x2e0e1, 0x2e0fa); the name is not kept. Every caller of either init passes a null `attr` (libc 0x5f36, 0x64bf; Fios 0x2e0df, 0x2e0f8; eboot 0x65bc4, 0x65e12, 0x6662a, 0x207e6d5, 0x2083d64), and `attr` is ignored.
+
+**Timeouts.**
+
+| Call | Timeout | Use |
+|---|---|---|
+| `scePthreadCondTimedwait(cond, mutex, usec)` | `uint32`, relative, microseconds | libc 0x6e50 converts an absolute `timespec` to the microseconds left from `gettimeofday`, rounded up, for its call at 0x6029; libSceFios2 computes a deadline minus now in microseconds, × 1000 then +999 / 1000 (0x2e1e4–0x2e218), for 0x2e220. The eboot's wrapper passes its argument through and calls the untimed wait for -1 (0x2083eb8) |
+| `pthread_cond_timedwait(cond, mutex, abstime)` | `struct timespec*`, absolute, wall clock | eboot 0x65c91: `gettimeofday`, plus a timeout in milliseconds (÷ 1000 for seconds, remainder × 1000 + `tv_usec`, × 1000 for nanoseconds), for 0x65cf1 |
+
+The sce wait runs `pthread_cond_clockwait` against a `CLOCK_MONOTONIC` deadline, the POSIX wait against the `abstime` on `CLOCK_REALTIME`. A null `abstime` or a `tv_nsec` outside [0, 10⁹) gives `EINVAL`.
+
+**Results.** A timeout gives `ETIMEDOUT` (libc 0x602e and Fios 0x2e22f compare 0x8002003c; the eboot's wrapper turns it into -3, 0x2083f20). The eboot's wrapper also tells `EPERM` (0x80020001, 0x2083ed1) and `EINVAL` (0x2083edd) apart: waiting on a mutex the thread doesn't hold gives `EPERM` for the error-checking and recursive types. Destroying a condition variable that a thread waits on gives `EBUSY` (the eboot's wrapper compares 0x10, 0x2083e02; libSceFios2 traps on any failure, 0x2e120); glibc's destroy would block until the waiters leave instead. A cell that holds no object of ours gives `EINVAL`.
