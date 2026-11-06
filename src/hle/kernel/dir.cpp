@@ -37,15 +37,6 @@ int host_result(long result) {
     return result < 0 ? errno : 0;
 }
 
-// The host path of `path` in `out`, or the host errno.
-int resolve(const char* path, Access access, Resolved& out) {
-    if (path == nullptr) {
-        return EFAULT;
-    }
-    out = resolve_path(path, access);
-    return out ? 0 : host_errno(out.error).value_or(EIO);
-}
-
 void log_call(std::string_view call, const char* path, int error) {
     common::log(common::LogLevel::debug, channel, "{} '{}': host errno {}", call,
                 path != nullptr ? path : "(null)", error);
@@ -55,7 +46,7 @@ void log_call(std::string_view call, const char* path, int error) {
 template <class F>
 int on_path(std::string_view call, const char* path, F f) {
     Resolved r;
-    int error = resolve(path, Access::write, r);
+    int error = resolve_guest_path(path, Access::write, r);
     if (error == 0) {
         error = f(r);
     }
@@ -80,9 +71,9 @@ int remove_dir(const char* path) {
 int rename_path(const char* from, const char* to) {
     Resolved source;
     Resolved target;
-    int error = resolve(from, Access::write, source);
+    int error = resolve_guest_path(from, Access::write, source);
     if (error == 0) {
-        error = resolve(to, Access::write, target);
+        error = resolve_guest_path(to, Access::write, target);
     }
     if (error == 0) {
         // The mounts may share a host file system, where the host rename would succeed.

@@ -14,16 +14,11 @@
 
 #include "common/runtime_dirs.hpp"
 #include "support/game.hpp"
-#include "hle/kernel/abi.hpp"
 
 namespace {
 
 namespace fs = std::filesystem;
 using namespace bb::hle::kernel;
-
-int guest(int host) {
-    return guest_errno(host).value();
-}
 
 void touch(const fs::path& file) {
     fs::create_directories(file.parent_path());
@@ -73,9 +68,9 @@ TEST_F(PathMapTest, GameMountIsReadOnly) {
     r = map_.resolve("/app0/missing/file", Access::read);
     ASSERT_TRUE(r);
     EXPECT_EQ(r.host, game_ / "missing" / "file");
-    EXPECT_EQ(map_.resolve("/app0/eboot.bin", Access::write).error, guest(EROFS));
-    EXPECT_EQ(map_.resolve("/app0/new.txt", Access::write).error, guest(EROFS));
-    EXPECT_EQ(map_.resolve("/app0", Access::write).error, guest(EROFS));
+    EXPECT_EQ(map_.resolve("/app0/eboot.bin", Access::write).error, EROFS);
+    EXPECT_EQ(map_.resolve("/app0/new.txt", Access::write).error, EROFS);
+    EXPECT_EQ(map_.resolve("/app0", Access::write).error, EROFS);
 }
 
 TEST_F(PathMapTest, Normalisation) {
@@ -100,18 +95,18 @@ TEST_F(PathMapTest, TrailingSlashNamesADirectory) {
 
 TEST_F(PathMapTest, DotDotNeverLeavesTheMount) {
     ASSERT_TRUE(map_.mount("/savedata0", save_));
-    EXPECT_EQ(map_.resolve("/app0/..", Access::read).error, guest(ENOENT));
-    EXPECT_EQ(map_.resolve("/app0/../savedata0/x", Access::read).error, guest(ENOENT));
+    EXPECT_EQ(map_.resolve("/app0/..", Access::read).error, ENOENT);
+    EXPECT_EQ(map_.resolve("/app0/../savedata0/x", Access::read).error, ENOENT);
     EXPECT_EQ(map_.resolve("/app0/dvdroot_ps4/../../eboot.bin", Access::read).error,
-              guest(ENOENT));
-    EXPECT_EQ(map_.resolve("/savedata0/../../etc/passwd", Access::write).error, guest(ENOENT));
+              ENOENT);
+    EXPECT_EQ(map_.resolve("/savedata0/../../etc/passwd", Access::write).error, ENOENT);
 }
 
 TEST_F(PathMapTest, JunkFilesNeverResolve) {
     EXPECT_EQ(map_.resolve("/app0/dvdroot_ps4/._map/m10_00.txt", Access::read).error,
-              guest(ENOENT));
-    EXPECT_EQ(map_.resolve("/app0/._eboot.bin", Access::read).error, guest(ENOENT));
-    EXPECT_EQ(map_.resolve("/app0/.DS_Store", Access::read).error, guest(ENOENT));
+              ENOENT);
+    EXPECT_EQ(map_.resolve("/app0/._eboot.bin", Access::read).error, ENOENT);
+    EXPECT_EQ(map_.resolve("/app0/.DS_Store", Access::read).error, ENOENT);
 }
 
 TEST_F(PathMapTest, WritableMountsAndUnmount) {
@@ -123,7 +118,7 @@ TEST_F(PathMapTest, WritableMountsAndUnmount) {
     EXPECT_TRUE(map_.unmount("/savedata0"));
     EXPECT_FALSE(map_.unmount("/savedata0"));
     EXPECT_FALSE(map_.unmount("/app0"));
-    EXPECT_EQ(map_.resolve("/savedata0/x", Access::read).error, guest(ENOENT));
+    EXPECT_EQ(map_.resolve("/savedata0/x", Access::read).error, ENOENT);
 }
 
 TEST_F(PathMapTest, NamesTheMountAndItsRoot) {
@@ -150,12 +145,12 @@ TEST_F(PathMapTest, MalformedOrReservedMountPointsThrow) {
 
 TEST_F(PathMapTest, UnknownPrefixesAreRefusedAndLoggedOnce) {
     testing::internal::CaptureStderr();
-    EXPECT_EQ(map_.resolve("/data/a", Access::read).error, guest(ENOENT));
-    EXPECT_EQ(map_.resolve("/data/b", Access::write).error, guest(ENOENT));
-    EXPECT_EQ(map_.resolve("/hostapp/log.txt", Access::write).error, guest(ENOENT));
-    EXPECT_EQ(map_.resolve("/", Access::read).error, guest(ENOENT));
-    EXPECT_EQ(map_.resolve("", Access::read).error, guest(ENOENT));
-    EXPECT_EQ(map_.resolve("app0/eboot.bin", Access::read).error, guest(ENOENT));
+    EXPECT_EQ(map_.resolve("/data/a", Access::read).error, ENOENT);
+    EXPECT_EQ(map_.resolve("/data/b", Access::write).error, ENOENT);
+    EXPECT_EQ(map_.resolve("/hostapp/log.txt", Access::write).error, ENOENT);
+    EXPECT_EQ(map_.resolve("/", Access::read).error, ENOENT);
+    EXPECT_EQ(map_.resolve("", Access::read).error, ENOENT);
+    EXPECT_EQ(map_.resolve("app0/eboot.bin", Access::read).error, ENOENT);
     const std::string log = testing::internal::GetCapturedStderr();
     EXPECT_EQ(log.find("/data"), log.rfind("/data")) << log;
     EXPECT_NE(log.find("/data"), std::string::npos) << log;
@@ -164,7 +159,7 @@ TEST_F(PathMapTest, UnknownPrefixesAreRefusedAndLoggedOnce) {
 
 TEST_F(PathMapTest, LongNames) {
     EXPECT_EQ(map_.resolve("/app0/" + std::string(256, 'a'), Access::read).error,
-              guest(ENAMETOOLONG));
+              ENAMETOOLONG);
     EXPECT_TRUE(map_.resolve("/app0/" + std::string(255, 'a'), Access::read));
     // PATH_MAX is 1024 including the NUL: 1023 bytes resolve, 1024 fail.
     const auto path_of_size = [](std::size_t size) {
@@ -180,7 +175,7 @@ TEST_F(PathMapTest, LongNames) {
     EXPECT_TRUE(map_.resolve(longest, Access::read));
     const std::string too_long = path_of_size(1024);
     ASSERT_EQ(too_long.size(), 1024u);
-    EXPECT_EQ(map_.resolve(too_long, Access::read).error, guest(ENAMETOOLONG));
+    EXPECT_EQ(map_.resolve(too_long, Access::read).error, ENAMETOOLONG);
 }
 
 TEST_F(PathMapTest, ProfileDirectories) {
@@ -212,7 +207,7 @@ TEST_F(PathMapTest, ProfileDirectories) {
 
 TEST(PathMapGlobal, ResolvePathUsesTheProcessTable) {
     EXPECT_EQ(&path_map(), &path_map());
-    EXPECT_EQ(resolve_path("/nowhere/x", Access::read).error, guest(ENOENT));
+    EXPECT_EQ(resolve_path("/nowhere/x", Access::read).error, ENOENT);
 }
 
 TEST(PathMapGame, DvdrootResolvesToAnExistingDirectory) {

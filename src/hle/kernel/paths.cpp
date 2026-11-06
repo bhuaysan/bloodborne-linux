@@ -7,7 +7,6 @@
 
 #include "common/log.hpp"
 #include "common/runtime_dirs.hpp"
-#include "hle/kernel/abi.hpp"
 
 namespace bb::hle::kernel {
 
@@ -24,7 +23,7 @@ constexpr std::string_view hostapp = "hostapp";
 
 Resolved fail(int host_errno) {
     Resolved r;
-    r.error = guest_errno(host_errno).value();
+    r.error = host_errno;
     return r;
 }
 

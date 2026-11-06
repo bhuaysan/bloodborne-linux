@@ -47,15 +47,6 @@ Outcome with_fd(std::int32_t fd, F f) {
     return f(file->host_fd);
 }
 
-// The host path of `path` in `out`, or the host errno.
-int resolve(const char* path, Access access, Resolved& out) {
-    if (path == nullptr) {
-        return EFAULT;
-    }
-    out = resolve_path(path, access);
-    return out ? 0 : host_errno(out.error).value_or(EIO);
-}
-
 Outcome open_file(const char* path, std::int32_t guest_flags, std::uint32_t mode) {
     const Flags flags = host_open_flags(guest_flags);
     if (flags.unknown != 0) {
@@ -67,7 +58,7 @@ Outcome open_file(const char* path, std::int32_t guest_flags, std::uint32_t mode
     const int host_flags = (flags.value & ~O_DIRECT) | O_CLOEXEC;
     const bool writes = (host_flags & O_ACCMODE) != O_RDONLY || (host_flags & (O_CREAT | O_TRUNC));
     Resolved r;
-    Outcome o{0, resolve(path, writes ? Access::write : Access::read, r)};
+    Outcome o{0, resolve_guest_path(path, writes ? Access::write : Access::read, r)};
     if (o.error == 0) {
         o = from_host(::open(r.host.c_str(), host_flags, static_cast<mode_t>(mode & 07777)));
     }
@@ -100,7 +91,7 @@ Outcome fstat_file(std::int32_t fd, GuestStat* out) {
 
 Outcome stat_path(const char* path, GuestStat* out) {
     Resolved r;
-    if (const int error = resolve(path, Access::read, r)) {
+    if (const int error = resolve_guest_path(path, Access::read, r)) {
         return {0, error};
     }
     struct stat st {};
