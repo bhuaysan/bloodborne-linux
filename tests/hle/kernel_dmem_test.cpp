@@ -87,6 +87,10 @@ TEST(KernelDmem, TwoMappingsOfOneRangeAlias) {
     ASSERT_NE(b, nullptr);
     EXPECT_NE(a, b);
     EXPECT_EQ(addr(a) % 0x10000, 0u);
+    for (void* const p : {a, b}) {  // where the game's 40-bit GPU addresses reach them
+        EXPECT_TRUE(addr(p) >= vmem::window_start && addr(p) + 2 * page_size <= vmem::window_end)
+            << p;
+    }
     std::memcpy(static_cast<char*>(a) + page_size, "alias", 6);
     EXPECT_STREQ(static_cast<const char*>(b) + page_size, "alias");
 

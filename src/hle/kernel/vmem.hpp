@@ -22,6 +22,19 @@ inline constexpr std::uint64_t page_size = 0x4000;
 // region table and dropped for the host. Logged once.
 inline constexpr int prot_extra = 0x30;
 
+// The guest window [window_start, window_end): every mapping without a fixed address goes there,
+// so that it fits the game's 40-bit GPU addresses. Reserved once, before the first guest mapping;
+// an unmapped range in it is reserved again instead of returned to the host. It lies in
+// AddressSanitizer's shadow gap, so ASan builds that map guest memory run with
+// protect_shadow_gap=0, and above the gap's own shadow, which ASan then maps up to 0x4091ff7000.
+inline constexpr std::uintptr_t window_start = 0x80'0000'0000;
+inline constexpr std::uintptr_t window_end = 0x100'0000'0000;
+
+// Whether [start, end) overlaps the guest window.
+constexpr bool in_window(std::uintptr_t start, std::uintptr_t end) {
+    return start < window_end && end > window_start;
+}
+
 // Region::flags, the byte at +0x20 of the query record. The eboot picks the release call by them
 // (0x20826e1).
 inline constexpr std::uint32_t region_anonymous = 0x1;  // released with release_anonymous
@@ -50,18 +63,21 @@ struct Mapping {
     off_t fd_offset = 0;
     std::uint32_t flags = region_anonymous;  // Region::flags
     std::uint64_t offset = 0;                // Region::offset
-    std::uint64_t alignment = page_size;     // of the address the host picks: a power of two
+    std::uint64_t alignment = page_size;     // of the address the runtime picks: a power of two
     std::string name;
 };
 
-// Maps at an `alignment`-aligned host address (or at the fixed one) and records the region.
-// Returns 0 and sets `out`, or a host errno: EINVAL for a bad length or alignment, unaligned
-// fixed address or unknown protection bits, also when a map into_reservation finds anything but
-// reservations in its range.
+// Maps at the lowest free `alignment`-aligned address of the guest window, at or above the hint
+// if it lies in the window (host MAP_32BIT: where the host picks), or at the fixed address, and
+// records the region. A fixed map into the window takes a range that no region holds. Returns 0
+// and sets `out`, or a host errno: EINVAL for a bad length or alignment, unaligned fixed address
+// or unknown protection bits, also when a map into_reservation finds anything but reservations
+// in its range; ENOMEM when the window is full; EEXIST when a fixed map hits a mapping or
+// reaches across an end of the window.
 int map(const Mapping& mapping, std::uintptr_t& out);
 
-// Reserves `length` bytes of address space at an `alignment`-aligned host address (`hint` is a
-// hint): a PROT_NONE region with `reserved` set, which unmap() releases and only a map
+// Reserves `length` bytes of address space at an `alignment`-aligned address in the guest window
+// (`hint` is a hint, as for map()): a PROT_NONE region with `reserved` set, which unmap() releases and only a map
 // into_reservation replaces. Returns 0 and sets `out`, or a host errno as map().
 int reserve(std::uintptr_t hint, std::uint64_t length, std::uint64_t alignment,
             std::uintptr_t& out);
@@ -71,7 +87,8 @@ int reserve(std::uintptr_t hint, std::uint64_t length, std::uint64_t alignment,
 // range is no guest mapping any more.
 int restore_reservation(std::uintptr_t start, std::uint64_t length);
 
-// Unmaps [start, start + length rounded up to page_size). Returns 0 or a host errno: EINVAL if
+// Unmaps [start, start + length rounded up to page_size); the part in the guest window is
+// reserved again, so no host mapping can take it. Returns 0 or a host errno: EINVAL if
 // start is unaligned, length is 0, or part of the range is no guest mapping (so the runtime's
 // own memory can never be unmapped).
 int unmap(std::uintptr_t start, std::uint64_t length);

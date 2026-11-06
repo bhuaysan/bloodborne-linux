@@ -3,6 +3,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
@@ -38,6 +39,15 @@ constexpr int reservation_flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 
 constexpr std::uint64_t round_up(std::uint64_t value) {
     return (value + page_size - 1) & ~(page_size - 1);
+}
+
+// `value` rounded up to `alignment`, a power of two.
+constexpr std::uint64_t align_up(std::uint64_t value, std::uint64_t alignment) {
+    return (value + alignment - 1) & ~(alignment - 1);
+}
+
+void* ptr(std::uintptr_t address) {
+    return reinterpret_cast<void*>(address);
 }
 
 // The table, keyed by start. Regions never overlap.
@@ -98,14 +108,138 @@ bool covered(std::uintptr_t start, std::uintptr_t end, std::optional<bool> reser
 // drops it: the host may reuse it, and no later guest map or unmap may touch that memory. A guest
 // mapping that survived on the host is only leaked. Returns 0 or errno. Needs table_mutex.
 int reserve_again(std::uintptr_t start, std::uintptr_t end) {
-    if (::mmap(reinterpret_cast<void*>(start), end - start, PROT_NONE,
-               reservation_flags | MAP_FIXED, -1, 0) != MAP_FAILED) {
+    if (::mmap(ptr(start), end - start, PROT_NONE, reservation_flags | MAP_FIXED, -1, 0) !=
+        MAP_FAILED) {
         return 0;
     }
     const int error = errno;
     log("reserve {:#x}-{:#x} again: failed, the range is dropped", start, end);
     erase_range(start, end);
     return error;
+}
+
+// Gives guest memory back: unmaps the part outside the window and reserves the part in it again
+// (reserve_again's rules), so the window keeps its whole range. Returns 0 or errno. Needs
+// table_mutex.
+int release(std::uintptr_t start, std::uintptr_t end) {
+    const std::uintptr_t low = std::clamp(start, window_start, window_end);
+    const std::uintptr_t high = std::clamp(end, window_start, window_end);
+    if (start < low && ::munmap(ptr(start), std::min(end, window_start) - start) != 0) {
+        return errno;
+    }
+    if (high < end && ::munmap(ptr(std::max(start, window_end)),
+                               end - std::max(start, window_end)) != 0) {
+        return errno;
+    }
+    return low < high ? reserve_again(low, high) : 0;
+}
+
+// Reserves the guest window on the first call. Returns 0 or errno, also on later calls after a
+// failure. Needs table_mutex.
+int reserve_window() {
+    static int error = -1;
+    if (error >= 0) {
+        return error;
+    }
+    constexpr std::uint64_t size = window_end - window_start;
+    void* const at = ::mmap(ptr(window_start), size, PROT_NONE,
+                            reservation_flags | MAP_FIXED_NOREPLACE, -1, 0);
+    error = at == ptr(window_start) ? 0 : at == MAP_FAILED ? errno : EEXIST;
+    if (at != MAP_FAILED && at != ptr(window_start)) {  // a kernel before 4.17 took it as a hint
+        ::munmap(at, size);
+    }
+    if (error != 0) {
+        // AddressSanitizer keeps the range as its PROT_NONE shadow gap without the option.
+        log("guest window {:#x}-{:#x} not reserved: {} (AddressSanitizer needs "
+            "protect_shadow_gap=0)",
+            window_start, window_end, std::strerror(error));
+    }
+    return error;
+}
+
+// Whether no region overlaps [start, end). Needs table_mutex.
+bool free_range(std::uintptr_t start, std::uintptr_t end) {
+    const auto it = table.lower_bound(start);
+    return (it == table.end() || it->first >= end) &&
+           (it == table.begin() || std::prev(it)->second.end <= start);
+}
+
+// The lowest `alignment`-aligned start of `length` free bytes in the window at or above `low`.
+// Needs table_mutex.
+std::optional<std::uintptr_t> find_free(std::uintptr_t low, std::uint64_t length,
+                                        std::uint64_t alignment) {
+    std::uintptr_t at = align_up(std::max(low, window_start), alignment);
+    auto it = table.upper_bound(at);
+    if (it != table.begin()) {
+        --it;
+    }
+    for (; it != table.end() && at < window_end; ++it) {
+        if (it->second.end <= at) {
+            continue;
+        }
+        if (it->first >= at && it->first - at >= length) {
+            break;
+        }
+        at = align_up(it->second.end, alignment);
+    }
+    if (at >= window_end || window_end - at < length) {
+        return std::nullopt;
+    }
+    return at;
+}
+
+// Maps at an `alignment`-aligned address the host picks: reserves enough to find one, maps over
+// it, then returns the rest. For MAP_32BIT, which the window can't serve.
+void* map_host_placed(const Mapping& m, int prot) {
+    const auto host_page = static_cast<std::uint64_t>(::sysconf(_SC_PAGESIZE));
+    const std::uint64_t reserved = m.length + m.alignment - host_page;
+    void* const base = ::mmap(ptr(m.address), reserved, PROT_NONE, reservation_flags | MAP_32BIT,
+                              -1, 0);
+    if (base == MAP_FAILED) {
+        return MAP_FAILED;
+    }
+    const auto b = reinterpret_cast<std::uintptr_t>(base);
+    const std::uintptr_t aligned = align_up(b, m.alignment);
+    void* const at =
+        ::mmap(ptr(aligned), m.length, prot, m.host_flags | MAP_FIXED, m.fd, m.fd_offset);
+    const int error = errno;
+    if (at == MAP_FAILED) {
+        ::munmap(base, reserved);
+        errno = error;
+        return MAP_FAILED;
+    }
+    if (aligned > b) {
+        ::munmap(base, aligned - b);
+    }
+    if (b + reserved > aligned + m.length) {
+        ::munmap(ptr(aligned + m.length), b + reserved - aligned - m.length);
+    }
+    return at;
+}
+
+// Maps at the lowest free aligned address in the window, at or above the hint if it lies there.
+// Returns the address, or MAP_FAILED with errno set. Needs table_mutex.
+void* map_in_window(const Mapping& m, int prot) {
+    std::optional<std::uintptr_t> at;
+    if (in_window(m.address, m.address + 1)) {
+        at = find_free(m.address, m.length, m.alignment);
+    }
+    if (!at) {
+        at = find_free(window_start, m.length, m.alignment);
+    }
+    if (!at) {
+        log("guest window: no {:#x} bytes aligned to {:#x} free", m.length, m.alignment);
+        errno = ENOMEM;
+        return MAP_FAILED;
+    }
+    // MAP_FIXED replaces the window's reservation in one call.
+    void* const out = ::mmap(ptr(*at), m.length, prot, m.host_flags | MAP_FIXED, m.fd, m.fd_offset);
+    if (out == MAP_FAILED) {
+        const int error = errno;
+        reserve_again(*at, *at + m.length);  // the failed MAP_FIXED may have unmapped the range
+        errno = error;
+    }
+    return out;
 }
 
 // The host protection for a guest protection, or nothing for unknown bits.
@@ -143,11 +277,17 @@ int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
         return EINVAL;
     }
     const std::scoped_lock lock(table_mutex);
-    void* const hint = reinterpret_cast<void*>(m.address);
+    if (const int error = reserve_window()) {
+        return error;
+    }
+    void* const hint = ptr(m.address);
+    const std::uintptr_t end = m.address + m.length;
     void* at = MAP_FAILED;
+    if (m.fixed && end < m.address) {
+        return EINVAL;
+    }
     if (m.fixed && m.into_reservation) {
-        const std::uintptr_t end = m.address + m.length;
-        if (end < m.address || !covered(m.address, end, true)) {
+        if (!covered(m.address, end, true)) {
             log("map {:#x}-{:#x}: not all reserved", m.address, end);
             return EINVAL;
         }
@@ -159,37 +299,27 @@ int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
             return error;
         }
         erase_range(m.address, end);
+    } else if (m.fixed && in_window(m.address, end)) {
+        // Over the window's reservation, where no region is.
+        if (m.address < window_start || end > window_end || !free_range(m.address, end)) {
+            return EEXIST;
+        }
+        at = ::mmap(hint, m.length, *prot, m.host_flags | MAP_FIXED, m.fd, m.fd_offset);
+        if (at == MAP_FAILED) {
+            const int error = errno;
+            reserve_again(m.address, end);  // as above
+            return error;
+        }
     } else if (m.fixed) {
         at = ::mmap(hint, m.length, *prot, m.host_flags | MAP_FIXED_NOREPLACE, m.fd, m.fd_offset);
         if (at != MAP_FAILED && at != hint) {  // a kernel before 4.17 took it as a hint
             ::munmap(at, m.length);
             return EEXIST;
         }
+    } else if ((m.host_flags & MAP_32BIT) != 0) {
+        at = map_host_placed(m, *prot);
     } else {
-        // Reserve enough to find an aligned start, map over it, then return the rest.
-        const auto host_page = static_cast<std::uint64_t>(::sysconf(_SC_PAGESIZE));
-        const std::uint64_t reserved = m.length + m.alignment - host_page;
-        void* const base =
-            ::mmap(hint, reserved, PROT_NONE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | (m.host_flags & MAP_32BIT), -1, 0);
-        if (base == MAP_FAILED) {
-            return errno;
-        }
-        const auto b = reinterpret_cast<std::uintptr_t>(base);
-        const std::uintptr_t aligned = (b + m.alignment - 1) & ~(m.alignment - 1);
-        at = ::mmap(reinterpret_cast<void*>(aligned), m.length, *prot, m.host_flags | MAP_FIXED,
-                    m.fd, m.fd_offset);
-        const int error = errno;
-        if (at == MAP_FAILED) {
-            ::munmap(base, reserved);
-            return error;
-        }
-        if (aligned > b) {
-            ::munmap(base, aligned - b);
-        }
-        if (b + reserved > aligned + m.length) {
-            ::munmap(reinterpret_cast<void*>(aligned + m.length), b + reserved - aligned - m.length);
-        }
+        at = map_in_window(m, *prot);
     }
     if (at == MAP_FAILED) {
         return errno;
@@ -241,8 +371,8 @@ int unmap(std::uintptr_t start, std::uint64_t length) {
     if (const int error = check_range(start, length, end)) {
         return error;
     }
-    if (::munmap(reinterpret_cast<void*>(start), end - start) != 0) {
-        return errno;
+    if (const int error = release(start, end)) {
+        return error;
     }
     erase_range(start, end);
     log("unmap {:#x}-{:#x}", start, end);
@@ -392,12 +522,19 @@ int guest_munmap(void* address, std::uint64_t length) {
 }
 
 // libc.prx's only call (0x541a5) probes whether a 4 KiB page is mapped with MS_ASYNC, so it goes
-// to the host for any address, not only guest mappings.
+// to the host for any address, not only guest mappings. In the guest window, where the host
+// always has a mapping, it fails with ENOMEM as on an unmapped host page where no guest mapping
+// is.
 int guest_msync(void* address, std::uint64_t length, int flags) {
     const Flags host = host_msync_flags(flags);
     if (host.unknown != 0) {
         log("msync: unknown or refused flags {:#x}", host.unknown);
         return posix_fail(EINVAL);
+    }
+    const auto start = reinterpret_cast<std::uintptr_t>(address);
+    if (length != 0 && vmem::in_window(start, start + length) &&
+        !vmem::mapped(start & ~std::uintptr_t{0xfff}, start + length)) {
+        return posix_fail(ENOMEM);
     }
     return ::msync(address, length, host.value) == 0 ? 0 : posix_fail(errno);
 }
