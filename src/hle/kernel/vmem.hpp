@@ -1,6 +1,7 @@
 // Kernel virtual memory (docs/design/m3-core-os.md, "Memory"): the region table of guest
 // mappings and the guest entry points. Internal to src/hle/kernel/; direct memory (#97) adds its
-// mappings through map() with its own fd, flags, offsets and alignment (dmem.hpp).
+// mappings through map() with its own fd, flags, offsets and alignment, and maps into the
+// reservations of reserve() (dmem.hpp).
 #pragma once
 
 #include <sys/types.h>
@@ -33,6 +34,7 @@ struct Region {
     std::uint32_t flags = 0;
     std::uint64_t offset = 0;           // direct memory offset of start, else 0
     std::string name;
+    bool reserved = false;  // a reservation from reserve(): PROT_NONE, flags 0
 };
 
 // A mapping request for map().
@@ -41,7 +43,9 @@ struct Mapping {
     std::uint64_t length = 0;    // a non-zero multiple of page_size
     int prot = 0;                // guest protection
     int host_flags = 0;          // MAP_PRIVATE or MAP_SHARED, plus MAP_ANONYMOUS without fd
-    bool fixed = false;          // never replaces a mapping (MAP_FIXED_NOREPLACE)
+    bool fixed = false;          // never replaces a mapping (MAP_FIXED_NOREPLACE), unless:
+    bool into_reservation = false;  // with `fixed`: replaces the reservations that must cover
+                                    // the range, and nothing else
     int fd = -1;
     off_t fd_offset = 0;
     std::uint32_t flags = region_anonymous;  // Region::flags
@@ -52,15 +56,27 @@ struct Mapping {
 
 // Maps at an `alignment`-aligned host address (or at the fixed one) and records the region.
 // Returns 0 and sets `out`, or a host errno: EINVAL for a bad length or alignment, unaligned
-// fixed address or unknown protection bits.
+// fixed address or unknown protection bits, also when a map into_reservation finds anything but
+// reservations in its range.
 int map(const Mapping& mapping, std::uintptr_t& out);
+
+// Reserves `length` bytes of address space at an `alignment`-aligned host address (`hint` is a
+// hint): a PROT_NONE region with `reserved` set, which unmap() releases and only a map
+// into_reservation replaces. Returns 0 and sets `out`, or a host errno as map().
+int reserve(std::uintptr_t hint, std::uint64_t length, std::uint64_t alignment,
+            std::uintptr_t& out);
+
+// Turns [start, start + length rounded up to page_size) back into a reservation, with unmap()'s
+// rules, so that a later unmap of the whole reservation finds no hole.
+int restore_reservation(std::uintptr_t start, std::uint64_t length);
 
 // Unmaps [start, start + length rounded up to page_size). Returns 0 or a host errno: EINVAL if
 // start is unaligned, length is 0, or part of the range is no guest mapping (so the runtime's
 // own memory can never be unmapped).
 int unmap(std::uintptr_t start, std::uint64_t length);
 
-// Changes the protection of a range of guest mappings, with unmap()'s rules.
+// Changes the protection of a range of guest mappings, with unmap()'s rules. EINVAL if the range
+// holds a reservation.
 int protect(std::uintptr_t start, std::uint64_t length, int prot);
 
 // Whether guest mappings cover [start, end) without a hole. False for an empty range.

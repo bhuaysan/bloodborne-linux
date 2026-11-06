@@ -337,6 +337,57 @@ TEST(KernelVmem, MsyncProbesHostPages) {
     EXPECT_EQ(take_errno(), 22);
 }
 
+TEST(KernelVmem, OnlyAMapIntoAReservationReplacesIt) {
+    std::uintptr_t r = 0;
+    ASSERT_EQ(vmem::reserve(0, 3 * page_size, 0x10000, r), 0);
+    EXPECT_EQ(r % 0x10000, 0u);
+    auto region = vmem::find(r + page_size);
+    ASSERT_TRUE(region);
+    EXPECT_TRUE(region->reserved);
+    EXPECT_EQ(region->start, r);
+    EXPECT_EQ(region->end, r + 3 * page_size);
+    EXPECT_EQ(region->prot, 0);
+    EXPECT_EQ(region->flags, 0u);
+    // A guest MAP_FIXED never replaces it, and protect refuses it.
+    const int fixed = guest_map_fixed | guest_map_private | guest_map_anon;
+    EXPECT_EQ(guest_mmap(ptr(r), page_size, 3, fixed, -1, 0), map_failed);
+    EXPECT_EQ(take_errno(), 17);
+    EXPECT_EQ(sceKernelMprotect(ptr(r), page_size, 3), sce_einval);
+
+    // A map into the reservation replaces the part that it covers.
+    vmem::Mapping m = anonymous(1);
+    m.address = r + page_size;
+    m.fixed = true;
+    m.into_reservation = true;
+    std::uintptr_t out = 0;
+    ASSERT_EQ(vmem::map(m, out), 0);
+    EXPECT_EQ(out, r + page_size);
+    static_cast<char*>(ptr(out))[0] = 1;
+    region = vmem::find(out);
+    ASSERT_TRUE(region);
+    EXPECT_FALSE(region->reserved);
+    EXPECT_EQ(region->prot, 3);
+    EXPECT_TRUE(vmem::find(r)->reserved);
+    EXPECT_EQ(vmem::find(r)->end, out);
+    EXPECT_TRUE(vmem::find(r + 2 * page_size)->reserved);
+    // Nothing but reservations: neither the mapping now there nor a range past the end.
+    EXPECT_EQ(vmem::map(m, out), EINVAL);
+    m.address = r + 2 * page_size;
+    m.length = 2 * page_size;
+    EXPECT_EQ(vmem::map(m, out), EINVAL);
+    EXPECT_TRUE(vmem::find(r + 2 * page_size)->reserved);
+
+    // Restored, the part is reserved again, so the whole range unmaps without a hole.
+    EXPECT_EQ(vmem::restore_reservation(r + page_size, page_size), 0);
+    region = vmem::find(r + page_size);
+    ASSERT_TRUE(region);
+    EXPECT_TRUE(region->reserved);
+    EXPECT_EQ(region->prot, 0);
+    EXPECT_EQ(sceKernelMunmap(ptr(r), 3 * page_size), 0);
+    EXPECT_FALSE(vmem::find(r + page_size));
+    EXPECT_EQ(vmem::restore_reservation(r, page_size), EINVAL);
+}
+
 TEST(KernelVmem, DirectMemoryTypeFailsWithoutDirectMemory) {
     std::int32_t type = 7;
     std::uint64_t start = 0, end = 0;
