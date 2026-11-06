@@ -100,6 +100,7 @@ Paths are normalised, and `..` cannot leave a mount. The resolver (`src/hle/kern
 
 - The descriptor table (`FdTable`, `fd_table()`) is in `src/hle/kernel/file.hpp`, for the other modules that take descriptors (mmap, directories). A guest descriptor holds a shared reference to its host descriptor, which closes when the last call using it returns, so a `close` on one thread never pulls the host descriptor from under a `read` on another. The duplicates of the host streams get numbers of 3 or more, and a closed host stream is replaced by `/dev/null` at such a number, so a guest `close` never reaches a host descriptor the runtime reuses.
 - `src/hle/kernel/file.cpp` holds the file functions. Host descriptors are opened `O_CLOEXEC`. `O_DIRECT` is dropped ([kernel-abi.md](../formats/kernel-abi.md#open-flags)), unknown open flags are refused with `EINVAL`. An open counts as a write for the resolver when its access mode isn't `O_RDONLY` or it has `O_CREAT` or `O_TRUNC`.
+- `src/hle/kernel/dir.cpp` holds the directory and metadata calls (mkdir, rmdir, unlink, rename, truncate, ftruncate; `getdirentries` follows). All of them resolve their paths for `write`, so anything under `/app0` fails with `EROFS`. `Resolved` names the mount of a path and whether the path is the mount point itself: a rename between two mounts fails with `EXDEV` even when both lie on one host file system, and rmdir, unlink or rename of a mount point (either side) fails with `EBUSY`, so the game can never remove or replace the host directory behind it.
 
 ## Network and PSN
 
