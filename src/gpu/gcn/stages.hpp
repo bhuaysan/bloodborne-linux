@@ -42,7 +42,9 @@ public:
 
     spv::ExecutionModel model() const { return spv::ExecutionModel::Vertex; }
 
-    // The initial registers after the user data: the vertex and instance indices of a VS.
+    // The initial registers after the user data: the vertex and instance indices of a VS. The key
+    // can't express VGT_PRIMITIVEID_EN or a domain shader on the VS stage yet; they would change
+    // these registers (docs/design/graphics.md, "Not in the key yet").
     void prologue();
 
     void exp(const Instruction& inst);
