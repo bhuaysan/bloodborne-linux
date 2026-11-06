@@ -36,6 +36,28 @@ const ShaderKey vertex_key = {.stage = Stage::vertex,
 
 using Words = std::vector<std::uint32_t>;
 
+// The instructions of a module after its header, each with its opcode word first.
+std::vector<std::span<const std::uint32_t>> instructions(const Words& spirv) {
+    std::vector<std::span<const std::uint32_t>> out;
+    for (std::size_t i = 5; i < spirv.size() && (spirv[i] >> 16) != 0; i += spirv[i] >> 16) {
+        out.push_back(std::span(spirv).subspan(i, std::min<std::size_t>(spirv[i] >> 16,
+                                                                         spirv.size() - i)));
+    }
+    return out;
+}
+
+bool is(std::span<const std::uint32_t> inst, spv::Op op) {
+    return (inst[0] & 0xffff) == static_cast<std::uint32_t>(op);
+}
+
+// The key of ps_attrs, as its header describes the inputs and exports.
+ShaderKey pixel_key() {
+    ShaderKey key{.stage = Stage::pixel, .pgm_rsrc2 = 2u << 1};
+    key.ps_input_ena = key.ps_input_addr = 1u << 1 | 1u << 6 | 1u << 8 | 1u << 9;
+    key.col_format = 0x249;
+    return key;
+}
+
 // The number of instructions with opcode `op` in a module (and `operand` as the operand at
 // `index`, when given).
 int count(const Words& spirv, spv::Op op, std::size_t index = 0, std::uint32_t operand = 0) {
@@ -105,6 +127,39 @@ TEST(GcnStages, ProgramsPassSpirvVal) {
     EXPECT_EQ(count(first.spirv, spv::Op::OpDecorate, 2,
                     static_cast<std::uint32_t>(spv::Decoration::BuiltIn)),
               3);  // SubgroupLocalInvocationId, VertexIndex, Position
+
+    const auto ps = translate(program_words("ps_attrs"), {}, pixel_key());
+    EXPECT_EQ(validate(ps.spirv), "");  // which also requires OriginUpperLeft in Vulkan
+    EXPECT_EQ(count(ps.spirv, spv::Op::OpEntryPoint, 1, 4), 1);  // Fragment
+    EXPECT_EQ(count(ps.spirv, spv::Op::OpDemoteToHelperInvocation), 1);
+    EXPECT_EQ(count(ps.spirv, spv::Op::OpDecorate, 2,
+                    static_cast<std::uint32_t>(spv::Decoration::Location)),
+              3);  // three render targets
+    EXPECT_FALSE(ps.interface.wave_size_dependent);
+    using D = spv::Decoration;
+    EXPECT_EQ(stored_channels(ps.spirv, D::Location, 0), xyzw);  // 32_ABGR
+    EXPECT_EQ(stored_channels(ps.spirv, D::Location, 2), (std::multiset<std::uint32_t>{0, 1}));
+    const std::uint32_t frag_coord = static_cast<std::uint32_t>(spv::BuiltIn::FragCoord);
+    EXPECT_EQ(count(ps.spirv, spv::Op::OpDecorate, 3, frag_coord), 1);  // POS_X and POS_Y
+    // mrt0 32_AR (x and w of the export), with v4 and v5 placed but not loaded: they hold 0.
+    ShaderKey other = pixel_key();
+    other.ps_input_addr = 1u << 1 | 1u << 6 | 1u << 8 | 1u << 9;
+    other.ps_input_ena = 1u << 1 | 1u << 6;
+    other.col_format = 0x243;
+    const auto ps2 = translate(program_words("ps_attrs"), {}, other);
+    EXPECT_EQ(validate(ps2.spirv), "");
+    EXPECT_EQ(count(ps2.spirv, spv::Op::OpDecorate, 3, frag_coord), 0);
+    EXPECT_EQ(stored_channels(ps2.spirv, D::Location, 0), (std::multiset<std::uint32_t>{0, 3}));
+    // POS_Z and POS_W in v4 and v5 (W is 1/FragCoord.w).
+    other.ps_input_ena = other.ps_input_addr = 1u << 1 | 1u << 6 | 1u << 10 | 1u << 11;
+    const auto ps3 = translate(program_words("ps_attrs"), {}, other);
+    EXPECT_EQ(validate(ps3.spirv), "");
+    EXPECT_EQ(count(ps3.spirv, spv::Op::OpFDiv), 1);
+    EXPECT_EQ(count(ps3.spirv, spv::Op::OpConstant, 3, 0x3f800000), 1);  // 1.0f of the 1/W
+    for (const std::uint32_t format : {5u, 6u, 7u, 8u}) {  // mrt1 UNORM16, SNORM16, UINT16, SINT16
+        other.col_format = 0x203 | format << 4;
+        EXPECT_EQ(validate(translate(program_words("ps_attrs"), {}, other).spirv), "") << format;
+    }
 }
 
 // The float mode comes from the same RSRC1 as VGPR_COMP_CNT and applies to the VS as in compute.
@@ -143,7 +198,7 @@ TEST(GcnStages, ErrorsNameWhatIsUnsupported) {
     EXPECT_EQ(error(xport(0xf, 32, 0, 1, 0, 0, xp::compr), vertex_key),
               "a compressed export to a position or parameter");
     EXPECT_EQ(error(xport(1, 12, 0, 0, 0, 0, xp::done), {}), "exp in a compute shader");
-    EXPECT_EQ(error({}, {.stage = Stage::pixel}), "the pixel stage is not translated yet");
+    EXPECT_EQ(error({}, {.stage = Stage::pixel}), "no error");
     EXPECT_EQ(error({}, {.stage = Stage::vertex, .pgm_rsrc2 = 1u << 12}),  // SO_EN
               "SPI_SHADER_PGM_RSRC2_VS 0x1000 is not supported yet");
     EXPECT_EQ(error({}, {.stage = Stage::vertex, .pgm_rsrc2 = 1u << 6}), "no error");  // TRAP
@@ -155,6 +210,31 @@ TEST(GcnStages, ErrorsNameWhatIsUnsupported) {
     EXPECT_EQ(error({0xd8d80000u, 0x01000000u}, vertex_key),
               "the LDS in a graphics stage is not supported yet");
     EXPECT_EQ(error({sopp(10)}, vertex_key), "s_barrier in a graphics stage is not supported yet");
+}
+
+TEST(GcnStages, PixelErrorsNameWhatIsUnsupported) {
+    const ShaderKey pixel = pixel_key();
+    EXPECT_EQ(error(xport(1, 12, 0, 0, 0, 0, xp::done), pixel),  // exp pos0 v0 done
+              "export target 12 is not supported in this stage yet");
+    EXPECT_EQ(error(xport(1, 8, 0, 0, 0, 0, xp::done), pixel),  // exp mrtz v0 done
+              "export target 8 is not supported in this stage yet");
+    EXPECT_EQ(error(xport(1, 9, 0, 0, 0, 0, xp::done), pixel), "no error");  // exp null
+    EXPECT_EQ(error(xport(0xf, 0, 0, 1, 0, 0, xp::compr), pixel),  // mrt0 is 32_ABGR
+              "a compressed export to mrt0 with SPI_SHADER_COL_FORMAT 9");
+    EXPECT_EQ(error(xport(0xf, 1, 0, 1, 2, 3), pixel),  // mrt1 is FP16_ABGR
+              "an uncompressed export to mrt1 with SPI_SHADER_COL_FORMAT 4");
+    EXPECT_EQ(error(xport(0xf, 3, 0, 1, 2, 3), pixel), "no error");  // mrt3 is ZERO
+
+    ShaderKey key = pixel;
+    key.ps_input_addr = 1u << 1;
+    EXPECT_EQ(error({}, key),
+              "SPI_PS_INPUT_ENA 0x342 enables inputs outside SPI_PS_INPUT_ADDR 0x2");
+    key.ps_input_ena = key.ps_input_addr = 1u << 12;  // FRONT_FACE_ENA
+    EXPECT_EQ(error({}, key), "SPI_PS_INPUT_ENA 0x1000 is not supported yet");
+    key.ps_input_ena = 0;  // placed but not loaded: the VGPR holds 0
+    EXPECT_EQ(error({}, key), "no error");
+    EXPECT_EQ(error({}, {.stage = Stage::pixel, .pgm_rsrc2 = 1u}),  // SCRATCH_EN
+              "SPI_SHADER_PGM_RSRC2_PS 0x1 is not supported yet");
 }
 
 }  // namespace

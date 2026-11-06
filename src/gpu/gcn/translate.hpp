@@ -39,12 +39,20 @@ struct ShaderKey {
     // SCRATCH_EN, OC_LDS_EN and the stream-out fields SO_BASE0_EN to SO_EN. Compute LDS_SIZE sizes
     // the LDS (a DS instruction with none is an error). The others don't change the initial
     // registers and are ignored.
+    // SPI_SHADER_PGM_RSRC2_PS has USER_SGPR in the same bits, and its SCRATCH_EN is rejected too.
     std::uint32_t pgm_rsrc2 = 0;
     // NUM_THREAD_FULL of COMPUTE_NUM_THREAD_X, _Y and _Z: the workgroup size.
     std::array<std::uint32_t, 3> num_threads = {64, 1, 1};
 
     // VGT_INSTANCE_STEP_RATE_0 and _1 (VS). A rate of 0 gives 0.
     std::array<std::uint32_t, 2> instance_step_rate = {1, 1};
+
+    // PS (docs/design/graphics.md, "Pixel key"): SPI_PS_INPUT_ADDR places the input VGPRs and
+    // SPI_PS_INPUT_ENA says which are loaded. Without SPI_BARYC_CNTL, POS_*_FLOAT are the pixel
+    // center ("Pixel: not in the key yet").
+    std::uint32_t ps_input_ena = 0;
+    std::uint32_t ps_input_addr = 0;
+    std::uint32_t col_format = 0;  // SPI_SHADER_COL_FORMAT, 4 bits per render target
 };
 
 // What the run time must know about a translated shader.

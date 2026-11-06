@@ -1,5 +1,5 @@
 // The graphics stages of the translator: their initial registers and exports
-// (docs/design/graphics.md, "Stage interfaces and ShaderKey"). So far the vertex stage. Internal to
+// (docs/design/graphics.md, "Stage interfaces and ShaderKey" and "Pixel shaders"). Internal to
 // the translator.
 #pragma once
 
@@ -21,6 +21,8 @@ public:
     using Id = SpirvBuilder::Id;
 
     virtual Id vgpr(unsigned n) = 0;  // the variable of v<n>, a u32
+    virtual Id sgpr(unsigned n) = 0;  // the variable of s<n>, a u32
+    virtual Id exec_var() = 0;        // the variable of this lane's EXEC bit, a bool
     virtual Id active() = 0;          // this lane's EXEC bit, loaded
     // Runs `body` in a selection on `cond`.
     virtual void guarded(Id cond, const std::function<void()>& body) = 0;
@@ -40,23 +42,32 @@ public:
     // Throws GcnError for the graphics register values that aren't supported.
     static void check_key(const ShaderKey& key);
 
-    spv::ExecutionModel model() const { return spv::ExecutionModel::Vertex; }
+    spv::ExecutionModel model() const;
 
     // The initial registers after the user data: the vertex and instance indices of a VS. The key
     // can't express VGT_PRIMITIVEID_EN or a domain shader on the VS stage yet; they would change
     // these registers (docs/design/graphics.md, "Not in the key yet").
-    void prologue();
+    // For a PS: the primitive mask SGPR, the input VGPRs and EXEC (the covered pixels).
+    void prologue(unsigned user_sgprs);
 
     void exp(const Instruction& inst);
+
+    // The execution modes, after the function.
+    void finish(Id main);
 
     // The global variables the stage declared, for the entry point.
     const std::vector<Id>& interface() const { return interface_; }
 
 private:
+    void pixel_prologue(unsigned user_sgprs);
+    void pixel_export(const Instruction& inst);
     Id builtin(spv::BuiltIn which, spv::StorageClass storage, Id type);
     Id output(std::uint32_t location, Id type);
     void store_components(Id var, Id type, const Id (&values)[4]);
+    void render_target(const Instruction& inst, unsigned n);
     Id value(const Operand& o);  // a VGPR as a float
+    Id half(Id packed, unsigned high, unsigned format, Id type);  // a 16-bit value of a pair
+    Id valid();
     Id load(Id type, Id pointer) { return b_.op(spv::Op::OpLoad, type, {pointer}); }
     void store(Id pointer, Id value) { b_.op_void(spv::Op::OpStore, {pointer, value}); }
     Id f32() { return b_.type_float(32); }
@@ -68,6 +79,7 @@ private:
     std::vector<Id> interface_;
     std::map<std::uint32_t, Id> builtins_;  // by BuiltIn
     std::map<std::uint32_t, Id> outputs_;   // by location
+    Id valid_ = 0;  // the valid mask of the last export with `vm`, a bool variable
 };
 
 }  // namespace bb::gcn::detail

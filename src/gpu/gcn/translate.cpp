@@ -237,6 +237,7 @@ public:
             interface_.insert(interface_.end(), stage_.interface().begin(),
                               stage_.interface().end());
             b_.entry_point(stage_.model(), main, "main", interface_);
+            stage_.finish(main);
         } else {
             b_.entry_point(spv::ExecutionModel::GLCompute, main, "main", interface_);
             b_.execution_mode(main, spv::ExecutionMode::LocalSize,
@@ -345,7 +346,7 @@ private:
 
     // The draw block and the initial registers: user data in the first SGPRs, then the stage's.
     // In compute, the thread ID in X is in v0, and the lane ID is LocalInvocationIndex modulo 64.
-    // In the vertex stage the lane ID is the subgroup's (docs/design/graphics.md, "Execution
+    // In the graphics stages the lane ID is the subgroup's (docs/design/graphics.md, "Execution
     // model"), so subgroup_base is 0.
     void prologue() {
         const Id user_t = b_.type_array(u32_, b_.constant_u32(16));
@@ -375,7 +376,7 @@ private:
 
         if (graphics()) {
             lane_ = load(u32_, builtin(spv::BuiltIn::SubgroupLocalInvocationId));
-            stage_.prologue();
+            stage_.prologue(user_sgprs());
             return;
         }
         const Id index = load(u32_, builtin(spv::BuiltIn::LocalInvocationIndex, u32_));
@@ -392,6 +393,9 @@ private:
             const Id pointer = b_.type_pointer(SC::Input, type != 0 ? type : u32_);
             it->second = b_.variable(pointer, SC::Input);
             b_.decorate(it->second, spv::Decoration::BuiltIn, {spirv_word(which)});
+            if (key_.stage == Stage::pixel) {  // integer fragment inputs are flat
+                b_.decorate(it->second, spv::Decoration::Flat);
+            }
             interface_.push_back(it->second);
         }
         return it->second;
@@ -1161,6 +1165,7 @@ private:
     }
 
     void guarded(Id cond, const std::function<void()>& body) override { when(cond, body); }
+    Id exec_var() override { return mask_exec(); }
 
     // MTBUF loads of 1 to 4 components of a typed element, in active lanes (docs/design/
     // graphics.md, "Typed buffer formats"). The address and the range check are those of
@@ -1770,7 +1775,7 @@ private:
         }
         return sgpr(c);
     }
-    Id sgpr(unsigned c) { return variable(sgprs_, c, u32_, b_.constant_u32(0)); }
+    Id sgpr(unsigned c) override { return variable(sgprs_, c, u32_, b_.constant_u32(0)); }
     Id vgpr(unsigned n) override { return variable(vgprs_, n, u32_, b_.constant_u32(0)); }
     Id mask_var(unsigned c) {
         return variable(bools_, c, bool_, b_.constant_bool(c == code::exec));
