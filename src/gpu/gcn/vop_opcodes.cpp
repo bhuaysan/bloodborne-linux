@@ -1,4 +1,4 @@
-// Opcode table of VOP1, from the opcode lists of the Sea Islands ISA manual
+// Opcode tables of VOP1, VOP2 and VOPC, from the opcode lists of the Sea Islands ISA manual
 // (chapter "Microcode Formats"). Regular families are built in loops.
 
 #include <array>
@@ -12,14 +12,15 @@ namespace {
 
 using Table = std::vector<VopInfo>;
 
-// LLVM prints the 32-bit encoding with an _e32 suffix, except for v_nop, v_clrexcp and
-// v_readfirstlane_b32.
+// LLVM prints the 32-bit encoding with an _e32 suffix, except for v_nop, v_clrexcp,
+// v_readfirstlane_b32, v_readlane_b32, v_writelane_b32, v_madmk_f32 and v_madak_f32.
 void set(Table& t, unsigned op, const std::string& name, std::uint8_t dst, std::uint8_t src0,
          std::uint8_t src1 = 0, Vop kind = Vop::plain) {
     if (t.size() <= op) {
         t.resize(op + 1);
     }
-    const bool suffix = kind != Vop::none && kind != Vop::sdst;
+    const bool suffix = kind != Vop::none && kind != Vop::sdst && kind != Vop::readlane &&
+                        kind != Vop::writelane && kind != Vop::madmk && kind != Vop::madak;
     t[op] = {"v_" + name + (suffix ? "_e32" : ""), dst, src0, src1, kind};
 }
 
@@ -74,14 +75,101 @@ Table make_vop1() {
     return t;
 }
 
+// Consecutive VOP2 opcodes from `first` with 32-bit operands.
+template <std::size_t N>
+void binary(Table& t, unsigned first, const std::array<const char*, N>& names) {
+    for (unsigned i = 0; i < N; ++i) {
+        set(t, first + i, names[i], 1, 1, 1, Vop::binary);
+    }
+}
+
+Table make_vop2() {
+    Table t;
+    set(t, 0, "cndmask_b32", 1, 1, 1, Vop::cndmask);
+    set(t, 1, "readlane_b32", 1, 1, 1, Vop::readlane);
+    set(t, 2, "writelane_b32", 1, 1, 1, Vop::writelane);
+    binary<28>(t, 3, {"add_f32", "sub_f32", "subrev_f32", "mac_legacy_f32", "mul_legacy_f32",
+                      "mul_f32", "mul_i32_i24", "mul_hi_i32_i24", "mul_u32_u24",
+                      "mul_hi_u32_u24", "min_legacy_f32", "max_legacy_f32", "min_f32", "max_f32",
+                      "min_i32", "max_i32", "min_u32", "max_u32", "lshr_b32", "lshrrev_b32",
+                      "ashr_i32", "ashrrev_i32", "lshl_b32", "lshlrev_b32", "and_b32", "or_b32",
+                      "xor_b32", "bfm_b32"});
+    binary<1>(t, 31, {"mac_f32"});
+    set(t, 32, "madmk_f32", 1, 1, 1, Vop::madmk);  // CI
+    set(t, 33, "madak_f32", 1, 1, 1, Vop::madak);  // CI
+    binary<3>(t, 34, {"bcnt_u32_b32", "mbcnt_lo_u32_b32", "mbcnt_hi_u32_b32"});
+    constexpr std::array<const char*, 3> carry_out = {"add_i32", "sub_i32", "subrev_i32"};
+    constexpr std::array<const char*, 3> carry = {"addc_u32", "subb_u32", "subbrev_u32"};
+    for (unsigned i = 0; i < 3; ++i) {
+        set(t, 37 + i, carry_out[i], 1, 1, 1, Vop::carry_out);
+        set(t, 40 + i, carry[i], 1, 1, 1, Vop::carry);
+    }
+    binary<7>(t, 43, {"ldexp_f32", "cvt_pkaccum_u8_f32", "cvt_pknorm_i16_f32",
+                      "cvt_pknorm_u16_f32", "cvt_pkrtz_f16_f32", "cvt_pk_u16_u32",
+                      "cvt_pk_i16_i32"});
+    return t;
+}
+
+// VOPC: the float compares are at the base of their family plus 0x20 for f64 plus the condition,
+// the integer compares at 0x80 plus 0x40 for unsigned, 0x20 for 64-bit and 0x10 for cmpx plus
+// the condition, and the class compares at 0x88 plus 0x20 for f64 and 0x10 for cmpx.
+Table make_vopc() {
+    Table t;
+    auto add = [&](unsigned op, const std::string& name, unsigned dwords, unsigned mask_dwords) {
+        set(t, op, name, 0, static_cast<std::uint8_t>(dwords),
+            static_cast<std::uint8_t>(mask_dwords), Vop::compare);
+    };
+    constexpr std::array<const char*, 16> fcond = {"f",   "lt",  "eq",  "le",  "gt",  "lg",
+                                                   "ge",  "o",   "u",   "nge", "nlg", "ngt",
+                                                   "nle", "neq", "nlt", "tru"};
+    constexpr std::array<const char*, 8> icond = {"f", "lt", "eq", "le", "gt", "ne", "ge", "t"};
+    constexpr std::array<const char*, 4> fbase = {"cmp", "cmpx", "cmps", "cmpsx"};
+    constexpr std::array<unsigned, 4> fbase_op = {0x00, 0x10, 0x40, 0x50};
+    for (unsigned b = 0; b < 4; ++b) {
+        for (unsigned wide = 0; wide < 2; ++wide) {
+            for (unsigned c = 0; c < 16; ++c) {
+                add(fbase_op[b] + wide * 0x20 + c,
+                    std::string(fbase[b]) + "_" + fcond[c] + (wide ? "_f64" : "_f32"),
+                    1 + wide, 1 + wide);
+            }
+        }
+    }
+    for (unsigned x = 0; x < 2; ++x) {      // cmp, cmpx
+        for (unsigned u = 0; u < 2; ++u) {  // signed, unsigned
+            for (unsigned wide = 0; wide < 2; ++wide) {
+                for (unsigned c = 0; c < 8; ++c) {
+                    add(0x80 + u * 0x40 + wide * 0x20 + x * 0x10 + c,
+                        std::string(x ? "cmpx_" : "cmp_") + icond[c] + (u ? "_u" : "_i") +
+                            (wide ? "64" : "32"),
+                        1 + wide, 1 + wide);
+                }
+            }
+        }
+    }
+    for (unsigned x = 0; x < 2; ++x) {
+        for (unsigned wide = 0; wide < 2; ++wide) {
+            add(0x88 + wide * 0x20 + x * 0x10,
+                std::string(x ? "cmpx" : "cmp") + "_class_" + (wide ? "f64" : "f32"), 1 + wide,
+                1);
+        }
+    }
+    return t;
+}
+
 }  // namespace
 
 const std::vector<VopInfo>& vop_opcodes(Format format) {
     static const Table vop1 = make_vop1();
+    static const Table vop2 = make_vop2();
+    static const Table vopc = make_vopc();
     static const Table none;
     switch (format) {
     case Format::vop1:
         return vop1;
+    case Format::vop2:
+        return vop2;
+    case Format::vopc:
+        return vopc;
     default:
         return none;
     }

@@ -1,4 +1,4 @@
-// VOP1: decoding and disassembly of words encoded by hand from the Sea Islands ISA manual, and a
+// VOP1, VOP2 and VOPC: decoding and disassembly of words encoded by hand from the Sea Islands ISA manual, and a
 // round trip of every opcode in the table through llvm-mc.
 
 #include <cstdint>
@@ -67,8 +67,14 @@ TEST(GcnVop, Errors) {
         {vop1(1, 1, 255)},  // literal past the end
         {vop1(15, 1, code::lds_direct)},  // LDS_DIRECT as a 64-bit source
         {sop1(3, 1, code::lds_direct)},   // LDS_DIRECT in a scalar format
-        {0x00000000},       // VOP2, not decoded yet
-        {0x7c000000},       // VOPC, not decoded yet
+        {vop2(50, 1, v, 2)},                   // unknown VOP2 opcode
+        {vopc(0x89, v, 2)},                    // unknown VOPC opcode
+        {vopc(0x21, v, 255)},                  // v[255:256]
+        {vop2(1, 128, v + 2, 3)},              // v_readlane_b32 to a constant
+        {vop2(1, 1, v + 2, 255)},              // lane select literal past the end
+        {vop2(2, 1, 2, code::lds_direct)},     // LDS_DIRECT as the lane select
+        {vop2(32, 1, v + 2, 3)},               // v_madmk_f32 literal past the end
+        {vop2(33, 1, v + 2, 3)},               // v_madak_f32 literal past the end
     };
     for (const auto& words : bad) {
         SCOPED_TRACE(words[0]);
@@ -116,6 +122,46 @@ const std::vector<Case> cases = {
     {{vop1(2, 1, code::lds_direct)}, "v_readfirstlane_b32 s1, src_lds_direct"},
     {{vop1(0, 0, 0)}, "v_nop"},
     {{vop1(65, 0, 0)}, "v_clrexcp"},
+    // VOP2.
+    {{vop2(3, 1, v + 2, 3)}, "v_add_f32_e32 v1, v2, v3"},
+    {{vop2(3, 1, 242, 3)}, "v_add_f32_e32 v1, 1.0, v3"},
+    {{vop2(3, 1, 255, 3), 0x41200000}, "v_add_f32_e32 v1, 0x41200000, v3"},
+    {{vop2(3, 1, 255, 3), 0x3f800000}, "v_add_f32_e32 v1, lit(0x3f800000), v3"},
+    {{vop2(8, 255, code::lds_direct, 255)}, "v_mul_f32_e32 v255, src_lds_direct, v255"},
+    {{vop2(49, 1, 2, 3)}, "v_cvt_pk_i16_i32_e32 v1, s2, v3"},
+    {{vop2(0, 1, v + 2, 3)}, "v_cndmask_b32_e32 v1, v2, v3, vcc"},
+    {{vop2(37, 1, v + 2, 3)}, "v_add_i32_e32 v1, vcc, v2, v3"},
+    {{vop2(38, 1, 133, 3)}, "v_sub_i32_e32 v1, vcc, 5, v3"},
+    {{vop2(40, 1, v + 2, 3)}, "v_addc_u32_e32 v1, vcc, v2, v3, vcc"},
+    {{vop2(41, 1, v + 2, 3)}, "v_subb_u32_e32 v1, vcc, v2, v3, vcc"},
+    {{vop2(42, 1, v + 2, 3)}, "v_subbrev_u32_e32 v1, vcc, v2, v3, vcc"},
+    {{vop2(1, 1, v + 2, 3)}, "v_readlane_b32 s1, v2, s3"},
+    {{vop2(1, code::vcc + 1, v + 2, code::m0)}, "v_readlane_b32 vcc_hi, v2, m0"},
+    {{vop2(1, 1, v + 2, 133)}, "v_readlane_b32 s1, v2, 5"},
+    {{vop2(2, 1, 2, 133)}, "v_writelane_b32 v1, s2, 5"},
+    {{vop2(2, 1, 133, 7)}, "v_writelane_b32 v1, 5, s7"},
+    {{vop2(32, 1, v + 2, 3), 0x41200000}, "v_madmk_f32 v1, v2, 0x41200000, v3"},
+    {{vop2(32, 1, v + 2, 3), 0x3f800000}, "v_madmk_f32 v1, v2, 0x3f800000, v3"},
+    {{vop2(33, 1, v + 2, 3), 0x41200000}, "v_madak_f32 v1, v2, v3, 0x41200000"},
+    {{vop2(33, 1, v + 2, 3), 5}, "v_madak_f32 v1, v2, v3, 0x5"},
+    // VOPC.
+    {{vopc(1, v + 1, 2)}, "v_cmp_lt_f32_e32 vcc, v1, v2"},
+    {{vopc(0x11, 4, 2)}, "v_cmpx_lt_f32_e32 vcc, s4, v2"},
+    {{vopc(0x4f, 244, 2)}, "v_cmps_tru_f32_e32 vcc, 2.0, v2"},
+    {{vopc(0x5f, v + 1, 2)}, "v_cmpsx_tru_f32_e32 vcc, v1, v2"},
+    {{vopc(0x22, v + 1, 4)}, "v_cmp_eq_f64_e32 vcc, v[1:2], v[4:5]"},
+    {{vopc(0x22, 4, 4)}, "v_cmp_eq_f64_e32 vcc, s[4:5], v[4:5]"},
+    {{vopc(0x22, 255, 4), 0x40000000}, "v_cmp_eq_f64_e32 vcc, lit(0x40000000), v[4:5]"},
+    {{vopc(0x22, 255, 4), 0x12345678}, "v_cmp_eq_f64_e32 vcc, 0x12345678, v[4:5]"},
+    {{vopc(0x80, v + 1, 2)}, "v_cmp_f_i32_e32 vcc, v1, v2"},
+    {{vopc(0x97, v + 1, 2)}, "v_cmpx_t_i32_e32 vcc, v1, v2"},
+    {{vopc(0xa5, 106, 2)}, "v_cmp_ne_i64_e32 vcc, vcc, v[2:3]"},
+    {{vopc(0xc6, v + 1, 2)}, "v_cmp_ge_u32_e32 vcc, v1, v2"},
+    {{vopc(0xf7, v + 1, 2)}, "v_cmpx_t_u64_e32 vcc, v[1:2], v[2:3]"},
+    {{vopc(0x88, v + 1, 2)}, "v_cmp_class_f32_e32 vcc, v1, v2"},
+    {{vopc(0x98, 255, 2), 0x3f800000}, "v_cmpx_class_f32_e32 vcc, lit(0x3f800000), v2"},
+    {{vopc(0xa8, v + 1, 4)}, "v_cmp_class_f64_e32 vcc, v[1:2], v4"},
+    {{vopc(0xb8, 4, 4)}, "v_cmpx_class_f64_e32 vcc, s[4:5], v4"},
 };
 
 std::string text(const std::vector<std::uint32_t>& words) {
@@ -150,6 +196,12 @@ TEST(GcnVop, EncodingsLlvmRejects) {
         {{vop1(11, 1, 255), 0x12345678}, "v_cvt_f32_f16_e32 v1, 0x12345678"},
         {{vop1(11, 1, 255), 0x10000}, "v_cvt_f32_f16_e32 v1, 0x10000"},
         {{vop1(11, 1, 255), 0x3f800000}, "v_cvt_f32_f16_e32 v1, 0x3f800000"},
+        // m0 as the destination of v_readlane_b32, and two different SGPRs or an SGPR and a literal on the constant bus.
+        {{vop2(1, code::m0, v + 2, 3)}, "v_readlane_b32 m0, v2, s3"},
+        {{vop2(2, 1, 2, 3)}, "v_writelane_b32 v1, s2, s3"},
+        {{vop2(33, 1, 2, 3), 5}, "v_madak_f32 v1, s2, v3, 0x5"},  // an SGPR and a literal
+        {{vop2(42, 1, 2, 3)}, "v_subbrev_u32_e32 v1, vcc, s2, v3, vcc"},  // an SGPR and VCC
+        {{vop2(1, 1, v + 2, 255), 0x12345678}, "v_readlane_b32 s1, v2, 0x12345678"},  // literal
     };
     for (const Case& c : rejected) {
         SCOPED_TRACE(c.text);
@@ -178,21 +230,66 @@ std::vector<std::uint32_t> every_vop1_opcode() {
     return words;
 }
 
+// One encoding per VOP2 opcode (v2, v4, v6; s1 and the lane select s3 for v_readlane_b32, the
+// inline constant 5 as lane select for v_writelane_b32, which can't have a second SGPR) and per
+// VOPC opcode (v4, v6), with the literal K after v_madmk_f32 and v_madak_f32.
+std::vector<std::vector<std::uint32_t>> every_vop2_opcode() {
+    std::vector<std::vector<std::uint32_t>> all;
+    for (unsigned op = 0; op < 0x3e; ++op) {  // 0x3e and 0x3f are VOPC and VOP1
+        std::vector<std::uint32_t> w = {op == 1   ? vop2(op, 1, v + 4, 3)
+                                        : op == 2 ? vop2(op, 2, 2, 133)
+                                                  : vop2(op, 2, v + 4, 6)};
+        if (op == 32 || op == 33) {
+            w.push_back(0x41200000);
+        }
+        try {
+            one(w);
+            all.push_back(w);
+        } catch (const GcnError&) {
+        }
+    }
+    return all;
+}
+
+std::vector<std::vector<std::uint32_t>> every_vopc_opcode() {
+    std::vector<std::vector<std::uint32_t>> all;
+    for (unsigned op = 0; op < 256; ++op) {
+        try {
+            one({vopc(op, v + 4, 6)});
+            all.push_back({vopc(op, v + 4, 6)});
+        } catch (const GcnError&) {
+        }
+    }
+    return all;
+}
+
+void round_trip(const std::vector<std::vector<std::uint32_t>>& all) {
+    std::vector<std::string> lines;
+    for (const auto& words : all) {
+        lines.push_back(text(words));
+    }
+    const auto assembled = assemble(lines);
+    for (std::size_t i = 0; i < all.size(); ++i) {
+        EXPECT_EQ(assembled[i].words, all[i]) << lines[i];
+    }
+}
+
 TEST(GcnVop, RoundTripEveryOpcode) {
     const auto words = every_vop1_opcode();
     const auto insts = decode(words, Until::code_end);
     EXPECT_EQ(insts.size(), 65u);  // opcodes 0-26 and 32-70, without v_mov_fed_b32
+    EXPECT_EQ(every_vop2_opcode().size(), 50u);
+    EXPECT_EQ(every_vopc_opcode().size(), 196u);
     if (!have_llvm_mc()) {
         GTEST_SKIP() << "llvm-mc not found";
     }
-    std::vector<std::string> lines;
-    for (const Instruction& inst : insts) {
-        lines.push_back(disassemble(inst));
+    std::vector<std::vector<std::uint32_t>> vop1_words;
+    for (std::uint32_t w : words) {
+        vop1_words.push_back({w});
     }
-    const auto assembled = assemble(lines);
-    for (std::size_t i = 0; i < insts.size(); ++i) {
-        EXPECT_EQ(assembled[i].words, std::vector<std::uint32_t>{words[i]}) << lines[i];
-    }
+    round_trip(vop1_words);
+    round_trip(every_vop2_opcode());
+    round_trip(every_vopc_opcode());
 }
 
 }  // namespace

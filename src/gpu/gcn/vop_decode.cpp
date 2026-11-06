@@ -1,4 +1,4 @@
-// Decoder for VOP1 (Sea Islands ISA manual, "Microcode Formats").
+// Decoder for VOP1, VOP2 and VOPC (Sea Islands ISA manual, "Microcode Formats").
 
 #include <format>
 #include <string>
@@ -26,10 +26,12 @@ public:
         const std::uint32_t w = word_;
         if (bits(w, 25, 7) == 0x3f) {
             start(Format::vop1, bits(w, 9, 8), "VOP1");
-            operands(bits(w, 17, 8));
+        } else if (bits(w, 25, 7) == 0x3e) {
+            start(Format::vopc, bits(w, 17, 8), "VOPC");
         } else {
-            fail("unsupported encoding");  // VOP2, VOPC
+            start(Format::vop2, bits(w, 25, 6), "VOP2");
         }
+        operands(bits(w, 17, 8), bits(w, 9, 8));
         return inst_;
     }
 
@@ -80,7 +82,14 @@ private:
         return scalar(c, dwords);
     }
 
-    void operands(unsigned vdst) {
+    // The VCC register pair, an implicit operand.
+    static Operand vcc() { return {OperandKind::scalar, 2, code::vcc, 0}; }
+
+    // The 32-bit literal K of v_madmk_f32 and v_madak_f32.
+    Operand literal_k() { return scalar(code::literal, 1); }
+
+    // `vdst` is the field in bits 17-24, `field` the one in bits 9-16 (VOP2, VOPC: vsrc1).
+    void operands(unsigned vdst, unsigned field) {
         const VopInfo& info = *info_;
         switch (info.kind) {
         case Vop::none:
@@ -95,6 +104,46 @@ private:
         case Vop::plain:
             add_dst(vgpr(vdst, info.dst));
             add_src(src0(info.src0));
+            return;
+        case Vop::binary:
+        case Vop::cndmask:
+        case Vop::carry_out:
+        case Vop::carry:
+        case Vop::madmk:
+        case Vop::madak:
+            add_dst(vgpr(vdst, 1));
+            if (info.kind == Vop::carry_out || info.kind == Vop::carry) {
+                add_dst(vcc());
+            }
+            add_src(src0(1));
+            if (info.kind == Vop::madmk) {
+                add_src(literal_k());
+            }
+            add_src(vgpr(field, 1));
+            if (info.kind == Vop::madak) {
+                add_src(literal_k());
+            }
+            if (info.kind == Vop::cndmask || info.kind == Vop::carry) {
+                add_src(vcc());
+            }
+            return;
+        case Vop::readlane:
+            if (vdst >= 128) {
+                fail(std::format("invalid scalar destination {}", vdst));
+            }
+            add_dst(scalar(vdst, 1));
+            add_src(src0(1));
+            add_src(scalar(field, 1));
+            return;
+        case Vop::writelane:
+            add_dst(vgpr(vdst, 1));
+            add_src(src0(1));
+            add_src(scalar(field, 1));
+            return;
+        case Vop::compare:
+            add_dst(vcc());
+            add_src(src0(info.src0));
+            add_src(vgpr(field, info.src1));
             return;
         }
     }

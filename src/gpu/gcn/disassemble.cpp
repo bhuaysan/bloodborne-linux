@@ -77,7 +77,7 @@ enum class Literal {
                 // with an inline value needs lit() to keep its encoding
     immediate,  // s_setreg_imm32_b32: always a literal, printed like LLVM prints it
     hex,        // SMRD offsets: LLVM encodes 255 or less in the immediate form, with or without
-                // lit()
+                // lit(). Also the constant K of v_madmk_f32 and v_madak_f32.
     vector,     // VOP1, VOP2, VOPC: as `lit`, with inline constants also on 64-bit operands
     f16,        // an f16 vector ALU source: as `lit`, with LLVM's 16-bit rule
 };
@@ -241,8 +241,16 @@ Literal literal_rule(const Instruction& inst, unsigned src) {
     case Format::vop1:
     case Format::vopc: {
         const auto& table = detail::vop_opcodes(inst.format);
-        const bool f16 = src == 0 && inst.opcode < table.size() && table[inst.opcode].f16_src0;
-        return f16 ? Literal::f16 : Literal::vector;
+        if (inst.opcode >= table.size()) {
+            return Literal::vector;
+        }
+        const detail::VopInfo& info = table[inst.opcode];
+        // The constant K of v_madmk_f32 and v_madak_f32 is always a literal.
+        if ((info.kind == detail::Vop::madmk && src == 1) ||
+            (info.kind == detail::Vop::madak && src == 2)) {
+            return Literal::hex;
+        }
+        return src == 0 && info.f16_src0 ? Literal::f16 : Literal::vector;
     }
     default:
         return Literal::lit;

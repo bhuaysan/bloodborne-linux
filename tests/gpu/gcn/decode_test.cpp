@@ -219,7 +219,7 @@ TEST(GcnDecode, Errors) {
     EXPECT_NE(std::string(e.what()).find("unknown SOPP opcode 3 at offset 0x4 (word 0xbf830000)"),
               std::string::npos);
 
-    EXPECT_EQ(error({0x00000000}).word(), 0u);  // VOP2, not decoded yet
+    EXPECT_EQ(error({vop2(50, 0, 0, 0)}).word(), vop2(50, 0, 0, 0));  // unknown VOP2 opcode
     EXPECT_EQ(error({sopp(2, 0xfffe)}).word(), sopp(2, 0xfffe));  // before the start
     EXPECT_NE(std::string(error({sop2(12, 0, 0, 0)}).what()).find("unknown SOP2 opcode 12"),
               std::string::npos);

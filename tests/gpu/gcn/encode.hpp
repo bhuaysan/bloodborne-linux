@@ -93,4 +93,15 @@ constexpr std::uint32_t vop1(unsigned op, unsigned vdst, unsigned src0) {
     return 0x3fu << 25 | vdst << 17 | op << 9 | src0;
 }
 
+// VOP2 and VOPC. `vdst` is a VGPR number, or the operand code of an SGPR destination for
+// v_readlane_b32. `src0` is the 9-bit operand code, `vsrc1` a VGPR number (or the 8-bit operand
+// code of the lane select of v_readlane_b32 and v_writelane_b32).
+constexpr std::uint32_t vop2(unsigned op, unsigned vdst, unsigned src0, unsigned vsrc1) {
+    return op << 25 | vdst << 17 | vsrc1 << 9 | src0;
+}
+
+constexpr std::uint32_t vopc(unsigned op, unsigned src0, unsigned vsrc1) {
+    return 0x3eu << 25 | op << 17 | vsrc1 << 9 | src0;
+}
+
 }  // namespace bb::test::gcn
