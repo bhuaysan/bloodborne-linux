@@ -22,6 +22,12 @@ std::int32_t sceKernelFtruncate(std::int32_t fd, std::int64_t length);
 std::int32_t sceKernelGetdirentries(std::int32_t fd, void* buffer, std::int32_t size,
                                     std::int64_t* base);
 
+// The guest d_type of the entry `name` of host directory `dir` with host type `host_type`. The
+// eboot decides directory or not from the type alone (0x207272e), so DT_UNKNOWN, which some host
+// file systems report, becomes the type of the entry. A symbolic link gets the type of its
+// target, since the resolver follows links. A host type that can't be resolved stays as it is.
+std::uint8_t guest_dirent_type(int dir, const char* name, std::uint8_t host_type);
+
 // POSIX convention (libScePosix): 0, or -1 with the guest errno set.
 int posix_mkdir(const char* path, std::uint32_t mode);
 int posix_rmdir(const char* path);

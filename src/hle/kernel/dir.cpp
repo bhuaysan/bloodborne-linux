@@ -137,8 +137,9 @@ Listing list_dir(int h, std::span<std::byte> out, std::int64_t* base) {
             const std::string_view name(reinterpret_cast<const char*>(host + at) +
                                         offsetof(HostDirent, name));
             if (!is_junk_name(name)) {
-                const std::size_t length = put_dirent(out.subspan(used),
-                                                      guest_fileno(entry.ino), entry.type, name);
+                const std::size_t length =
+                    put_dirent(out.subspan(used), guest_fileno(entry.ino),
+                               guest_dirent_type(h, name.data(), entry.type), name);
                 if (length == 0) {
                     full = true;
                     break;
@@ -163,6 +164,17 @@ Listing list_dir(int h, std::span<std::byte> out, std::int64_t* base) {
 }
 
 }  // namespace
+
+std::uint8_t guest_dirent_type(int dir, const char* name, std::uint8_t host_type) {
+    if (host_type != DT_UNKNOWN && host_type != DT_LNK) {
+        return host_type;
+    }
+    struct stat st;
+    if (::fstatat(dir, name, &st, 0) != 0) {
+        return host_type;
+    }
+    return static_cast<std::uint8_t>(IFTODT(st.st_mode));
+}
 
 std::int32_t sceKernelMkdir(const char* path, std::uint32_t mode) {
     return sce_fail(make_dir(path, mode));

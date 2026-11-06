@@ -1,5 +1,6 @@
 #include "hle/kernel/dir.hpp"
 
+#include <fcntl.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -26,7 +27,7 @@ using namespace bb::hle::kernel;
 // Guest open flags (docs/formats/kernel-abi.md).
 constexpr int o_rdonly = 0, o_rdwr = 2, o_directory = 0x20000;
 // Guest d_type values.
-constexpr int dt_dir = 4, dt_reg = 8;
+constexpr int dt_unknown = 0, dt_dir = 4, dt_reg = 8, dt_lnk = 10;
 
 std::int32_t sce(int host_errno) {
     return sce_error(guest_errno(host_errno).value());
@@ -248,6 +249,44 @@ TEST_F(DirTest, RereadsEachBlockFromItsBase) {
     }
     EXPECT_EQ(seen, expected);
     EXPECT_EQ(sceKernelClose(fd), 0);
+}
+
+// Symbolic links list as their targets, since the resolver follows them.
+TEST_F(DirTest, ListsLinksAsTheirTargets) {
+    fs::create_directory(save0_ / "dir");
+    write(save0_ / "file", "");
+    fs::create_directory_symlink("dir", save0_ / "dir_link");
+    fs::create_symlink("file", save0_ / "file_link");
+    fs::create_symlink("missing", save0_ / "dangling");
+    const std::int32_t fd = sceKernelOpen("/savedata0", o_rdonly | o_directory, 0);
+    ASSERT_GE(fd, 3);
+    std::map<std::string, int> types;
+    for (const Record& r : list_all(fd, 512)) {
+        types[r.name] = r.type;
+    }
+    EXPECT_EQ(types, (std::map<std::string, int>{{".", dt_dir},
+                                                 {"..", dt_dir},
+                                                 {"dir", dt_dir},
+                                                 {"dir_link", dt_dir},
+                                                 {"file", dt_reg},
+                                                 {"file_link", dt_reg},
+                                                 {"dangling", dt_lnk}}));
+    EXPECT_EQ(sceKernelClose(fd), 0);
+}
+
+// Some host file systems (XFS without ftype, some FUSE and NFS mounts) report DT_UNKNOWN.
+TEST_F(DirTest, ReplacesAnUnknownHostTypeWithTheEntrysType) {
+    fs::create_directory(save0_ / "dir");
+    write(save0_ / "file", "");
+    const int dir = ::open(save0_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    ASSERT_GE(dir, 0);
+    EXPECT_EQ(guest_dirent_type(dir, "dir", dt_unknown), dt_dir);
+    EXPECT_EQ(guest_dirent_type(dir, "file", dt_unknown), dt_reg);
+    EXPECT_EQ(guest_dirent_type(dir, "..", dt_unknown), dt_dir);
+    EXPECT_EQ(guest_dirent_type(dir, "missing", dt_unknown), dt_unknown);
+    // A known type is taken as it is, without a host call.
+    EXPECT_EQ(guest_dirent_type(dir, "missing", dt_reg), dt_reg);
+    ::close(dir);
 }
 
 TEST_F(DirTest, ListsTheGameDirectory) {
