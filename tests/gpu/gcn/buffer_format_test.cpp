@@ -67,4 +67,17 @@ TEST(GcnBufferFormat, NumberFormatsByWidth) {
     }
 }
 
+// A store takes the number formats that the buffer unit writes (Sea Islands ISA Table 8.13).
+TEST(GcnBufferFormat, StoredNumberFormats) {
+    for (const unsigned nf : {nfmt::unorm, nfmt::snorm, nfmt::uint_, nfmt::sint}) {
+        EXPECT_TRUE(format_error(10, nf, true).empty()) << nf;  // 8_8_8_8
+    }
+    EXPECT_TRUE(format_error(12, nfmt::float_, true).empty());  // 16_16_16_16
+    for (const unsigned nf : {nfmt::uscaled, nfmt::sscaled, nfmt::snorm_ogl}) {
+        EXPECT_TRUE(format_error(10, nf).empty()) << nf;
+        EXPECT_FALSE(format_error(10, nf, true).empty()) << nf;
+    }
+    EXPECT_FALSE(format_error(1, nfmt::float_, true).empty());  // the width rules still apply
+}
+
 }  // namespace

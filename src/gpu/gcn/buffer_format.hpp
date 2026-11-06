@@ -33,8 +33,10 @@ struct FormatLayout {
 // done).
 const FormatLayout* format_layout(unsigned dfmt);
 
-// Why the pair can't be converted (in the translator's error message), or an empty string.
-std::string format_error(unsigned dfmt, unsigned nfmt);
+// Why the pair can't be converted (in the translator's error message), or an empty string. A
+// store also rejects the number formats that the buffer unit can't write (USCALED, SSCALED and
+// SNORM_OGL, Sea Islands ISA Table 8.13).
+std::string format_error(unsigned dfmt, unsigned nfmt, bool store = false);
 
 // Emits the conversions. Values are u32 ids whatever their type: floats as their bit patterns.
 class FormatEmitter {
@@ -48,10 +50,18 @@ public:
     // raw[0]). Components the format doesn't have are 0.
     Words decode(unsigned dfmt, unsigned nfmt, const Words& raw);
 
+    // The element's dwords from its components (`value`, X first), the inverse of decode: UNORM
+    // and SNORM clamp (NaN gives 0) and round to nearest even, UINT and SINT saturate, FLOAT
+    // rounds to a half float to nearest even. A narrow element sits in the low bits of the result's
+    // [0], and the bits above it are 0.
+    Words encode(unsigned dfmt, unsigned nfmt, const Words& value);
+
 private:
     Id float_to_bits(Id value);
     Id extended(unsigned instruction, Id type, const SpirvBuilder::Words& operands);
     Id decode_field(unsigned nfmt, const FormatField& field, Id word);
+    Id encode_field(unsigned nfmt, unsigned width, Id value);
+    Id to_half(Id bits);
 
     SpirvBuilder& b_;
     Id u32_;
