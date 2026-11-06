@@ -14,7 +14,8 @@ namespace bb::vk {
 namespace {
 
 constexpr const char* required_extensions[] = {
-    VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME,
+    VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+    VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
     VK_KHR_SHADER_MAXIMAL_RECONVERGENCE_EXTENSION_NAME,
 };
 
@@ -56,11 +57,8 @@ struct Families {
 
 // The property and feature chains, for a Vulkan 1.3 device with the required extensions.
 struct Query {
-    VkPhysicalDeviceExternalMemoryHostPropertiesEXT host =
-        make<VkPhysicalDeviceExternalMemoryHostPropertiesEXT>(
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT);
     VkPhysicalDeviceVulkan13Properties p13 = make<VkPhysicalDeviceVulkan13Properties>(
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES, &host);
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES);
     VkPhysicalDeviceVulkan12Properties p12 = make<VkPhysicalDeviceVulkan12Properties>(
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES, &p13);
     VkPhysicalDeviceVulkan11Properties p11 = make<VkPhysicalDeviceVulkan11Properties>(
@@ -126,6 +124,20 @@ struct Query {
     }
 };
 
+// Whether `device` imports dma-bufs into the mirror's sparse buffers (VUID-VkBufferCreateInfo-
+// pNext-00920 allows the handle type only when this reports it importable).
+bool imports_dma_buf(VkPhysicalDevice device) {
+    auto info = make<VkPhysicalDeviceExternalBufferInfo>(
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO);
+    info.flags = mirror_buffer_flags;
+    info.usage = mirror_buffer_usage;
+    info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+    auto props = make<VkExternalBufferProperties>(VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES);
+    vkGetPhysicalDeviceExternalBufferProperties(device, &info, &props);
+    return props.externalMemoryProperties.externalMemoryFeatures &
+           VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
+}
+
 // What `device` lacks of the requirements of Device::create, or nothing.
 std::optional<std::string> missing(VkPhysicalDevice device) {
     VkPhysicalDeviceProperties props;
@@ -148,6 +160,9 @@ std::optional<std::string> missing(VkPhysicalDevice device) {
     }
     if (auto feature = Query(device).missing_feature()) {
         return feature;
+    }
+    if (!imports_dma_buf(device)) {
+        return "dma-buf import for sparse storage buffers with device addresses";
     }
     const Families families(device);
     if (!families.graphics) {
@@ -235,9 +250,8 @@ std::unique_ptr<Device> Device::create(const Instance& instance, const DeviceOpt
     std::unique_ptr<Device> device(new Device);
     device->physical_ = physicals[*chosen];
     const Query query(device->physical_);
-    DeviceProperties& p = device->properties_ = {
-        query.props.properties, query.p11, query.p12, query.p13,
-        query.host.minImportedHostPointerAlignment};
+    DeviceProperties& p = device->properties_ = {query.props.properties, query.p11, query.p12,
+                                                 query.p13};
     p.v11.pNext = p.v12.pNext = p.v13.pNext = nullptr;
 
     // Only the required features are enabled.

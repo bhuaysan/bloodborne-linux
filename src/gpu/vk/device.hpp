@@ -70,8 +70,16 @@ struct DeviceProperties {
     VkPhysicalDeviceVulkan11Properties v11{};
     VkPhysicalDeviceVulkan12Properties v12{};
     VkPhysicalDeviceVulkan13Properties v13{};
-    VkDeviceSize min_imported_host_pointer_alignment = 0;  // VK_EXT_external_memory_host
 };
+
+// The sparse buffers of the GPU memory mirror (docs/design/graphics.md, "GPU memory mirror"):
+// created with these flags and this usage, and bound to dma-bufs of the direct memory memfd,
+// imported with VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT. A suitable device reports that
+// handle type importable for such buffers.
+constexpr VkBufferCreateFlags mirror_buffer_flags =
+    VK_BUFFER_CREATE_SPARSE_BINDING_BIT | VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT;
+constexpr VkBufferUsageFlags mirror_buffer_usage =
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
 // One VkQueue. Vulkan wants calls on a queue externally synchronized: hold `lock` around them.
 struct Queue {

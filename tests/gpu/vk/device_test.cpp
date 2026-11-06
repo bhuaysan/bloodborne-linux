@@ -1,6 +1,5 @@
 // bbvk's device choice, and the device core on lavapipe.
 
-#include <bit>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -71,9 +70,20 @@ TEST(VkDevice, CreatesLavapipe) {
     EXPECT_NE(std::string(p.core.deviceName).find("llvmpipe"), std::string::npos);
     EXPECT_GE(p.core.apiVersion, VK_API_VERSION_1_3);
     EXPECT_EQ(p.v12.driverID, VK_DRIVER_ID_MESA_LLVMPIPE);
-    EXPECT_TRUE(std::has_single_bit(p.min_imported_host_pointer_alignment));
     EXPECT_NE(device->handle(), VK_NULL_HANDLE);
     EXPECT_NE(device->graphics().handle, VK_NULL_HANDLE);
+    // The mirror's sparse buffers can take dma-bufs (device choice requires it).
+    auto info = make<VkPhysicalDeviceExternalBufferInfo>(
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO);
+    info.flags = mirror_buffer_flags;
+    info.usage = mirror_buffer_usage;
+    info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+    auto external = make<VkExternalBufferProperties>(VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES);
+    vkGetPhysicalDeviceExternalBufferProperties(device->physical(), &info, &external);
+    EXPECT_TRUE(external.externalMemoryProperties.externalMemoryFeatures &
+                VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT);
+    // The dma-buf extensions are enabled: their entry point resolves on the device.
+    EXPECT_NE(vkGetDeviceProcAddr(device->handle(), "vkGetMemoryFdPropertiesKHR"), nullptr);
     // Lavapipe has one queue family with everything, so the sparse queue is the graphics queue.
     EXPECT_EQ(&device->sparse(), &device->graphics());
 }
