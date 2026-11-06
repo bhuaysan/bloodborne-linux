@@ -43,8 +43,11 @@ struct Query {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES, &p12);
     VkPhysicalDeviceProperties2 props = make<VkPhysicalDeviceProperties2>(
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &p11);
+    VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR reconvergence =
+        make<VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR>(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MAXIMAL_RECONVERGENCE_FEATURES_KHR);
     VkPhysicalDeviceVulkan13Features f13 = make<VkPhysicalDeviceVulkan13Features>(
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES);
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, &reconvergence);
     VkPhysicalDeviceVulkan12Features f12 = make<VkPhysicalDeviceVulkan12Features>(
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, &f13);
     VkPhysicalDeviceFeatures2 features = make<VkPhysicalDeviceFeatures2>(
@@ -73,6 +76,10 @@ struct Query {
         }
         if (!f13.subgroupSizeControl || !f13.computeFullSubgroups) {
             return "subgroup size control";
+        }
+        // The translator declares MaximallyReconvergesKHR in a module with subgroup operations.
+        if (!reconvergence.shaderMaximalReconvergence) {
+            return "VK_KHR_shader_maximal_reconvergence";
         }
         if (!(p11.subgroupSupportedStages & VK_SHADER_STAGE_COMPUTE_BIT) ||
             (p11.subgroupSupportedOperations & ops) != ops) {
@@ -255,8 +262,11 @@ struct ComputeRunner::State {
             return "lavapipe compute queue or host-coherent memory";
         }
 
+        auto reconvergence = make<VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR>(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MAXIMAL_RECONVERGENCE_FEATURES_KHR);
+        reconvergence.shaderMaximalReconvergence = VK_TRUE;
         auto f13 = make<VkPhysicalDeviceVulkan13Features>(
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES);
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, &reconvergence);
         f13.subgroupSizeControl = VK_TRUE;
         f13.computeFullSubgroups = VK_TRUE;
         auto f12 = make<VkPhysicalDeviceVulkan12Features>(
@@ -275,6 +285,9 @@ struct ComputeRunner::State {
             VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, &features);
         device_info.queueCreateInfoCount = 1;
         device_info.pQueueCreateInfos = &queue_info;
+        const char* extensions[] = {VK_KHR_SHADER_MAXIMAL_RECONVERGENCE_EXTENSION_NAME};
+        device_info.enabledExtensionCount = 1;
+        device_info.ppEnabledExtensionNames = extensions;
         check(vkCreateDevice(physical, &device_info, nullptr, &device), "vkCreateDevice");
         vkGetDeviceQueue(device, queue_family, 0, &queue);
 

@@ -121,6 +121,13 @@ public:
         b_.entry_point(spv::ExecutionModel::GLCompute, main, "main", interface_);
         b_.execution_mode(main, spv::ExecutionMode::LocalSize,
                           {key_.num_threads[0], key_.num_threads[1], key_.num_threads[2]});
+        if (uses_subgroup_) {
+            // A subgroup operation can follow a branch that isn't uniform in the subgroup (the
+            // predicated store of flat()). Only maximal reconvergence promises that the
+            // invocations meet again at its merge, so that a ballot sees all of them.
+            b_.extension("SPV_KHR_maximal_reconvergence");
+            b_.execution_mode(main, spv::ExecutionMode::MaximallyReconvergesKHR);
+        }
         return {b_.words(), {.wave_size_dependent = wave_size_dependent_}};
     }
 
@@ -609,6 +616,7 @@ private:
     void cross_lane() {
         b_.capability(spv::Capability::GroupNonUniform);
         b_.capability(spv::Capability::GroupNonUniformBallot);
+        uses_subgroup_ = true;
         wave_size_dependent_ = true;
     }
 
@@ -722,6 +730,7 @@ private:
     std::map<std::uint32_t, Id> builtins_;
     std::set<unsigned> mask_sgprs_;                 // the first SGPR of each mask pair
     const Instruction* inst_ = nullptr;
+    bool uses_subgroup_ = false;
     bool wave_size_dependent_ = false;
 };
 

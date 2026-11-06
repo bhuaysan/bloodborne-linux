@@ -1,11 +1,13 @@
 // The translator without a device: every test program gives a module that spirv-val accepts, and
 // what isn't supported throws GcnError naming it. The execution tests are in tests/gpu/runner/.
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <spirv/unified1/spirv.hpp11>
 
 #include "gpu/gcn/encode.hpp"
 #include "gpu/gcn/gcn.hpp"
@@ -23,6 +25,19 @@ using bb::gcn::translate;
 constexpr std::uint32_t s_endpgm = sopp(1);
 const ShaderKey key5 = {.pgm_rsrc2 = 5u << 1};  // 5 user SGPRs, s5 and up for masks
 
+// Whether the module declares the execution mode MaximallyReconvergesKHR.
+bool maximally_reconverges(const std::vector<std::uint32_t>& spirv) {
+    for (std::size_t i = 5; i < spirv.size() && (spirv[i] >> 16) != 0; i += spirv[i] >> 16) {
+        if ((spirv[i] & 0xffff) == static_cast<std::uint32_t>(spv::Op::OpExecutionMode) &&
+            i + 2 < spirv.size() &&
+            spirv[i + 2] ==
+                static_cast<std::uint32_t>(spv::ExecutionMode::MaximallyReconvergesKHR)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 TEST(GcnTranslate, ProgramsPassSpirvVal) {
     if (!have_spirv_val()) {
         GTEST_SKIP() << "spirv-val not found";
@@ -35,8 +50,9 @@ TEST(GcnTranslate, ProgramsPassSpirvVal) {
     }
 }
 
-// Ballots, v_readfirstlane_b32 and v_readlane_b32 make a shader depend on the wave size; the
-// lane-local v_mbcnt with a constant mask and v_writelane_b32 don't.
+// Ballots, v_readfirstlane_b32 and v_readlane_b32 make a shader depend on the wave size and
+// declare maximal reconvergence; the lane-local v_mbcnt with a constant mask and v_writelane_b32
+// don't.
 TEST(GcnTranslate, WaveSizeDependence) {
     const auto dependent = [](std::vector<std::uint32_t> code) {
         code.push_back(s_endpgm);
@@ -44,6 +60,8 @@ TEST(GcnTranslate, WaveSizeDependence) {
         if (have_spirv_val()) {
             EXPECT_EQ(validate(translation.spirv), "");
         }
+        EXPECT_EQ(maximally_reconverges(translation.spirv),
+                  translation.interface.wave_size_dependent);
         return translation.interface.wave_size_dependent;
     };
     EXPECT_FALSE(dependent(vop3(0x123, 1, 193, 128)));       // v_mbcnt_lo_u32_b32_e64 v1, -1, 0
