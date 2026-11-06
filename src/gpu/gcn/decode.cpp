@@ -1,4 +1,5 @@
-// Decoder for the scalar microcode formats (Sea Islands ISA manual, "Microcode Formats").
+// Decoder for the scalar microcode formats (Sea Islands ISA manual, "Microcode Formats"). DS and
+// FLAT are decoded in ds_flat.cpp.
 
 #include <algorithm>
 #include <array>
@@ -85,6 +86,8 @@ public:
         } else if (bits(w, 27, 5) == 0x18) {
             start(Format::smrd, bits(w, 22, 5), "SMRD");
             smrd_operands();
+        } else if (detail::is_ds_flat(w)) {
+            return detail::decode_ds_flat(code_, index_);
         } else {
             fail("unsupported encoding");
         }

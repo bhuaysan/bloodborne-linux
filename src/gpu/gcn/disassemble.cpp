@@ -10,6 +10,7 @@
 #include <string_view>
 
 #include "gpu/gcn/gcn.hpp"
+#include "gpu/gcn/opcodes.hpp"
 
 namespace bb::gcn {
 
@@ -201,6 +202,8 @@ std::string operand(const Operand& op, Literal literal) {
         return waitcnt(op.value);
     case OperandKind::sendmsg:
         return sendmsg(op.value);
+    case OperandKind::vector:
+        return range("v", op.code, op.dwords);
     }
     return "?";
 }
@@ -223,6 +226,9 @@ std::string disassemble(const Instruction& inst) {
     }
     for (unsigned i = 0; i < inst.num_src; ++i) {
         append(inst.src[i]);
+    }
+    if (inst.format == Format::ds || inst.format == Format::flat) {
+        out += detail::ds_flat_modifiers(inst);
     }
     return out;
 }

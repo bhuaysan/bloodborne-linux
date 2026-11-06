@@ -6,6 +6,7 @@ add_library(bbgcn STATIC
     cfg.cpp
     decode.cpp
     disassemble.cpp
+    ds_flat.cpp
     opcodes.cpp
     spirv_builder.cpp
     structurize.cpp)

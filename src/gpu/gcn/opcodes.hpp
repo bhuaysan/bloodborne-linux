@@ -1,7 +1,9 @@
 // Opcode tables of the GCN microcode formats (internal to bbgcn).
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -35,5 +37,10 @@ struct OpInfo {
 // The opcode table of a scalar format, indexed by opcode, written from the opcode lists of the
 // Sea Islands ISA manual. Empty for formats that aren't decoded yet.
 const std::vector<OpInfo>& opcodes(Format format);
+
+// DS (ds_flat.cpp): 2 dwords long, with its own opcode table.
+bool is_ds_flat(std::uint32_t word);
+Instruction decode_ds_flat(std::span<const std::uint32_t> code, std::size_t index);
+std::string ds_flat_modifiers(const Instruction& inst);  // " offset:16 gds", or empty
 
 }  // namespace bb::gcn::detail

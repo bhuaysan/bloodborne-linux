@@ -47,6 +47,7 @@ enum class OperandKind : std::uint8_t {
     hwreg,     // hardware register field of s_getreg/s_setreg, in `value`
     waitcnt,   // counters of s_waitcnt, in `value`
     sendmsg,   // message of s_sendmsg, in `value`
+    vector,    // VGPR; `code` is the register number, `dwords` the size of the range
 };
 
 // Operand codes of the scalar operand field with a fixed meaning.
@@ -63,6 +64,11 @@ inline constexpr std::uint16_t execz = 252;
 inline constexpr std::uint16_t scc = 253;
 inline constexpr std::uint16_t literal = 255;
 }  // namespace code
+
+// Bits of Instruction::flags, the cache and LDS modifiers of the memory formats.
+namespace flag {
+inline constexpr std::uint16_t gds = 1;  // DS: global data share instead of LDS
+}  // namespace flag
 
 struct Operand {
     OperandKind kind = OperandKind::none;
@@ -84,6 +90,10 @@ struct Instruction {
     std::uint8_t num_src = 0;
     std::array<Operand, 2> dst;
     std::array<Operand, 4> src;
+    // Memory formats: the offset field (DS: offset1 in the high byte, offset0 in the low byte,
+    // read as one 16-bit offset by the instructions that take one), and the flag bits.
+    std::uint16_t mem_offset = 0;
+    std::uint16_t flags = 0;
 };
 
 enum class Until {
