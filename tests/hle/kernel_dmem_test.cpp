@@ -218,6 +218,106 @@ TEST(KernelDmem, TypeThreeTestOfTheEbootAnswersTrue) {
     EXPECT_EQ(release_direct(offset, 0x10000), 0);
 }
 
+TEST(KernelDmem, ReserveRefusesBadArguments) {
+    void* p = nullptr;
+    EXPECT_EQ(reserve_range(&p, page_size, 1, 0), sce_einval);         // flags
+    EXPECT_EQ(reserve_range(&p, page_size, 0, 0x6000), sce_einval);    // alignment
+    EXPECT_EQ(reserve_range(&p, 0x1000, 0, 0), sce_einval);            // length
+    EXPECT_EQ(reserve_range(&p, 0, dmem::map_flag_0x80, 0), sce_einval);
+    EXPECT_EQ(reserve_range(nullptr, page_size, 0, 0), sce_einval);
+    EXPECT_EQ(p, nullptr);
+}
+
+// As 0x2901eb0: reserve a range, map blocks of direct memory into it, and undo as 0x2902101.
+TEST(KernelDmem, BatchMapsIntoAReservationAndUndoes) {
+    const std::uint64_t offset = allocate(2 * page_size, 0x10000);
+    auto* const view = static_cast<char*>(map(offset, 2 * page_size, 0x10000));
+    std::memcpy(view + page_size, "block", 6);
+    void* range = nullptr;
+    ASSERT_EQ(reserve_range(&range, 4 * page_size, dmem::map_flag_0x80, 0), 0);
+    auto* const base = static_cast<char*>(range);
+    const auto reserved = vmem::find(addr(base));
+    ASSERT_TRUE(reserved);
+    EXPECT_TRUE(reserved->reserved);
+    EXPECT_EQ(reserved->end, addr(base) + 4 * page_size);
+
+    BatchEntry entries[2] = {
+        {addr(base), offset + page_size, page_size, 3, {}, dmem::batch_map},
+        {addr(base) + 2 * page_size, offset, page_size, 0x33, {}, dmem::batch_map},
+    };
+    std::int32_t done = -1;
+    ASSERT_EQ(map_direct_batch(entries, 2, &done), 0);
+    EXPECT_EQ(done, 2);
+    EXPECT_STREQ(base, "block");  // aliases the view
+    QueryRecord record{};
+    ASSERT_EQ(query_mapping(base + 2 * page_size + 0x10, 0, &record, sizeof record), 0);
+    EXPECT_EQ(record.start, addr(base) + 2 * page_size);
+    EXPECT_EQ(record.offset, offset);
+    EXPECT_EQ(record.flags, vmem::region_direct);
+    EXPECT_EQ(vmem::find(addr(base) + 2 * page_size)->prot, 0x33);
+    EXPECT_TRUE(vmem::find(addr(base) + page_size)->reserved);  // the gap stays reserved
+
+    for (BatchEntry& e : entries) {
+        e.operation = dmem::batch_unmap;
+    }
+    ASSERT_EQ(map_direct_batch(entries, 2, nullptr), 0);
+    EXPECT_TRUE(vmem::find(addr(base))->reserved);
+    EXPECT_TRUE(vmem::find(addr(base) + 2 * page_size)->reserved);
+    EXPECT_EQ(sceKernelMunmap(base, 4 * page_size), 0);  // 0x2902115: no hole left
+    EXPECT_FALSE(vmem::find(addr(base)));
+    EXPECT_STREQ(view + page_size, "block");
+
+    EXPECT_EQ(sceKernelMunmap(view, 2 * page_size), 0);
+    EXPECT_EQ(release_direct(offset, 2 * page_size), 0);
+}
+
+TEST(KernelDmem, BatchStopsAtTheFirstFailure) {
+    const std::uint64_t offset = allocate(2 * page_size, 0);
+    void* range = nullptr;
+    ASSERT_EQ(reserve_range(&range, 2 * page_size, 0, 0), 0);
+    const std::uintptr_t base = addr(range);
+    void* other = nullptr;
+    ASSERT_EQ(map_anonymous(&other, page_size, 3, 0), 0);
+    std::memset(other, 0x5a, page_size);
+
+    // The second entry maps over a mapping that isn't reserved: refused, the first stays done.
+    const BatchEntry entries[2] = {
+        {base, offset, page_size, 3, {}, dmem::batch_map},
+        {addr(other), offset, page_size, 3, {}, dmem::batch_map},
+    };
+    std::int32_t done = -1;
+    EXPECT_NE(map_direct_batch(entries, 2, &done), 0);
+    EXPECT_EQ(done, 1);
+    EXPECT_EQ(static_cast<const unsigned char*>(other)[0], 0x5a);
+    EXPECT_EQ(vmem::find(base)->flags, vmem::region_direct);
+
+    // A free offset, a range past the reservation's end, an unaligned address, an unknown
+    // operation, and an unmap past the end.
+    const BatchEntry bad[] = {
+        {base + page_size, offset + 2 * page_size, page_size, 3, {}, dmem::batch_map},
+        {base + page_size, offset, 2 * page_size, 3, {}, dmem::batch_map},
+        {base + page_size + 0x1000, offset, page_size, 3, {}, dmem::batch_map},
+        {base + page_size, offset, page_size, 3, {}, 2},
+        {base + 2 * page_size, 0, page_size, 0, {}, dmem::batch_unmap},
+    };
+    for (const BatchEntry& e : bad) {
+        done = -1;
+        EXPECT_NE(map_direct_batch(&e, 1, &done), 0);
+        EXPECT_EQ(done, 0);
+    }
+    EXPECT_TRUE(vmem::find(base + page_size)->reserved);
+    EXPECT_EQ(map_direct_batch(nullptr, 1, &done), sce_einval);
+    EXPECT_EQ(map_direct_batch(entries, -1, &done), sce_einval);
+    EXPECT_EQ(map_direct_batch(entries, 0, &done), 0);
+    EXPECT_EQ(done, 0);
+
+    const BatchEntry undo{base, 0, page_size, 0, {}, dmem::batch_unmap};
+    EXPECT_EQ(map_direct_batch(&undo, 1, nullptr), 0);
+    EXPECT_EQ(sceKernelMunmap(range, 2 * page_size), 0);
+    EXPECT_EQ(sceKernelMunmap(other, page_size), 0);
+    EXPECT_EQ(release_direct(offset, 2 * page_size), 0);
+}
+
 TEST(KernelDmem, ImportsResolveToTheImplementations) {
     const auto resolve = [](const char* nid) {
         return bb::hle::resolve({nid, "libkernel", "libkernel", bb::loader::stt_func});
@@ -227,6 +327,8 @@ TEST(KernelDmem, ImportsResolveToTheImplementations) {
     EXPECT_EQ(resolve("L-Q3LEjIbgA"), addr(reinterpret_cast<void*>(&map_direct)));
     EXPECT_EQ(resolve("MBuItvba6z8"), addr(reinterpret_cast<void*>(&release_direct)));
     EXPECT_EQ(resolve("BC+OG5m9+bw"), addr(reinterpret_cast<void*>(&direct_memory_type)));
+    EXPECT_EQ(resolve("7oxv3PPCumo"), addr(reinterpret_cast<void*>(&reserve_range)));
+    EXPECT_EQ(resolve("2SKEx6bSq-4"), addr(reinterpret_cast<void*>(&map_direct_batch)));
 }
 
 }  // namespace

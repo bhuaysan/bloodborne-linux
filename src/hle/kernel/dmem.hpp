@@ -10,8 +10,13 @@ namespace bb::hle::kernel::dmem {
 // of every allocation's search range (eboot 0x33eacc, 0x2081a9b, 0x2081eaf, 0x26d3edd).
 inline constexpr std::uint64_t total_size = std::uint64_t{8} << 30;
 
-// Map flag 0x80, passed at eboot 0x29032a4. Its meaning is unknown; it is accepted and ignored.
+// Map flag 0x80, passed at eboot 0x29032a4, and the reservation's flag 0x80 (0x2901fbd). Its
+// meaning is unknown; it is accepted and ignored.
 inline constexpr int map_flag_0x80 = 0x80;
+
+// The operations of a BatchEntry.
+inline constexpr std::int32_t batch_map = 0;    // map the offset range into a reservation
+inline constexpr std::int32_t batch_unmap = 1;  // unmap the range back into a reservation
 
 // The memfd, created at the first call. -1 (with errno set) if the host refused it.
 int fd();
@@ -43,5 +48,25 @@ std::int32_t release_direct(std::uint64_t offset, std::uint64_t length);
 // BC+OG5m9+bw: the type and the bounds [*start, *end) of the allocation that holds `offset`.
 std::int32_t direct_memory_type(std::uint64_t offset, std::int32_t* type, std::uint64_t* start,
                                 std::uint64_t* end);
+
+// 7oxv3PPCumo: reserves `length` bytes of address space at an `alignment`-aligned address for
+// map_direct_batch(). *address is a hint in and the range out.
+std::int32_t reserve_range(void** address, std::uint64_t length, int flags,
+                           std::uint64_t alignment);
+
+// One operation of map_direct_batch(), as 0x2901eb0 fills it.
+struct BatchEntry {
+    std::uint64_t address;  // inside a reservation
+    std::uint64_t offset;   // direct memory offset, for batch_map
+    std::uint64_t length;
+    std::uint8_t prot;      // guest protection, for batch_map
+    std::uint8_t reserved[3];
+    std::int32_t operation;  // dmem::batch_map or dmem::batch_unmap
+};
+static_assert(sizeof(BatchEntry) == 0x20);
+
+// 2SKEx6bSq-4: runs `count` entries in order and stops at the first that fails. *done (if not
+// null) is the number of entries that succeeded.
+std::int32_t map_direct_batch(const BatchEntry* entries, std::int32_t count, std::int32_t* done);
 
 }  // namespace bb::hle::kernel
