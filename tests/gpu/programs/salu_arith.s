@@ -81,12 +81,37 @@ s_not_b32 s21, s11                  ; 14
 scc
 val s21
 val s30                             ; 15: the SCC bits, the first one highest
+s_mov_b32 s30, 0
+s_add_i32 s21, s10, s11             ; 16: overflow
+scc
+val s21
+s_sub_i32 s21, s12, s10             ; 17: overflow
+scc
+val s21
+s_sub_i32 s21, s11, s13             ; 18: a borrow but no overflow
+scc
+val s21
+s_min_i32 s21, s12, s13             ; 19: src0 is the minimum
+scc
+val s21
+s_min_u32 s21, s12, s13             ; 20: src1 is
+scc
+val s21
+s_max_i32 s21, s12, s13             ; 21
+scc
+val s21
+s_max_u32 s21, s12, s13             ; 22
+scc
+val s21
+s_mul_i32 s21, s12, s13             ; 23
+val s21
+val s30                             ; 24: the SCC bits of stages 16 to 22
 v_and_b32_e32 v7, 15, v0
 v_cmp_eq_u32_e64 s[6:7], 5, v7      ; lane 5 of each 16 (put changes vcc)
 s_wqm_b64 s[8:9], s[6:7]
-v_cndmask_b32_e64 v6, 0, 1, s[8:9]  ; 16: the quad of lanes 4-7 of each 16
+v_cndmask_b32_e64 v6, 0, 1, s[8:9]  ; 25: the quad of lanes 4-7 of each 16
 put v6
 s_not_b64 s[28:29], s[6:7]
-v_cndmask_b32_e64 v6, 0, 1, s[28:29] ; 17
+v_cndmask_b32_e64 v6, 0, 1, s[28:29] ; 26
 put v6
 s_endpgm

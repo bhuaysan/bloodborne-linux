@@ -69,7 +69,8 @@ constexpr Operand exec_operand{.kind = OperandKind::scalar, .dwords = 2, .code =
 
 // The SALU operations of scalar_arithmetic() that read their sources as plain values.
 constexpr std::string_view salu_arithmetic[] = {
-    "s_not_b32", "s_cselect_b32", "s_lshl_b32", "s_lshr_b32", "s_ashr_i32", "s_bfe_u32",
+    "s_not_b32", "s_add_i32", "s_sub_i32", "s_min_i32", "s_min_u32", "s_max_i32", "s_max_u32",
+    "s_mul_i32", "s_cselect_b32", "s_lshl_b32", "s_lshr_b32", "s_ashr_i32", "s_bfe_u32",
     "s_bfe_i32",
 };
 
@@ -582,6 +583,22 @@ private:
         if (name == "s_not_b32") {
             r = b_.op(Op::OpNot, u32_, {a});
             nonzero(r);
+        } else if (name == "s_add_i32" || name == "s_sub_i32") {  // SCC: signed overflow
+            const bool add = name == "s_add_i32";
+            r = u(add ? Op::OpIAdd : Op::OpISub, a, b);
+            // add: a and b have one sign and r the other; sub: a and b differ and r follows b.
+            const Id sign = u(Op::OpBitwiseAnd, u(Op::OpBitwiseXor, a, r),
+                              u(Op::OpBitwiseXor, add ? b : a, add ? r : b));
+            store(scc(), b_.op(Op::OpSLessThan, bool_, {sign, b_.constant_u32(0)}));
+        } else if (name.starts_with("s_min_") || name.starts_with("s_max_")) {
+            const bool min = name.starts_with("s_min_"), sign = name.ends_with("_i32");
+            const Id first = b_.op(min ? (sign ? Op::OpSLessThan : Op::OpULessThan)
+                                       : (sign ? Op::OpSGreaterThan : Op::OpUGreaterThan),
+                                   bool_, {a, b});  // SCC: src0 is taken
+            r = b_.op(Op::OpSelect, u32_, {first, a, b});
+            store(scc(), first);
+        } else if (name == "s_mul_i32") {
+            r = u(Op::OpIMul, a, b);
         } else if (name == "s_cselect_b32") {
             r = b_.op(Op::OpSelect, u32_, {load(bool_, scc()), a, b});
         } else if (name == "s_lshl_b32" || name == "s_lshr_b32" || name == "s_ashr_i32") {

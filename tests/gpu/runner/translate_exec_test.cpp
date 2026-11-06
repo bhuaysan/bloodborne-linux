@@ -292,7 +292,7 @@ TEST_F(TranslateExec, ScalarArithmetic) {
     if (!runner_->info().subgroup_quad) {  // s_wqm_b64 swaps within the quad
         GTEST_SKIP() << "no quad subgroup operations in compute";
     }
-    constexpr std::uint32_t stages = 18;
+    constexpr std::uint32_t stages = 27;
     const auto out = run("salu_arith", {}, stages * lanes);
     const std::uint32_t max = 0x7fffffff, m16 = 0xfffffff0, five = 5, count = 35 & 31;
     const std::uint32_t d = 0x12f4a6b8;
@@ -313,10 +313,18 @@ TEST_F(TranslateExec, ScalarArithmetic) {
         scc = scc << 1 | flag;
     }
     EXPECT_EQ(out[15 * lanes], scc);
+    const std::uint32_t arithmetic[] = {max + 1, m16 - max, 1 - five, m16,
+                                        five,    five,      m16,      m16 * five};
+    for (std::uint32_t k = 0; k < std::size(arithmetic); ++k) {
+        EXPECT_EQ(out[(16 + k) * lanes], arithmetic[k]) << "stage " << 16 + k;
+    }
+    // s_add_i32 and s_sub_i32 set SCC on signed overflow, not on a carry or borrow; s_min_* and
+    // s_max_* when they take src0.
+    EXPECT_EQ(out[24 * lanes], 0b1101001u);
     for (std::uint32_t i = 0; i < lanes; ++i) {
         SCOPED_TRACE(testing::Message() << "lane " << i);
-        EXPECT_EQ(out[16 * lanes + i], i % 16 / 4 == 1 ? 1u : 0u);  // the quad of lane 5
-        EXPECT_EQ(out[17 * lanes + i], i % 16 == 5 ? 0u : 1u);
+        EXPECT_EQ(out[25 * lanes + i], i % 16 / 4 == 1 ? 1u : 0u);  // the quad of lane 5
+        EXPECT_EQ(out[26 * lanes + i], i % 16 == 5 ? 0u : 1u);
     }
 }
 
