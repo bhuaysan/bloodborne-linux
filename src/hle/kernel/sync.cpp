@@ -11,7 +11,6 @@
 #include <cerrno>
 #include <cstdint>
 #include <ctime>
-#include <list>
 #include <mutex>
 
 #include "hle/hle.hpp"
@@ -41,9 +40,44 @@ struct Rwlock {
 
 // A thread in a condition variable wait. It sleeps on its own host condition variable until a
 // signal or broadcast sets `woken`, or its deadline passes.
+// It lives on the waiting thread's stack and links itself into the condition variable's queue,
+// so a wait allocates nothing.
 struct CondWaiter {
     pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
     bool woken = false;
+    CondWaiter* prev = nullptr;
+    CondWaiter* next = nullptr;
+};
+
+// The blocked waiters of a condition variable in arrival order, linked through the waiters.
+class WaitQueue {
+public:
+    bool empty() const { return first_ == nullptr; }
+
+    void push_back(CondWaiter* w) {
+        w->prev = last_;
+        w->next = nullptr;
+        (last_ != nullptr ? last_->next : first_) = w;
+        last_ = w;
+    }
+
+    // Removes a waiter that is in the queue.
+    void erase(CondWaiter* w) {
+        (w->prev != nullptr ? w->prev->next : first_) = w->next;
+        (w->next != nullptr ? w->next->prev : last_) = w->prev;
+        w->prev = w->next = nullptr;
+    }
+
+    // Removes and returns the first waiter. The queue must not be empty.
+    CondWaiter* pop_front() {
+        CondWaiter* w = first_;
+        erase(w);
+        return w;
+    }
+
+private:
+    CondWaiter* first_ = nullptr;
+    CondWaiter* last_ = nullptr;
 };
 
 // The waiters are kept by hand rather than in a glibc condition variable, so that destroy knows
@@ -57,7 +91,7 @@ struct Cond {
     std::uint64_t tag = tag_value;
     pthread_mutex_t state = PTHREAD_MUTEX_INITIALIZER;
     pthread_cond_t drained = PTHREAD_COND_INITIALIZER;
-    std::list<CondWaiter*> blocked;
+    WaitQueue blocked;
     int leaving = 0;
 
     static int create_default(Cell* cell);
@@ -360,8 +394,7 @@ int cond_destroy(Cell* cond) {
 
 // Moves the first blocked waiter to the leaving ones and wakes it. Called with `state` held.
 void release_first(Cond* c) {
-    CondWaiter* w = c->blocked.front();
-    c->blocked.pop_front();
+    CondWaiter* w = c->blocked.pop_front();
     w->woken = true;
     ++c->leaving;
     pthread_cond_signal(&w->wake);
@@ -388,10 +421,10 @@ int cond_wait_with(Cell* cond, Cell* mutex, Sleep sleep) {
         pthread_mutex_unlock(&c->state);
         return error;
     }
-    const auto position = c->blocked.insert(c->blocked.end(), &self);
+    c->blocked.push_back(&self);
     while (!self.woken) {
         if (sleep(&self.wake, &c->state) == ETIMEDOUT && !self.woken) {
-            c->blocked.erase(position);
+            c->blocked.erase(&self);
             error = ETIMEDOUT;
             break;
         }
