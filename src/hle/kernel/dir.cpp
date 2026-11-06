@@ -116,7 +116,8 @@ struct Listing {
 Listing list_dir(int h, std::span<std::byte> out, std::int64_t* base) {
     const off_t start = ::lseek(h, 0, SEEK_CUR);
     if (start < 0) {
-        return {0, errno};
+        // A pipe or tty (such as the host streams at guest 0-2) isn't a directory either.
+        return {0, errno == ESPIPE ? EINVAL : errno};
     }
     alignas(HostDirent) std::byte host[8192];
     std::size_t used = 0;

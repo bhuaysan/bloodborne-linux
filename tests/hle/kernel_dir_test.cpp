@@ -1,6 +1,7 @@
 #include "hle/kernel/dir.hpp"
 
 #include <stdlib.h>
+#include <unistd.h>
 
 #include <cerrno>
 #include <cstddef>
@@ -173,6 +174,14 @@ TEST_F(DirTest, RefusesBuffersTooSmallForTheNextRecordAndNonDirectories) {
     EXPECT_EQ(sceKernelGetdirentries(file, buffer, sizeof buffer, nullptr), sce(EINVAL));
     EXPECT_EQ(sceKernelClose(file), 0);
     EXPECT_EQ(sceKernelGetdirentries(1000, buffer, sizeof buffer, nullptr), sce(EBADF));
+
+    // A descriptor that can't seek, like a host stream at guest 0-2.
+    int ends[2];
+    ASSERT_EQ(::pipe(ends), 0);
+    const std::int32_t pipe = fd_table().insert(ends[0]);
+    EXPECT_EQ(sceKernelGetdirentries(pipe, buffer, sizeof buffer, nullptr), sce(EINVAL));
+    EXPECT_EQ(sceKernelClose(pipe), 0);
+    ::close(ends[1]);
 }
 
 TEST_F(DirTest, ListsTheGameDirectory) {
