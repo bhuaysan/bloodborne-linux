@@ -2,7 +2,11 @@
 
 #include "hle/system/save_data.hpp"
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <array>
+#include <cerrno>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -23,10 +27,14 @@ namespace {
 namespace fs = std::filesystem;
 
 constexpr std::string_view library = "libSceSaveData";
+constexpr std::string_view dialog_library = "libSceSaveDataDialog";
 
 // Mount points we hand out: /savedata0, /savedata1, ... (our choice; the game only uses the
 // string as a path prefix, 0x283ff5b).
 constexpr unsigned max_mounts = 16;
+// The byte store: the game declares at most 0x100000 bytes (0x283f040). Our bound for reads and
+// writes, with room to spare.
+constexpr std::uint64_t store_limit = 0x400000;
 
 struct State {
     std::mutex lock;
@@ -76,6 +84,10 @@ std::optional<unsigned> mounted_index(State& s, const SaveMountOutput* mounted) 
         }
     }
     return std::nullopt;
+}
+
+fs::path store_path(const fs::path& root, std::uint32_t user_id) {
+    return root / std::format("store-{}.bin", user_id);
 }
 
 }  // namespace
@@ -213,11 +225,121 @@ std::int32_t save_data_erase(const SaveEraseInput* in) {
     return ec ? save_failed : save_ok;
 }
 
+std::int32_t save_data_set_text(const SaveMountOutput* mounted, std::int32_t kind,
+                                const char* text, std::uint32_t size) {
+    State& s = state();
+    const std::lock_guard guard(s.lock);
+    if (!mounted_index(s, mounted) || text == nullptr) {
+        return save_failed;
+    }
+    // Our choice: the text is kept nowhere (the eboot doesn't show who reads it).
+    log(library, BB_SYSTEM_CALLER(), "text {}: {}", kind, std::string_view(text, strnlen(text, size)));
+    return save_ok;
+}
+
+std::int32_t save_data_set_blob(const SaveMountOutput* mounted, const void* record) {
+    State& s = state();
+    const std::lock_guard guard(s.lock);
+    return mounted_index(s, mounted) && record != nullptr ? save_ok : save_failed;
+}
+
+std::int32_t save_store_read(std::uint32_t user_id, void* buffer, std::uint64_t size,
+                             std::uint64_t offset) {
+    State& s = state();
+    const std::lock_guard guard(s.lock);
+    if (buffer == nullptr || !s.root || offset > store_limit || size > store_limit - offset) {
+        return save_failed;
+    }
+    // Bytes the store doesn't hold read as zeros, so a missing store looks empty: the game
+    // then finds no header and reports "no save yet" (0x2841056).
+    std::memset(buffer, 0, size);
+    const int fd = ::open(store_path(*s.root, user_id).c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        return errno == ENOENT ? save_ok : save_failed;
+    }
+    std::uint64_t done = 0;
+    while (done < size) {
+        const ssize_t n = ::pread(fd, static_cast<char*>(buffer) + done, size - done,
+                                  static_cast<off_t>(offset + done));
+        if (n <= 0) {
+            break;
+        }
+        done += static_cast<std::uint64_t>(n);
+    }
+    ::close(fd);
+    return save_ok;
+}
+
+std::int32_t save_store_write(std::uint32_t user_id, const void* buffer, std::uint64_t size,
+                              std::uint64_t offset) {
+    State& s = state();
+    const std::lock_guard guard(s.lock);
+    if (buffer == nullptr || !s.root || offset > store_limit || size > store_limit - offset) {
+        return save_failed;
+    }
+    const int fd = ::open(store_path(*s.root, user_id).c_str(), O_WRONLY | O_CREAT | O_CLOEXEC,
+                          0600);
+    if (fd < 0) {
+        return save_failed;
+    }
+    std::uint64_t done = 0;
+    bool ok = true;
+    while (done < size) {
+        const ssize_t n = ::pwrite(fd, static_cast<const char*>(buffer) + done, size - done,
+                                   static_cast<off_t>(offset + done));
+        if (n <= 0) {
+            ok = false;
+            break;
+        }
+        done += static_cast<std::uint64_t>(n);
+    }
+    ok = ::close(fd) == 0 && ok;
+    return ok ? save_ok : save_failed;
+}
+
+std::int32_t save_store_declare(std::uint32_t user_id, std::uint64_t size, const void* record) {
+    State& s = state();
+    const std::lock_guard guard(s.lock);
+    if (record == nullptr || !s.root || size > store_limit) {
+        return save_failed;
+    }
+    log(library, BB_SYSTEM_CALLER(), "store for user {}: {:#x} bytes", user_id, size);
+    return save_ok;
+}
+
+// The dialog is only reached when a save mount fails with 0x809f000a (0x2841ca0), which we
+// never return. Opening it fails, so the game goes straight to closing it (0x28432f5).
+std::int32_t save_dialog_initialize() {
+    return save_ok;
+}
+
+std::int32_t save_dialog_open(const void* /*params*/) {
+    log(dialog_library, BB_SYSTEM_CALLER(), "open: no dialog");
+    return save_failed;
+}
+
+std::int32_t save_dialog_status() {
+    return 0;  // anything but 2 ends the game's poll (0x284330a)
+}
+
+std::int32_t save_dialog_close() {
+    return save_ok;
+}
+
 BB_HLE_FUNCTION("libSceSaveData", "ZkZhskCPXFw", save_data_initialize);  // name unknown
 BB_HLE_FUNCTION("libSceSaveData", "yKDy8S5yLA0", save_data_terminate);   // name unknown
 BB_HLE_FUNCTION("libSceSaveData", "32HQAQdwM2o", save_data_mount);       // name unknown
 BB_HLE_FUNCTION("libSceSaveData", "BMR4F-Uek3E", save_data_unmount);     // name unknown
 BB_HLE_FUNCTION("libSceSaveData", "dyIhnXq-0SM", save_data_search);      // name unknown
 BB_HLE_FUNCTION("libSceSaveData", "S1GkePI17zQ", save_data_erase);       // name unknown
+BB_HLE_FUNCTION("libSceSaveData", "85zul--eGXs", save_data_set_text);    // name unknown
+BB_HLE_FUNCTION("libSceSaveData", "c88Yy54Mx0w", save_data_set_blob);    // name unknown
+BB_HLE_FUNCTION("libSceSaveData", "7Bt5pBC-Aco", save_store_read);       // name unknown
+BB_HLE_FUNCTION("libSceSaveData", "h3YURzXGSVQ", save_store_write);      // name unknown
+BB_HLE_FUNCTION("libSceSaveData", "v7AAAMo0Lz4", save_store_declare);    // name unknown
+BB_HLE_FUNCTION("libSceSaveDataDialog", "s9e3+YpRnzw", save_dialog_initialize);  // name unknown
+BB_HLE_FUNCTION("libSceSaveDataDialog", "4tPhsP6FpDI", save_dialog_open);        // name unknown
+BB_HLE_FUNCTION("libSceSaveDataDialog", "KK3Bdg1RWK0", save_dialog_status);      // name unknown
+BB_HLE_FUNCTION("libSceSaveDataDialog", "YuH2FA7azqQ", save_dialog_close);       // name unknown
 
 }  // namespace bb::hle::system

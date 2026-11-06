@@ -74,7 +74,7 @@ inline constexpr std::int32_t save_failed = static_cast<std::int32_t>(0x809f0001
 // save_not_found, then mounts again).
 inline constexpr std::uint32_t save_mode_create = 4;
 
-// Where save directories live: profile_data()/savedata, created
+// Where save directories and the per-user byte store live: profile_data()/savedata, created
 // with mode 0700. bb-run (#101) is to pass it to set_save_data_root at start-up; until then
 // every mount fails. A directory the game names SPRJ0000 is <root>/SPRJ0000/.
 std::filesystem::path save_data_root(const common::RuntimeDirs& dirs);
@@ -88,4 +88,18 @@ std::int32_t save_data_mount(const SaveMountInput* in, SaveMountOutput* out);
 std::int32_t save_data_unmount(const SaveMountOutput* mounted);
 std::int32_t save_data_search(const SaveSearchCondition* cond, SaveSearchResult* result);
 std::int32_t save_data_erase(const SaveEraseInput* in);
+std::int32_t save_data_set_text(const SaveMountOutput* mounted, std::int32_t kind,
+                                const char* text, std::uint32_t size);
+std::int32_t save_data_set_blob(const SaveMountOutput* mounted, const void* record);
+std::int32_t save_store_read(std::uint32_t user_id, void* buffer, std::uint64_t size,
+                             std::uint64_t offset);
+std::int32_t save_store_write(std::uint32_t user_id, const void* buffer, std::uint64_t size,
+                              std::uint64_t offset);
+std::int32_t save_store_declare(std::uint32_t user_id, std::uint64_t size, const void* record);
+
+std::int32_t save_dialog_initialize();
+std::int32_t save_dialog_open(const void* params);
+std::int32_t save_dialog_status();
+std::int32_t save_dialog_close();
+
 }  // namespace bb::hle::system

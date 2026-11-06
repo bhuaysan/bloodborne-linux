@@ -100,10 +100,15 @@ TEST_F(SaveDataTest, TwoProfilesStayApart) {
     SaveMountOutput out{};
     ASSERT_EQ(mount("SPRJ0000", 2 | save_mode_create, &out), save_ok);
     ASSERT_EQ(save_data_unmount(&out), save_ok);
+    const char data[4] = {1, 2, 3, 4};
+    ASSERT_EQ(save_store_write(1, data, sizeof data, 0), save_ok);
 
     const fs::path bob = use_profile("bob");
     EXPECT_NE(alice, bob);
     EXPECT_EQ(mount("SPRJ0000", 1, &out), save_not_found);
+    std::array<char, 4> read{1, 1, 1, 1};
+    EXPECT_EQ(save_store_read(1, read.data(), read.size(), 0), save_ok);
+    EXPECT_EQ(read, (std::array<char, 4>{}));
     EXPECT_TRUE(fs::is_directory(alice / "SPRJ0000"));
     EXPECT_FALSE(fs::exists(bob / "SPRJ0000"));
 }
@@ -126,6 +131,8 @@ TEST_F(SaveDataTest, MountRefusesBadNamesAndDoubleMounts) {
 TEST_F(SaveDataTest, WithoutARootEverythingFails) {
     SaveMountOutput out{};
     EXPECT_EQ(mount("SPRJ0000", 6, &out), save_failed);
+    char byte = 0;
+    EXPECT_EQ(save_store_read(1, &byte, 1, 0), save_failed);
 }
 
 TEST_F(SaveDataTest, SearchAndErase) {
@@ -154,6 +161,40 @@ TEST_F(SaveDataTest, SearchAndErase) {
     EXPECT_EQ(result.hits, 0U);
 }
 
+// The per-user byte store: unwritten bytes read as zeros, so a fresh store has no header and
+// the game reports "no save yet" (0x2841056).
+TEST_F(SaveDataTest, TheByteStoreReadsBackWhatWasWritten) {
+    use_profile("alice");
+    EXPECT_EQ(save_store_declare(1, 0x100000, "record"), save_ok);
+    std::array<char, 8> read{};
+    read.fill(9);
+    EXPECT_EQ(save_store_read(1, read.data(), read.size(), 0x10), save_ok);
+    EXPECT_EQ(read, (std::array<char, 8>{}));
+    EXPECT_EQ(save_store_write(1, "abcd", 4, 0x12), save_ok);
+    EXPECT_EQ(save_store_read(1, read.data(), read.size(), 0x10), save_ok);
+    EXPECT_EQ(std::string(read.data(), read.size()), std::string("\0\0abcd\0\0", 8));
+    EXPECT_EQ(save_store_write(1, "x", 1, 0x400000), save_failed);
+    EXPECT_EQ(save_store_read(1, nullptr, 1, 0), save_failed);
+}
+
+TEST_F(SaveDataTest, TheDialogNeverOpens) {
+    EXPECT_EQ(save_dialog_initialize(), 0);
+    EXPECT_NE(save_dialog_open(nullptr), 0);
+    EXPECT_NE(save_dialog_status(), 2);
+    EXPECT_EQ(save_dialog_close(), 0);
+}
+
+TEST_F(SaveDataTest, TextAndBlobNeedAMount) {
+    use_profile("alice");
+    SaveMountOutput out{};
+    EXPECT_EQ(save_data_set_text(&out, 1, "title", 0x80), save_failed);
+    ASSERT_EQ(mount("SPRJ0000", 6, &out), save_ok);
+    EXPECT_EQ(save_data_set_text(&out, 1, "title", 0x80), save_ok);
+    const std::array<std::uint64_t, 5> blob{};
+    EXPECT_EQ(save_data_set_blob(&out, blob.data()), save_ok);
+    EXPECT_EQ(save_data_unmount(&out), save_ok);
+}
+
 TEST(SaveDataNids, ResolveToTheImplementations) {
     struct Entry {
         const char* library;
@@ -167,6 +208,15 @@ TEST(SaveDataNids, ResolveToTheImplementations) {
         {"libSceSaveData", "BMR4F-Uek3E", reinterpret_cast<void*>(&save_data_unmount)},
         {"libSceSaveData", "dyIhnXq-0SM", reinterpret_cast<void*>(&save_data_search)},
         {"libSceSaveData", "S1GkePI17zQ", reinterpret_cast<void*>(&save_data_erase)},
+        {"libSceSaveData", "85zul--eGXs", reinterpret_cast<void*>(&save_data_set_text)},
+        {"libSceSaveData", "c88Yy54Mx0w", reinterpret_cast<void*>(&save_data_set_blob)},
+        {"libSceSaveData", "7Bt5pBC-Aco", reinterpret_cast<void*>(&save_store_read)},
+        {"libSceSaveData", "h3YURzXGSVQ", reinterpret_cast<void*>(&save_store_write)},
+        {"libSceSaveData", "v7AAAMo0Lz4", reinterpret_cast<void*>(&save_store_declare)},
+        {"libSceSaveDataDialog", "s9e3+YpRnzw", reinterpret_cast<void*>(&save_dialog_initialize)},
+        {"libSceSaveDataDialog", "4tPhsP6FpDI", reinterpret_cast<void*>(&save_dialog_open)},
+        {"libSceSaveDataDialog", "KK3Bdg1RWK0", reinterpret_cast<void*>(&save_dialog_status)},
+        {"libSceSaveDataDialog", "YuH2FA7azqQ", reinterpret_cast<void*>(&save_dialog_close)},
     };
     for (const Entry& e : entries) {
         EXPECT_EQ(bb::hle::resolve({e.nid, e.library, e.library, bb::loader::stt_func}),
