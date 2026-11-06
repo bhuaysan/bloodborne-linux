@@ -1,12 +1,10 @@
 // The graphics stages without a device: the graphics test programs give modules that spirv-val
 // accepts, and what isn't supported throws GcnError naming it.
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <map>
 #include <set>
-#include <span>
 #include <string>
 #include <vector>
 
@@ -16,6 +14,7 @@
 #include "gpu/gcn/encode.hpp"
 #include "gpu/gcn/gcn.hpp"
 #include "gpu/gcn/programs.hpp"
+#include "gpu/gcn/spirv_module.hpp"
 #include "gpu/gcn/spirv_val.hpp"
 #include "gpu/gcn/translate.hpp"
 
@@ -36,20 +35,6 @@ const ShaderKey vertex_key = {.stage = Stage::vertex,
                               .instance_step_rate = {1, 2}};
 
 using Words = std::vector<std::uint32_t>;
-
-// The instructions of a module after its header, each with its opcode word first.
-std::vector<std::span<const std::uint32_t>> instructions(const Words& spirv) {
-    std::vector<std::span<const std::uint32_t>> out;
-    for (std::size_t i = 5; i < spirv.size() && (spirv[i] >> 16) != 0; i += spirv[i] >> 16) {
-        out.push_back(std::span(spirv).subspan(i, std::min<std::size_t>(spirv[i] >> 16,
-                                                                         spirv.size() - i)));
-    }
-    return out;
-}
-
-bool is(std::span<const std::uint32_t> inst, spv::Op op) {
-    return (inst[0] & 0xffff) == static_cast<std::uint32_t>(op);
-}
 
 // The number of instructions with opcode `op` in a module (and `operand` as the operand at
 // `index`, when given).
