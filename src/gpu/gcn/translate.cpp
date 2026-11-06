@@ -104,7 +104,8 @@ constexpr CarryOp carry_ops[] = {
     {"v_subb_u32", true, false, true},   {"v_subbrev_u32", true, true, true},
 };
 
-// An integer compare, v_cmp[x]_<cond>_<i32|u32> or s_cmp_<cond>_<i32|u32>.
+// An integer compare, v_cmp[x]_<cond>_<i32|u32>, s_cmp_<cond>_<i32|u32> or the SOPK form
+// s_cmpk_<cond>_<i32|u32> (its immediate is extended by the caller).
 struct Compare {
     std::string_view cond;
     bool is_signed;

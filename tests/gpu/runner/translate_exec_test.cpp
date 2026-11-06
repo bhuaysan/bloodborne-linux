@@ -253,7 +253,8 @@ TEST_F(TranslateExec, ScalarArithmetic) {
     const std::uint32_t d = 0x12f4a6b8;
     const std::uint32_t expected[] = {
         d << count, m16 >> count,
-        static_cast<std::uint32_t>(static_cast<std::int32_t>(m16) >> count), 0, 0xa6, 0xffffffa6, 0, 0xffff8000, 0x80000000, static_cast<std::uint32_t>(-15), 0x1234,
+        static_cast<std::uint32_t>(static_cast<std::int32_t>(m16) >> count), 0, 0xa6, 0xffffffa6, 0,
+        0xffff8000, 0x80000000, static_cast<std::uint32_t>(-15), 0x1234,
         7, max, five, ~1u,
     };
     for (std::uint32_t k = 0; k < std::size(expected); ++k) {
