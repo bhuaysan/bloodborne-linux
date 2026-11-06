@@ -1,7 +1,9 @@
 #include "hle/kernel/dmem.hpp"
 
+#include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -314,6 +316,45 @@ TEST(KernelDmem, BatchStopsAtTheFirstFailure) {
     EXPECT_EQ(sceKernelMunmap(range, 2 * page_size), 0);
     EXPECT_EQ(sceKernelMunmap(other, page_size), 0);
     EXPECT_EQ(release_direct(offset, 2 * page_size), 0);
+}
+
+// The harness's restore (docs/design/runtime.md, "Guest memory"): takes back what was mapped
+// and allocated after the baseline, also a split of a baseline allocation, and refuses a
+// baseline whose mappings changed. The data of the baseline's allocations is the harness's to
+// restore, so only the new allocation's must read zeros.
+TEST(KernelDmem, HarnessRestoreTakesBackMappingsAndAllocations) {
+    const std::uint64_t kept = allocate(2 * page_size, 0);
+    void* kept_view = map(kept, 2 * page_size);
+    const std::vector<vmem::Region> mappings = vmem::regions();
+    const std::vector<dmem::AllocatedRange> allocations = dmem::allocations();
+
+    const std::uint64_t added = allocate(2 * page_size, 0);
+    EXPECT_EQ(release_direct(kept + page_size, page_size), 0);
+    auto* view = static_cast<unsigned char*>(map(added, 2 * page_size));
+    std::memset(view, 0xa5, 2 * page_size);
+    EXPECT_EQ(sceKernelMunmap(view + page_size, page_size), 0);  // split
+    void* anonymous = nullptr;
+    EXPECT_EQ(map_anonymous(&anonymous, page_size, 3, 0), 0);
+    EXPECT_EQ(vmem::restore(mappings), 0);
+    EXPECT_EQ(dmem::restore_allocations(allocations), 0);
+    EXPECT_EQ(vmem::regions(), mappings);
+    EXPECT_EQ(dmem::allocations(), allocations);
+
+    // The same calls get the same offset and address again, and read zeros.
+    EXPECT_EQ(allocate(2 * page_size, 0), added);
+    EXPECT_EQ(map(added, 2 * page_size), view);
+    EXPECT_EQ(view[0], 0);
+    EXPECT_EQ(view[page_size], 0);
+    EXPECT_EQ(vmem::restore(mappings), 0);
+    EXPECT_EQ(dmem::restore_allocations(allocations), 0);
+
+    // A baseline mapping that is gone can't be mapped back: nothing changes.
+    EXPECT_EQ(sceKernelMunmap(kept_view, page_size), 0);
+    const std::vector<vmem::Region> now = vmem::regions();
+    EXPECT_EQ(vmem::restore(mappings), EINVAL);
+    EXPECT_EQ(vmem::regions(), now);
+    EXPECT_EQ(sceKernelMunmap(static_cast<char*>(kept_view) + page_size, page_size), 0);
+    EXPECT_EQ(release_direct(kept, 2 * page_size), 0);
 }
 
 TEST(KernelDmem, ImportsResolveToTheImplementations) {

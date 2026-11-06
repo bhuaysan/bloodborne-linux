@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 namespace bb::hle::kernel::dmem {
 
@@ -20,6 +21,23 @@ inline constexpr std::int32_t batch_unmap = 1;  // unmap the range back into a r
 
 // The memfd, created at the first call. -1 (with errno set) if the host refused it.
 int fd();
+
+// One allocation, as allocations() lists it.
+struct AllocatedRange {
+    std::uint64_t start = 0, end = 0;  // offsets in the memfd, end exclusive
+    std::int32_t type = 0;
+    bool operator==(const AllocatedRange&) const = default;
+};
+
+// For the differential test harness only (docs/design/runtime.md, "Guest memory"): a copy of
+// the allocations, ordered by offset.
+std::vector<AllocatedRange> allocations();
+
+// For the harness only: puts the allocations back to `baseline`, an earlier allocations(), and
+// punches a hole into the memfd wherever an allocation lies now that the baseline doesn't
+// cover, so the next allocation there gets the same offset and reads zeros again. The data of
+// the baseline's allocations is the harness's to restore. Returns 0 or the errno of fallocate.
+int restore_allocations(const std::vector<AllocatedRange>& baseline);
 
 }  // namespace bb::hle::kernel::dmem
 

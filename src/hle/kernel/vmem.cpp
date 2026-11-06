@@ -15,6 +15,7 @@
 #include <mutex>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
@@ -454,6 +455,33 @@ std::vector<Region> regions() {
         out.push_back(region);
     }
     return out;
+}
+
+int restore(const std::vector<Region>& baseline) {
+    const std::scoped_lock lock(table_mutex);
+    for (const Region& r : baseline) {
+        const auto it = table.find(r.start);
+        if (it == table.end() || it->second != r) {
+            log("restore: the baseline's region {:#x}-{:#x} '{}' changed", r.start, r.end,
+                r.name);
+            return EINVAL;
+        }
+    }
+    // Regions don't overlap, so every other region was mapped after the baseline.
+    std::vector<std::pair<std::uintptr_t, std::uintptr_t>> added;
+    for (const auto& [start, r] : table) {
+        if (!std::ranges::binary_search(baseline, start, {}, &Region::start)) {
+            added.emplace_back(start, r.end);
+        }
+    }
+    for (const auto& [start, end] : added) {
+        if (const int error = release(start, end)) {
+            return error;
+        }
+        erase_range(start, end);
+        log("restore: unmap {:#x}-{:#x}", start, end);
+    }
+    return 0;
 }
 
 }  // namespace bb::hle::kernel::vmem

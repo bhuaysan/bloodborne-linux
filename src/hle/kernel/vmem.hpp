@@ -49,6 +49,7 @@ struct Region {
     std::uint64_t offset = 0;           // direct memory offset of start, else 0
     std::string name;
     bool reserved = false;  // a reservation from reserve(): PROT_NONE, flags 0
+    bool operator==(const Region&) const = default;
 };
 
 // A mapping request for map().
@@ -106,6 +107,13 @@ std::optional<Region> find(std::uintptr_t address);
 
 // A copy of the region table, ordered by address.
 std::vector<Region> regions();
+
+// For the differential test harness only (docs/design/runtime.md, "Guest memory"): puts the
+// region table back to `baseline`, an earlier regions(). Gives back every region that isn't in
+// it, as unmap() does, so the next map without a fixed address gets the same address again.
+// Returns 0, EINVAL (and changes nothing) if a region of the baseline is gone or changed, which
+// it can't map back, or the errno of a failed release.
+int restore(const std::vector<Region>& baseline);
 
 }  // namespace bb::hle::kernel::vmem
 

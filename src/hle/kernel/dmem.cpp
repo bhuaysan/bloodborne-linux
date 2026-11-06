@@ -141,6 +141,50 @@ int fd() {
     return memfd;
 }
 
+std::vector<AllocatedRange> allocations() {
+    const std::scoped_lock lock(table_mutex);
+    std::vector<AllocatedRange> out;
+    for (const auto& [start, a] : table) {
+        out.push_back({start, a.end, a.type});
+    }
+    return out;
+}
+
+int restore_allocations(const std::vector<AllocatedRange>& baseline) {
+    const std::scoped_lock lock(table_mutex);
+    int error = 0;
+    auto punch = [&](std::uint64_t start, std::uint64_t end) {
+        if (::fallocate(fd(), FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+                        static_cast<off_t>(start), static_cast<off_t>(end - start)) != 0) {
+            error = errno;
+        }
+    };
+    for (const auto& [start, a] : table) {
+        // The parts of [start, a.end) between the baseline's allocations, which are in order.
+        std::uint64_t at = start;
+        for (const AllocatedRange& b : baseline) {
+            if (b.end <= at) {
+                continue;
+            }
+            if (b.start >= a.end) {
+                break;
+            }
+            if (b.start > at) {
+                punch(at, b.start);
+            }
+            at = b.end;
+        }
+        if (at < a.end) {
+            punch(at, a.end);
+        }
+    }
+    table.clear();
+    for (const AllocatedRange& b : baseline) {
+        table.emplace(b.start, Allocation{b.end, b.type});
+    }
+    return error;
+}
+
 namespace {
 
 // A shared view of the memfd at `offset`, as a direct region of the region table.
