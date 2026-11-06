@@ -10,12 +10,14 @@
 #include <format>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <utility>
 
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
+#include "hle/kernel/file.hpp"
 
 namespace bb::hle::kernel::vmem {
 namespace {
@@ -256,9 +258,11 @@ std::int32_t map_anonymous_named(void** address, std::uint64_t length, int prot,
 
 }  // namespace
 
-// The offset of an anonymous mapping is ignored.
+// A file mapping (no MAP_ANON) maps the host descriptor behind guest descriptor `fd` at `offset`,
+// which must be a multiple of the guest page size. The offset of an anonymous mapping is ignored.
+// Without MAP_SHARED or MAP_PRIVATE a mapping is private, so it never writes to its file.
 void* guest_mmap(void* address, std::uint64_t length, int prot, int flags, int fd,
-                 std::int64_t /*offset*/) {
+                 std::int64_t offset) {
     const Flags host = host_map_flags(flags);
     const int sharing = flags & (guest_map_shared | guest_map_private);
     if (host.unknown != 0) {
@@ -271,18 +275,31 @@ void* guest_mmap(void* address, std::uint64_t length, int prot, int flags, int f
         posix_fail(EINVAL);
         return map_failed;
     }
-    if ((flags & guest_map_anon) == 0) {
-        // Guest descriptors don't exist yet (#98): no file can be mapped.
-        log("mmap: file mapping of guest descriptor {} refused", fd);
-        posix_fail(EBADF);
-        return map_failed;
-    }
     vmem::Mapping m;
     m.address = reinterpret_cast<std::uintptr_t>(address);
     m.length = (length + vmem::page_size - 1) & ~(vmem::page_size - 1);
     m.prot = prot;
     m.host_flags = (host.value & ~MAP_FIXED) | (sharing == 0 ? MAP_PRIVATE : 0);
     m.fixed = (host.value & MAP_FIXED) != 0;
+    // Holds the host descriptor open until the host mapping has its own reference to the file.
+    std::shared_ptr<OpenFile> file;
+    if ((flags & guest_map_anon) == 0) {
+        file = fd_table().get(fd);
+        if (!file) {
+            log("mmap: guest descriptor {} is not open", fd);
+            posix_fail(EBADF);
+            return map_failed;
+        }
+        if (offset < 0 || static_cast<std::uint64_t>(offset) % vmem::page_size != 0) {
+            log("mmap: file offset {:#x} refused", offset);
+            posix_fail(EINVAL);
+            return map_failed;
+        }
+        m.fd = file->host_fd;
+        m.fd_offset = static_cast<off_t>(offset);
+        m.flags = 0;
+        m.name = std::format("fd {}", fd);
+    }
     std::uintptr_t out = 0;
     if (const int error = vmem::map(m, out)) {
         posix_fail(error);
