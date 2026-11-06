@@ -1,9 +1,7 @@
 #include "hle/kernel/paths.hpp"
 
 #include <cerrno>
-#include <cstdlib>
 #include <fstream>
-#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -12,7 +10,6 @@
 
 #include <gtest/gtest.h>
 
-#include "common/runtime_dirs.hpp"
 #include "support/game.hpp"
 
 namespace {
@@ -176,33 +173,6 @@ TEST_F(PathMapTest, LongNames) {
     const std::string too_long = path_of_size(1024);
     ASSERT_EQ(too_long.size(), 1024u);
     EXPECT_EQ(map_.resolve(too_long, Access::read).error, ENAMETOOLONG);
-}
-
-TEST_F(PathMapTest, ProfileDirectories) {
-    const char* keys[] = {"XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME"};
-    std::optional<std::string> saved[4];
-    for (int i = 0; i < 4; ++i) {
-        if (const char* v = std::getenv(keys[i])) {
-            saved[i] = v;
-        }
-        ::setenv(keys[i], (tmp_ / "xdg" / keys[i]).c_str(), 1);
-    }
-    const auto dirs = bb::common::RuntimeDirs::from_environment("p1", {game_});
-    for (int i = 0; i < 4; ++i) {
-        if (saved[i]) {
-            ::setenv(keys[i], saved[i]->c_str(), 1);
-        } else {
-            ::unsetenv(keys[i]);
-        }
-    }
-    const fs::path save = savedata_dir(dirs, 3);
-    EXPECT_EQ(save, dirs.profile_data() / "savedata" / "3");
-    EXPECT_TRUE(fs::is_directory(save));
-    const fs::path temp = temp_dir(dirs);
-    EXPECT_EQ(temp, dirs.profile_cache() / "temp");
-    EXPECT_TRUE(fs::is_directory(temp));
-    ASSERT_TRUE(map_.mount("/savedata3", save));
-    EXPECT_EQ(map_.resolve("/savedata3/f", Access::write).host, save / "f");
 }
 
 TEST(PathMapGlobal, ResolvePathUsesTheProcessTable) {

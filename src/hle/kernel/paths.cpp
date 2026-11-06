@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "common/log.hpp"
-#include "common/runtime_dirs.hpp"
 
 namespace bb::hle::kernel {
 
@@ -42,14 +41,6 @@ std::string_view mount_name(std::string_view guest_point) {
 
 bool is_junk_name(std::string_view name) {
     return name.starts_with("._") || name == ".DS_Store";
-}
-
-fs::path savedata_dir(const common::RuntimeDirs& dirs, unsigned n) {
-    return dirs.ensure(dirs.profile_data() / "savedata" / std::to_string(n));
-}
-
-fs::path temp_dir(const common::RuntimeDirs& dirs) {
-    return dirs.ensure(dirs.profile_cache() / "temp");
 }
 
 void PathMap::mount_game(const fs::path& game_dir) {

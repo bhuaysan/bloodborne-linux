@@ -11,10 +11,6 @@
 #include <string>
 #include <string_view>
 
-namespace bb::common {
-class RuntimeDirs;
-}
-
 namespace bb::hle::kernel {
 
 // What the caller will do with the path. Anything that may create, change or remove a file or
@@ -36,11 +32,6 @@ inline constexpr std::string_view game_mount = "/app0";
 // True for the macOS junk files in a dump: names starting with "._", and ".DS_Store". They are
 // never resolved and directory listings hide them.
 bool is_junk_name(std::string_view name);
-
-// The host directory of save data mount <n>, profile_data()/savedata/<n>, created if missing.
-std::filesystem::path savedata_dir(const common::RuntimeDirs& dirs, unsigned n);
-// The host directory of the temporary mount, profile_cache()/temp, created if missing.
-std::filesystem::path temp_dir(const common::RuntimeDirs& dirs);
 
 class PathMap {
 public:
