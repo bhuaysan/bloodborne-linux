@@ -1,8 +1,12 @@
 // The graphics stages without a device: the graphics test programs give modules that spirv-val
 // accepts, and what isn't supported throws GcnError naming it.
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <map>
+#include <set>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -31,18 +35,56 @@ const ShaderKey vertex_key = {.stage = Stage::vertex,
                               .pgm_rsrc2 = 4u << 1,
                               .instance_step_rate = {1, 2}};
 
+using Words = std::vector<std::uint32_t>;
+
+// The instructions of a module after its header, each with its opcode word first.
+std::vector<std::span<const std::uint32_t>> instructions(const Words& spirv) {
+    std::vector<std::span<const std::uint32_t>> out;
+    for (std::size_t i = 5; i < spirv.size() && (spirv[i] >> 16) != 0; i += spirv[i] >> 16) {
+        out.push_back(std::span(spirv).subspan(i, std::min<std::size_t>(spirv[i] >> 16,
+                                                                         spirv.size() - i)));
+    }
+    return out;
+}
+
+bool is(std::span<const std::uint32_t> inst, spv::Op op) {
+    return (inst[0] & 0xffff) == static_cast<std::uint32_t>(op);
+}
+
 // The number of instructions with opcode `op` in a module (and `operand` as the operand at
 // `index`, when given).
-int count(const std::vector<std::uint32_t>& spirv, spv::Op op, std::size_t index = 0,
-          std::uint32_t operand = 0) {
+int count(const Words& spirv, spv::Op op, std::size_t index = 0, std::uint32_t operand = 0) {
     int n = 0;
-    for (std::size_t i = 5; i < spirv.size() && (spirv[i] >> 16) != 0; i += spirv[i] >> 16) {
-        if ((spirv[i] & 0xffff) == static_cast<std::uint32_t>(op) &&
-            (index == 0 || (i + index < spirv.size() && spirv[i + index] == operand))) {
+    for (const auto inst : instructions(spirv)) {
+        if (is(inst, op) && (index == 0 || (index < inst.size() && inst[index] == operand))) {
             ++n;
         }
     }
     return n;
+}
+
+// The channels the module stores into the output decorated with `decoration` `value` (a
+// location or a built-in), one entry per OpStore through an access chain with a constant index.
+std::multiset<std::uint32_t> stored_channels(const Words& spirv, spv::Decoration decoration,
+                                             std::uint32_t value) {
+    std::uint32_t output = 0;
+    std::map<std::uint32_t, std::uint32_t> constants;  // by id
+    std::map<std::uint32_t, std::uint32_t> channels;   // by the id of an access chain into output
+    std::multiset<std::uint32_t> stored;
+    for (const auto inst : instructions(spirv)) {
+        if (is(inst, spv::Op::OpDecorate) && inst.size() == 4 &&
+            inst[2] == static_cast<std::uint32_t>(decoration) && inst[3] == value) {
+            output = inst[1];
+        } else if (is(inst, spv::Op::OpConstant) && inst.size() == 4) {
+            constants[inst[2]] = inst[3];
+        } else if (is(inst, spv::Op::OpAccessChain) && inst.size() == 5 && inst[3] == output &&
+                   output != 0) {
+            channels[inst[2]] = constants.at(inst[4]);
+        } else if (is(inst, spv::Op::OpStore) && channels.contains(inst[1])) {
+            stored.insert(channels[inst[1]]);
+        }
+    }
+    return stored;
 }
 
 TEST(GcnStages, ProgramsPassSpirvVal) {
@@ -54,6 +96,17 @@ TEST(GcnStages, ProgramsPassSpirvVal) {
     EXPECT_EQ(count(vs.spirv, spv::Op::OpEntryPoint, 1, 0), 1);  // Vertex
     EXPECT_EQ(count(vs.spirv, spv::Op::OpUDiv), 2);              // v1 and v2
     EXPECT_FALSE(vs.interface.wave_size_dependent);
+    // pos0 and param0 store all four channels, param1 only x, at location 1.
+    const std::multiset<std::uint32_t> xyzw = {0, 1, 2, 3};
+    EXPECT_EQ(stored_channels(vs.spirv, spv::Decoration::BuiltIn,
+                              static_cast<std::uint32_t>(spv::BuiltIn::Position)),
+              xyzw);
+    EXPECT_EQ(stored_channels(vs.spirv, spv::Decoration::Location, 0), xyzw);
+    EXPECT_EQ(stored_channels(vs.spirv, spv::Decoration::Location, 1),
+              std::multiset<std::uint32_t>{0});
+    EXPECT_EQ(count(vs.spirv, spv::Op::OpDecorate, 2,
+                    static_cast<std::uint32_t>(spv::Decoration::Location)),
+              2);
     // A step rate of 0 gives 0, and with VGPR_COMP_CNT 0 there is no instance index.
     ShaderKey key = vertex_key;
     key.instance_step_rate = {0, 0};
