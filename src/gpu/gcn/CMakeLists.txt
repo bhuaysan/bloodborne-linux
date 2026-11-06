@@ -8,6 +8,7 @@ add_library(bbgcn STATIC
     decode.cpp
     disassemble.cpp
     ds_flat.cpp
+    lds.cpp
     memory.cpp
     opcodes.cpp
     spirv_builder.cpp
