@@ -9,9 +9,11 @@
  │   original game code  ◄──hooks──►  decompiled C++        │
  │   (mapped from eboot)              (replaces functions)  │
  │          │  imports (by NID)                             │
- │          ▼                                               │
- │   HLE system libraries (ours)                            │
- │   kernel · libc · file I/O · pad · audio · GNM · …       │
+ │          ├──────────────►  bundled PRXs (game's own)     │
+ │          │                 libc.prx · libSceFios2.prx    │
+ │          ▼                        │                      │
+ │   HLE system libraries (ours)  ◄──┘                      │
+ │   kernel · file I/O · system · video · GNM · net · …     │
  │          │                                               │
  │          ▼                                               │
  │   Linux: pthreads · mmap · files · SDL/evdev · Vulkan    │
@@ -29,7 +31,12 @@ The interfaces between the runtime parts (loader, import stubs, hooks, different
 - Maps the ELF `PT_LOAD` segments into one reserved range at a chosen base (the eboot links at 0).
 - Parses the PS4-specific dynamic section: imported libraries, modules and symbol NIDs.
 - Applies relocations and fills the import tables with our implementations, or with logging stubs.
-- (M3) Sets up TLS, the stack and the process parameters, then jumps to the entry point.
+- Loads the game's bundled `libc.prx` and `libSceFios2.prx` next to the eboot, as one load set.
+
+Starting the game is split over three parts (M3, see [design/m3-core-os.md](design/m3-core-os.md)):
+- `bb::hle::link` registers the exports of the bundled PRXs, relocates every module against them and the HLE layer, and registers the PRXs' TLS templates. The eboot's own TLS block is a fixed reservation at the end of the runtime executable's static TLS (`bbeboottls`), so game code and our code share one thread pointer.
+- `bb::hle::run_prx_init`, on the game's main thread, checks that thread's eboot TLS block, hands the eboot's process parameters (`PT_SCE_PROCPARAM`) to libkernel and runs the PRXs' initialisers.
+- `bb-run` (`src/tools/bb_run.cpp`) does the rest: it maps the load set and calls `link`, applies the hooks, creates the game's main thread with its stack, and on that thread calls `run_prx_init` and then the eboot's entry point.
 
 ### HLE system libraries
 Each imported Sony library becomes a module in our runtime. Every function is identified by its NID. Unimplemented functions resolve to a stub that logs the call, which shows us what to implement next. Two of the game's bundled PRX files, `libc.prx` and `libSceFios2.prx`, are needed at startup and are loaded the same way as the eboot (or later replaced by our code). The other five bundled PRXs are camera-image libraries that the game most likely never loads (see `docs/formats/imports.md`).
@@ -49,7 +56,7 @@ The translator, its offline tests and the shader extraction are designed in [des
 Decompiled functions are compiled into the runtime. At startup, a table of `{original_address, replacement}` pairs is applied. Each original function entry is patched to jump to the replacement. Replacements call other game functions through their original addresses until those are replaced too.
 
 ### Differential test harness
-Decompiled functions are verified before the game boots. A test process maps the original executable through the loader. It then calls the original function and the C++ replacement with the same inputs, in the same initial memory state, and compares return values and touched memory. Functions with side effects on the OS layer use recorded or stubbed imports.
+Decompiled functions are verified before the game boots. A test process maps the original executable through the loader. It then calls the original function and the C++ replacement with the same inputs, in the same initial memory state, and compares return values and touched memory. With the eboot alone (`EbootTest`), imports without an HLE implementation go to stubs whose calls are recorded and compared. Functions that need the OS layer, such as those that allocate, run with the full load set (`LoadSetTest`): the real HLE modules and the game's own `libc.prx`, with the game's heap and the thread's TLS in the snapshot. See [design/runtime.md](design/runtime.md#differential-test-harness).
 
 ### Symbols
 Our analysis results (names, signatures, types, matched NIDs) live as text in `symbols/`. Scripts sync them with a local Ghidra project, so the project can be rebuilt at any time and the history is tracked in git.

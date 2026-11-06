@@ -1,21 +1,29 @@
-# Runtime design (M2)
+# Runtime design
 
-The interfaces that the loader, the import stubs, the hooks and the differential test harness share. Issues #43 to #47 build on this note. Change it in the same PR when an implementation has to deviate.
+The interfaces that the loader, the import stubs, the hooks and the differential test harness share. Written for M2 (issues #43 to #47) and extended in M3 for the load set, the HLE modules and `bb-run`; how the runtime brings up the OS layer is in [m3-core-os.md](m3-core-os.md). Change it in the same PR when an implementation has to deviate.
 
 ## Source layout
 
 ```
 src/
-  common/    bbcommon   file reading, SHA-256, game directory lookup
+  common/    bbcommon   file reading, SHA-256, game directory lookup, logger, runtime directories (XDG, profile)
   loader/    bbloader   SELF → ELF, ELF parsing, mapping, relocation, eh_frame lookup, load set
-  hle/       bbhle      HLE module registry, import stubs, NID name table
+  hle/       bbhle      HLE module registry, import stubs, NID name table, linking the load set, PRX init,
+                        the libkernel modules (kernel/: threads, sync, event queues, memory, files, time,
+                        TLS, process)
+  hle/system/ bbhlesystem  system services (sysmodule, user and system service, app content, save data, …)
+  hle/video/  bbhlevideo   headless video out and GNM driver submission
+  hle/net/    bbhlenet     network and PSN libraries, reported as offline
+  hle/eboot_tls/ bbeboottls  the eboot's static TLS reservation
   hook/      bbhook     function-entry patches
   game/      bbgame     decompiled functions (registered into bbhook), the image accessor
   harness/   bbharness  differential test harness (tests only)
-  tools/                small command-line programs (bb-load, bb-gcn)
+  gpu/       bbgcn      GCN shader translator (graphics.md)
+  tools/                command-line programs (bb-load, bb-run, bb-gcn)
 tests/<target>/         GoogleTest unit and differential tests, one directory per target
 tests/support/          bbtestsupport: shared test helpers (game directory lookup, BB_REQUIRE_GAME)
 tests/harness/          harness tests, plus bbeboottest: the EbootTest fixture (also used by tests/game/)
+                        and the LoadSetTest fixture (load set linked and initialised, "Process setup")
 ```
 
 Dependencies point one way:
@@ -83,8 +91,9 @@ Who runs which steps:
 | Caller | Steps |
 |---|---|
 | `bb-load` | 1 for the load set, 2 through `bb::hle::link`, 4 |
-| differential harness (M2) | 1, 2 with `bb::hle::resolve`, 4 |
-| game runtime (M3) | 1 for the eboot and the bundled PRXs, 2 through `bb::hle::link` (their exports registered with `bb::hle`, `bb::hle::resolve` for all three, then the PRXs' TLS templates registered with the TLS helper), 3 with all registered replacements, 4, the TLS check, then PRX init and the entry point on the game's main thread ([m3-core-os.md](m3-core-os.md)) |
+| differential harness, `EbootTest` | 1, 2 with `bb::hle::resolve`, 4 |
+| differential harness, `LoadSetTest` | 1 for the load set, 2 through `bb::hle::link`, 4, then PRX init ("Process setup") |
+| game runtime (`bb-run`) | 1 for the eboot and the bundled PRXs, 2 through `bb::hle::link` (their exports registered with `bb::hle`, `bb::hle::resolve` for all three, then the PRXs' TLS templates registered with the TLS helper), 3 with all registered replacements, 4, the TLS check, then PRX init and the entry point on the game's main thread ([m3-core-os.md](m3-core-os.md)) |
 | loader unit tests | 1, 2 with a fake resolver, 4 |
 
 ### Load set
@@ -352,9 +361,9 @@ A map call during a test (#206) changes state that no region holds: the kernel's
 
 No eboot function that maps memory is a small leaf: the map calls (0x2081dbe, 0x33eb0d, 0x26d3fda) sit in allocator methods that lock and fill their own tables. The tests in `tests/harness/load_set_test.cpp` therefore use synthetic guest-ABI originals compiled into the test, which call the eboot's imports as those call sites do, through `compare_functions`. A version that maps a different size or protection, or allocates a different size, fails; two runs of a map get the same address and read zeros.
 
-### Limits for M2
+### Limits
 
-- No TLS: functions that use `%fs` must not be called until M3 sets up TLS. The harness doesn't set `%fs`, so such a function would read and possibly overwrite glibc's own TLS block and thread control block, which can crash or corrupt the test process. From M3 the eboot test executables (`harness_eboot_test`, `game_eboot_test`) link the eboot's TLS reservation (`bbeboottls`), so `%fs` accesses land in it. `EbootTest` doesn't snapshot it; `LoadSetTest` does.
+- TLS: the harness doesn't set `%fs`; game code uses the test thread's own thread pointer. The eboot test executables (`harness_eboot_test`, `game_eboot_test`, `harness_load_set_test`) link the eboot's TLS reservation (`bbeboottls`), so the eboot's `%fs` accesses land in it. `EbootTest` doesn't snapshot it, so a function that writes the eboot's TLS needs `LoadSetTest`, which does, together with the PRXs' TLS blocks. A test binary without `bbeboottls` must not call a function that uses `%fs`: it would read and possibly overwrite glibc's own TLS block and thread control block. (In M2 there was no TLS at all.)
 - HLE implementations called from a diff test must be stateless, or keep their state in a snapshot region. Other state isn't restored between the two calls, and calls to implementations aren't compared.
 - No heap with `EbootTest`: an import such as `malloc` is a stub that returns 0. `LoadSetTest` runs libc.prx's `malloc`, the game's allocator, on a heap that is a snapshot region. A map call during a test (the heap growing, or a function that maps memory itself) is taken back by the restore and compared ("Guest memory").
 - A crash in the original or the replacement kills the test binary. Isolating each call in a forked child can come later if it is needed.
