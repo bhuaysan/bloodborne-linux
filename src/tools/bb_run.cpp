@@ -3,7 +3,9 @@
 //
 // The initial thread sets up the runtime, maps and links the load set, applies the registered
 // hooks and starts the game's main thread. That thread runs the PRX initialisers and then the
-// eboot's entry. The initial thread only waits for it, or for --timeout. Every way out after the
+// eboot's entry. The initial thread only waits for it, or for --timeout. The main-loop probe logs
+// when the game reaches its main loop and, with --stop-at-main-loop, ends the run there, on the
+// game's main thread. Every way out after the
 // load goes through end_run, never std::exit: game threads may still run, and host atexit
 // handlers, static destructors and LeakSanitizer must not run under them.
 
@@ -11,6 +13,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <ctime>
@@ -30,6 +33,7 @@
 #include "game/image.hpp"
 #include "hle/kernel/paths.hpp"
 #include "hle/kernel/thread.hpp"
+#include "hle/kernel/time.hpp"
 #include "hle/kernel/tls.hpp"
 #include "hle/link.hpp"
 #include "hle/prx_init.hpp"
@@ -38,6 +42,7 @@
 #include "hook/hook.hpp"
 #include "loader/load_set.hpp"
 #include "loader/relocate.hpp"
+#include "tools/main_loop_probe.hpp"
 #include "tools/run_options.hpp"
 
 namespace {
@@ -65,6 +70,36 @@ struct Game {
     bb::loader::Image* eboot = nullptr;
 };
 
+// The main-loop probe and what to do when it fires. Set once before the game starts, never
+// destroyed: game threads use it until the process ends.
+struct MainLoop {
+    bb::tools::MainLoopProbe probe;
+    bool stop;  // --stop-at-main-loop
+    std::chrono::steady_clock::time_point start;
+};
+MainLoop* main_loop = nullptr;
+
+// The gettimeofday observer (libScePosix), on the calling game thread.
+void observe_gettimeofday(std::uintptr_t return_address) {
+    if (!main_loop->probe.count(return_address)) {
+        return;
+    }
+    const std::chrono::duration<double> elapsed =
+        std::chrono::steady_clock::now() - main_loop->start;
+    bb::common::log(LogLevel::info, channel, "main loop reached after {:.1f} s", elapsed.count());
+    if (main_loop->stop) {
+        end_run(0);
+    }
+}
+
+// The entry's exit handler: libc's exit calls it once main has returned (or the game called
+// exit), so later frame pacer calls no longer count. PRX DT_FINI is not run in M3.
+void exit_handler() {
+    if (main_loop != nullptr) {
+        main_loop->probe.main_returned();
+    }
+}
+
 void* game_main(void* p) {
     const Game& game = *static_cast<const Game*>(p);
     bb::common::set_thread_name("game main");
@@ -78,7 +113,7 @@ void* game_main(void* p) {
     auto* entry = game.eboot->fn<bb::tools::EbootEntry>(game.eboot->entry);
     bb::common::log(LogLevel::info, channel, "calling the entry {:#x}",
                     game.eboot->runtime(game.eboot->entry));
-    entry(&args, &bb::tools::entry_exit_handler);
+    entry(&args, &exit_handler);
     // The entry ends in libc's exit, which calls _exit; it doesn't return.
     bb::common::log(LogLevel::warn, channel, "the entry returned");
     end_run(0);
@@ -120,14 +155,11 @@ void* game_main(void* p) {
 // Everything up to the start of the game's main thread. Returns the exit status of a run that
 // ends before it; throws for errors that end it with status 1.
 int start(const bb::tools::RunOptions& options) {
+    const auto start_time = std::chrono::steady_clock::now();
     if (options.log_spec) {
         bb::common::set_log_filter(bb::common::LogFilter::parse(*options.log_spec));
     } else {
         bb::common::set_log_filter_from_environment();  // before link: the call trace reads it
-    }
-    if (options.stop_at_main_loop) {
-        std::cerr << "bb-run: --stop-at-main-loop is not available yet\n";
-        return 2;
     }
     std::optional<fs::path> game_dir = options.game_dir;
     if (!game_dir) {
@@ -169,6 +201,12 @@ int start(const bb::tools::RunOptions& options) {
     bb::hle::kernel::path_map().mount_game(*game_dir);
     bb::hle::system::set_save_data_root(bb::hle::system::save_data_root(dirs));
     bb::hle::system::set_user_name(options.profile);
+    main_loop = new MainLoop{
+        bb::tools::MainLoopProbe(
+            game->eboot->runtime(bb::tools::frame_pacer),
+            game->eboot->runtime(bb::tools::frame_pacer + bb::tools::frame_pacer_size)),
+        options.stop_at_main_loop, start_time};
+    bb::hle::kernel::set_gettimeofday_observer(&observe_gettimeofday);
     run_game(*game, options.timeout_seconds);
 }
 

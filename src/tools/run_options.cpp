@@ -74,6 +74,4 @@ EntryArgs entry_args() {
     return {1, {eboot_guest_path, nullptr}};
 }
 
-void entry_exit_handler() {}
-
 }  // namespace bb::tools

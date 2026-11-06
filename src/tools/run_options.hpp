@@ -60,11 +60,8 @@ inline constexpr const char* eboot_guest_path = "/app0/eboot.bin";
 // argc 1 and argv {eboot_guest_path, nullptr}.
 EntryArgs entry_args();
 
-// The function bb-run passes as the entry's second argument. The entry registers it with libc's
-// atexit, and libc's exit calls it; it does nothing, since PRX DT_FINI is not run in M3.
-void entry_exit_handler();
-
-// The eboot's entry point: entry(args, exit_handler).
+// The eboot's entry point: entry(args, exit_handler). The entry registers exit_handler with libc's
+// atexit, so libc's exit calls it, once main has returned or the game calls exit.
 using EbootEntry = void(const EntryArgs* args, void (*exit_handler)());
 
 }  // namespace bb::tools

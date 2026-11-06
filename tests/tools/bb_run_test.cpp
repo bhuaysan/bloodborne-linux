@@ -100,7 +100,6 @@ TEST(EntryArgs, MatchesTheEntrysReads) {
     EXPECT_STREQ(argv[0], "/app0/eboot.bin");
     EXPECT_EQ(argv[1], nullptr);
     EXPECT_EQ(sizeof args, 24U);
-    bb::tools::entry_exit_handler();  // does nothing, and returns
 }
 
 // ---- the main-loop probe ------------------------------------------------------------------------
@@ -237,13 +236,12 @@ TEST(BbRun, NeedsAGameDirectory) {
     EXPECT_FALSE(std::filesystem::exists(dir.path() / "state")) << "no log file before the game";
 }
 
-// --stop-at-main-loop arrives with the main-loop probe (#105).
-TEST(BbRun, RefusesStopAtMainLoopForNow) {
+// --stop-at-main-loop is accepted, and still needs the game.
+TEST(BbRun, AcceptsStopAtMainLoop) {
     const TempDir dir;
-    const Result r = run_bb_run(dir, "--stop-at-main-loop --game-dir /nonexistent");
+    const Result r = run_bb_run(dir, "--stop-at-main-loop");
     EXPECT_EQ(r.status, 2);
-    EXPECT_NE(r.output.find("--stop-at-main-loop is not available yet"), std::string::npos)
-        << r.output;
+    EXPECT_NE(r.output.find("set BB_GAME_DIR"), std::string::npos) << r.output;
 }
 
 // The whole log file in the logs directory below `dir`, which must hold exactly one.
@@ -289,6 +287,18 @@ TEST(BbRunGame, RunsTheEntry) {
     EXPECT_NE(log.find("run: calling the entry"), std::string::npos) << log;
     EXPECT_TRUE(std::filesystem::is_directory(dir.path() /
                                               "data/bloodborne-linux/profiles/test/savedata"));
+}
+
+// The goal of M3 (docs/design/m3-core-os.md, "Goal"): the game reaches its main loop, and bb-run
+// stops there with status 0. Disabled until the game gets there (#106).
+TEST(BbRunGame, DISABLED_ReachesTheMainLoop) {
+    BB_REQUIRE_GAME(game);
+    const TempDir dir;
+    const Result r = run_bb_run(
+        dir, "--stop-at-main-loop --timeout 120 --profile test --game-dir " + quote(game.string()));
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(r.output.find("run: main loop reached after "), std::string::npos) << r.output;
+    EXPECT_NE(read_log_file(dir).find("run: main loop reached after "), std::string::npos);
 }
 
 }  // namespace
