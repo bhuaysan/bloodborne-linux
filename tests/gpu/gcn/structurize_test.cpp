@@ -96,7 +96,7 @@ std::vector<std::uint32_t> walk(const Cfg& cfg, Script script) {
 }
 
 // Runs the module's function: constants, variables, loads, stores, OpIEqual, OpSelect and the
-// branches.
+// branches, OpSwitch among them.
 std::vector<std::uint32_t> run(const Module& m, Script script) {
     std::map<Id, std::uint32_t> values, memory;
     std::map<Id, std::size_t> labels;
@@ -143,6 +143,14 @@ std::vector<std::uint32_t> run(const Module& m, Script script) {
             break;
         case Op::OpBranchConditional:
             pc = labels.at(values.at(w[1]) != 0 ? w[2] : w[3]);
+            break;
+        case Op::OpSwitch:
+            pc = labels.at(w[2]);
+            for (std::uint32_t k = 3; k + 1 < (w[0] >> 16); k += 2) {
+                if (w[k] == values.at(w[1])) {
+                    pc = labels.at(w[k + 1]);
+                }
+            }
             break;
         case Op::OpReturn:
             return trace;
@@ -209,12 +217,20 @@ TEST(GcnStructurize, ExitsOutOfNestedLoops) {
           {{{0, {true}}}, {{2, {false, false, true}}, {3, {true, false}}, {4, {true}}}, {}});
 }
 
-TEST(GcnStructurize, RejectsIrreducibleGraphs) {
+TEST(GcnStructurize, IrreducibleGraphs) {
     // 0: if scc0 goto 2; 1: nop; 2: if scc1 goto 1; 3: end. The loop {1, 2} has two entries.
-    const std::vector<std::uint32_t> words = {br(scc0, 0, 2), sopp(nop), br(scc1, 2, 1),
-                                              sopp(endpgm)};
-    const Cfg cfg = build_cfg(decode(words, Until::code_end));
-    EXPECT_THROW(build(cfg), GcnError);
+    const std::vector<std::uint32_t> two_entries = {br(scc0, 0, 2), sopp(nop), br(scc1, 2, 1),
+                                                    sopp(endpgm)};
+    // The same inside a natural loop: 0: nop; 1: if scc0 goto 3; 2: nop; 3: if scc1 goto 2;
+    // 4: if vccnz goto 1; 5: end. Block i holds instruction i.
+    const std::vector<std::uint32_t> in_loop = {sopp(nop),      br(scc0, 1, 3),  sopp(nop),
+                                                br(scc1, 3, 2), br(vccnz, 4, 1), sopp(endpgm)};
+    for (const auto& words : {two_entries, in_loop}) {
+        EXPECT_FALSE(analyze(build_cfg(decode(words, Until::code_end))).reducible);
+    }
+    check(two_entries, {{{0, {true}}, {2, {true, true}}}, {{2, {true}}}, {}});
+    check(in_loop,
+          {{{1, {true, false}}, {3, {true, false, true}}, {4, {true}}}, {{4, {true, true}}}, {}});
 }
 
 }  // namespace
