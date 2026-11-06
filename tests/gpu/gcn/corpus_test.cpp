@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -20,8 +19,8 @@
 
 #include <gtest/gtest.h>
 
-#include "common/file.hpp"
 #include "common/sha256.hpp"
+#include "gpu/gcn/corpus.hpp"
 #include "gpu/gcn/gcn.hpp"
 #include "gpu/gcn/llvm_mc.hpp"
 #include "support/game.hpp"
@@ -34,8 +33,6 @@ using namespace bb::test::gcn;
 
 using Words = std::vector<std::uint32_t>;
 
-constexpr std::string_view footer_marker = "OrbShdr";
-constexpr std::size_t footer_size = 0x1c;
 constexpr std::size_t batch_size = 50000;  // distinct instructions per llvm-mc run
 constexpr std::size_t max_reports = 20;    // failures reported one by one
 
@@ -60,46 +57,6 @@ const std::vector<KnownDifference> known_differences = {
 const char* const format_names[] = {"sop2", "sopk", "sop1",  "sopc",  "sopp", "smrd",
                                     "vop2", "vop1", "vopc",  "vop3",  "vintrp", "ds",
                                     "mubuf", "mtbuf", "mimg", "exp",  "flat"};
-
-// The code of one extracted program (docs/formats/shader-binary.md): the program file holds the
-// code, the footer data and the footer block, which says how long the code is. Empty with `why`
-// set when the file isn't a program.
-Words program_code(const fs::path& file, std::string& why) {
-    const auto bytes = bb::common::read_file(file);
-    const std::string_view data(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto block = data.find(footer_marker);
-    if (block == std::string_view::npos || block + footer_size > data.size()) {
-        why = "no OrbShdr footer block";
-        return {};
-    }
-    std::uint32_t info = 0;
-    std::memcpy(&info, data.data() + block + 8, 4);  // the code size is in bits 8 to 31
-    const std::size_t size = info >> 8;
-    if (size == 0 || size % 4 != 0 || size > block) {
-        why = "the footer's code size " + std::to_string(size) + " doesn't fit the file";
-        return {};
-    }
-    Words code(size / 4);
-    std::memcpy(code.data(), data.data(), size);
-    return code;
-}
-
-// The program files of every extracted archive, in a fixed order.
-std::vector<fs::path> program_files(const fs::path& root) {
-    std::vector<fs::path> files;
-    for (const auto& archive : fs::directory_iterator(root)) {
-        if (!fs::is_directory(archive.path() / "programs")) {
-            continue;
-        }
-        for (const auto& entry : fs::recursive_directory_iterator(archive.path() / "programs")) {
-            if (entry.is_regular_file()) {
-                files.push_back(entry.path());
-            }
-        }
-    }
-    std::sort(files.begin(), files.end());
-    return files;
-}
 
 // Every distinct instruction of the corpus, assembled in batches, and what became of it.
 class RoundTrip {
@@ -216,7 +173,7 @@ TEST(GcnCorpus, EveryShaderDecodesAndRoundTrips) {
     for (const auto& file : program_files(root)) {
         ++files;
         std::string why;
-        const Words code = program_code(file, why);
+        const Words code = read_program(file, why).code;
         if (why.empty() && seen.insert(bb::common::sha256(std::as_bytes(std::span(code)))).second) {
             try {
                 std::set<std::pair<int, int>> in_program;

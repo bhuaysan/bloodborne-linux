@@ -10,12 +10,12 @@ if(NOT BB_SPIRV_VAL)
 endif()
 
 # Helpers shared with the execution tests: llvm-mc, spirv-val and the test programs.
-add_library(bbgcntest STATIC llvm_mc.cpp programs.cpp spirv_val.cpp)
+add_library(bbgcntest STATIC corpus.cpp llvm_mc.cpp programs.cpp spirv_val.cpp)
 target_include_directories(bbgcntest PUBLIC ${PROJECT_SOURCE_DIR}/tests)
 target_compile_definitions(bbgcntest PRIVATE BB_LLVM_MC="${BB_LLVM_MC}"
                                              BB_SPIRV_VAL="${BB_SPIRV_VAL}"
                                              BB_GCN_PROGRAMS_DIR="${PROJECT_SOURCE_DIR}/tests/gpu/programs")
-target_link_libraries(bbgcntest PRIVATE bb_warnings)
+target_link_libraries(bbgcntest PRIVATE bb_warnings bbcommon)
 
 bb_add_test(gcn_test
     SOURCES cfg_test.cpp corpus_test.cpp decode_test.cpp disassemble_test.cpp ds_flat_test.cpp memory_test.cpp
