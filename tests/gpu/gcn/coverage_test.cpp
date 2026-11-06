@@ -36,12 +36,15 @@ using Words = std::vector<std::uint32_t>;
 constexpr std::size_t max_reports = 20;  // failures reported one by one
 constexpr std::uint32_t s_endpgm = sopp(1);
 
-// The key a program of this type is translated with. Only the compute stage translates, so every
-// program gets the default compute key for now: the vertex, pixel and the other stages are
-// translated as probes, which count the instructions the translator still lacks. This is the
-// place where the stage keys go when they exist (#125 and later items).
+// The key a program of this type is translated with. The footer doesn't carry the register
+// values, so these are test defaults. Vertex and copy shaders get VGPR_COMP_CNT 3 and no user
+// SGPRs, as in compute. The other programs, whose stages the translator doesn't have yet, get the
+// default compute key and are probes: they count the instructions the translator lacks. Domain
+// shaders (type 8) run on the VS stage too, but the vertex key can't express their inputs.
 ShaderKey default_key(unsigned type) {
-    static_cast<void>(type);
+    if (type == 1 || type == 6) {
+        return {.stage = Stage::vertex, .pgm_rsrc1 = 3u << 24};
+    }
     return {};
 }
 
@@ -136,6 +139,7 @@ struct OpcodeUse {
     Format format = Format::sopp;
     std::uint16_t opcode = 0;
     Words first;
+    unsigned type = 0;  // the type of the program it is from, for the key of the probe
     std::uint64_t instructions = 0;
     std::uint64_t programs = 0;
 };
@@ -200,6 +204,7 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
                     use.name = inst.name;
                     use.format = inst.format;
                     use.opcode = inst.opcode;
+                    use.type = program.type;
                     use.first.assign(program.code.begin() + inst.offset / 4,
                                      program.code.begin() + inst.offset / 4 + inst.size);
                 }
@@ -245,7 +250,7 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
             code[0] &= ~0xffffu;  // a branch to the next instruction, the s_endpgm
         }
         code.push_back(s_endpgm);
-        const Outcome o = translate_program(code, 0, true);
+        const Outcome o = translate_program(code, use.type, true);
         if (o.internal || !o.invalid.empty()) {
             ADD_FAILURE() << "probe of " << use.name << ": "
                           << (o.internal ? "internal error: " + o.message
