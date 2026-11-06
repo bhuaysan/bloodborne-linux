@@ -1,7 +1,6 @@
-// libSceSaveData and libSceSaveDataDialog: save directories in the profile. Both libraries are in
-// (or derived from) the exposure log of docs/clean-room.md, so everything here comes from the
-// eboot's call sites only and no function has a Sony-style name; docs/formats/savedata.md has
-// the facts and the addresses that show them.
+// libSceSaveData and libSceSaveDataDialog: save directories in the profile. Written from the
+// eboot's call sites only and without Sony-style names, under the earlier source policy (#226
+// lifts that); docs/formats/savedata.md has the facts and the addresses that show them.
 #pragma once
 
 #include <cstddef>

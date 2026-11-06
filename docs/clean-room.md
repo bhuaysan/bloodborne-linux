@@ -7,7 +7,7 @@ The file keeps its old name for links and tools. Since 2026-11-06 the project bu
 Never search for, open, fetch, read or run:
 
 - **Leaked Sony SDK material:** headers, documentation, samples, tools and libraries from Sony's SDK, also when they are copied into another project. Before opening a file from a code source, check its path and license header. Skip directories and files named after the SDK, and Sony headers without a clear open-source license. A file that carries a Sony copyright notice or reads like SDK material is off-limits. Stop reading it and record it in the [exposure log](#exposure-log).
-- **Copies of game data** other than the maintainer's own dump: no downloaded executables, assets, decrypted firmware modules or save files.
+- **Copies of game data** other than the maintainer's own dump: no downloaded executables, assets, extracted param or table data, decrypted firmware modules or save files.
 
 Everything else is allowed, with credit.
 
@@ -15,7 +15,7 @@ Everything else is allowed, with credit.
 
 - Public documentation of every kind: PS4 platform and file formats, NID lists and databases, AMD GPU documentation, Vulkan and SPIR-V, ELF and ABI documents, FreeBSD and Linux man pages and headers, wikis, articles and talks.
 - Source code and documentation of open-source projects, for example PS4 emulators (shadPS4 and others), Mesa, the Linux GPU drivers, LLVM, homebrew toolchains, and PS4 recompilation or translation tools.
-- Bloodborne and FromSoftware material: file-format libraries and tools, reverse-engineering and modding notes, decomp projects, symbol maps, param and struct dumps, address lists, cheat tables, per-title emulator patches and compatibility notes.
+- Bloodborne and FromSoftware material: file-format libraries and tools, reverse-engineering and modding notes, decomp projects, symbol maps, param and struct layouts and definitions, address lists, cheat tables, per-title emulator patches and compatibility notes. Dumps of the game's actual data (extracted params, assets, executables) count as game data, see above.
 - Tools run as programs, including emulators run on our game (for frames, logs and captured GPU command streams).
 
 Facts from any of these sources can be used directly. Still check each fact against the game's own files or behavior before relying on it, and say in the code or doc where it was checked.
@@ -25,9 +25,13 @@ Facts from any of these sources can be used directly. Still check each fact agai
 The project is licensed under GPL-2.0-or-later ([LICENSE](../LICENSE)). Code from other projects may be copied or adapted when its license allows that in a GPL-2.0-or-later project.
 
 - **Check the license of each file**, not only the project's. The file's own license header or SPDX tag decides. Without one, the nearest `LICENSE` or `COPYING` file in its directory or a parent directory of the same repository decides. Without either, the file counts as unlicensed. Unlicensed code gives facts only: write our own code from it.
-- **Compatible licenses:** GPL-2.0-only, GPL-2.0-or-later, LGPL-2.1 and later, and the permissive licenses (MIT and X11 variants, BSD-2-Clause, BSD-3-Clause, ISC, zlib, BSL-1.0). Apache-2.0, GPL-3.0 and LGPL-3.0 code may be used too, but it makes the combined program GPL-3.0-or-later; record that in the credit row. MPL-2.0 code stays in its own files. Code under AGPL, CC-BY-NC, other non-commercial licenses or no license is not copied.
-- **Whole files** go unchanged into `third_party/<project>/` together with their license text (and Apache-2.0 `NOTICE` files).
-- **Adapted code** in our files keeps the original copyright lines and an SPDX tag of its license in a header comment, plus `// Source: <project> <path> @<commit>`. Adapted Apache-2.0 files say that they were changed.
+- **The program as a whole is GPL-2.0-or-later**, and code is reused only when that stays true. Copy or adapt code under:
+  - GPL-2.0-or-later, LGPL-2.1-only and LGPL-2.1-or-later;
+  - the permissive licenses MIT (and X11 variants), BSD-2-Clause, BSD-3-Clause, ISC, zlib and BSL-1.0 (BSD-4-Clause, with its advertising clause, is not compatible);
+  - MPL-2.0, in files of their own, when the file is not marked "Incompatible With Secondary Licenses".
+- **Facts only, no copied code**, from GPL-2.0-only, GPL-3.0, LGPL-3.0, Apache-2.0 and AGPL code, non-commercial licenses (e.g. CC-BY-NC) and unlicensed files. GPL-2.0-only code would make the program GPL-2.0-only, and GPL-3.0, LGPL-3.0 and Apache-2.0 code would make it GPL-3.0; a GPL-2.0-only and a GPL-3.0/Apache-2.0 piece can't be combined at all. Reusing such code needs a maintainer decision that changes the line above first.
+- **Whole files** go unchanged into `third_party/<project>/` together with their license text.
+- **Adapted code** in our files keeps the original copyright lines and gets an SPDX tag of its license, a `// Source: <project> <path> @<commit>` line and a `// Changed for bloodborne-linux, <date>` line in a header comment. GPL-2.0 §2(a) and LGPL-2.1 §2(b) require that notice of changes; we use it for every license.
 - **Upstream preferred.** Take code from the project's own repository or release, and record the commit.
 - **Credit.** Record every source in [references.md](references.md) in the same change that uses it. Code sources go into its code sources table: project and commit, license of the files, files or pages used, what was taken (facts or code), where it is used, and the date.
 
@@ -52,11 +56,11 @@ Commit a NID only together with what we know about it: a matched name in `symbol
 
 ## Exposure log
 
-Leaked SDK material seen by accident goes here. Entries before 2026-11-06 recorded material that was off-limits under the earlier clean-room policy; they no longer restrict anything and are kept as history.
+Leaked SDK material seen by accident goes here. Entries before 2026-11-06 recorded material that was off-limits under the earlier clean-room policy; they no longer restrict anything (their Handling column is superseded) and are kept as history.
 
 | Date | What was seen | Handling |
 |---|---|---|
-| 2026-11-04 | Screenshots of psdevwiki tables pairing NIDs with function names for libSceRemoteplay, libSceSaveData, libSceRegMgr and libSceRtc | Not copied or used, not even as test vectors. A name for a NID of these four libraries is accepted only together with an independent, recorded candidate source (a string in the dump, how the game uses the function, or public documentation that isn't a NID list and isn't a code source). |
+| 2026-11-04 | Screenshots of psdevwiki tables pairing NIDs with function names for libSceRemoteplay, libSceSaveData, libSceRegMgr and libSceRtc | Superseded on 2026-11-06. Was: not copied or used, not even as test vectors. A name for a NID of these four libraries is accepted only together with an independent, recorded candidate source (a string in the dump, how the game uses the function, or public documentation that isn't a NID list and isn't a code source). |
 
 ## Game version
 

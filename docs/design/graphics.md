@@ -75,7 +75,7 @@ What a first look shows, to be worked out and documented in `docs/formats/`:
   
   Some files hold more than one program.
 
-Material on these formats from category 3 of the code sources may be used under its rules. Everything gets checked against the files.
+FromSoftware file-format material may be used under the rules in [clean-room.md](../clean-room.md). Everything gets checked against the files.
 
 `tools/shaderbnd` checks each archive's SHA-256 against a pinned table in a new file in `tools/common/`. It refuses other files. It writes to `analysis/shaders/<archive>/`:
 
@@ -385,7 +385,7 @@ Four levels. The first three need neither a running game nor a GPU.
      - The test module is written with `SpirvBuilder` and checked with `spirv-val` when it is installed. It reads the draw block like a translated program: the guest addresses of its output and input come from user data, it adds a user-data value to every input word, and invocation 0 writes `SubgroupSize` and `code_address`. The guest addresses lie above 2^32, so the high words count. The test runs it twice, the second time on new guest memory at another base, so the reset of the command pool and fence is covered. The pipeline asks for no subgroup size, so the test accepts any power of two in the device's range.
    - The exact wave-64 mode runs locally on an AMD GPU.
 4. **Replays** (later wave, after M3):
-   - Captures of real frames, as PM4 streams plus the memory they reference, go to `analysis/captures/`. They come from our runtime, or as reference frames from an emulator run on the game with call logging off (see [clean-room.md](../clean-room.md#code-sources)).
+   - Captures of real frames, as PM4 streams plus the memory they reference, go to `analysis/captures/`. They come from our runtime, or as reference frames from an emulator run on the game.
    - The captures are replayed through `bbpm4` and `bbvk`, and the images are compared.
 
 Committed test data is only our own: assembly sources, their assembled words, and expected values. Nothing extracted from the game is committed.
@@ -400,9 +400,9 @@ Committed test data is only our own: assembly sources, their assembled words, an
 - **Register writes.** `SET_CONTEXT_REG`, `SET_SH_REG`, `SET_UCONFIG_REG` and `SET_CONFIG_REG` update a mirror of the register file.
 - **Draws and dispatches** take a snapshot of the state the backend needs: ShaderKey, render targets, blend, depth and raster state, and user data.
 - **Unknown packets** are logged once per opcode; the eboot writes two opcodes that have no name yet (0x8C, 0x8D), and the names of the others still need checking against an AMD PM4 header ([gnm.md](../formats/gnm.md#open-questions-and-next-steps)). `NOP` packets with a payload go to a hook list, because the driver may use them as markers. The GNM code tags some packets with `NOP`s whose payload starts with `0x6875xxxx`.
-- **Register names and offsets** come from the AMD register guide. The Mesa register database (code sources, category 1) may be used to generate a table, as generated data in its own PR.
+- **Register names and offsets** come from the AMD register guide. The Mesa register database (MIT) may be used to generate a table, as generated data in its own PR.
 - **GPU memory.** The guest's GPU-visible memory (libkernel direct memory, M3) is imported into Vulkan with `VK_EXT_external_memory_host` where the device allows it. That gives device addresses without copies. Such memory stays host memory, so on a discrete GPU every read crosses PCIe. A device-local cache with write tracking will be needed for vertex and constant data.
-- **Textures and render targets** are cached by address and descriptor. Tiled ↔ linear conversion uses AMD's addrlib (code sources, category 1, MIT), copied into `third_party/` in its own PR.
+- **Textures and render targets** are cached by address and descriptor. Tiled ↔ linear conversion uses AMD's addrlib (MIT), copied into `third_party/` in its own PR.
 - **Clip space.** Clip-space conventions (`PA_CL_CLIP_CNTL`, depth range, viewport orientation) are decided with the backend.
 - **Flip.** `libSceVideoOut` flips present through a Vulkan swapchain.
 
@@ -431,7 +431,7 @@ Each item is one issue, at most 500 lines of code and tests. Every PR that first
 | 8b | **Image sampling.** MIMG sample operations, image and sampler bindings, the image type class in the key. | 8a |
 | 8c | **Other image operations.** Loads, stores, gather and atomics. | 8b |
 | 9 | **Corpus translation report.** Translate everything, run `spirv-val`, record coverage. It grows as later items land. | 4, 6c |
-| 10 | **GNM survey (research).** Covers how the eboot builds and submits command buffers, what the `libSceGnmDriver` imports do (behavior only, named by role), and where fetch shaders come from. Written up in `docs/formats/gnm.md`. It works from the eboot and the AMD documents only. Reading an emulator's GnmDriver HLE code would put `libSceGnmDriver` into the exposure log, so ask the maintainer first. | – |
+| 10 | **GNM survey (research).** Covers how the eboot builds and submits command buffers, what the `libSceGnmDriver` imports do (behavior only, named by role), and where fetch shaders come from. Written up in `docs/formats/gnm.md`. It was written from the eboot and the AMD documents only, under the earlier policy; emulator GnmDriver HLE code may now be used too. | – |
 
 Items 1, 3a and 10 can start at once. Items 5 and 6a wait for item 0.
 

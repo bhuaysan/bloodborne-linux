@@ -1,6 +1,6 @@
-// libSceRtc: dates and microsecond ticks. The library is in the exposure log of
-// docs/clean-room.md, so everything here comes from the eboot's call sites only and no function
-// has a Sony-style name; docs/formats/rtc.md has the facts and the addresses that show them.
+// libSceRtc: dates and microsecond ticks. Written from the eboot's call sites only and without
+// Sony-style names, under the earlier source policy (#226 lifts that); docs/formats/rtc.md has
+// the facts and the addresses that show them.
 #pragma once
 
 #include <cstdint>

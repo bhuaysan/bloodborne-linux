@@ -1,6 +1,6 @@
 # Save data
 
-What the eboot's libSceSaveData and libSceSaveDataDialog imports do, worked out only from the eboot's own call sites. Both libraries are in (or derived from) the exposure log of [clean-room.md](../clean-room.md#exposure-log), so this note and the code (`src/hle/system/save_data.{hpp,cpp}`) give NIDs and neutral descriptions, never function names. Addresses are eboot link addresses. Facts the code shows carry their addresses; values it doesn't show are **our choice**, marked as such.
+What the eboot's libSceSaveData and libSceSaveDataDialog imports do, worked out only from the eboot's own call sites. Under the earlier policy both libraries were in (or derived from) its exposure log ([clean-room.md](../clean-room.md#exposure-log)), so this note and the code (`src/hle/system/save_data.{hpp,cpp}`) give NIDs and neutral descriptions, not function names; #226 lifts that. Addresses are eboot link addresses. Facts the code shows carry their addresses; values it doesn't show are **our choice**, marked as such.
 
 ## How the game uses them
 

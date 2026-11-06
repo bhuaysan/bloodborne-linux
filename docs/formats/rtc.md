@@ -1,6 +1,6 @@
 # libSceRtc dates and ticks
 
-What the eboot's ten libSceRtc imports do, worked out only from the eboot's own call sites. The library is in the exposure log of [clean-room.md](../clean-room.md#exposure-log), so this note and the code (`src/hle/system/date_time.{hpp,cpp}`) give NIDs and neutral descriptions, never function names. All imports are called by the eboot only. Addresses are eboot link addresses.
+What the eboot's ten libSceRtc imports do, worked out only from the eboot's own call sites. Under the earlier policy the library was in its exposure log ([clean-room.md](../clean-room.md#exposure-log)), so this note and the code (`src/hle/system/date_time.{hpp,cpp}`) give NIDs and neutral descriptions, not function names; #226 lifts that. All imports are called by the eboot only. Addresses are eboot link addresses.
 
 Facts the code shows are marked with their addresses. Where the code doesn't show something, the value is **our choice**, marked as such.
 

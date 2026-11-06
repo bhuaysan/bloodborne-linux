@@ -70,7 +70,7 @@ git config core.hooksPath tools/githooks
 
 ## License
 
-The project is licensed under the GNU General Public License, version 2 or (at your option) any later version (see [LICENSE](LICENSE)). Code taken from other projects keeps its own license and notices (`third_party/`, header comments). Code written before 2026-11-06 was published under the MIT license. The license does not cover the game.
+Copyright (C) 2026 bloodborne-linux contributors. The project is licensed under the GNU General Public License, version 2 or (at your option) any later version (see [LICENSE](LICENSE)). Code taken from other projects keeps its own license and notices (`third_party/`, header comments). Code written before 2026-11-06 was published under the MIT license. The license does not cover the game.
 
 ## Legal
 

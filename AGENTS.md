@@ -25,7 +25,7 @@ See `docs/architecture.md` and `docs/roadmap.md`.
 **Read [`docs/clean-room.md`](docs/clean-room.md) (the source and license policy) before reusing external code.** In short:
 - **Never** look at leaked Sony SDK material (also when it is copied into another project), and never use game data other than the maintainer's own dump.
 - Everything else is allowed: public docs and NID lists, PS4 emulators (for example shadPS4), Mesa and other open-source code, and Bloodborne/FromSoftware reverse-engineering, decomp and modding material.
-- The project is GPL-2.0-or-later. Code is copied or adapted only from files whose license is compatible (see `docs/clean-room.md`), and keeps its copyright lines, an SPDX tag and a `// Source:` comment.
+- The project is GPL-2.0-or-later. Code is copied or adapted only from files whose license keeps it so (see `docs/clean-room.md`). Whole files go unchanged into `third_party/` with their license; adapted code keeps its copyright lines and gets an SPDX tag, a `// Source:` line and a `// Changed for bloodborne-linux, <date>` line.
 - Log every source in `docs/references.md` in the same change that uses it.
 - Import names need a NID that matches the documented hash; record the name's source in `symbols/nids.csv`.
 - If a source's license is unclear, don't copy from it. Ask the maintainer.

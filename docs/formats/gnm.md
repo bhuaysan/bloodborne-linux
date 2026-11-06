@@ -6,7 +6,7 @@ Sources: the eboot of CUSA03173 patch 1.09 (disassembled with `objdump` over byt
 
 Addresses are eboot link addresses. Register names are those of the register reference, which lists every register named in this note unless the text says otherwise.
 
-**The packet names are unverified.** The opcode numbers are what the eboot writes. The SI programming guide describes packets by name and body but gives no opcode numbers, and no logged source pairs numbers with names. The pairings in the table below come from general knowledge of AMD's open-source PM4 headers, not from a source read for this note. They hold only once checked against one of those headers (code-source category 1, see [open questions](#open-questions-and-next-steps)). Names that the SI guide doesn't describe at all are marked *not in guide*. Each packet's length and operands were checked against the writer that emits it, unless the row says otherwise.
+**The packet names are unverified.** The opcode numbers are what the eboot writes. The SI programming guide describes packets by name and body but gives no opcode numbers, and no logged source pairs numbers with names. The pairings in the table below come from general knowledge of AMD's open-source PM4 headers, not from a source read for this note. They hold only once checked against one of those headers (see [open questions](#open-questions-and-next-steps)). Names that the SI guide doesn't describe at all are marked *not in guide*. Each packet's length and operands were checked against the writer that emits it, unless the row says otherwise.
 
 ## Summary
 
@@ -289,10 +289,10 @@ The HLE registers these as logging stubs.
 
 - **Register blocks of the stage writers.** Which register each dword of the blocks at shader object +0x8 holds. Next step: item 2 parses the footer; compare its values with the bitfields of `SPI_SHADER_PGM_RSRC1/2_*` and the context registers in the register guide. Until then the HLE can write `SPI_SHADER_PGM_LO/HI` and `RSRC1/2` from the first four dwords and fill the rest with a `NOP`.
 - **Opcodes 0x8C, 0x8D.** No name yet. 0x8C/0x8D come in pairs with compute-side writers whose bodies differ from the graphics ones, and 0x8D sits where a draw sits; they may belong to a draw path that uses a compute command buffer. The header check above may name them. Next step: count them in captured streams once the game runs, and log each opcode once as the design says.
-- **Packet names and field layouts.** Every opcode-to-name pairing in the packet table, and the field layouts of the packets the SI guide doesn't describe (`RELEASE_MEM`, `DMA_DATA`, `ACQUIRE_MEM`, `REWIND`, `SET_QUEUE_REG`, `SET_UCONFIG_REG`, the two `*_MULTI` draws), need checking against an AMD PM4 header (Linux `amdgpu`/`radeon` or Mesa, code-source category 1) before the parser hard-codes them. The check is logged as a code-source row in references.md; the request goes to the clean-room researcher. The same check can name event type 0x35 and uconfig register 0x200.
+- **Packet names and field layouts.** Every opcode-to-name pairing in the packet table, and the field layouts of the packets the SI guide doesn't describe (`RELEASE_MEM`, `DMA_DATA`, `ACQUIRE_MEM`, `REWIND`, `SET_QUEUE_REG`, `SET_UCONFIG_REG`, the two `*_MULTI` draws), need checking against an AMD PM4 header (Linux `amdgpu`/`radeon` or Mesa) before the parser hard-codes them. The check is logged as a code-source row in references.md; the request goes to the research agent. The same check can name event type 0x35 and uconfig register 0x200.
 - **`iCO804ZgzdA`'s start-up probe.** Find what the renderer flag at +0x121 (set at 0x216b1b3) switches before choosing the HLE result. Returning `0x80d13fff` keeps the feature off, which is the safer first choice.
 - **`1qXLHIpROPE`, `TLV4mswiZ4A`, `ln33zjBrfjk`.** Roles above are partial. Each is called once or twice; a runtime log of their arguments once the renderer starts will settle them.
-- **Reading the driver HLE code of an emulator** would answer the dword layouts directly but puts `libSceGnmDriver` into the exposure log. Not needed for the second wave as planned below.
+- **Reading the driver HLE code of an emulator** would answer the dword layouts directly. Since 2026-11-06 the source policy allows it.
 
 ## Second wave
 

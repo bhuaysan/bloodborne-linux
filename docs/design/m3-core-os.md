@@ -146,7 +146,7 @@ One logger in `bbcommon` (`src/common/log.hpp`): levels, channels (`loader`, `hl
 
 ## Naming
 
-NIDs without a matched name are implemented under a descriptive C++ name and registered by NID, with a comment that the name is unknown. They get no row in `symbols/nids.csv`, which holds matched names only. For libSceRtc, libSceSaveData and libSceSaveDataDialog (exposure log in `docs/clean-room.md`, which treats libSceSaveDataDialog like libSceSaveData) semantics come from the game's call sites only, and no Sony-style names are written down, not even in comments.
+NIDs without a matched name are implemented under a descriptive C++ name and registered by NID, with a comment that the name is unknown. They get no row in `symbols/nids.csv`, which holds matched names only. libSceRtc, libSceSaveData and libSceSaveDataDialog were written from the game's call sites only and without Sony-style names, under the earlier policy's exposure log; #226 lifts that.
 
 ## Open questions
 
