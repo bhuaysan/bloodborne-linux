@@ -286,10 +286,13 @@ TEST_F(TranslateExec, BufferMemory) {
     }
 }
 
-// SALU lane masks: s_and_saveexec_b64 with v_cmpx (nested predication), and the eight bitwise
-// operations on two masks with every combination of bits in lanes 0 to 3.
+// SALU lane masks: s_and_saveexec_b64 with v_cmpx (nested predication), the eight bitwise
+// operations on two masks with every combination of bits in lanes 0 to 3, and the same
+// operations under a partial EXEC (lanes 0-31), whose results have bits in every lane. The
+// saveexec forms run with S0 and EXEC that differ in both directions: S0 is the odd lanes, so
+// s_andn2_saveexec gives S0 & ~EXEC (the odd lanes from 32 on) and not EXEC & ~S0.
 TEST_F(TranslateExec, MaskScalarOps) {
-    const auto out = run("mask_exec", {}, 2 * lanes);
+    const auto out = run("mask_exec", {}, 4 * lanes);
     for (std::uint32_t i = 0; i < lanes; ++i) {
         SCOPED_TRACE(testing::Message() << "lane " << i);
         EXPECT_EQ(out[i], (i < 4 ? 0x20u : 0u) | (i < 8 ? 0x12u : i < 32 ? 0x11u : 0u));
@@ -298,6 +301,10 @@ TEST_F(TranslateExec, MaskScalarOps) {
             bits = bits << 1 | (bitwise(k, i & 1, i >> 1 & 1) & 1);
         }
         EXPECT_EQ(out[lanes + i], bits);
+        const std::uint32_t a = i & 1, b = i >> 1 & 1, in_exec = i < 32;
+        EXPECT_EQ(out[2 * lanes + i], (bitwise(1, a, b) & 1) << 1 | (bitwise(6, a, b) & 1));
+        EXPECT_EQ(out[3 * lanes + i], (bitwise(3, a, in_exec) & 1) << 2 | in_exec << 1 |
+                                          (bitwise(4, a, in_exec) & 1));
     }
 }
 

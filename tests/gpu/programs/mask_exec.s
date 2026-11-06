@@ -40,4 +40,31 @@ v_addc_u32_e32 v7, vcc, v7, v7, vcc
 s_xnor_b64 vcc, s[6:7], s[8:9]
 v_addc_u32_e32 v7, vcc, v7, v7, vcc
 flat_store_dword v[2:3], v7
+v_add_i32_e32 v2, vcc, 0x100, v2
+v_cmp_gt_u32_e64 s[10:11], 32, v0   ; stage 2: the SALU ignores EXEC. E = lanes 0-31 is EXEC,
+s_mov_b64 exec, s[10:11]            ; and A, B are the masks of stage 1: the results have bits
+s_or_b64 vcc, s[6:7], s[8:9]        ; in every lane, the ones outside E too
+s_nor_b64 s[16:17], s[6:7], s[8:9]
+s_mov_b64 exec, -1
+v_mov_b32_e32 v7, 0
+v_addc_u32_e32 v7, vcc, v7, v7, vcc
+s_mov_b64 vcc, s[16:17]
+v_addc_u32_e32 v7, vcc, v7, v7, vcc
+flat_store_dword v[2:3], v7
+v_add_i32_e32 v2, vcc, 0x100, v2
+s_mov_b64 exec, s[10:11]            ; stage 3: the saveexec forms with S0 = A (the odd lanes) and
+s_andn2_saveexec_b64 s[16:17], s[6:7] ; EXEC = E, which differ in both directions: S0 & ~EXEC
+s_mov_b64 s[18:19], exec            ; is not EXEC & ~S0, and S0 | ~EXEC is not EXEC | ~S0
+s_mov_b64 exec, s[10:11]
+s_orn2_saveexec_b64 s[20:21], s[6:7]
+s_mov_b64 s[22:23], exec
+s_mov_b64 exec, -1
+v_mov_b32_e32 v7, 0
+s_mov_b64 vcc, s[18:19]             ; bits, highest first: the new EXEC of s_andn2_saveexec,
+v_addc_u32_e32 v7, vcc, v7, v7, vcc ; the EXEC it saved, the new EXEC of s_orn2_saveexec
+s_mov_b64 vcc, s[16:17]
+v_addc_u32_e32 v7, vcc, v7, v7, vcc
+s_mov_b64 vcc, s[22:23]
+v_addc_u32_e32 v7, vcc, v7, v7, vcc
+flat_store_dword v[2:3], v7
 s_endpgm
