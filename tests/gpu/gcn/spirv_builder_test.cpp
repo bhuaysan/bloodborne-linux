@@ -1,8 +1,7 @@
-// SPIR-V builder: the word encoding, sharing of types and constants, misuse, and a compute module
-// shaped like the translator's output, validated by spirv-val. The word-encoding tests build
-// fragments that spirv-val would reject (no capability, undefined ids), so they compare words
-// only; every helper they use also appears in the validated module. The vertex and fragment
-// modules come with the image types in #129.
+// SPIR-V builder: the word encoding, sharing of types and constants, misuse, and a compute and a
+// fragment module shaped like the translator's output, validated by spirv-val. The word-encoding
+// tests build fragments that spirv-val would reject (no capability, undefined ids), so they compare
+// words only; every helper they use also appears in a validated module.
 
 #include <cstdint>
 #include <stdexcept>
@@ -165,6 +164,11 @@ TEST(SpirvBuilder, SharesTypesAndConstantsButNotAggregates) {
     EXPECT_NE(b.type_array(u32, b.constant_u32(4)), b.type_array(u32, b.constant_u32(4)));
     EXPECT_NE(b.type_runtime_array(u32), b.type_runtime_array(u32));
     EXPECT_EQ(b.import_extended("GLSL.std.450"), b.import_extended("GLSL.std.450"));
+    const Id image = b.type_image(b.type_float(32), spv::Dim::Dim2D, 0, false, false, 1);
+    EXPECT_EQ(b.type_image(b.type_float(32), spv::Dim::Dim2D, 0, false, false, 1), image);
+    EXPECT_NE(b.type_image(b.type_float(32), spv::Dim::Dim2D, 0, true, false, 1), image);
+    EXPECT_EQ(b.type_sampled_image(image), b.type_sampled_image(image));
+    EXPECT_EQ(b.type_sampler(), b.type_sampler());
 
     b.capability(spv::Capability::Shader);
     b.capability(spv::Capability::Shader);
@@ -351,6 +355,64 @@ TEST(SpirvBuilder, ComputeModuleValidates) {
 
     b.entry_point(spv::ExecutionModel::GLCompute, main, "main", {draw, index_var, lds, mask});
     b.execution_mode(main, spv::ExecutionMode::LocalSize, {64, 1, 1});
+    EXPECT_EQ(validate(b.words()), "");
+}
+
+// A fragment shader with an interpolated input, two render target outputs, a texture sampled
+// through a separate image and sampler, and a demote to helper invocation under a condition.
+TEST(SpirvBuilder, FragmentModuleValidates) {
+    if (!have_spirv_val()) {
+        GTEST_SKIP() << "spirv-val not found";
+    }
+    SpirvBuilder b;
+    b.capability(spv::Capability::Shader);
+    b.capability(spv::Capability::DemoteToHelperInvocation);
+    b.memory_model(spv::AddressingModel::Logical, spv::MemoryModel::GLSL450);
+    const Id f32 = b.type_float(32);
+    const Id vec2 = b.type_vector(f32, 2);
+    const Id vec4 = b.type_vector(f32, 4);
+    const Id image_t = b.type_image(f32, spv::Dim::Dim2D, 0, false, false, 1);
+    const Id image = b.variable(b.type_pointer(SC::UniformConstant, image_t), SC::UniformConstant);
+    const Id sampler = b.variable(b.type_pointer(SC::UniformConstant, b.type_sampler()),
+                                  SC::UniformConstant);
+    b.decorate(image, spv::Decoration::DescriptorSet, {0});
+    b.decorate(image, spv::Decoration::Binding, {0});
+    b.decorate(sampler, spv::Decoration::DescriptorSet, {0});
+    b.decorate(sampler, spv::Decoration::Binding, {1});
+    const Id coord = b.variable(b.type_pointer(SC::Input, vec2), SC::Input);
+    b.decorate(coord, spv::Decoration::Location, {0});
+    b.decorate(coord, spv::Decoration::NoPerspective);
+    Id out[2];
+    for (std::uint32_t n = 0; n < 2; ++n) {
+        out[n] = b.variable(b.type_pointer(SC::Output, vec4), SC::Output);
+        b.decorate(out[n], spv::Decoration::Location, {n});
+    }
+
+    const Id void_t = b.type_void();
+    const Id main = b.begin_function(void_t, b.type_function(void_t));
+    b.begin_block(b.id());
+    const Id uv = b.op(Op::OpLoad, vec2, {coord});
+    const Id sampled = b.op(Op::OpSampledImage, b.type_sampled_image(image_t),
+                            {b.op(Op::OpLoad, image_t, {image}),
+                             b.op(Op::OpLoad, b.type_sampler(), {sampler})});
+    const Id texel = b.op(Op::OpImageSampleImplicitLod, vec4, {sampled, uv});
+    b.op_void(Op::OpStore, {out[0], texel});
+    b.op_void(Op::OpStore, {out[1], b.constant_null(vec4)});
+    const Id then = b.id(), merge = b.id();
+    const Id u = b.op(Op::OpCompositeExtract, f32, {uv, 0});
+    const Id left = b.op(Op::OpFOrdLessThan, b.type_bool(), {u, b.constant_f32(0.5f)});
+    b.op_void(Op::OpSelectionMerge, {merge, spirv_word(spv::SelectionControlMask::MaskNone)});
+    b.op_void(Op::OpBranchConditional, {left, then, merge});
+    b.begin_block(then);
+    b.op_void(Op::OpDemoteToHelperInvocation);
+    b.op_void(Op::OpBranch, {merge});
+    b.begin_block(merge);
+    b.op_void(Op::OpReturn);
+    b.end_function();
+
+    b.entry_point(spv::ExecutionModel::Fragment, main, "main",
+                  {image, sampler, coord, out[0], out[1]});
+    b.execution_mode(main, spv::ExecutionMode::OriginUpperLeft);
     EXPECT_EQ(validate(b.words()), "");
 }
 

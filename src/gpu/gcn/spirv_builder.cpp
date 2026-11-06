@@ -183,6 +183,20 @@ SpirvBuilder::Id SpirvBuilder::type_function(Id result, const std::vector<Id>& p
     return declare(spv::Op::OpTypeFunction, 0, operands);
 }
 
+SpirvBuilder::Id SpirvBuilder::type_image(Id sampled_type, spv::Dim dim, std::uint32_t depth,
+                                          bool arrayed, bool multisampled, std::uint32_t sampled,
+                                          spv::ImageFormat format) {
+    return declare(spv::Op::OpTypeImage, 0,
+                   {sampled_type, spirv_word(dim), depth, arrayed ? 1u : 0u,
+                    multisampled ? 1u : 0u, sampled, spirv_word(format)});
+}
+
+SpirvBuilder::Id SpirvBuilder::type_sampler() { return declare(spv::Op::OpTypeSampler, 0, {}); }
+
+SpirvBuilder::Id SpirvBuilder::type_sampled_image(Id image) {
+    return declare(spv::Op::OpTypeSampledImage, 0, {image});
+}
+
 SpirvBuilder::Id SpirvBuilder::constant_bool(bool value) {
     return declare(value ? spv::Op::OpConstantTrue : spv::Op::OpConstantFalse, type_bool(), {});
 }

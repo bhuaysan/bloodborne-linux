@@ -67,6 +67,13 @@ public:
     Id type_struct(const std::vector<Id>& members);
     Id type_pointer(spv::StorageClass storage, Id pointee);
     Id type_function(Id result, const std::vector<Id>& parameters = {});
+    // OpTypeImage: `depth` and `sampled` are the operands' 0, 1 or 2 (unknown, or known only at
+    // run time).
+    Id type_image(Id sampled_type, spv::Dim dim, std::uint32_t depth, bool arrayed,
+                  bool multisampled, std::uint32_t sampled,
+                  spv::ImageFormat format = spv::ImageFormat::Unknown);
+    Id type_sampler();
+    Id type_sampled_image(Id image);
 
     // Constants.
     Id constant_bool(bool value);
