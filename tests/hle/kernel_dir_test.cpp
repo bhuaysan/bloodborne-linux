@@ -62,6 +62,7 @@ TEST_F(DirTest, CreatesAndRemovesDirectoriesAndFiles) {
     EXPECT_EQ(sceKernelMkdir("/savedata0/d", 0755), sce(EEXIST));
     write(save0_ / "d" / "f", "x");
     EXPECT_EQ(sceKernelRmdir("/savedata0/d"), sce(ENOTEMPTY));
+    EXPECT_EQ(sceKernelUnlink("/savedata0/d"), sce(EPERM));
     EXPECT_EQ(sceKernelUnlink("/savedata0/d/f"), 0);
     EXPECT_EQ(sceKernelUnlink("/savedata0/d/f"), sce(ENOENT));
     EXPECT_EQ(sceKernelRmdir("/savedata0/d"), 0);

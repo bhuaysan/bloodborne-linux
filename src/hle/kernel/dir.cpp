@@ -97,7 +97,12 @@ std::int32_t sceKernelRmdir(const char* path) {
 
 std::int32_t sceKernelUnlink(const char* path) {
     return sce_fail(on_path("unlink", path, [](const Resolved& r) {
-        return r.mount_root ? EBUSY : host_result(::unlink(r.host.c_str()));
+        if (r.mount_root) {
+            return EBUSY;
+        }
+        const int error = host_result(::unlink(r.host.c_str()));
+        // Linux reports a directory as EISDIR, FreeBSD's unlink(2) as EPERM.
+        return error == EISDIR ? EPERM : error;
     }));
 }
 
