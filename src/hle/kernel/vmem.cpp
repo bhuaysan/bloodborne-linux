@@ -53,14 +53,15 @@ void* ptr(std::uintptr_t address) {
     return reinterpret_cast<void*>(address);
 }
 
-// The table, keyed by start. Regions never overlap.
-std::mutex table_mutex;
-std::map<std::uintptr_t, Region> table;
+// The table, keyed by start. Regions never overlap. The maps are leaked, never destroyed: game
+// threads may call in during exit.
+constinit std::mutex table_mutex;
+std::map<std::uintptr_t, Region>& table = *new std::map<std::uintptr_t, Region>;
 
 // The ranges of the window that reserve_again dropped, start to end. The host may still hold the
 // guest mapping there or may have reused the range, so placement in the window skips them for
 // good. They are no regions, so unmap, protect and the queries refuse them. Needs table_mutex.
-std::map<std::uintptr_t, std::uintptr_t> dropped;
+std::map<std::uintptr_t, std::uintptr_t>& dropped = *new std::map<std::uintptr_t, std::uintptr_t>;
 
 // Splits the region that holds `at` so that a region starts there. Needs table_mutex.
 void split_at(std::uintptr_t at) {

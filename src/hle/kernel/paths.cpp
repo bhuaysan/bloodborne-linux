@@ -152,7 +152,7 @@ void PathMap::log_refused(const std::string& first, std::string_view why) {
 }
 
 PathMap& path_map() {
-    static PathMap map;
+    static PathMap& map = *new PathMap;  // leaked: game threads may call in during exit
     return map;
 }
 

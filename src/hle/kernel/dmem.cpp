@@ -35,9 +35,10 @@ struct Allocation {
 };
 
 // The allocations, keyed by start offset. They never overlap. Adjacent ones stay apart, so that
-// the type query (BC+OG5m9+bw) can report the bounds of each.
-std::mutex table_mutex;
-std::map<std::uint64_t, Allocation> table;
+// the type query (BC+OG5m9+bw) can report the bounds of each. Leaked, never destroyed: game
+// threads may call in during exit.
+constinit std::mutex table_mutex;
+std::map<std::uint64_t, Allocation>& table = *new std::map<std::uint64_t, Allocation>;
 
 constexpr bool power_of_two(std::uint64_t value) {
     return value != 0 && (value & (value - 1)) == 0;
