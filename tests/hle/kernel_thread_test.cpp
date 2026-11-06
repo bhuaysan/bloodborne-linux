@@ -41,7 +41,8 @@ auto* const attr_init = fn<std::int32_t(Cell*)>("nsYoNRywwNg");
 auto* const attr_destroy = fn<std::int32_t(Cell*)>("62KCwEMmzcM");
 auto* const attr_setstacksize = fn<std::int32_t(Cell*, std::size_t)>("UTXzJbWhhTE");
 
-constexpr std::int32_t esrch = 0x80020003, edeadlk = 0x8002000b, einval = 0x80020016;
+constexpr std::int32_t esrch = 0x80020003, edeadlk = 0x8002000b, einval = 0x80020016,
+                       eagain = 0x80020023;
 
 char marker;
 
@@ -149,6 +150,21 @@ TEST(Thread, TheRequestedStackSizeIsApplied) {
     EXPECT_LE(size, largest_host_stack(min_thread_stack_size));
     EXPECT_EQ(attr_destroy(&attr), 0);
     EXPECT_EQ(attr_destroy(&attr), einval);
+}
+
+TEST(Thread, AStackSizeTheHostCantGiveFailsTheCreate) {
+    Cell attr = 0;
+    ASSERT_EQ(attr_init(&attr), 0);
+    Handle thread = reinterpret_cast<Handle>(&marker);  // a failed create leaves it alone
+    // Sizes that would wrap around when the reserve is added, and one beyond the address space.
+    for (const std::size_t size : {SIZE_MAX, SIZE_MAX - thread_stack_reserve + 1,
+                                   std::size_t{1} << 62}) {
+        SCOPED_TRACE(size);
+        ASSERT_EQ(attr_setstacksize(&attr, size), 0);  // the setter only checks the minimum
+        EXPECT_EQ(create(&thread, &attr, add_one, nullptr, nullptr), eagain);
+        EXPECT_EQ(thread, reinterpret_cast<Handle>(&marker));
+    }
+    EXPECT_EQ(attr_destroy(&attr), 0);
 }
 
 // ---- handles -----------------------------------------------------------------------------------
