@@ -25,8 +25,8 @@ struct DeviceInfo {
 
 class ComputeRunner {
 public:
-    // The runner on lavapipe. Nothing when there is no Vulkan 1.3 instance, no lavapipe device,
-    // or the device lacks a feature the translator needs; `why` then says which.
+    // The runner on lavapipe. Nothing when there is no Vulkan 1.3 instance, no lavapipe driver
+    // or device, or the device lacks a feature the translator needs; `why` then says which.
     static std::unique_ptr<ComputeRunner> create(std::string& why);
     ~ComputeRunner();
     ComputeRunner(const ComputeRunner&) = delete;

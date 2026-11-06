@@ -4,6 +4,7 @@
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -11,6 +12,9 @@
 namespace bb::test::vk {
 
 namespace {
+
+// The loader's driver filter that selects only lavapipe's manifest (lvp_icd.*.json).
+constexpr const char* kLavapipeOnly = "*lvp*";
 
 // A Vulkan structure with its type and next pointer set and everything else zero.
 template <typename T>
@@ -123,8 +127,10 @@ struct ComputeRunner::State {
         }
     }
 
-    // Picks lavapipe and creates the device. Returns what is missing, or nothing.
-    std::optional<std::string> init() {
+    // Picks lavapipe and creates the device. Returns what is missing, or nothing. With
+    // `lavapipe_only`, the loader loads no driver but lavapipe, so a failed instance means that
+    // lavapipe is missing.
+    std::optional<std::string> init(bool lavapipe_only) {
         auto app = make<VkApplicationInfo>(VK_STRUCTURE_TYPE_APPLICATION_INFO);
         app.pApplicationName = "bloodborne-linux compute runner";
         app.apiVersion = VK_API_VERSION_1_3;
@@ -132,8 +138,14 @@ struct ComputeRunner::State {
         instance_info.pApplicationInfo = &app;
         if (VkResult r = vkCreateInstance(&instance_info, nullptr, &instance); r != VK_SUCCESS) {
             instance = VK_NULL_HANDLE;
-            return "Vulkan instance (vkCreateInstance gave " +
-                   std::to_string(static_cast<int>(r)) + ")";
+            const std::string result =
+                "vkCreateInstance gave " + std::to_string(static_cast<int>(r));
+            if (lavapipe_only) {
+                return "lavapipe driver (Mesa's Vulkan drivers; the loader, limited to "
+                       "VK_LOADER_DRIVERS_SELECT=" +
+                       std::string(kLavapipeOnly) + ", made no instance: " + result + ")";
+            }
+            return "Vulkan instance (" + result + ")";
         }
         std::uint32_t count = 0;
         check(vkEnumeratePhysicalDevices(instance, &count, nullptr), "vkEnumeratePhysicalDevices");
@@ -203,9 +215,11 @@ ComputeRunner::~ComputeRunner() = default;
 std::unique_ptr<ComputeRunner> ComputeRunner::create(std::string& why) {
     // Only lavapipe's manifest is loaded, unless the environment selects other drivers. The
     // other drivers would be loaded and initialized for nothing.
-    ::setenv("VK_LOADER_DRIVERS_SELECT", "*lvp*", 0);
+    ::setenv("VK_LOADER_DRIVERS_SELECT", kLavapipeOnly, 0);
+    const char* select = std::getenv("VK_LOADER_DRIVERS_SELECT");
+    const bool lavapipe_only = select != nullptr && std::string_view(select) == kLavapipeOnly;
     auto state = std::make_unique<State>();
-    if (auto missing = state->init()) {
+    if (auto missing = state->init(lavapipe_only)) {
         why = "no " + *missing;
         return nullptr;
     }
