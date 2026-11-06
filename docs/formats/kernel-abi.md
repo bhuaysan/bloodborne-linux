@@ -323,3 +323,29 @@ The libkernel `scePthreadCond*` imports (libc.prx, libSceFios2.prx and the eboot
 The sce wait runs `pthread_cond_clockwait` against a `CLOCK_MONOTONIC` deadline, the POSIX wait against the `abstime` on `CLOCK_REALTIME`. A null `abstime` or a `tv_nsec` outside [0, 10⁹) gives `EINVAL`.
 
 **Results.** A timeout gives `ETIMEDOUT` (libc 0x602e and Fios 0x2e22f compare 0x8002003c; the eboot's wrapper turns it into -3, 0x2083f20). The eboot's wrapper also tells `EPERM` (0x80020001, 0x2083ed1) and `EINVAL` (0x2083edd) apart: waiting on a mutex the thread doesn't hold gives `EPERM` for the error-checking and recursive types. Destroying a condition variable that a thread is blocked on gives `EBUSY` (the eboot's wrapper compares 0x10, 0x2083e02; libSceFios2 traps on any failure, 0x2e120); glibc's destroy would block until the waiters leave instead. A waiter that a signal or broadcast has already released doesn't count, even while it waits to take the mutex back: the common teardown "lock, set a flag, broadcast, destroy" succeeds, and destroy waits for the released waiters to leave, as glibc does. To know which waiters are still blocked, each waiter sleeps on its own host condition variable, and signal and broadcast release them in arrival order. A cell that holds no object of ours gives `EINVAL`.
+
+## Threads
+
+The libkernel thread and thread attribute imports, `sched_yield`, and the libScePosix `pthread_*` thread imports (issue #94). `src/hle/kernel/thread.cpp` implements `scePthreadCreate`, `scePthreadJoin`, `scePthreadExit` and the attribute's init, destroy and stack size so far. Detach, Self, Equal, Yield, `sched_yield`, the other attribute setters, `scePthreadAttrGet` and the libScePosix entry points follow in a second part and stay logging stubs until then. Affinity, names, priority changes, thread-specific data and once are #99.
+
+**Creation.** `scePthreadCreate(&thread, attr, entry, arg, name)` (eboot 0x263b3de, 0xd1ab29; libc 0x60df, 0x634d; Fios 0x2eb4e), `pthread_create(&thread, attr, entry, arg)` (eboot 0x66674, 0x666df) and the unnamed libScePosix `Jmi+9w9u0E4(&thread, attr, entry, arg, name)` (eboot 0x4388aa). For the last one, the eboot's wrapper at 0x438840 passes its own entry, argument and name through, and its callers pass a code address as the entry (0x42326e, used at 0x4232c9); it reports a non-zero result through `perror` (0x4388fb), so the result is an errno number. The name may be null; libc passes a formatted buffer (0x60cc), libSceFios2 at most 15 bytes (0x2eb10).
+
+**Handles.** The handle is 8 bytes (Fios reads it back at 0x2eb55, the eboot stores it at 0x4388c1) and is a pointer to our `Thread` object. The runtime keeps a table of live threads and refuses a handle that isn't in it with `ESRCH`, without reading through it. A joined thread leaves the table, and so does a detached thread when it ends. Self returns the handle the creator got (Fios's entry stores it at 0x2ebb3). `scePthreadEqual` returns 1 for the same handle, else 0 (libc 0x6250 passes the result through, Fios 0x2ec19 tests it for non-zero).
+
+**Attributes.** One 8-byte cell (eboot 0x263b36f: at -0x58, below the name buffer at -0x50; eboot 0x438876: at -0x40, below the handle at -0x38) that holds a pointer to our attribute object. Init allocates the object, destroy frees it and resets the cell to 0, and a cell without one of our objects gives `EINVAL`. The eboot initialises one static attribute (0x53e9948) once and passes it to every create at 0x66674. A null attribute means the defaults (libc 0x6345). Defaults: stack 0x10000, joinable, policy, priority and inheritance 0.
+
+| Setter | Values | Applied | Source |
+|---|---|---|---|
+| stack size | at least 0x4000, else `EINVAL` | yes | eboot's wrapper 0x263b310: 0x10000 when its caller passes 0 (0x263b331), a retry with 0x4000 when the size is refused (0x263b387); eboot 0x66557: 0x20000. `PTHREAD_STACK_MIN` is 16384 in Linux pthread_attr_setstacksize(3) |
+| detach state | 0 joinable, 1 detached, else `EINVAL` | yes | 0: eboot 0x263b3b3, 0x43887b, Fios 0x2ea7c (joined at 0x2ebde). 1: eboot 0x6654a, 0x66689, 0xd1aad5 (never joined) |
+| sched param | pointer to one `int`, the priority | recorded | eboot 0x66564 (700), 0x666bb (from a table), 0xd1aaf5; Fios 0x2ea99 |
+| sched policy | any `int` | recorded | eboot 0x263b3bd, 0xd1aae7: 1 |
+| inherit sched | any `int` | recorded | Fios 0x2eaa0: 0 |
+
+The host stack is the requested size plus a 64 KiB reserve for the runtime's own frames (design note, Threads). `scePthreadAttrGet(thread, attr)` fills an initialised attribute with the thread's attributes and its current detach state (libc 0x81abf, with Self as the thread).
+
+**Exit.** `scePthreadExit(value)` and `pthread_exit(value)` end the calling thread with `value` as its result. The eboot's thread entry 0x263b1e0 never returns through its `ret`: it ends in 0x207f990, which calls `scePthreadExit` (0x207f99b). libc's wrapper (0x6190) and the eboot (0x667e0) pass an `int` sign-extended to 64 bits.
+
+**Join.** `scePthreadJoin(thread, &value)` and `pthread_join`. `value` may be null (Fios 0x2ebdc). libc reads the low 32 bits of the result (0x6147).
+
+**Results.** The sce entry points return `0x80020000 | errno`, the POSIX ones the errno number. The eboot's wrapper tells `EPERM` (0x80020001), `EINVAL` (0x80020016) and `EAGAIN` (0x80020023) apart after a failed create (0x263b3f3–0x263b405). Following Linux pthread_join(3) and pthread_detach(3): `ESRCH` for a handle not in the table (null included), `EDEADLK` for joining the calling thread, `EINVAL` for joining or detaching a thread that is detached, already being joined, or wasn't started by the runtime. `EINVAL` also for a null handle pointer or entry and for an invalid attribute; `EAGAIN` when the host can't create the thread. `scePthreadYield` returns nothing (libc's wrapper 0x6240 is a tail jump); `sched_yield` returns 0, or -1 with the guest errno.
