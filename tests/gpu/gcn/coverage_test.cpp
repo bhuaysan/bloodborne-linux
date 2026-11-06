@@ -323,6 +323,22 @@ TEST(GcnCoverage, ProgramOutcomes) {
     EXPECT_FALSE(open.internal);
     EXPECT_FALSE(open.message.empty());
     EXPECT_EQ(open.message.find(" at offset "), std::string::npos);
+
+    // Vertex (1) and copy (6) shaders get the vertex key, so a position export translates. The
+    // other types keep the compute key, where exp is an error; domain shaders (8) among them.
+    Words position = xport(0xf, 12, 0, 1, 2, 3, xp::done);  // exp pos0 v0, v1, v2, v3 done
+    position.push_back(s_endpgm);
+    for (const unsigned type : {1u, 6u}) {
+        const Outcome vertex = translate_program(position, type, true);
+        EXPECT_TRUE(vertex.translated) << "type " << type << ": " << vertex.message;
+        EXPECT_EQ(vertex.invalid, "") << "type " << type;
+    }
+    for (const unsigned type : {0u, 8u}) {
+        const Outcome compute = translate_program(position, type, true);
+        EXPECT_FALSE(compute.translated) << "type " << type;
+        EXPECT_EQ(compute.message, "exp in a compute shader") << "type " << type;
+        EXPECT_EQ(compute.blocker, "exp") << "type " << type;
+    }
 }
 
 TEST(GcnCoverage, KindOfNamesTheInstruction) {
