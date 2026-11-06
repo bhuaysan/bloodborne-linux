@@ -1,4 +1,4 @@
-// libkernel threads and thread attributes, on glibc threads
+// libkernel and libScePosix threads and thread attributes, on glibc threads
 // (docs/design/m3-core-os.md, "Threads"; values and call sites in docs/formats/kernel-abi.md,
 // "Threads"). The core functions return a host errno, which the sce entry points translate.
 
@@ -213,13 +213,24 @@ int posix_sched_yield() {
     return sched_yield() == 0 ? 0 : posix_fail(errno);
 }
 
-// Sce<f>::call wraps a core function `f` in the sce error form.
+// Sce<f>::call and Posix<f>::call wrap a core function `f` in the sce or POSIX error form.
 template <auto F>
 struct Sce;
 template <class... A, int (*F)(A...)>
 struct Sce<F> {
     static std::int32_t call(A... args) { return sce_fail(F(args...)); }
 };
+
+template <auto F>
+struct Posix;
+template <class... A, int (*F)(A...)>
+struct Posix<F> {
+    static int call(A... args) { return pthread_error(F(args...)); }
+};
+
+int posix_create(Thread** thread, const Cell* attr, ThreadEntry entry, void* arg) {
+    return pthread_error(create_thread(thread, attr, entry, arg, nullptr));
+}
 
 }  // namespace
 
@@ -382,3 +393,15 @@ BB_HLE_FUNCTION("libkernel", "4+h9EzwKF4I", k::Sce<k::attr_setschedpolicy>::call
 BB_HLE_FUNCTION("libkernel", "eXbUSpEaTsA", k::Sce<k::attr_setinheritsched>::call);
 BB_HLE_FUNCTION("libkernel", "x1X76arYMxU", k::Sce<k::attr_get>::call);
 
+// libScePosix: the same with POSIX error numbers. Jmi+9w9u0E4 is pthread_create with a name as
+// fifth argument (docs/formats/kernel-imports.md).
+BB_HLE_FUNCTION("libScePosix", "OxhIB8LB-PQ", k::posix_create);
+BB_HLE_FUNCTION("libScePosix", "Jmi+9w9u0E4", k::Posix<k::create_thread>::call);
+BB_HLE_FUNCTION("libScePosix", "h9CcP3J0oVM", k::Posix<k::join_thread>::call);
+BB_HLE_FUNCTION("libScePosix", "FJrT5LuUBAU", k::exit_thread);
+BB_HLE_FUNCTION("libScePosix", "EotR8a3ASf4", k::current_thread);
+BB_HLE_FUNCTION("libScePosix", "wtkt-teR1so", k::Posix<k::attr_init>::call);
+BB_HLE_FUNCTION("libScePosix", "zHchY8ft5pk", k::Posix<k::attr_destroy>::call);
+BB_HLE_FUNCTION("libScePosix", "2Q0z6rnBrTE", k::Posix<k::attr_setstacksize>::call);
+BB_HLE_FUNCTION("libScePosix", "E+tyo3lp5Lw", k::Posix<k::attr_setdetachstate>::call);
+BB_HLE_FUNCTION("libScePosix", "euKRgm0Vn2M", k::Posix<k::attr_setschedparam>::call);

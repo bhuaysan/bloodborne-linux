@@ -24,9 +24,9 @@ using Cell = std::uintptr_t;
 using Handle = Thread*;
 
 template <class F>
-F* fn(const char* nid) {
+F* fn(const char* nid, const char* library = "libkernel") {
     return reinterpret_cast<F*>(
-        bb::hle::resolve({nid, "libkernel", "libTestModule", bb::loader::stt_func}));
+        bb::hle::resolve({nid, library, "libTestModule", bb::loader::stt_func}));
 }
 
 auto* const create =
@@ -46,6 +46,19 @@ auto* const attr_setschedparam = fn<std::int32_t(Cell*, const int*)>("DzES9hQF4f
 auto* const attr_setschedpolicy = fn<std::int32_t(Cell*, int)>("4+h9EzwKF4I");
 auto* const attr_setinheritsched = fn<std::int32_t(Cell*, int)>("eXbUSpEaTsA");
 auto* const attr_get = fn<std::int32_t(Handle, Cell*)>("x1X76arYMxU");
+
+constexpr const char* posix = "libScePosix";
+auto* const posix_create = fn<int(Handle*, const Cell*, ThreadEntry, void*)>("OxhIB8LB-PQ", posix);
+auto* const posix_create_named =
+    fn<int(Handle*, const Cell*, ThreadEntry, void*, const char*)>("Jmi+9w9u0E4", posix);
+auto* const posix_join = fn<int(Handle, void**)>("h9CcP3J0oVM", posix);
+auto* const posix_exit = fn<void(void*)>("FJrT5LuUBAU", posix);
+auto* const posix_self = fn<Handle()>("EotR8a3ASf4", posix);
+auto* const posix_attr_init = fn<int(Cell*)>("wtkt-teR1so", posix);
+auto* const posix_attr_destroy = fn<int(Cell*)>("zHchY8ft5pk", posix);
+auto* const posix_attr_setstacksize = fn<int(Cell*, std::size_t)>("2Q0z6rnBrTE", posix);
+auto* const posix_attr_setdetachstate = fn<int(Cell*, int)>("E+tyo3lp5Lw", posix);
+auto* const posix_attr_setschedparam = fn<int(Cell*, const int*)>("euKRgm0Vn2M", posix);
 
 constexpr std::int32_t esrch = 0x80020003, edeadlk = 0x8002000b, einval = 0x80020016,
                        eagain = 0x80020023;
@@ -385,6 +398,39 @@ TEST(Thread, AttrGetCopiesTheAttributesAndTheCurrentDetachState) {
     EXPECT_EQ(attr_get(self(), &not_an_attr), einval);
     EXPECT_EQ(attr_setschedpolicy(&not_an_attr, 1), einval);
     EXPECT_EQ(attr_destroy(&copy), 0);
+}
+
+// ---- libScePosix -------------------------------------------------------------------------------
+
+void* exit_with_self(void*) {
+    posix_exit(posix_self());
+    return nullptr;
+}
+
+TEST(Thread, ThePosixCallsReturnErrnoNumbers) {
+    constexpr int posix_esrch = 3, posix_einval = 22;
+    Cell attr = 0;
+    ASSERT_EQ(posix_attr_init(&attr), 0);
+    EXPECT_EQ(posix_attr_setstacksize(&attr, min_thread_stack_size - 1), posix_einval);
+    EXPECT_EQ(posix_attr_setstacksize(&attr, 0x20000), 0);
+    EXPECT_EQ(posix_attr_setdetachstate(&attr, 2), posix_einval);
+    EXPECT_EQ(posix_attr_setdetachstate(&attr, guest_create_joinable), 0);
+    const int priority = 700;
+    EXPECT_EQ(posix_attr_setschedparam(&attr, &priority), 0);
+
+    Handle thread = nullptr;
+    ASSERT_EQ(posix_create(&thread, &attr, exit_with_self, nullptr), 0);
+    void* value = nullptr;
+    ASSERT_EQ(posix_join(thread, &value), 0);
+    EXPECT_EQ(value, thread);
+    EXPECT_EQ(posix_join(thread, nullptr), posix_esrch);
+
+    ASSERT_EQ(posix_create_named(&thread, nullptr, add_one, &marker, "posix worker"), 0);
+    EXPECT_EQ(thread->name, "posix worker");
+    ASSERT_EQ(posix_join(thread, nullptr), 0);
+    EXPECT_EQ(posix_create(&thread, nullptr, nullptr, nullptr), posix_einval);
+    EXPECT_EQ(posix_attr_destroy(&attr), 0);
+    EXPECT_EQ(posix_attr_destroy(&attr), posix_einval);
 }
 
 }  // namespace
