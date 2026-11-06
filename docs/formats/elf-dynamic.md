@@ -38,7 +38,7 @@ Standard tags that appear: `DT_NEEDED` (1), `DT_INIT` (0xC), `DT_FINI` (0xD), `D
 
 Sony tags. Offset means an offset into the dynlibdata segment.
 
-| Tag | Our name | Value | Standard equivalent | Confidence |
+| Tag | Name | Value | Standard equivalent | Confidence |
 |---|---|---|---|---|
 | 0x61000025 | DT_SCE_HASH | offset | DT_HASH, but see below | confirmed (layout) |
 | 0x61000027 | DT_SCE_PLTGOT | virtual address | DT_PLTGOT | confirmed |
@@ -54,11 +54,11 @@ Sony tags. Offset means an offset into the dynlibdata segment.
 | 0x6100003B | DT_SCE_SYMENT | 24 | DT_SYMENT | confirmed |
 | 0x6100003D | DT_SCE_HASHSZ | size of the hash table | none | confirmed |
 | 0x6100003F | DT_SCE_SYMTABSZ | size of the symbol table | none (Linux derives the count from the hash table) | confirmed |
-| 0x61000007 | | 0 here | | unknown |
-| 0x61000009 | | string table offset: the build path of the file | | observed |
+| 0x61000007 | DT_SCE_FINGERPRINT | 0 here | | unknown |
+| 0x61000009 | DT_SCE_FILENAME | string table offset: the build path of the file | | observed |
 | 0x6100000D | DT_SCE_MODULE_INFO | module record: this file's module, id 0 | | confirmed |
 | 0x6100000F | DT_SCE_NEEDED_MODULE | module record, one per needed module | | confirmed |
-| 0x61000011 | | 0 here | | unknown |
+| 0x61000011 | DT_SCE_MODULE_ATTR | 0 here | | unknown |
 | 0x61000013 | DT_SCE_EXPORT_LIB | library record: a library this file exports, PRX only | | confirmed |
 | 0x61000015 | DT_SCE_IMPORT_LIB | library record, one per imported library | | confirmed |
 | 0x61000017 | DT_SCE_EXPORT_LIB_ATTR | library id + attribute word, pairs with 0x13 | | observed |

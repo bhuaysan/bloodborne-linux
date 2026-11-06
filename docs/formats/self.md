@@ -129,7 +129,7 @@ The ELF header and program headers are copied verbatim. Things that differ from 
 
 Program header types seen:
 
-| `p_type` | Our name | Notes |
+| `p_type` | Name | Notes |
 |---|---|---|
 | 0x1 | PT_LOAD | Code (R E) and data (RW). Data has `p_memsz` > `p_filesz` (bss). |
 | 0x2 | PT_DYNAMIC | `p_vaddr` = 0. The file data lies inside the DYNLIBDATA segment, which isn't loaded. |
