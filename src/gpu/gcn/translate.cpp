@@ -1,6 +1,6 @@
 // GCN to SPIR-V: one invocation per lane, the registers as function variables, and EXEC as
 // predication (docs/design/graphics.md, "Execution model"). The instruction semantics follow the
-// Sea Islands ISA manual (scalar and vector ALU operations); the compute stage's initial
+// Sea Islands ISA manual (scalar and vector ALU operations, FLAT); the compute stage's initial
 // registers follow COMPUTE_PGM_RSRC2 (Sea Islands register reference).
 
 #include "gpu/gcn/translate.hpp"
@@ -94,7 +94,7 @@ private:
     unsigned user_sgprs() const { return (key_.pgm_rsrc2 >> rsrc2_user_sgpr_shift) & 31; }
 
     // The draw block and the initial registers: user data in the first SGPRs, the thread ID in
-    // X in v0.
+    // X in v0. The lane ID is LocalInvocationIndex modulo 64.
     void prologue() {
         const Id user_t = b_.type_array(u32_, b_.constant_u32(16));
         b_.decorate(user_t, spv::Decoration::ArrayStride, {4});
@@ -118,7 +118,11 @@ private:
                                {draw, c0, b_.constant_u32(k)});
             store(sgpr(k), load_global(u32_, p, 4));
         }
+        bias_ = load_global(
+            u64_, b_.op(Op::OpAccessChain, global_pointer(u64_), {draw, b_.constant_u32(1)}), 8);
 
+        const Id index = load(u32_, builtin(spv::BuiltIn::LocalInvocationIndex, u32_));
+        lane_ = b_.op(Op::OpBitwiseAnd, u32_, {index, b_.constant_u32(63)});
         const Id uvec3 = b_.type_vector(u32_, 3);
         const Id local = load(uvec3, builtin(spv::BuiltIn::LocalInvocationId, uvec3));
         store(vgpr(0), b_.op(Op::OpCompositeExtract, u32_, {local, 0}));
@@ -151,6 +155,9 @@ private:
             case Format::vop3:
                 vector(inst);
                 break;
+            case Format::flat:
+                flat(inst);
+                break;
             default:
                 unsupported();
             }
@@ -174,7 +181,9 @@ private:
     void scalar(const Instruction& inst) {
         const std::string_view name = inst.name;
         const Operand& dst = inst.dst[0];
-        if (name == "s_mov_b32" || name == "s_mov_b64") {
+        if (name == "s_mov_b64" && dst.kind == OperandKind::scalar && dst.code == code::exec) {
+            store(mask_exec(), read_mask(inst.src[0]));
+        } else if (name == "s_mov_b32" || name == "s_mov_b64") {
             const unsigned dwords = name == "s_mov_b64" ? 2 : 1;
             Id value[2] = {};
             for (unsigned d = 0; d < dwords; ++d) {
@@ -223,6 +232,31 @@ private:
         }
     }
 
+    // flat_store_dword reaches guest memory through the address bias, in active lanes only. There
+    // is no range check, and the LDS and scratch apertures are not handled.
+    void flat(const Instruction& inst) {
+        if (inst.name != "flat_store_dword") {
+            unsupported();
+        }
+        const Id high = b_.op(Op::OpShiftLeftLogical, u64_,
+                              {b_.op(Op::OpUConvert, u64_, {read(inst.src[0], 1)}),
+                               b_.constant_u32(32)});
+        const Id guest = b_.op(Op::OpBitwiseOr, u64_,
+                               {high, b_.op(Op::OpUConvert, u64_, {read(inst.src[0], 0)})});
+        const Id pointer = b_.op(Op::OpConvertUToPtr, global_pointer(u32_),
+                                 {b_.op(Op::OpIAdd, u64_, {guest, bias_})});
+        const Id data = read(inst.src[1]);
+        const Id guard = active();
+        const Id then = b_.id();
+        const Id merge = b_.id();
+        b_.op_void(Op::OpSelectionMerge, {merge, spirv_word(spv::SelectionControlMask::MaskNone)});
+        b_.op_void(Op::OpBranchConditional, {guard, then, merge});
+        b_.begin_block(then);
+        b_.op_void(Op::OpStore, {pointer, data, spirv_word(spv::MemoryAccessMask::Aligned), 4});
+        b_.op_void(Op::OpBranch, {merge});
+        b_.begin_block(merge);
+    }
+
     // Dword `dword` of a source operand, as a u32.
     Id read(const Operand& o, unsigned dword = 0) {
         switch (o.kind) {
@@ -253,11 +287,42 @@ private:
         return dword == 0 ? o.value : (static_cast<std::int32_t>(o.value) < 0 ? ~0u : 0u);
     }
 
-    // Dword `dword` of a scalar destination. EXEC stays all lanes so far.
+    // A lane mask source, EXEC or a constant: this lane's bit of it.
+    Id read_mask(const Operand& o) {
+        if (o.kind == OperandKind::scalar && o.code == code::exec) {
+            return active();
+        }
+        if (o.kind != OperandKind::constant) {
+            fail(std::format("unsupported mask operand of {}", inst_->name));
+        }
+        const std::uint32_t low = constant_word(o, 0);
+        const std::uint32_t high = constant_word(o, 1);
+        if (low == high && (low == 0 || low == ~0u)) {
+            return b_.constant_bool(low != 0);
+        }
+        const Id lower = b_.op(Op::OpULessThan, bool_, {lane_, b_.constant_u32(32)});
+        return lane_bit(b_.op(Op::OpSelect, u32_,
+                              {lower, b_.constant_u32(low), b_.constant_u32(high)}));
+    }
+
+    // Bit (lane ID modulo 32) of `word`.
+    Id lane_bit(Id word) {
+        const Id shift = b_.op(Op::OpBitwiseAnd, u32_, {lane_, b_.constant_u32(31)});
+        const Id bit = b_.op(Op::OpBitwiseAnd, u32_,
+                             {b_.op(Op::OpShiftRightLogical, u32_, {word, shift}),
+                              b_.constant_u32(1)});
+        return b_.op(Op::OpINotEqual, bool_, {bit, b_.constant_u32(0)});
+    }
+
+    // Dword `dword` of a scalar destination. A 32-bit write to exec_lo or exec_hi sets the
+    // lanes of that half to their bit of the value.
     void write_scalar(const Operand& o, Id value, unsigned dword = 0) {
         const unsigned c = o.code + dword;
         if (o.kind == OperandKind::scalar && (c & ~1u) == code::exec) {
-            fail(std::format("writes to EXEC by {} are not supported yet", inst_->name));
+            const Op half = (c & 1) != 0 ? Op::OpUGreaterThanEqual : Op::OpULessThan;
+            const Id mine = b_.op(half, bool_, {lane_, b_.constant_u32(32)});
+            store(mask_exec(), b_.op(Op::OpSelect, bool_, {mine, lane_bit(value), active()}));
+            return;
         }
         if (o.kind != OperandKind::scalar) {
             unsupported();
@@ -317,6 +382,7 @@ private:
     Cfg cfg_;
     SpirvBuilder b_;
     Id bool_ = 0, u32_ = 0, u64_ = 0;
+    Id lane_ = 0, bias_ = 0;
     std::vector<Id> interface_;
     std::map<unsigned, Id> sgprs_, vgprs_, bools_;  // bools_: EXEC and SCC by operand code
     const Instruction* inst_ = nullptr;

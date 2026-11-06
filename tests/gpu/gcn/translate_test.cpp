@@ -75,8 +75,8 @@ TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
               "unsupported register operand 106 of s_mov_b32 at offset 0x0 (word 0xbe80036a)");
     EXPECT_EQ(error({s_endpgm}, {.stage = bb::gcn::Stage::pixel}),
               "only the compute stage is translated so far at offset 0x0 (word 0x00000000)");
-    EXPECT_EQ(error({sop1(4, 126, 196), s_endpgm}),  // s_mov_b64 exec, -4
-              "writes to EXEC by s_mov_b64 are not supported yet at offset 0x0 (word 0xbefe04c4)");
+    EXPECT_EQ(error({sop1(4, 126, 0), s_endpgm}),  // s_mov_b64 exec, s[0:1]
+              "unsupported mask operand of s_mov_b64 at offset 0x0 (word 0xbefe0400)");
     EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 1u << 7}),  // TGID_X_EN
               "COMPUTE_PGM_RSRC2 0x80 is not supported yet at offset 0x0 (word 0x00000000)");
     EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 16u << 1 | 4u << 15}), "no error");  // LDS_SIZE
