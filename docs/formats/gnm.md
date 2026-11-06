@@ -296,6 +296,8 @@ The HLE registers these as logging stubs.
 
 ## Second wave
 
+Planned in [graphics.md](../design/graphics.md#command-buffers-to-the-first-frame-second-wave), items 15–20. The list below is what this note contributed.
+
 What the note gives the PM4 and submission issues:
 
 1. **PM4 parser core** (`bbpm4`), after the packet names are checked (open questions): type-3 headers and the type-2 filler, the four register spaces and the predicate/shader-type bits, `NOP` skipping, `INDIRECT_BUFFER`/`INDIRECT_BUFFER_CONST`, `REWIND` (wait for the valid bit), and a log of unknown opcodes. Tests with synthetic streams.

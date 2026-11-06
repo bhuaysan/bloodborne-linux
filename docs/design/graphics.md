@@ -12,7 +12,7 @@ How the game's GPU work reaches Vulkan: the shader translator (GCN → SPIR-V), 
   The corpus test (#121) answered whether the game uses Sea Islands (CI) additions to Southern Islands (SI, gfx6): every distinct instruction of the 3,832 programs with different code, assembled for `tahiti` (SI), gives the words of the game, except 265 distinct SMRD encodings with the 32-bit literal offset (`s_load_dwordx8 s[24:31], s[12:13], 0x100`; the SI offset field has 8 bits). No FLAT, no `flat_scratch` and no other CI instruction occurs. So the game relies on CI only for SMRD offsets of 256 dwords and more, which the decoder handles. References: the AMD documents in [clean-room.md](../clean-room.md#allowed-with-credit).
 - **Command buffers** are built by GNM code that is statically linked into the eboot. Only the driver boundary is imported: `libSceGnmDriver` has 50 imported functions, two of them named so far. The game hands us finished PM4 streams at submission time.
 - **Shaders live in the game files** (below). Each one can be found again at run time by the hash of its code.
-- **M3 doesn't reach the main loop yet.** The first wave therefore works on the game files only: extraction, decoding, translation, and execution tests on our own GCN programs.
+- **The first wave ran offline**, before M3 reached the main loop: extraction, decoding, translation, and execution tests on our own GCN programs. The second wave works on the running game.
 
 ## Source layout
 
@@ -464,22 +464,6 @@ Four levels. The first three need neither a running game nor a GPU.
 
 Committed test data is only our own: assembly sources, their assembled words, and expected values. Nothing extracted from the game is committed.
 
-## Command buffers and state (later wave, sketch)
-
-- **Parsing.** The `libSceGnmDriver` submit functions hand `bbpm4` the command buffers and constant-engine buffers. Parsing runs on a GPU thread, never on the calling game thread. What the eboot writes and submits is in [gnm.md](../formats/gnm.md).
-- **Constant engine.** The game uses it: each DCB comes with a CCB, and the two streams synchronise through the CE/DE counters, so `bbpm4` runs both.
-- **Compute queues.** The game maps compute queues on its own ring buffers and reports the write offset through an import. `bbpm4` parses those rings too.
-- **Addresses.** Packets carry the game's own virtual addresses, and command buffers hold data the GPU reads (descriptors, constants, indices). Command buffer memory is GPU-visible memory like the rest.
-- **One format.** Imports that write packets into a game buffer write standard PM4 (per the SI programming guide), so the parser sees one format.
-- **Register writes.** `SET_CONTEXT_REG`, `SET_SH_REG`, `SET_UCONFIG_REG` and `SET_CONFIG_REG` update a mirror of the register file.
-- **Draws and dispatches** take a snapshot of the state the backend needs: ShaderKey, render targets, blend, depth and raster state, and user data.
-- **Unknown packets** are logged once per opcode; the eboot writes two opcodes that have no name yet (0x8C, 0x8D), and the names of the others still need checking against an AMD PM4 header ([gnm.md](../formats/gnm.md#open-questions-and-next-steps)). `NOP` packets with a payload go to a hook list, because the driver may use them as markers. The GNM code tags some packets with `NOP`s whose payload starts with `0x6875xxxx`.
-- **Register names and offsets** come from the AMD register guide. The Mesa register database (MIT) may be used to generate a table, as generated data in its own PR.
-- **GPU memory.** The guest's GPU-visible memory (libkernel direct memory, M3) is imported into Vulkan with `VK_EXT_external_memory_host` where the device allows it. That gives device addresses without copies. Such memory stays host memory, so on a discrete GPU every read crosses PCIe. A device-local cache with write tracking will be needed for vertex and constant data.
-- **Textures and render targets** are cached by address and descriptor. Tiled ↔ linear conversion uses AMD's addrlib (MIT), copied into `third_party/` in its own PR.
-- **Clip space.** Clip-space conventions (`PA_CL_CLIP_CNTL`, depth range, viewport orientation) are decided with the backend.
-- **Flip.** `libSceVideoOut` flips present through a Vulkan swapchain.
-
 ## First wave (offline)
 
 Each item is one issue, at most 500 lines of code and tests. Every PR that first uses a tool or header adds its row to `docs/references.md`: LLVM (`llvm-mc`), SPIRV-Tools, SPIRV-Headers, Mesa's lavapipe, the Vulkan loader.
@@ -508,6 +492,69 @@ Each item is one issue, at most 500 lines of code and tests. Every PR that first
 | 10 | **GNM survey (research).** Covers how the eboot builds and submits command buffers, what the `libSceGnmDriver` imports do (behavior only, named by role), and where fetch shaders come from. Written up in `docs/formats/gnm.md`. It was written from the eboot and the AMD documents only, under the earlier policy; emulator GnmDriver HLE code may now be used too. | – |
 
 Items 1, 3a and 10 can start at once. Items 5 and 6a wait for item 0.
+
+## Command buffers to the first frame (second wave)
+
+The game reaches its main loop (M3). On the render thread it binds shaders, builds command buffers, submits them and flips three video-out buffers, all into logging stubs (a 60 s run on 2026-11-06). The second wave turns those submissions into Vulkan work up to the first presented frame. shadPS4 (GPL-2.0-or-later, like us) solves the same problem; its structure is summarised below and its code may be adapted where that is faster, file by file with the notices `docs/clean-room.md` asks for.
+
+### Decisions
+
+- **One GPU thread.** The submit imports only queue work. One thread (`bb::pm4::GpuThread`) runs the graphics queue, its constant engine and the compute rings. Each stream is a parser state that can stop at a wait (`WAIT_REG_MEM`, `WAIT_ON_CE_COUNTER`, `WAIT_ON_DE_COUNTER_DIFF`, `MEM_SEMAPHORE`, an unset `REWIND` bit) and resume later; the thread round-robins over the runnable streams. shadPS4 does the same with C++20 coroutines (`video_core/amdgpu/liverpool.cpp`); a plain resumable cursor is enough for us.
+- **Register mirror.** `bbpm4` keeps the four register spaces as arrays indexed by dword offset (config 0x2000, SH 0x2C00, context 0xA000, uconfig 0xC000), with typed accessors for the registers the backend reads. Offsets and opcode numbers come from AMD's MIT headers `si_ci_vi_merged_offset.h` and `si_ci_vi_merged_pm4_it_opcodes.h`, copied unchanged into `third_party/amd-gcn/` (they also settle the packet names that [gnm.md](../formats/gnm.md#open-questions-and-next-steps) left unverified). Field layouts may be adapted from shadPS4's `amdgpu/regs*.h` and `pm4_cmds.h`.
+- **CPU-side packets run on the GPU thread in stream order**: `WRITE_DATA`, `COPY_DATA`, `DMA_DATA` (fill and copy), the memory write of `EVENT_WRITE_EOP`, `EVENT_WRITE_EOS` and `RELEASE_MEM`. Before such a write the thread waits for the Vulkan work recorded so far (a timeline semaphore value), so a label never claims work that hasn't finished. Interrupt selects trigger the equeue events the game registered with `sceGnmAddEqEvent`. `ACQUIRE_MEM` and `PFP_SYNC_ME` are no-ops while guest memory is host memory (below).
+- **Stage register imports** (`sceGnmSetVsShader` and the others, [gnm.md](../formats/gnm.md#shader-objects-and-the-stage-writers)) write the standard `SET_SH_REG`/`SET_CONTEXT_REG` packets for their register block and pad with a `NOP`. Block layouts (from shadPS4's `gnmdriver.cpp`): VS `[PGM_LO, 0, RSRC1, RSRC2, SPI_VS_OUT_CONFIG, SPI_SHADER_POS_FORMAT, PA_CL_VS_OUT_CNTL]`; PS `[PGM_LO, 0, RSRC1, RSRC2, SPI_SHADER_Z_FORMAT, SPI_SHADER_COL_FORMAT, SPI_PS_INPUT_ENA, SPI_PS_INPUT_ADDR, SPI_PS_IN_CONTROL, SPI_BARYC_CNTL, DB_SHADER_CONTROL, CB_SHADER_MASK]`; CS `[PGM_LO, 0, RSRC1, RSRC2, NUM_THREAD_X, Y, Z]`. The modifier argument replaces RSRC1 bits outside `0xfcfffc3f` (VS) or `0xfffffc3f` (CS). The issue checks each layout against the game's own register blocks in the shader files.
+- **GPU memory mirror.** Guest addresses are host addresses (the guest window, m3-core-os.md). The backend creates one sparse `VkBuffer` over the first *N* GiB of the guest window (default 32 GiB; the window places mappings from its start) and binds each GPU-visible guest mapping into it at its window offset, as host memory imported with `VK_EXT_external_memory_host`. Then `address_bias = buffer device address - window start` stays the single bias of the translator's draw block, the GPU reads what the CPU wrote with no copies and no write tracking, and labels written by the CPU are seen by `WAIT_REG_MEM` directly. RADV on the reference machine offers a 128 TiB sparse address space and host pointer import with 4 KiB alignment; lavapipe offers 2 GiB, enough for tests with a small mirror. Unknowns for the spike: whether imported host memory may back sparse bindings on RADV and lavapipe, and the sparse binding granularity (64 KiB is likely) against guest mappings aligned to 16 KiB. If either fails, the fallback is a page table in the draw block (one device address per 64 KiB block, as shadPS4's `bda_pagetable_buffer`), which changes the translator's address computation; that decision then comes back to this note. Performance on a discrete GPU (every read crosses PCIe) is a later concern: a device-local cache with write tracking (shadPS4's `page_manager` and `buffer_cache`) replaces the mirror for hot ranges then.
+- **Images** (render targets, depth, textures, display buffers) are `VkImage`s cached by guest address and descriptor. Tiled ↔ linear conversion runs as compute shaders adapted from shadPS4's `host_shaders/tiling.comp` and `texture_cache/tile.h`, which replaces the earlier plan of AMD's addrlib. Render targets are written back to guest memory only where the CPU or a later linear read needs them; the presenter reads the render target image of a display buffer directly.
+- **Draws** take a snapshot from the register mirror: ShaderKey per stage, fetch code from the vertex stage's user data dwords 0–1, render targets, blend, depth, stencil, raster and primitive state. Pipelines are cached by that key and use dynamic rendering. The format, blend, compare, cull and topology tables may be adapted from shadPS4's `renderer_vulkan/liverpool_to_vk.cpp`.
+- **Presentation.** A window and Vulkan surface from SDL3 (zlib, the system package `SDL3-devel` / `libsdl3-dev`). The existing video-out flip thread completes flips per tick; on each flip the presenter blits the display buffer's image to the swapchain. Submit-and-flip queues the flip behind the submission's work, as shadPS4's `PatchFlipRequest` does with the 64-dword `0x68750777` NOP.
+- **Unknown packets** are logged once per opcode, among them 0x8C and 0x8D, which have no name yet. `NOP` payloads tagged `0x6875xxxx` are skipped; the parser records the tag for the trace.
+- **Clip space** (`PA_CL_CLIP_CNTL`, depth range, viewport orientation) is settled in the pipeline-state item against a known draw of the game.
+- **Debugging.** `--gpu-trace` logs per frame the packets, draws and dispatches with their key state; RenderDoc can capture the Vulkan side.
+
+### shadPS4 map
+
+Commit `ff1b7a2e87eef8f301377e0cabbbeeeb73cc3b49`, all GPL-2.0-or-later except `externals/gcn` (MIT, AMD):
+
+| Part | shadPS4 files | How we use it |
+|---|---|---|
+| Submit, flip patching, compute queues, stage registers | `core/libraries/gnmdriver/gnmdriver.cpp` | Behaviour; small packet writers may be adapted |
+| Packet structs, register layouts, descriptors | `video_core/amdgpu/{pm4_cmds.h,regs*.h,resource.h,pixel_format.*}` | Adapt the definitions |
+| GPU thread, CE/DE, packet handling | `video_core/amdgpu/liverpool.cpp` | Structure; written anew without coroutines |
+| State to Vulkan tables | `video_core/renderer_vulkan/liverpool_to_vk.cpp` | Adapt the tables |
+| Tiling | `video_core/amdgpu/tiling.*`, `texture_cache/tile.h`, `host_shaders/tiling.comp` | Adapt |
+| Presentation | `video_core/renderer_vulkan/{vk_presenter,vk_swapchain}.*`, `sdl_window.cpp` | Structure |
+| Buffer cache, page tracking | `video_core/{buffer_cache,page_manager}*` | Later, for the device-local cache |
+
+Fetch shaders need nothing from shadPS4: our translator inlines them.
+
+### Items
+
+Each item is one issue of at most 500 lines of code and tests. "Design" items are written in the main thread.
+
+| # | Item | Depends on |
+|---|---|---|
+| 11 (#266) | **Maintainer: packages.** `SDL3-devel` locally; `libsdl3-dev` in CI. The window target is built only when SDL3 is found. | – |
+| 12 (#267) | **AMD register and PM4 headers** unchanged in `third_party/amd-gcn/`, own PR; the packet-name check of gnm.md against them. | – |
+| 13 (#268) | **Design spike: GPU memory mirror.** Sparse buffer over a window range, host-pointer imports bound into it on RADV and lavapipe, binding granularity against 16 KiB mappings, a compute test reading CPU-written data through the bias. Result into this note. | – |
+| 14 (#269) | **`bbvk` device core.** Instance, device choice (a discrete GPU first, lavapipe for tests), required features (Vulkan 1.3, buffer device address, sparse residency, host memory import), queues, a timeline-semaphore scheduler. Shares setup with the test runner. | – |
+| 15 (#270) | **PM4 parser core** (`bbpm4`). Headers, type-2 filler, register spaces and mirror, `NOP` tags, `INDIRECT_BUFFER`, `REWIND`, `CONTEXT_CONTROL`, `CLEAR_STATE`, unknown-opcode log. Synthetic streams. | 12 |
+| 16 (#271) | **Stage register imports.** `sceGnmSet{Vs,Ps,Cs,Es,Gs,Hs,Ls}Shader` and their "unchanged" variants, layouts checked against the shader files. | 12 |
+| 17 (#272) | **Constant engine.** CE RAM, `WRITE_CONST_RAM`, `DUMP_CONST_RAM`, `INDIRECT_BUFFER_CONST`, the CE/DE counters, DCB and CCB as two streams. | 15 |
+| 18 (#273) | **GPU thread and graphics submission.** The thread and its resumable streams, the three submits, `sceGnmSubmitDone`, default hardware state, markers, the profiling queries, logging stubs for the unreachable imports. | 15 |
+| 19 (#274) | **Memory packets, labels and events.** `WRITE_DATA`, `COPY_DATA`, `DMA_DATA`, `WAIT_REG_MEM`, `MEM_SEMAPHORE`, `EVENT_WRITE_EOP/EOS`, `RELEASE_MEM`, `ACQUIRE_MEM`, `sceGnmAddEqEvent` and the equeue trigger. | 18 |
+| 20 (#275) | **Compute queues.** Map, unmap, `sceGnmDingDong`, ring parsing from the read pointer, read-pointer write-back. | 18 |
+| 21 (#276) | **GPU memory mirror.** Per item 13: bind and unbind on GPU-visible map and unmap, the bias, the mirror size option. | 13, 14 |
+| 22 (#277) | **Window and presentation.** SDL3 window, swapchain, the video-out flip thread presenting a test image, flip and vblank events unchanged. | 11, 14 |
+| 23 (#278) | **Tiling.** Tile-mode tables and the compute detiler/tiler, tested against our own tiled data. | 14 |
+| 24 (#279) | **Render targets and depth.** `CB_COLOR*` and `DB_*` to cached images, formats table, clears, dynamic rendering. | 15, 14 |
+| 25 (#280) | **Dispatches.** CS state to a compute pipeline, `DISPATCH_DIRECT` and `DISPATCH_INDIRECT` through the translator and the mirror. | 19, 21 |
+| 26 (#281) | **Graphics pipeline state.** Draw snapshot, ShaderKey per stage with the fetch code, blend, depth, stencil, raster and topology tables, pipeline cache. | 24, #129 |
+| 27 (#282) | **Draw execution.** The draw packets, index state and index buffers through the mirror, draw blocks, `draw`/`drawIndexed`. | 21, 26 |
+| 28 (#283) | **Textures and samplers.** T# and S# to images and samplers, upload and detile, descriptor arrays for the translator's bindings. | 23, 27, #130 |
+| 29 (#284) | **First frame.** Submit-and-flip queues the flip behind its work; the presenter shows the display buffer's render target. Done when the game's first frame appears in the window. | 22, 23, 24, 27 |
+| 30 (#285) | **GPU trace.** `--gpu-trace`: packets, draws and dispatches per frame. | 18 |
+
+Items 11–14 can start at once; 15 and 16 after 12.
 
 ## Open questions
 
