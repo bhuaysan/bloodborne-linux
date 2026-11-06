@@ -35,8 +35,8 @@ struct DsOperation {
 };
 
 // What the translator does for the named DS instruction (LLVM's mnemonic), nothing for the ones it
-// doesn't handle: the 64-bit and float atomics, the src2 forms, GWS, append and consume. ds_swizzle_b32 is no LDS access: the translator handles it apart
-// from this table.
+// doesn't handle: the 64-bit and float atomics, the src2 forms, GWS, append and consume.
+// ds_swizzle_b32 is no LDS access: the translator handles it apart from this table.
 std::optional<DsOperation> classify_ds(std::string_view name);
 
 }  // namespace bb::gcn::detail
