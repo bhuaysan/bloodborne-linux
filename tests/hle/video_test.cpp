@@ -13,6 +13,7 @@
 
 #include "hle/hle.hpp"
 #include "hle/kernel/equeue.hpp"
+#include "hle/video/gnm_shader.hpp"
 #include "loader/image.hpp"
 #include "loader/relocate.hpp"
 #include "support/game.hpp"
@@ -218,7 +219,7 @@ TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
         std::string_view library, nid;
         void* impl;
     };
-    const std::array<Expected, 13> expected{{
+    const std::array<Expected, 18> expected{{
         {"libSceVideoOut", "Up36PTk687E", reinterpret_cast<void*>(&sceVideoOutOpen)},
         {"libSceGnmDriver", "29oKvKXzEZo", reinterpret_cast<void*>(&gnm_map_compute_queue)},
         {"libSceVideoOut", "uquVH4-Du78", reinterpret_cast<void*>(&sceVideoOutClose)},
@@ -232,6 +233,11 @@ TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
         {"libSceGnmDriver", "iCO804ZgzdA", reinterpret_cast<void*>(&gnm_submit_other)},
         {"libSceGnmDriver", "xbxNatawohc", reinterpret_cast<void*>(&gnm_submit_and_flip)},
         {"libSceGnmDriver", "yvZ73uQUqrk", reinterpret_cast<void*>(&sceGnmSubmitDone)},
+        {"libSceGnmDriver", "gAhCn6UiU4Y", reinterpret_cast<void*>(&sceGnmSetVsShader)},
+        {"libSceGnmDriver", "V31V01UiScY", reinterpret_cast<void*>(&sceGnmSetVsShader)},
+        {"libSceGnmDriver", "bQVd5YzCal0", reinterpret_cast<void*>(&sceGnmSetPsShader)},
+        {"libSceGnmDriver", "4MgRw-bVNQU", reinterpret_cast<void*>(&sceGnmSetPsShader)},
+        {"libSceGnmDriver", "KXltnCwEJHQ", reinterpret_cast<void*>(&sceGnmSetCsShader)},
     }};
     std::set<std::string> imports;
     for (const bb::loader::Symbol& sym : image.dyn.symbols) {

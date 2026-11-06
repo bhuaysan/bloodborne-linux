@@ -3,7 +3,8 @@ bb_add_test(hle_net_test SOURCES net_test.cpp LIBS bbhlenet bbhle)
 bb_add_test(hle_system_test SOURCES system_test.cpp LIBS bbhle bbhlesystem)
 bb_add_test(hle_date_time_test SOURCES date_time_test.cpp LIBS bbhle bbhlesystem)
 bb_add_test(hle_save_data_test SOURCES save_data_test.cpp LIBS bbhle bbhlesystem)
-bb_add_test(hle_video_test SOURCES video_test.cpp LIBS bbhle bbhlevideo)
+# The stage register imports check their layouts against the shader files with the decoder.
+bb_add_test(hle_video_test SOURCES video_test.cpp gnm_shader_test.cpp LIBS bbhle bbhlevideo bbgcn)
 # Runs the PRX initialisers, so it needs the eboot's TLS reservation (docs/design/m3-core-os.md,
 # "TLS").
 bb_add_test(hle_prx_init_test SOURCES prx_init_test.cpp LIBS bbhle bbeboottls bbtestguestwindow)
