@@ -11,6 +11,7 @@ add_library(bbgcn STATIC
     opcodes.cpp
     spirv_builder.cpp
     structurize.cpp
+    translate.cpp
     vop3_decode.cpp
     vop_decode.cpp
     vop_opcodes.cpp)
