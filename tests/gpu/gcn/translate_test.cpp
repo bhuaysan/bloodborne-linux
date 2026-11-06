@@ -31,8 +31,27 @@ TEST(GcnTranslate, ProgramsPassSpirvVal) {
         SCOPED_TRACE(name);
         const auto translation = translate(program_words(name), {}, key5);
         EXPECT_EQ(validate(translation.spirv), "");
-        EXPECT_FALSE(translation.interface.wave_size_dependent);
+        EXPECT_EQ(translation.interface.wave_size_dependent, name == "cross_lane");
     }
+}
+
+// Ballots, v_readfirstlane_b32 and v_readlane_b32 make a shader depend on the wave size; the
+// lane-local v_mbcnt with a constant mask and v_writelane_b32 don't.
+TEST(GcnTranslate, WaveSizeDependence) {
+    const auto dependent = [](std::vector<std::uint32_t> code) {
+        code.push_back(s_endpgm);
+        const auto translation = translate(code, {}, key5);
+        if (have_spirv_val()) {
+            EXPECT_EQ(validate(translation.spirv), "");
+        }
+        return translation.interface.wave_size_dependent;
+    };
+    EXPECT_FALSE(dependent(vop3(0x123, 1, 193, 128)));       // v_mbcnt_lo_u32_b32_e64 v1, -1, 0
+    EXPECT_FALSE(dependent({vop2(0x02, 1, 0, 131)}));        // v_writelane_b32 v1, s0, 3
+    EXPECT_TRUE(dependent({sop1(16, 6, 126)}));              // s_bcnt1_i32_b64 s6, exec
+    EXPECT_TRUE(dependent({vop2(0x01, 6, 256 + 1, 131)}));   // v_readlane_b32 s6, v1, 3
+    EXPECT_TRUE(dependent({vop1(0x02, 6, 256 + 1)}));        // v_readfirstlane_b32 s6, v1
+    EXPECT_TRUE(dependent(vop3(0x123, 1, 106, 128)));        // v_mbcnt_lo_u32_b32_e64 v1, vcc_lo, 0
 }
 
 // Scalar ALU, a loop on SCC, and the vector ALU in VOP1, VOP2 and VOP3 encodings.
@@ -69,10 +88,8 @@ std::string error(const std::vector<std::uint32_t>& code, const ShaderKey& key =
 TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
     EXPECT_EQ(error({vopc(0x01, 256, 1), s_endpgm}),  // v_cmp_lt_f32_e32 vcc, v0, v1
               "unsupported instruction v_cmp_lt_f32_e32 at offset 0x0 (word 0x7c020300)");
-    EXPECT_EQ(error({sop1(3, 0, 126), s_endpgm}),  // s_mov_b32 s0, exec_lo
-              "exec_lo is read as a value at offset 0x0 (word 0xbe80037e)");
-    EXPECT_EQ(error({sop1(3, 0, 106), s_endpgm}),  // s_mov_b32 s0, vcc_lo
-              "unsupported register operand 106 of s_mov_b32 at offset 0x0 (word 0xbe80036a)");
+    EXPECT_EQ(error({sop1(3, 0, 108), s_endpgm}),  // s_mov_b32 s0, tba_lo
+              "unsupported register operand 108 of s_mov_b32 at offset 0x0 (word 0xbe80036c)");
     EXPECT_EQ(error({s_endpgm}, {.stage = bb::gcn::Stage::pixel}),
               "only the compute stage is translated so far at offset 0x0 (word 0x00000000)");
     EXPECT_EQ(error({sop1(4, 126, 108), s_endpgm}),  // s_mov_b64 exec, tba
@@ -87,11 +104,6 @@ TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
         code.insert(code.end(), rest.begin(), rest.end());
         return code;
     };
-    EXPECT_EQ(error(cmp(6, {sop1(3, 0, 6), s_endpgm})),  // s_mov_b32 s0, s6
-              "s6 is used as both a mask and a value at offset 0x8 (word 0xbe800306)");
-    EXPECT_EQ(error(cmp(6, {sop1(4, 10, 6), sop1(3, 0, 11), s_endpgm})),
-              // s_mov_b64 s[10:11], s[6:7] makes s[10:11] a mask, s_mov_b32 s0, s11 reads it
-              "s11 is used as both a mask and a value at offset 0xc (word 0xbe80030b)");
     EXPECT_EQ(error(cmp(2, {s_endpgm})),
               "user data s2 is used as a mask at offset 0x0 (word 0xd1820002)");
     EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 1u << 7}),  // TGID_X_EN

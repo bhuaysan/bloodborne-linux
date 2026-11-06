@@ -1,17 +1,21 @@
 // GCN to SPIR-V: one invocation per lane, the registers as function variables, and EXEC as
 // predication (docs/design/graphics.md, "Execution model"). The instruction semantics follow the
 // Sea Islands ISA manual (scalar and vector ALU operations, FLAT); the compute stage's initial
-// registers follow COMPUTE_PGM_RSRC2 (Sea Islands register reference).
+// registers follow COMPUTE_PGM_RSRC2 (Sea Islands register reference). Cross-lane operations run
+// over the subgroup in lane-local mode, at the subgroup's wave position (subgroup_base).
 
 #include "gpu/gcn/translate.hpp"
 
 #include <algorithm>
+#include <array>
 #include <format>
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
 #include <string_view>
+
+#include <spirv/unified1/GLSL.std.450.h>
 
 #include "gpu/gcn/cfg.hpp"
 #include "gpu/gcn/gcn.hpp"
@@ -117,7 +121,7 @@ public:
         b_.entry_point(spv::ExecutionModel::GLCompute, main, "main", interface_);
         b_.execution_mode(main, spv::ExecutionMode::LocalSize,
                           {key_.num_threads[0], key_.num_threads[1], key_.num_threads[2]});
-        return {b_.words(), {}};
+        return {b_.words(), {.wave_size_dependent = wave_size_dependent_}};
     }
 
 private:
@@ -136,9 +140,9 @@ private:
     }
 
     // The mask type pass: the SGPR pairs that hold lane masks are the mask operands of the
-    // instructions below, and what s_mov_b64 copies to or from a mask. A pair used as a mask and
-    // as a value is an error when the value use is translated (value_sgpr). VCC and EXEC are
-    // masks.
+    // instructions below, and what s_mov_b64 copies to or from a mask. VCC and EXEC are masks. A
+    // mask's dwords can still be read as values (a ballot) and written as values (each lane
+    // takes its bit).
     void collect_masks() {
         const auto mark = [this](const Operand& o) {
             if (o.kind != OperandKind::scalar || o.dwords != 2 || o.code >= code::flat_scratch) {
@@ -189,6 +193,12 @@ private:
                (o.code == code::exec || o.code == code::vcc || mask_sgprs_.contains(o.code));
     }
 
+    // A dword of EXEC, VCC or a mask pair.
+    bool is_mask_half(unsigned c) const {
+        const unsigned pair = c & ~1u;
+        return pair == code::exec || pair == code::vcc || mask_sgprs_.contains(pair);
+    }
+
     unsigned user_sgprs() const { return (key_.pgm_rsrc2 >> rsrc2_user_sgpr_shift) & 31; }
 
     // The draw block and the initial registers: user data in the first SGPRs, the thread ID in
@@ -226,11 +236,16 @@ private:
         store(vgpr(0), b_.op(Op::OpCompositeExtract, u32_, {local, 0}));
     }
 
-    Id builtin(spv::BuiltIn which, Id type) {
-        const Id var = b_.variable(b_.type_pointer(SC::Input, type), SC::Input);
-        b_.decorate(var, spv::Decoration::BuiltIn, {spirv_word(which)});
-        interface_.push_back(var);
-        return var;
+    // The input variable of a built-in, declared on first use. `type` defaults to u32.
+    Id builtin(spv::BuiltIn which, Id type = 0) {
+        auto [it, added] = builtins_.try_emplace(spirv_word(which), 0);
+        if (added) {
+            const Id pointer = b_.type_pointer(SC::Input, type != 0 ? type : u32_);
+            it->second = b_.variable(pointer, SC::Input);
+            b_.decorate(it->second, spv::Decoration::BuiltIn, {spirv_word(which)});
+            interface_.push_back(it->second);
+        }
+        return it->second;
     }
 
     // Emits a block's instructions. Its branch or s_endpgm is the block's exit.
@@ -299,9 +314,72 @@ private:
             write_scalar(dst, r);
             store(scc(), b_.op(Op::OpULessThan, bool_, add ? SpirvBuilder::Words{r, a}
                                                            : SpirvBuilder::Words{a, b}));
+        } else if (name.starts_with("s_bcnt") || name.starts_with("s_ff") ||
+                   name.starts_with("s_flbit")) {
+            scalar_count(inst);
         } else {
             unsupported();
         }
+    }
+
+    // The SOP1 counts of a 32- or 64-bit source: s_bcnt0/1 count the clear or set bits (SCC: the
+    // count isn't 0), s_ff0/1 find the first clear or set bit from the LSB, s_flbit_i32_b32/b64
+    // the first set bit from the MSB, and the signed s_flbit_i32/_i64 the first bit from the MSB
+    // that differs from the sign. A search that finds nothing gives -1. A mask source is read
+    // through a ballot.
+    void scalar_count(const Instruction& inst) {
+        const std::string_view name = inst.name;
+        const unsigned n = inst.src[0].dwords;
+        std::array<Id, 2> w = read_words(inst.src[0]);
+        Id r;
+        if (name.starts_with("s_bcnt")) {
+            r = b_.op(Op::OpBitCount, u32_, {w[0]});
+            if (n == 2) {
+                r = b_.op(Op::OpIAdd, u32_, {r, b_.op(Op::OpBitCount, u32_, {w[1]})});
+            }
+            if (name.starts_with("s_bcnt0")) {
+                r = b_.op(Op::OpISub, u32_, {b_.constant_u32(32 * n), r});
+            }
+            store(scc(), b_.op(Op::OpINotEqual, bool_, {r, b_.constant_u32(0)}));
+        } else if (name.starts_with("s_ff")) {
+            if (name.starts_with("s_ff0")) {
+                for (unsigned d = 0; d < n; ++d) {
+                    w[d] = b_.op(Op::OpNot, u32_, {w[d]});
+                }
+            }
+            r = find_first(w, n, false);
+        } else {
+            if (name == "s_flbit_i32" || name == "s_flbit_i32_i64") {
+                const Id sign = b_.op(Op::OpShiftRightArithmetic, u32_,
+                                      {w[n - 1], b_.constant_u32(31)});
+                for (unsigned d = 0; d < n; ++d) {
+                    w[d] = b_.op(Op::OpBitwiseXor, u32_, {w[d], sign});
+                }
+            }
+            r = find_first(w, n, true);
+        }
+        write_scalar(inst.dst[0], r);
+    }
+
+    // The position of the first set bit of the n-dword value `w` (low dword first), counted from
+    // the LSB, or from the MSB when `from_msb`; -1 when no bit is set.
+    Id find_first(const std::array<Id, 2>& w, unsigned n, bool from_msb) {
+        const Id glsl = b_.import_extended("GLSL.std.450");
+        Id r = b_.constant_u32(~0u);
+        for (unsigned k = 0; k < n; ++k) {  // the dword searched last first
+            const unsigned d = from_msb ? k : n - 1 - k;
+            Id pos;
+            if (from_msb) {
+                const Id msb = b_.op(Op::OpExtInst, u32_, {glsl, GLSLstd450FindUMsb, w[d]});
+                pos = b_.op(Op::OpISub, u32_, {b_.constant_u32(32 * (n - d) - 1), msb});
+            } else {
+                const Id lsb = b_.op(Op::OpExtInst, u32_, {glsl, GLSLstd450FindILsb, w[d]});
+                pos = b_.op(Op::OpIAdd, u32_, {lsb, b_.constant_u32(32 * d)});
+            }
+            r = b_.op(Op::OpSelect, u32_,
+                      {b_.op(Op::OpINotEqual, bool_, {w[d], b_.constant_u32(0)}), pos, r});
+        }
+        return r;
     }
 
     // VOP1, VOP2 and VOP3: the result is written as select(active, new, old).
@@ -332,6 +410,39 @@ private:
             }
         } else if (carry != std::end(carry_ops)) {
             vector_carry(*carry, inst);
+        } else if (name == "v_readfirstlane_b32") {  // lane 0 when EXEC is 0
+            const Id first = find_first(ballot(active()), 2, false);
+            const Id none = b_.op(Op::OpIEqual, bool_, {first, b_.constant_u32(~0u)});
+            const Id lane = b_.op(Op::OpSelect, u32_, {none, b_.constant_u32(0), first});
+            write_scalar(inst.dst[0], broadcast(read(inst.src[0]), lane));
+        } else if (name == "v_readlane_b32" || name == "v_writelane_b32") {
+            // Both ignore EXEC. The lane select is taken modulo 64.
+            const Id lane = b_.op(Op::OpBitwiseAnd, u32_, {read(inst.src[1]), b_.constant_u32(63)});
+            if (name == "v_readlane_b32") {
+                write_scalar(inst.dst[0], broadcast(read(inst.src[0]), lane));
+            } else {
+                const Id var = vgpr(inst.dst[0].code);
+                store(var, b_.op(Op::OpSelect, u32_,
+                                 {b_.op(Op::OpIEqual, bool_, {lane_, lane}), read(inst.src[0]),
+                                  load(u32_, var)}));
+            }
+        } else if (name == "v_mbcnt_lo_u32_b32" || name == "v_mbcnt_hi_u32_b32") {
+            // src1 plus the bits of src0 that belong to the lanes below this one: of lanes 0-31
+            // for _lo, of lanes 32-63 for _hi.
+            const bool hi = name == "v_mbcnt_hi_u32_b32";
+            const Id below = b_.op(
+                Op::OpISub, u32_,
+                {b_.op(Op::OpShiftLeftLogical, u32_,
+                       {b_.constant_u32(1),
+                        b_.op(Op::OpBitwiseAnd, u32_, {lane_, b_.constant_u32(31)})}),
+                 b_.constant_u32(1)});
+            const Id lower = b_.op(Op::OpULessThan, bool_, {lane_, b_.constant_u32(32)});
+            const Id mask = b_.op(Op::OpSelect, u32_,
+                                  {lower, hi ? b_.constant_u32(0) : below,
+                                   hi ? below : b_.constant_u32(~0u)});
+            const Id count = b_.op(Op::OpBitCount, u32_,
+                                   {b_.op(Op::OpBitwiseAnd, u32_, {read(inst.src[0]), mask})});
+            write_vector(inst.dst[0], b_.op(Op::OpIAdd, u32_, {count, read(inst.src[1])}));
         } else if (op != std::end(vector_ops)) {
             const Id x = read(inst.src[op->rev ? 1 : 0]);
             Id y = read(inst.src[op->rev ? 0 : 1]);
@@ -421,6 +532,9 @@ private:
         case OperandKind::vector:
             return load(u32_, vgpr(o.code + dword));
         case OperandKind::scalar:
+            if (const unsigned c = o.code + dword; is_mask_half(c)) {
+                return ballot(load(bool_, mask_var(c & ~1u)))[c & 1];
+            }
             return load(u32_, value_sgpr(o.code + dword));
         case OperandKind::constant:
         case OperandKind::literal:
@@ -443,6 +557,59 @@ private:
             return dword != 0 ? o.value : 0;
         }
         return dword == 0 ? o.value : (static_cast<std::int32_t>(o.value) < 0 ? ~0u : 0u);
+    }
+
+    // The dwords of a 32- or 64-bit source; a mask takes one ballot.
+    std::array<Id, 2> read_words(const Operand& o) {
+        if (is_mask(o)) {
+            return ballot(load(bool_, mask_var(o.code)));
+        }
+        return {read(o, 0), o.dwords == 2 ? read(o, 1) : Id{0}};
+    }
+
+    // The wave mask of a lane bit, as its low and high dword: a ballot over the subgroup, moved
+    // to the subgroup's position in the wave. The bits of lanes in other subgroups are 0.
+    std::array<Id, 2> ballot(Id bit) {
+        cross_lane();
+        const Id bits = b_.op(Op::OpGroupNonUniformBallot, b_.type_vector(u32_, 4),
+                              {b_.constant_u32(spirv_word(spv::Scope::Subgroup)), bit});
+        const auto wide = [&](std::uint32_t k) {
+            return b_.op(Op::OpUConvert, u64_, {b_.op(Op::OpCompositeExtract, u32_, {bits, k})});
+        };
+        const Id c32 = b_.constant_u32(32);
+        const Id mask = b_.op(Op::OpBitwiseOr, u64_,
+                              {wide(0), b_.op(Op::OpShiftLeftLogical, u64_, {wide(1), c32})});
+        const Id wave = b_.op(Op::OpShiftLeftLogical, u64_, {mask, subgroup_base()});
+        return {b_.op(Op::OpUConvert, u32_, {wave}),
+                b_.op(Op::OpUConvert, u32_, {b_.op(Op::OpShiftRightLogical, u64_, {wave, c32})})};
+    }
+
+    // `value` in wave lane `lane`, which must be uniform in the subgroup, or 0 when that lane
+    // belongs to another subgroup.
+    Id broadcast(Id value, Id lane) {
+        cross_lane();
+        const Id local = b_.op(Op::OpISub, u32_, {lane, subgroup_base()});
+        const Id inside = b_.op(Op::OpULessThan, bool_,
+                                {local, load(u32_, builtin(spv::BuiltIn::SubgroupSize))});
+        const Id c0 = b_.constant_u32(0);
+        const Id from = b_.op(Op::OpSelect, u32_, {inside, local, c0});
+        const Id r = b_.op(Op::OpGroupNonUniformBroadcast, u32_,
+                           {b_.constant_u32(spirv_word(spv::Scope::Subgroup)), value, from});
+        return b_.op(Op::OpSelect, u32_, {inside, r, c0});
+    }
+
+    // The wave lane of subgroup invocation 0. It assumes that a subgroup covers consecutive
+    // values of LocalInvocationIndex, which the execution tests check.
+    Id subgroup_base() {
+        return b_.op(Op::OpISub, u32_,
+                     {lane_, load(u32_, builtin(spv::BuiltIn::SubgroupLocalInvocationId))});
+    }
+
+    // A cross-lane operation: its result can differ between the subgroups of a wave.
+    void cross_lane() {
+        b_.capability(spv::Capability::GroupNonUniform);
+        b_.capability(spv::Capability::GroupNonUniformBallot);
+        wave_size_dependent_ = true;
     }
 
     // A lane mask source (EXEC, VCC, a mask pair) or a constant: this lane's bit of it.
@@ -472,14 +639,15 @@ private:
         return b_.op(Op::OpINotEqual, bool_, {bit, b_.constant_u32(0)});
     }
 
-    // Dword `dword` of a scalar destination. A 32-bit write to exec_lo or exec_hi sets the
-    // lanes of that half to their bit of the value.
+    // Dword `dword` of a scalar destination. A 32-bit write to half of a mask (exec_lo, vcc_hi,
+    // ...) sets the lanes of that half to their bit of the value.
     void write_scalar(const Operand& o, Id value, unsigned dword = 0) {
         const unsigned c = o.code + dword;
-        if (o.kind == OperandKind::scalar && (c & ~1u) == code::exec) {
+        if (o.kind == OperandKind::scalar && is_mask_half(c)) {
             const Op half = (c & 1) != 0 ? Op::OpUGreaterThanEqual : Op::OpULessThan;
             const Id mine = b_.op(half, bool_, {lane_, b_.constant_u32(32)});
-            store(mask_exec(), b_.op(Op::OpSelect, bool_, {mine, lane_bit(value), active()}));
+            const Id var = mask_var(c & ~1u);
+            store(var, b_.op(Op::OpSelect, bool_, {mine, lane_bit(value), load(bool_, var)}));
             return;
         }
         if (o.kind != OperandKind::scalar) {
@@ -501,14 +669,9 @@ private:
     }
 
     // Registers: a function variable each, declared on first use. SGPRs and M0 hold a u32. EXEC,
-    // VCC and the mask pairs hold this lane's bit, and so does SCC, a bool.
+    // VCC and the mask pairs hold this lane's bit, and so does SCC, a bool. The halves of a mask
+    // are read and written as values through read() and write_scalar(), not here.
     Id value_sgpr(unsigned c) {
-        if (mask_sgprs_.contains(c & ~1u)) {
-            fail(std::format("s{} is used as both a mask and a value", c));
-        }
-        if ((c & ~1u) == code::exec) {
-            fail(std::format("{} is read as a value", c == code::exec ? "exec_lo" : "exec_hi"));
-        }
         if (c >= code::flat_scratch && c != code::m0) {  // also SCC and the other condition bits
             fail(std::format("unsupported register operand {} of {}", c, inst_->name));
         }
@@ -556,8 +719,10 @@ private:
     Id lane_ = 0, bias_ = 0;
     std::vector<Id> interface_;
     std::map<unsigned, Id> sgprs_, vgprs_, bools_;  // bools_: masks and SCC by operand code
+    std::map<std::uint32_t, Id> builtins_;
     std::set<unsigned> mask_sgprs_;                 // the first SGPR of each mask pair
     const Instruction* inst_ = nullptr;
+    bool wave_size_dependent_ = false;
 };
 
 }  // namespace
