@@ -70,14 +70,14 @@ docs/
   formats/           our own notes on PS4 and game file formats
   design/            design notes (runtime.md: loader, stubs, hooks, harness; graphics.md: shader translator)
 src/                 the runtime, C++20 (see docs/design/runtime.md)
-  common/            file reading, SHA-256, game directory lookup
+  common/            file reading, SHA-256, game directory lookup, logging, XDG runtime directories
   loader/            SELF to ELF, ELF parsing, mapping, relocation
-  hle/               HLE module registry, import stubs, NID name table
+  hle/               HLE module registry, import stubs, NID name table, linking, the kernel, system, video and net modules
   hook/              function-entry patches and the replacement registry
   game/              decompiled game functions
   harness/           differential test harness (tests only)
   gpu/               GCN shader translator (gcn/), later PM4 state (pm4/) and the Vulkan backend (vk/)
-  tools/             bb-load, bb-gcn
+  tools/             bb-load, bb-gcn, bb-run (starts the game)
 tests/               GoogleTest unit and differential tests, one directory per target (gpu/gcn/ for bbgcn), plus support/ and gpu/programs/
 symbols/             our analysis as text: functions.csv, nids.csv, types/
 third_party/         copied third-party code with its license (see docs/clean-room.md)
