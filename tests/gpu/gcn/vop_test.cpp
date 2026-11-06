@@ -99,6 +99,19 @@ const std::vector<Case> cases = {
     {{vop1(15, 1, 255), 0x12345678}, "v_cvt_f32_f64_e32 v1, 0x12345678"},
     {{vop1(15, 1, 255), 0x40000000}, "v_cvt_f32_f64_e32 v1, lit(0x40000000)"},
     {{vop1(15, 1, 255), 5}, "v_cvt_f32_f64_e32 v1, lit(0x5)"},
+    // The f16 source of v_cvt_f32_f16: LLVM reads a literal as 16 bits.
+    {{vop1(11, 1, 242)}, "v_cvt_f32_f16_e32 v1, 1.0"},
+    {{vop1(11, 1, 255), 0x3c00}, "v_cvt_f32_f16_e32 v1, lit(0x3c00)"},
+    {{vop1(11, 1, 255), 0xbc00}, "v_cvt_f32_f16_e32 v1, lit(0xbc00)"},
+    {{vop1(11, 1, 255), 0x4400}, "v_cvt_f32_f16_e32 v1, lit(0x4400)"},
+    {{vop1(11, 1, 255), 0x3800}, "v_cvt_f32_f16_e32 v1, lit(0x3800)"},
+    {{vop1(11, 1, 255), 0x40}, "v_cvt_f32_f16_e32 v1, lit(0x40)"},
+    {{vop1(11, 1, 255), 0xfff0}, "v_cvt_f32_f16_e32 v1, lit(0xfff0)"},
+    {{vop1(11, 1, 255), 0xffff}, "v_cvt_f32_f16_e32 v1, lit(0xffff)"},
+    {{vop1(11, 1, 255), 0x41}, "v_cvt_f32_f16_e32 v1, 0x41"},
+    {{vop1(11, 1, 255), 0xffef}, "v_cvt_f32_f16_e32 v1, 0xffef"},
+    {{vop1(11, 1, 255), 0x3c01}, "v_cvt_f32_f16_e32 v1, 0x3c01"},
+    {{vop1(10, 1, 255), 0x3c00}, "v_cvt_f16_f32_e32 v1, 0x3c00"},  // an f32 source
     {{vop1(2, code::vcc, v + 1)}, "v_readfirstlane_b32 vcc_lo, v1"},
     {{vop1(2, 1, code::lds_direct)}, "v_readfirstlane_b32 s1, src_lds_direct"},
     {{vop1(0, 0, 0)}, "v_nop"},
@@ -133,6 +146,10 @@ TEST(GcnVop, EncodingsLlvmRejects) {
         {{vop1(2, code::m0, v + 1)}, "v_readfirstlane_b32 m0, v1"},  // m0 as destination
         {{vop1(2, 1, 133)}, "v_readfirstlane_b32 s1, 5"},  // a source other than a VGPR
         {{vop1(2, 1, 2)}, "v_readfirstlane_b32 s1, s2"},
+        // A literal above 0xffff on an f16 source, also with lit().
+        {{vop1(11, 1, 255), 0x12345678}, "v_cvt_f32_f16_e32 v1, 0x12345678"},
+        {{vop1(11, 1, 255), 0x10000}, "v_cvt_f32_f16_e32 v1, 0x10000"},
+        {{vop1(11, 1, 255), 0x3f800000}, "v_cvt_f32_f16_e32 v1, 0x3f800000"},
     };
     for (const Case& c : rejected) {
         SCOPED_TRACE(c.text);

@@ -26,6 +26,7 @@ struct VopInfo {
     std::uint8_t src0 = 0;
     std::uint8_t src1 = 0;
     Vop kind = Vop::plain;
+    bool f16_src0 = false;  // src0 is an f16 operand, with LLVM's 16-bit rule for literals
 };
 
 // The opcode table of VOP1, indexed by opcode (empty for the other formats), written from the

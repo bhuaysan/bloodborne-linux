@@ -41,6 +41,7 @@ Table make_vop1() {
     run<10>(t, 5, {"cvt_f32_i32", "cvt_f32_u32", "cvt_u32_f32", "cvt_i32_f32", "mov_fed_b32",
                    "cvt_f16_f32", "cvt_f32_f16", "cvt_rpi_i32_f32", "cvt_flr_i32_f32",
                    "cvt_off_f32_i4"});
+    t[11].f16_src0 = true;  // v_cvt_f32_f16
     set(t, 15, "cvt_f32_f64", 1, 2);
     set(t, 16, "cvt_f64_f32", 2, 1);
     run<4>(t, 17, {"cvt_f32_ubyte0", "cvt_f32_ubyte1", "cvt_f32_ubyte2", "cvt_f32_ubyte3"});

@@ -13,6 +13,7 @@
 #include "gpu/gcn/gcn.hpp"
 #include "gpu/gcn/opcodes.hpp"
 #include "gpu/gcn/memory.hpp"
+#include "gpu/gcn/vop.hpp"
 
 namespace bb::gcn {
 
@@ -66,15 +67,36 @@ std::string scalar(unsigned c, unsigned dwords) {
     return std::format("{}_{}", pair, c % 2 == 0 ? "lo" : "hi");
 }
 
+// The f16 bit patterns of the float inline constants.
+constexpr std::array<std::uint32_t, 8> f16_constants = {0x3800, 0xb800, 0x3c00, 0xbc00,
+                                                        0x4000, 0xc000, 0x4400, 0xc400};
+
+// How a literal prints.
+enum class Literal {
+    lit,        // SOP2, SOP1, SOPC: the field could hold an inline constant instead, so a literal
+                // with an inline value needs lit() to keep its encoding
+    immediate,  // s_setreg_imm32_b32: always a literal, printed like LLVM prints it
+    hex,        // SMRD offsets: LLVM encodes 255 or less in the immediate form, with or without
+                // lit()
+    vector,     // VOP1, VOP2, VOPC: as `lit`, with inline constants also on 64-bit operands
+    f16,        // an f16 vector ALU source: as `lit`, with LLVM's 16-bit rule
+};
+
 // Whether llvm-mc would encode a literal of this value as an inline constant instead. On 64-bit
 // operands it reads the 32-bit literal as a 64-bit integer, so only 0 to 64 are inline there. On
 // the 64-bit operands of the vector formats it also inlines the high dwords of the f64 constants.
-bool inlinable(std::uint32_t value, unsigned dwords, bool vector) {
+// On f16 operands it reads the literal as 16 bits: -16 to -1 are 0xfff0 to 0xffff there, and the
+// float constants are their f16 patterns.
+bool inlinable(std::uint32_t value, unsigned dwords, Literal literal) {
     if (value <= 64) {
         return true;
     }
+    if (literal == Literal::f16) {
+        return (value >= 0xfff0 && value <= 0xffff) ||
+               std::ranges::find(f16_constants, value) != f16_constants.end();
+    }
     if (dwords != 1) {
-        return vector && std::ranges::any_of(float_constants, [&](double d) {
+        return literal == Literal::vector && std::ranges::any_of(float_constants, [&](double d) {
                    return value == std::bit_cast<std::uint64_t>(d) >> 32;
                });
     }
@@ -168,16 +190,6 @@ std::string immediate(std::uint32_t value) {
     return std::format("{:#x}", value);
 }
 
-// How a literal prints.
-enum class Literal {
-    lit,        // SOP2, SOP1, SOPC: the field could hold an inline constant instead, so a literal
-                // with an inline value needs lit() to keep its encoding
-    immediate,  // s_setreg_imm32_b32: always a literal, printed like LLVM prints it
-    hex,        // SMRD offsets: LLVM encodes 255 or less in the immediate form, with or without
-                // lit()
-    vector,     // VOP1, VOP2, VOPC: as `lit`, with inline constants also on 64-bit operands
-};
-
 std::string operand(const Operand& op, Literal literal) {
     switch (op.kind) {
     case OperandKind::none:
@@ -193,8 +205,7 @@ std::string operand(const Operand& op, Literal literal) {
         if (literal == Literal::immediate) {
             return immediate(op.value);
         }
-        if ((literal == Literal::lit || literal == Literal::vector) &&
-            inlinable(op.value, op.dwords, literal == Literal::vector)) {
+        if (literal != Literal::hex && inlinable(op.value, op.dwords, literal)) {
             return std::format("lit({:#x})", op.value);
         }
         return std::format("{:#x}", op.value);
@@ -219,27 +230,40 @@ std::string operand(const Operand& op, Literal literal) {
     return "?";
 }
 
+// How a literal in source `src` of `inst` prints.
+Literal literal_rule(const Instruction& inst, unsigned src) {
+    switch (inst.format) {
+    case Format::sopk:
+        return Literal::immediate;
+    case Format::smrd:
+        return Literal::hex;
+    case Format::vop2:
+    case Format::vop1:
+    case Format::vopc: {
+        const auto& table = detail::vop_opcodes(inst.format);
+        const bool f16 = src == 0 && inst.opcode < table.size() && table[inst.opcode].f16_src0;
+        return f16 ? Literal::f16 : Literal::vector;
+    }
+    default:
+        return Literal::lit;
+    }
+}
+
 }  // namespace
 
 std::string disassemble(const Instruction& inst) {
-    const bool vector =
-        inst.format == Format::vop2 || inst.format == Format::vop1 || inst.format == Format::vopc;
-    const Literal literal = inst.format == Format::sopk   ? Literal::immediate
-                            : inst.format == Format::smrd ? Literal::hex
-                            : vector                      ? Literal::vector
-                                                          : Literal::lit;
     std::string out(inst.name);
     const char* separator = " ";
-    auto append = [&](const Operand& op) {
+    auto append = [&](const Operand& op, Literal literal) {
         out += separator;
         out += operand(op, literal);
         separator = ", ";
     };
     for (unsigned i = 0; i < inst.num_dst; ++i) {
-        append(inst.dst[i]);
+        append(inst.dst[i], Literal::hex);  // never a literal
     }
     for (unsigned i = 0; i < inst.num_src; ++i) {
-        append(inst.src[i]);
+        append(inst.src[i], literal_rule(inst, i));
     }
     if (inst.format == Format::ds || inst.format == Format::flat) {
         out += detail::ds_flat_modifiers(inst);
