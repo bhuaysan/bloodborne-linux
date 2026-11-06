@@ -21,9 +21,11 @@ inline constexpr std::uint32_t type2_filler = 0x80000000;
 
 constexpr std::uint32_t header_type(std::uint32_t header) { return header >> 30; }
 
-// Body dwords of a type-0 or type-3 header.
+// Body dwords of a type-0 or type-3 header: count + 1, except that a type-3 count of 0x3FFF
+// stands for an empty body. A type-0 count of 0x3FFF writes 0x4000 registers.
 constexpr std::uint32_t body_dwords(std::uint32_t header) {
-    return ((header >> 16 & 0x3FFF) + 1) & 0x3FFF;
+    const std::uint32_t dwords = (header >> 16 & 0x3FFF) + 1;
+    return header_type(header) == 3 ? dwords & 0x3FFF : dwords;
 }
 
 // A type-3 header with `body` (0 to 0x3FFF) body dwords.

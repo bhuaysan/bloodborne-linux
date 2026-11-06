@@ -33,6 +33,7 @@ TEST(Pm4Packet, CountOf3FFFIsAnEmptyBody) {
     EXPECT_EQ(bb::pm4::body_dwords(0xFFFF1000u), 0u);
     EXPECT_EQ(bb::pm4::body_dwords(0xC0001000u), 1u);  // the CB/DB extent hint NOP
     EXPECT_EQ(bb::pm4::body_dwords(0x00010100u), 2u);  // type 0: two registers
+    EXPECT_EQ(bb::pm4::body_dwords(0x3FFF0100u), 0x4000u);  // the type-3 rule skips type 0
     EXPECT_EQ(bb::pm4::header_type(bb::pm4::type2_filler), 2u);
 }
 
