@@ -25,6 +25,7 @@ import derive  # noqa: E402
 import elfimports  # noqa: E402
 import freebsdman  # noqa: E402
 import nidmatch as m  # noqa: E402
+import shadps4names  # noqa: E402
 import syscandidates  # noqa: E402
 from cli import pinned_elf_paths  # noqa: E402
 from elfbuilder import Builder  # noqa: E402
@@ -452,6 +453,40 @@ class FreebsdIndexTest(unittest.TestCase):
                      and all(path.is_file()
                              for path in pinned_elf_paths(m.ELF_DIR, elfimports.PINNED_ELFS)),
                      "needs BB_GAME_DIR and the self2elf outputs in analysis/elf/")
+class Shadps4NamesTest(unittest.TestCase):
+    NID_A, NID_B = "ttHNfU+qDBU", "gKqzW-zWhvY"
+
+    def test_registered_names(self):
+        text = f'''
+    LIB_FUNCTION("{self.NID_A}", "libSceRtc", 1, "libSceRtc", sceRtcGetTick);
+    LIB_FUNCTION("{self.NID_B}", "libkernel", 1, "libkernel",
+                 Libraries::Kernel::sceKernelOpen);
+    LIB_FUNCTION("{self.NID_A}", "libkernel", 1, "libkernel", ORBIS(sceKernelClose));
+    LIB_FUNCTION("{self.NID_A}", "libScePosix", 1, "libkernel", posix_pthread_self);
+    // LIB_FUNCTION("{self.NID_A}", "libSceRtc", 1, "libSceRtc", [](int) {{ return 0; }});
+    LIB_FUNCTION("short", "libSceRtc", 1, "libSceRtc", notANid);
+    #define LIB_FUNCTION(nid, lib, libversion, mod, function) x
+'''
+        self.assertEqual(shadps4names.registered_names(text),
+                         {"sceRtcGetTick", "sceKernelOpen", "sceKernelClose", "posix_pthread_self",
+                          "pthread_self"})
+
+    def test_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(m.MatchError, "is not a directory"):
+                shadps4names.checkout_names(root)
+            lib = root / shadps4names.LIBRARIES / "rtc"
+            lib.mkdir(parents=True)
+            (lib / "rtc.cpp").write_text(
+                f'LIB_FUNCTION("{self.NID_A}", "libSceRtc", 1, "libSceRtc", sceRtcEnd);\n')
+            (lib / "notes.txt").write_text(
+                f'LIB_FUNCTION("{self.NID_A}", "libSceRtc", 1, "libSceRtc", ignored);\n')
+            self.assertEqual(shadps4names.checkout_names(root), {"sceRtcEnd"})
+            with self.assertRaisesRegex(m.MatchError, "cannot read the commit"):
+                shadps4names.revision(root)
+
+
 class GameTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

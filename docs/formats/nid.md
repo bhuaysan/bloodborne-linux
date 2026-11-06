@@ -39,6 +39,7 @@ Candidate sources and their labels in the `source` column:
 | `glibc` | symbols defined by the system's `libc.so.6` and `libm.so.6` | same |
 | `libstdcxx` | symbols defined by the system's `libstdc++.so.6` (mangled C++ names) | same |
 | `freebsd-man2`, `freebsd-man3` | every name documented by a FreeBSD 10.4-RELEASE manual page of section 2 or 3, from the man.freebsd.org apropos index (the result pages of the query `.`, saved under `analysis/refs/`) | `analysis/nids/candidates/`, written by `freebsdman.py` |
+| `shadps4-<commit>` | the function identifiers of the `LIB_FUNCTION` registrations in shadPS4's `src/core/libraries/`, see [Public name lists](#public-name-lists) | `analysis/nids/candidates/`, written by `shadps4names.py` |
 | `derive-posix`, `derive-words` | `sce*` names derived from names we already have, see [Derivation rules](#derivation-rules) | `analysis/nids/candidates/`, written by `derive.py` |
 | *file stem* | hand-picked names, each with a comment saying why | `symbols/candidates/*.txt`, committed |
 
@@ -70,7 +71,13 @@ The game's identifiers use the same words as the API. Leaving out the `sce*` nam
 
 `derive-words` repeats until nothing new turns up. Every new match adds its words to the vocabulary, and the next round tries only combinations that contain a new word. A name is kept only if its NID belongs to a library that its prefix came from. Names from earlier runs that came only from these rules are not used as input, so a rerun gives the same lists.
 
-**Excluded libraries.** The libraries in the earlier policy's exposure log ([clean-room.md](../clean-room.md#exposure-log)) get no prefixes; the tooling still enforces this until #226 removes it. The same goes for libSceSaveDataDialog, whose names start with the libSceSaveData prefix. No derived name may start with one of their prefixes. Their NIDs are never targets, not even when another library shares them, and the words of their names are not part of the vocabulary. As a second check, `nidmatch` refuses a name for these libraries whose only sources are `derive-*` labels. The list is `NO_DERIVE_LIBRARIES` in `nidmatch.py`.
+**No excluded libraries.** Under the earlier policy the libraries of the exposure log (libSceRtc, libSceSaveData, libSceSaveDataDialog, libSceRegMgr, libSceRemoteplay) got no prefixes and no derived names. [clean-room.md](../clean-room.md) lifted that on 2026-11-06 and #226 removed it from the tools: every library gets prefixes, every NID is a target, and a name from a derivation rule alone is accepted for any library.
+
+### Public name lists
+
+The source policy allows public NID lists and emulator code. Whatever the source, the rule stays: a name counts only if it hashes to a NID of the pinned files. So a list is just one more candidate file, and its file stem is its label, which names the list and its revision, e.g. `shadps4-0d5f273` for shadPS4 at commit `0d5f273`. The label ends up in the `source` column, and the source gets a row in [references.md](../references.md).
+
+`tools/nidmatch/shadps4names.py` writes such a list from a shadPS4 checkout. It takes the function identifiers of the `LIB_FUNCTION("<nid>", "<library>", <version>, "<module>", <function>)` registrations (and the C name behind each `posix_*` identifier) and ignores the NIDs listed beside them, so a wrong pairing in the emulator can't name a NID here. The list is local, like the other generated ones, and the label is carried over in `nids.csv` on machines without it. A list that is not code, such as a table saved from a wiki, goes in the same way as a candidate file under `symbols/candidates/` or as an extra file argument, with a stem that names the page and its revision.
 
 ### First results
 
