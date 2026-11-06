@@ -34,9 +34,9 @@ std::vector<ResourceSource> find_buffer_sources(std::span<const Instruction> pro
 // `add_tid_enable` (dword 3, bit 23): they change the address and the range check (Sea Islands
 // ISA 8.1.5.2, Table 8.5), which the translator does not implement yet (scratch, #247), and it
 // would otherwise ignore them silently. The error's offset is the byte offset of the dword in the
-// V#, its word that dword. A V# that the shader computes is out of reach and not checked. `s_buffer_load_*` ignores these bits
-// (7.2.2), but `ShaderInterface::buffers` doesn't say which instruction uses a source, so the check
-// is applied to every source.
+// V#, its word that dword. A V# that the shader computes is out of reach and not checked.
+// `s_buffer_load_*` ignores these bits (7.2.2), but `ShaderInterface::buffers` doesn't say which
+// instruction uses a source, so the check is applied to every source.
 void check_buffer_descriptor(const std::array<std::uint32_t, 4>& vsharp);
 
 // The register operand that holds the descriptor of a buffer instruction, or nullptr.

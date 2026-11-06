@@ -949,9 +949,9 @@ private:
 
     // SMRD, in every lane: s_load_dword* reads at a 64-bit address from an SGPR pair, with no
     // range check. s_buffer_load_dword* reads through a V# in four SGPRs, and each dword that
-    // is not inside the buffer (`scalar_in_range`) reads as 0. The offset is in dwords when it is the
-    // instruction's immediate or the literal that follows it, and in bytes when it is an SGPR (the
-    // low 2 bits are ignored).
+    // is not inside the buffer (`scalar_in_range`) reads as 0. The offset is in dwords when it is
+    // the instruction's immediate or the literal that follows it, and in bytes when it is an SGPR
+    // (the low 2 bits are ignored).
     void scalar_memory(const Instruction& inst) {
         const std::string_view name = inst.name;
         const bool buffer = name.starts_with("s_buffer_load_dword");
