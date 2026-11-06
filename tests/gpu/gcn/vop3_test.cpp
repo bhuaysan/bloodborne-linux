@@ -1,5 +1,5 @@
-// VOP3 and VINTRP: decoding and disassembly of words encoded by hand from the Sea Islands ISA
-// manual, and a round trip of every opcode in the VOP3 table through llvm-mc.
+// VOP3: decoding and disassembly of words encoded by hand from the Sea Islands ISA manual, and a
+// round trip of every opcode in the VOP3 table through llvm-mc.
 
 #include <algorithm>
 #include <cstdint>
@@ -65,7 +65,6 @@ TEST(GcnVop3, Operands) {
     EXPECT_EQ(inst.dst[1], sreg(8, 2));
     EXPECT_EQ(inst.src[2], vgpr(6, 2));
 
-    // v_mqsad_u32_u8 v[4:7], v[8:9], v12, v[16:19]
     inst = one(vop3(0x175, 4, v + 8, v + 12, v + 16));
     EXPECT_EQ(inst.dst[0], vgpr(4, 4));
     EXPECT_EQ(inst.src[0], vgpr(8, 2));
@@ -87,6 +86,7 @@ TEST(GcnVop3, Errors) {
         vop3(0x103, 1, v, 254),                  // LDS_DIRECT as src1
         vop3(0x183, 1, 254),                     // and as the 64-bit src0 of v_cvt_i32_f64
         vop3(0x103, 1, v, v, 0, 1 << 13),        // reserved bit 13
+        vop3(0x180, 0, 0, 0, 0, 1 << 13),        // v_nop_e64 rejects reserved bits too
         vop3(0x103, 1, v, v, 0, 1 << 8),         // abs, clamp, omod and neg are not decoded yet
         vop3(0x103, 1, v, v, 0, 1 << 11),
         vop3(0x103, 1, v, v, 0, 0, 1u << 27),
@@ -176,10 +176,9 @@ TEST(GcnVop3, EncodingsLlvmRejects) {
 
 // One encoding per VOP3 opcode: v4 as the destination (s[4:5] for compares), v8 and v12 as the
 // first two sources and v16 as the third, or s[8:9] for the mask or carry of v_cndmask_b32 and
-// the carry instructions, with 0 in the source fields that the instruction doesn't use (LLVM's
-// choice) and in the other fields of v_nop and v_clrexcp. LLVM has no syntax for
-// the instructions in `no_syntax`, and the lane selects of v_readlane_b32 and v_writelane_b32
-// can't be VGPRs.
+// the carry instructions, with 0 in the unused source fields (LLVM's choice) and in the other
+// fields of v_nop and v_clrexcp. LLVM has no syntax for `no_syntax`, and the lane selects of
+// v_readlane_b32 and v_writelane_b32 can't be VGPRs.
 TEST(GcnVop3, RoundTripEveryOpcode) {
     const std::vector<std::string> no_syntax = {"v_readfirstlane_b32_e64", "v_mov_fed_b32_e64"};
     std::vector<Words> all;
