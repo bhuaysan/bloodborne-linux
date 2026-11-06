@@ -16,14 +16,10 @@
 
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
+#include "hle/kernel/guest_object.hpp"
 
 namespace bb::hle::kernel {
 namespace {
-
-using Cell = std::uintptr_t;
-
-// Cell values below this are no pointers to our objects, so they are refused without reading.
-constexpr Cell lowest_object = 0x10000;
 
 // Each object type has a tag and the host primitive, and makes the object for a cell that holds
 // the static initialiser with create_default.
@@ -72,16 +68,6 @@ constinit std::mutex creation_lock;
 
 std::atomic_ref<Cell> atomic(Cell* cell) {
     return std::atomic_ref<Cell>(*cell);
-}
-
-// The object of ours that `value` points to, or nullptr.
-template <class T>
-T* object_at(Cell value) {
-    if (value < lowest_object || value % alignof(T) != 0) {
-        return nullptr;
-    }
-    T* object = reinterpret_cast<T*>(value);
-    return object->tag == T::tag_value ? object : nullptr;
 }
 
 // Stores a new mutex in `cell`. Returns a host errno.
@@ -473,21 +459,6 @@ int cond_broadcast(Cell* cond) {
 }
 
 // ---- entry points --------------------------------------------------------------------------
-
-// Sce<f>::call and Posix<f>::call wrap a core function `f` in the sce or POSIX error form.
-template <auto F>
-struct Sce;
-template <class... A, int (*F)(A...)>
-struct Sce<F> {
-    static std::int32_t call(A... args) { return sce_fail(F(args...)); }
-};
-
-template <auto F>
-struct Posix;
-template <class... A, int (*F)(A...)>
-struct Posix<F> {
-    static int call(A... args) { return pthread_error(F(args...)); }
-};
 
 // The name is not kept (libc.prx passes one, 0x64e7; the eboot passes null, 0xd1ac41).
 std::int32_t sce_mutex_init(Cell* mutex, const std::uint64_t* attr, const char* /*name*/) {

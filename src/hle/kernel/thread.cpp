@@ -22,12 +22,11 @@
 #include "common/log.hpp"
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
+#include "hle/kernel/guest_object.hpp"
 #include "hle/kernel/tls.hpp"
 
 namespace bb::hle::kernel {
 namespace {
-
-using Cell = std::uintptr_t;
 
 constexpr std::string_view channel = "hle.libkernel";
 
@@ -114,16 +113,9 @@ struct Attr {
     ThreadAttributes values;
 };
 
-// Cell values below this are no pointers to our objects, so they are refused without reading.
-constexpr Cell lowest_object = 0x10000;
-
 // The attribute object of `cell`, or nullptr.
 Attr* attr_at(const Cell* cell) {
-    if (cell == nullptr || *cell < lowest_object || *cell % alignof(Attr) != 0) {
-        return nullptr;
-    }
-    auto* attr = reinterpret_cast<Attr*>(*cell);
-    return attr->tag == Attr::tag_value ? attr : nullptr;
+    return cell == nullptr ? nullptr : object_at<Attr>(*cell);
 }
 
 int attr_init(Cell* cell) {
@@ -314,21 +306,6 @@ void yield() {
 int posix_sched_yield() {
     return sched_yield() == 0 ? 0 : posix_fail(errno);
 }
-
-// Sce<f>::call and Posix<f>::call wrap a core function `f` in the sce or POSIX error form.
-template <auto F>
-struct Sce;
-template <class... A, int (*F)(A...)>
-struct Sce<F> {
-    static std::int32_t call(A... args) { return sce_fail(F(args...)); }
-};
-
-template <auto F>
-struct Posix;
-template <class... A, int (*F)(A...)>
-struct Posix<F> {
-    static int call(A... args) { return pthread_error(F(args...)); }
-};
 
 int posix_create(Thread** thread, const Cell* attr, ThreadEntry entry, void* arg) {
     return pthread_error(create_thread(thread, attr, entry, arg, nullptr));
