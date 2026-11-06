@@ -1,4 +1,4 @@
-; A vertex shader (key in translate_test.cpp). User data: s[0:3] the V# of the vertices, 32 bytes
+; A vertex shader (key in stages_test.cpp). User data: s[0:3] the V# of the vertices, 32 bytes
 ; each: a position, then a color. It loads both by the vertex index in v0 and exports them as pos0
 ; and param0, and the instance index (v3, with VGPR_COMP_CNT 3) as the x of param1.
 buffer_load_dwordx4 v[4:7], v0, s[0:3], 0 idxen
