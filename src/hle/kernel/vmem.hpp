@@ -67,7 +67,8 @@ int reserve(std::uintptr_t hint, std::uint64_t length, std::uint64_t alignment,
             std::uintptr_t& out);
 
 // Turns [start, start + length rounded up to page_size) back into a reservation, with unmap()'s
-// rules, so that a later unmap of the whole reservation finds no hole.
+// rules, so that a later unmap of the whole reservation finds no hole. If the host refuses, the
+// range is no guest mapping any more.
 int restore_reservation(std::uintptr_t start, std::uint64_t length);
 
 // Unmaps [start, start + length rounded up to page_size). Returns 0 or a host errno: EINVAL if
