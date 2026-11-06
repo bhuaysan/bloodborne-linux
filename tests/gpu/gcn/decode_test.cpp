@@ -178,6 +178,8 @@ TEST(GcnDecode, Smrd) {
     EXPECT_EQ(inst.num_src, 0);
 
     EXPECT_EQ(error({smrd(0, 0, 4, false, 128)}).word(), smrd(0, 0, 4, false, 128));
+    // A condition bit as offset register: LLVM accepts it, the manual allows only an SGPR.
+    EXPECT_EQ(error({smrd(0, 0, 4, false, code::vccz)}).word(), smrd(0, 0, 4, false, code::vccz));
     EXPECT_EQ(error({smrd(2, 2, 4, true, 0)}).word(), smrd(2, 2, 4, true, 0));  // s[2:5]
 
     // Special registers as base and offset register.
