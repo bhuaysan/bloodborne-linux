@@ -201,6 +201,14 @@ TEST(GcnStructurize, ContinueFromInsideAScope) {
           {{{1, {false, false, true}}, {2, {true, false}}, {4, {true}}}, {}});
 }
 
+TEST(GcnStructurize, ExitsOutOfNestedLoops) {
+    // 0: if vccz goto 5; 1: nop; 2: if scc0 goto 5; 3: if scc1 goto 1; 4: if vccnz goto 2; 5: end
+    // Block 3 continues the outer loop from the inner one, block 2 leaves both to the merge 5.
+    check({br(vccz, 0, 5), sopp(nop), br(scc0, 2, 5), br(scc1, 3, 1), br(vccnz, 4, 2),
+           sopp(endpgm)},
+          {{{0, {true}}}, {{2, {false, false, true}}, {3, {true, false}}, {4, {true}}}, {}});
+}
+
 TEST(GcnStructurize, RejectsIrreducibleGraphs) {
     // 0: if scc0 goto 2; 1: nop; 2: if scc1 goto 1; 3: end. The loop {1, 2} has two entries.
     const std::vector<std::uint32_t> words = {br(scc0, 0, 2), sopp(nop), br(scc1, 2, 1),
