@@ -196,6 +196,10 @@ void round_trip(Format format, const std::vector<Words>& all, unsigned known,
         EXPECT_EQ(inst.format, format);
         EXPECT_EQ(inst.opcode, opcodes[i]);
         EXPECT_EQ(disassemble(inst), lines[i]);
+        // LLVM prints the ds_swizzle_b32 pattern in its swizzle() form, we print the number.
+        if (inst.name != "ds_swizzle_b32") {
+            EXPECT_EQ(assembled[i].text, lines[i]);
+        }
     }
 }
 
