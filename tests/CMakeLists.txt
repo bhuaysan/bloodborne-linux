@@ -18,7 +18,7 @@ else()
 endif()
 
 # Helpers shared by all tests, e.g. finding the game.
-add_library(bbtestsupport STATIC support/game.cpp)
+add_library(bbtestsupport STATIC support/game.cpp support/process.cpp)
 target_include_directories(bbtestsupport PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(bbtestsupport PRIVATE BB_MAIN_CHECKOUT="${BB_MAIN_CHECKOUT}")
 target_link_libraries(bbtestsupport PUBLIC bbcommon GTest::gtest PRIVATE bb_warnings)

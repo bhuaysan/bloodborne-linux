@@ -12,17 +12,14 @@
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
 #include "loader/dynamic.hpp"
+#include "support/hle.hpp"
 
 namespace {
 
 using bb::hle::kernel::sce_error;
 using namespace std::chrono_literals;
 
-template <class F>
-F* fn(const char* nid) {
-    return reinterpret_cast<F*>(
-        bb::hle::resolve({nid, "libkernel", "libTestModule", bb::loader::stt_func}));
-}
+using bb::test::fn;
 
 auto* const create = fn<std::int32_t(std::uint64_t*, const char*, std::int32_t, std::int32_t,
                                      std::int32_t, const void*)>("188x57JYp0g");

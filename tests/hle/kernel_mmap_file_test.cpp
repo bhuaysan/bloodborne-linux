@@ -15,6 +15,7 @@
 #include "hle/kernel/file.hpp"
 #include "hle/kernel/paths.hpp"
 #include "hle/kernel/vmem.hpp"
+#include "support/hle.hpp"
 
 namespace {
 
@@ -29,15 +30,8 @@ constexpr int o_rdonly = 0;
 void* const map_failed = reinterpret_cast<void*>(-1);
 
 // The guest errno after a POSIX call; resets it.
-int take_errno() {
-    const int e = *guest_errno_location();
-    *guest_errno_location() = 0;
-    return e;
-}
-
-int guest(int host_errno) {
-    return guest_errno(host_errno).value();
-}
+using bb::test::guest;
+using bb::test::take_errno;
 
 std::string slurp(const fs::path& file) {
     std::ifstream in(file, std::ios::binary);

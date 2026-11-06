@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "support/game.hpp"
+#include "support/process.hpp"
 #include "tools/main_loop_probe.hpp"
 #include "tools/run_options.hpp"
 
@@ -157,34 +158,8 @@ TEST(MainLoopProbe, ReportsExactlyOnceAcrossThreads) {
 
 // ---- the binary ---------------------------------------------------------------------------------
 
-struct Result {
-    int status;          // the exit status, -1 when the process didn't exit normally
-    std::string output;  // standard output and standard error
-};
-
-// Runs `command` through /bin/sh and captures its standard output and standard error.
-Result run(const std::string& command) {
-    FILE* pipe = popen((command + " 2>&1").c_str(), "r");
-    if (pipe == nullptr) {
-        return {-1, "popen failed"};
-    }
-    std::string output;
-    char buffer[4096];
-    while (const std::size_t n = std::fread(buffer, 1, sizeof buffer, pipe)) {
-        output.append(buffer, n);
-    }
-    const int status = pclose(pipe);
-    return {WIFEXITED(status) ? WEXITSTATUS(status) : -1, output};
-}
-
-// `s` as a single-quoted shell word.
-std::string quote(const std::string& s) {
-    std::string out = "'";
-    for (const char c : s) {
-        out += c == '\'' ? std::string("'\\''") : std::string(1, c);
-    }
-    return out + "'";
-}
+using bb::test::quote;
+using bb::test::Result;
 
 // A fresh directory outside the checkout (RuntimeDirs refuses directories inside it), removed at
 // the end of the test.
@@ -208,13 +183,15 @@ private:
 };
 
 // Runs bb-run with `args` in `dir`, with the XDG base directories below it and without BB_LOG
-// and BB_GAME_DIR.
+// and BB_GAME_DIR. Captures its standard output and standard error.
 Result run_bb_run(const TempDir& dir, const std::string& args) {
     const std::string d = dir.path().string();
-    return run(std::format("cd {} && env -u BB_LOG -u BB_GAME_DIR XDG_DATA_HOME={} "
-                           "XDG_CACHE_HOME={} XDG_CONFIG_HOME={} XDG_STATE_HOME={} {} {}",
-                           quote(d), quote(d + "/data"), quote(d + "/cache"),
-                           quote(d + "/config"), quote(d + "/state"), quote(BB_RUN_PATH), args));
+    return bb::test::run(std::format("cd {} && env -u BB_LOG -u BB_GAME_DIR XDG_DATA_HOME={} "
+                                     "XDG_CACHE_HOME={} XDG_CONFIG_HOME={} XDG_STATE_HOME={} {} {} "
+                                     "2>&1",
+                                     quote(d), quote(d + "/data"), quote(d + "/cache"),
+                                     quote(d + "/config"), quote(d + "/state"),
+                                     quote(BB_RUN_PATH), args));
 }
 
 TEST(BbRun, PrintsTheUsage) {

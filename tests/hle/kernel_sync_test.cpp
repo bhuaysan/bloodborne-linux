@@ -13,6 +13,7 @@
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
 #include "loader/dynamic.hpp"
+#include "support/hle.hpp"
 
 namespace {
 
@@ -20,11 +21,7 @@ using namespace bb::hle::kernel;
 using Cell = std::uintptr_t;
 using Attr = std::uint64_t;
 
-template <class F>
-F* fn(const char* library, const char* nid) {
-    return reinterpret_cast<F*>(
-        bb::hle::resolve({nid, library, "libTestModule", bb::loader::stt_func}));
-}
+using bb::test::fn;
 
 constexpr const char* kernel = "libkernel";
 constexpr const char* posix = "libScePosix";

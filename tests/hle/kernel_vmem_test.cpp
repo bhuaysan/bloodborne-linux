@@ -21,6 +21,7 @@
 
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
+#include "support/hle.hpp"
 
 namespace {
 
@@ -82,11 +83,7 @@ bool refuse_reservations_at(std::uintptr_t address) {
 }
 
 // The guest errno after a POSIX call; resets it.
-int take_errno() {
-    const int e = *guest_errno_location();
-    *guest_errno_location() = 0;
-    return e;
-}
+using bb::test::take_errno;
 
 TEST(KernelVmem, MapsAlignedAndRecordsTheRegion) {
     vmem::Mapping m = anonymous(4);

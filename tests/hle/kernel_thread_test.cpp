@@ -20,6 +20,7 @@
 #include "hle/hle.hpp"
 #include "hle/kernel/tls.hpp"
 #include "loader/dynamic.hpp"
+#include "support/hle.hpp"
 
 namespace {
 
@@ -27,11 +28,7 @@ using namespace bb::hle::kernel;
 using Cell = std::uintptr_t;
 using Handle = Thread*;
 
-template <class F>
-F* fn(const char* nid, const char* library = "libkernel") {
-    return reinterpret_cast<F*>(
-        bb::hle::resolve({nid, library, "libTestModule", bb::loader::stt_func}));
-}
+using bb::test::fn;
 
 auto* const create =
     fn<std::int32_t(Handle*, const Cell*, ThreadEntry, void*, const char*)>("6UgtwV+0zb4");
@@ -52,17 +49,17 @@ auto* const attr_setinheritsched = fn<std::int32_t(Cell*, int)>("eXbUSpEaTsA");
 auto* const attr_get = fn<std::int32_t(Handle, Cell*)>("x1X76arYMxU");
 
 constexpr const char* posix = "libScePosix";
-auto* const posix_create = fn<int(Handle*, const Cell*, ThreadEntry, void*)>("OxhIB8LB-PQ", posix);
+auto* const posix_create = fn<int(Handle*, const Cell*, ThreadEntry, void*)>(posix, "OxhIB8LB-PQ");
 auto* const posix_create_named =
-    fn<int(Handle*, const Cell*, ThreadEntry, void*, const char*)>("Jmi+9w9u0E4", posix);
-auto* const posix_join = fn<int(Handle, void**)>("h9CcP3J0oVM", posix);
-auto* const posix_exit = fn<void(void*)>("FJrT5LuUBAU", posix);
-auto* const posix_self = fn<Handle()>("EotR8a3ASf4", posix);
-auto* const posix_attr_init = fn<int(Cell*)>("wtkt-teR1so", posix);
-auto* const posix_attr_destroy = fn<int(Cell*)>("zHchY8ft5pk", posix);
-auto* const posix_attr_setstacksize = fn<int(Cell*, std::size_t)>("2Q0z6rnBrTE", posix);
-auto* const posix_attr_setdetachstate = fn<int(Cell*, int)>("E+tyo3lp5Lw", posix);
-auto* const posix_attr_setschedparam = fn<int(Cell*, const int*)>("euKRgm0Vn2M", posix);
+    fn<int(Handle*, const Cell*, ThreadEntry, void*, const char*)>(posix, "Jmi+9w9u0E4");
+auto* const posix_join = fn<int(Handle, void**)>(posix, "h9CcP3J0oVM");
+auto* const posix_exit = fn<void(void*)>(posix, "FJrT5LuUBAU");
+auto* const posix_self = fn<Handle()>(posix, "EotR8a3ASf4");
+auto* const posix_attr_init = fn<int(Cell*)>(posix, "wtkt-teR1so");
+auto* const posix_attr_destroy = fn<int(Cell*)>(posix, "zHchY8ft5pk");
+auto* const posix_attr_setstacksize = fn<int(Cell*, std::size_t)>(posix, "2Q0z6rnBrTE");
+auto* const posix_attr_setdetachstate = fn<int(Cell*, int)>(posix, "E+tyo3lp5Lw");
+auto* const posix_attr_setschedparam = fn<int(Cell*, const int*)>(posix, "euKRgm0Vn2M");
 
 constexpr std::int32_t esrch = 0x80020003, edeadlk = 0x8002000b, einval = 0x80020016,
                        eagain = 0x80020023;

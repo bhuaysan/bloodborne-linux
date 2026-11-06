@@ -12,38 +12,18 @@
 
 #include <gtest/gtest.h>
 
+#include "support/process.hpp"
+
 namespace {
 
-struct Result {
-    int exit_code;  // -1 when the process didn't exit normally
-    std::string output;
-};
-
-// `s` as a single-quoted shell word.
-std::string quote(const std::string& s) {
-    std::string out = "'";
-    for (char c : s) {
-        out += c == '\'' ? std::string("'\\''") : std::string(1, c);
-    }
-    return out + "'";
-}
+using bb::test::quote;
+using bb::test::Result;
 
 // Runs bb-gcn with `args` (shell words) through /bin/sh and captures its standard output, and
 // with `with_stderr` its standard error too.
 Result bb_gcn(const std::string& args, bool with_stderr = false) {
-    const std::string command =
-        quote(BB_GCN_PATH) + " " + args + (with_stderr ? " 2>&1" : " 2>/dev/null");
-    FILE* pipe = popen(command.c_str(), "r");
-    if (!pipe) {
-        return {-1, "popen failed"};
-    }
-    std::string output;
-    char buffer[4096];
-    while (std::size_t n = std::fread(buffer, 1, sizeof buffer, pipe)) {
-        output.append(buffer, n);
-    }
-    int status = pclose(pipe);
-    return {WIFEXITED(status) ? WEXITSTATUS(status) : -1, output};
+    return bb::test::run(
+        quote(BB_GCN_PATH) + " " + args + (with_stderr ? " 2>&1" : " 2>/dev/null"));
 }
 
 class BbGcn : public ::testing::Test {
@@ -121,14 +101,14 @@ TEST_F(BbGcn, AllDecodesEveryWholeDword) {
 
 TEST_F(BbGcn, RejectsBadArguments) {
     write({0xbf810000});
-    EXPECT_EQ(bb_gcn("").exit_code, 2);
-    EXPECT_EQ(bb_gcn("disasm").exit_code, 2);
-    EXPECT_EQ(bb_gcn("disasm --size 4 " + path()).exit_code, 2);
-    EXPECT_EQ(bb_gcn("disasm " + path() + " " + path()).exit_code, 2);
-    EXPECT_EQ(bb_gcn("translate " + path()).exit_code, 2);
-    EXPECT_EQ(bb_gcn("--help").exit_code, 0);
+    EXPECT_EQ(bb_gcn("").status, 2);
+    EXPECT_EQ(bb_gcn("disasm").status, 2);
+    EXPECT_EQ(bb_gcn("disasm --size 4 " + path()).status, 2);
+    EXPECT_EQ(bb_gcn("disasm " + path() + " " + path()).status, 2);
+    EXPECT_EQ(bb_gcn("translate " + path()).status, 2);
+    EXPECT_EQ(bb_gcn("--help").status, 0);
     std::filesystem::remove(file_);
-    EXPECT_EQ(bb_gcn("disasm " + path()).exit_code, 1);  // no such file
+    EXPECT_EQ(bb_gcn("disasm " + path()).status, 1);  // no such file
 }
 
 }  // namespace

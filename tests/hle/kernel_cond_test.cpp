@@ -13,6 +13,7 @@
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
 #include "loader/dynamic.hpp"
+#include "support/hle.hpp"
 
 namespace {
 
@@ -21,11 +22,7 @@ using bb::hle::kernel::sce_error;
 using Cell = std::uintptr_t;
 using namespace std::chrono_literals;
 
-template <class F>
-F* fn(const char* library, const char* nid) {
-    return reinterpret_cast<F*>(
-        bb::hle::resolve({nid, library, "libTestModule", bb::loader::stt_func}));
-}
+using bb::test::fn;
 
 constexpr const char* kernel = "libkernel";
 constexpr const char* posix = "libScePosix";

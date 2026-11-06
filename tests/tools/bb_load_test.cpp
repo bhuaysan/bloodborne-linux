@@ -13,37 +13,13 @@
 #include <gtest/gtest.h>
 
 #include "support/game.hpp"
+#include "support/process.hpp"
 
 namespace {
 
-struct Result {
-    int exit_code;  // -1 when the process didn't exit normally
-    std::string output;
-};
-
-// Runs `command` through /bin/sh and captures its standard output.
-Result run(const std::string& command) {
-    FILE* pipe = popen(command.c_str(), "r");
-    if (!pipe) {
-        return {-1, "popen failed"};
-    }
-    std::string output;
-    char buffer[4096];
-    while (std::size_t n = std::fread(buffer, 1, sizeof buffer, pipe)) {
-        output.append(buffer, n);
-    }
-    int status = pclose(pipe);
-    return {WIFEXITED(status) ? WEXITSTATUS(status) : -1, output};
-}
-
-// `s` as a single-quoted shell word.
-std::string quote(const std::string& s) {
-    std::string out = "'";
-    for (char c : s) {
-        out += c == '\'' ? std::string("'\\''") : std::string(1, c);
-    }
-    return out + "'";
-}
+using bb::test::quote;
+using bb::test::Result;
+using bb::test::run;
 
 using LibraryCounts = std::tuple<std::string, int, int>;  // library, func, object
 
@@ -94,10 +70,10 @@ const std::string bb_load = quote(BB_LOAD_PATH);
 
 TEST(BbLoad, NeedsTheGameDirectory) {
     Result r = run("BB_GAME_DIR= " + bb_load + " 2>&1");
-    EXPECT_EQ(r.exit_code, 2);
+    EXPECT_EQ(r.status, 2);
     EXPECT_NE(r.output.find("set BB_GAME_DIR or pass --game-dir"), std::string::npos) << r.output;
     r = run(bb_load + " --game-dir /nonexistent 2>&1");
-    EXPECT_EQ(r.exit_code, 1);
+    EXPECT_EQ(r.status, 1);
     EXPECT_NE(r.output.find("/nonexistent/eboot.bin"), std::string::npos) << r.output;
 }
 
@@ -159,7 +135,7 @@ testing::AssertionResult hle_at_least(const std::string& binding, int total, int
 TEST(BbLoadGame, PrintsTheLoadSet) {
     BB_REQUIRE_GAME(game);
     Result r = run(bb_load + " --game-dir " + quote(game.string()));
-    ASSERT_EQ(r.exit_code, 0) << r.output;
+    ASSERT_EQ(r.status, 0) << r.output;
     std::string last;
     std::vector<ModuleOutput> modules = parse(r.output, last);
     ASSERT_EQ(modules.size(), 3U) << r.output;

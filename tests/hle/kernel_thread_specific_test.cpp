@@ -12,6 +12,7 @@
 #include "hle/hle.hpp"
 #include "hle/kernel/thread.hpp"
 #include "loader/dynamic.hpp"
+#include "support/hle.hpp"
 
 namespace {
 
@@ -19,11 +20,7 @@ using namespace bb::hle::kernel;
 using Cell = std::uintptr_t;
 using Handle = Thread*;
 
-template <class F>
-F* fn(const char* nid) {
-    return reinterpret_cast<F*>(
-        bb::hle::resolve({nid, "libkernel", "libTestModule", bb::loader::stt_func}));
-}
+using bb::test::fn;
 
 auto* const create =
     fn<std::int32_t(Handle*, const Cell*, ThreadEntry, void*, const char*)>("6UgtwV+0zb4");
