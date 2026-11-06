@@ -172,6 +172,7 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
     // One program file at a time. The code of a program is translated once, however many files
     // hold it; the files are counted per stage.
     std::map<bb::common::Sha256Digest, Outcome> outcomes;
+    std::map<bb::common::Sha256Digest, std::string> first_stage;  // of the first file with the code
     std::map<std::pair<int, int>, OpcodeUse> uses;  // by format and opcode, for the probes
     std::map<std::string, std::uint64_t> files_by_stage, translated_by_stage;
     std::uint64_t files = 0, translated_files = 0, wave_files = 0;
@@ -188,6 +189,7 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
         auto [it, fresh] = outcomes.try_emplace(digest);
         if (fresh) {
             it->second = translate_program(program.code, program.type, true);
+            first_stage[digest] = program_type_name(program.type);
             const Outcome& o = it->second;
             if (o.internal || !o.invalid.empty()) {
                 if (++failures <= max_reports) {
@@ -219,15 +221,18 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
         wave_files += it->second.wave_size_dependent;
     }
 
-    // The gaps: programs by the instruction and by the message they stop at.
-    Counts by_blocker, by_message;
+    // The gaps: programs by the instruction and by the message they stop at, and by the stage
+    // (the type of the first file with the code, which picks the key) and the instruction.
+    Counts by_blocker, by_message, by_stage_blocker;
     std::uint64_t translated = 0, wave = 0;
     for (const auto& [digest, o] : outcomes) {
         translated += o.translated;
         wave += o.wave_size_dependent;
         if (!o.translated) {
             ++by_message[kind_of(o.message, o.blocker)];
-            ++by_blocker[o.blocker.empty() ? "(none)" : o.blocker];
+            const std::string blocker = o.blocker.empty() ? "(none)" : o.blocker;
+            ++by_blocker[blocker];
+            ++by_stage_blocker[first_stage[digest] + '\t' + blocker];
         }
     }
 
@@ -283,6 +288,8 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
     }
     write_counts(out, "programs by the instruction the translation stops at",
                  "mnemonic\tprograms", by_blocker);
+    write_counts(out, "programs by stage and the instruction the translation stops at",
+                 "stage\tmnemonic\tprograms", by_stage_blocker);
     write_counts(out, "programs by message", "message\tprograms", by_message);
     write_counts(out, "opcodes by probe result", "result\topcodes", probe_messages);
     out << "\n## probe result per opcode, most used first\n"
