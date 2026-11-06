@@ -11,6 +11,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <ranges>
 
 #include "common/log.hpp"
 #include "hle/hle.hpp"
@@ -65,7 +66,13 @@ std::optional<std::uint64_t> checked_alignment(std::uint64_t alignment) {
 std::optional<std::uint64_t> find_free(std::uint64_t low, std::uint64_t high, std::uint64_t length,
                                        std::uint64_t alignment) {
     std::uint64_t at = align_up(low, alignment);
-    for (const auto& [start, allocation] : table) {
+    // Allocations don't overlap, so every one before the last that starts at or below `at` ends
+    // at or below it: the scan starts at that last one.
+    auto first = table.upper_bound(at);
+    if (first != table.begin()) {
+        --first;
+    }
+    for (const auto& [start, allocation] : std::ranges::subrange(first, table.end())) {
         if (at >= high) {
             break;
         }
