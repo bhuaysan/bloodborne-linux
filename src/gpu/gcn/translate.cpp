@@ -561,7 +561,8 @@ private:
         write_mask(inst.dst[1], b_.op(Op::OpLogicalAnd, bool_, {active(), out}));
     }
 
-    // `a` compared with `b` under `c`; the operands are u32 whatever the signedness.
+    // `a` compared with `b` under `c`; the operands are u32 whatever the signedness. Not equal is
+    // spelled "ne" by the VALU compares and "lg" by the SOPC ones.
     Id int_compare(const Compare& c, Id a, Id b) {
         if (c.cond == "f" || c.cond == "t") {
             return b_.constant_bool(c.cond == "t");
@@ -570,7 +571,7 @@ private:
         Op op;
         if (c.cond == "eq") {
             op = Op::OpIEqual;
-        } else if (c.cond == "ne") {
+        } else if (c.cond == "ne" || c.cond == "lg") {
             op = Op::OpINotEqual;
         } else if (c.cond == "lt") {
             op = s ? Op::OpSLessThan : Op::OpULessThan;

@@ -340,6 +340,32 @@ TEST_F(TranslateExec, MaskBranches) {
     }
 }
 
+// The 12 s_cmp opcodes, one SCC bit each: s2 = -2 against s3 = 1 (signed less, unsigned greater)
+// and s3 against itself. The expected bits come from the same comparisons in C++.
+TEST_F(TranslateExec, ScalarCompares) {
+    constexpr std::uint32_t s2 = 0xffff'fffe, s3 = 1;
+    const auto bits = [](auto a, auto b) {
+        // eq, lg, gt, ge, lt, le
+        return std::array<bool, 6>{a == b, a != b, a > b, a >= b, a < b, a <= b};
+    };
+    const auto mask = [&](std::uint32_t a, std::uint32_t b) {
+        std::uint32_t result = 0;
+        unsigned n = 0;
+        for (bool bit : bits(static_cast<std::int32_t>(a), static_cast<std::int32_t>(b))) {
+            result |= std::uint32_t{bit} << n++;
+        }
+        for (bool bit : bits(a, b)) {
+            result |= std::uint32_t{bit} << n++;
+        }
+        return result;
+    };
+    const auto out = run("mask_sopc", {s2, s3}, 2 * lanes);
+    for (std::uint32_t i = 0; i < lanes; ++i) {
+        EXPECT_EQ(out[i], mask(s2, s3)) << "lane " << i;
+        EXPECT_EQ(out[lanes + i], mask(s3, s3)) << "lane " << i;
+    }
+}
+
 TEST_F(TranslateExec, ScalarLoopAndSkips) {
     const auto out = run("scalar_loop", {5, 0x8000'0001}, lanes + 1);
     for (std::uint32_t i = 0; i < lanes; ++i) {
