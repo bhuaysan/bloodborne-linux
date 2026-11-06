@@ -1,6 +1,6 @@
 // Disassembler in LLVM's AMDGPU assembly syntax for gfx7. Every line assembles back to the same
-// words with llvm-mc, except for the encodings that LLVM's syntax can't express (see
-// docs/design/graphics.md, "Decoder and disassembler").
+// words with llvm-mc, except for the encodings that LLVM's syntax can't express (see the
+// known differences under "Disassembler" in the "Interface" section of docs/design/graphics.md).
 
 #include <array>
 #include <bit>
