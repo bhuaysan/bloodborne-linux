@@ -65,7 +65,7 @@ std::vector<Assembled> assemble_path(const fs::path& source) {
         throw std::runtime_error("llvm-mc rejected the source:\n" + output);
     }
     // A label's fixup is left unresolved, and its bytes print as "A".
-    if (output.find("fixup") != std::string::npos) {
+    if (output.find("  fixup ") != std::string::npos) {
         throw std::runtime_error("branches need numeric offsets, not labels:\n" + output);
     }
     return out;

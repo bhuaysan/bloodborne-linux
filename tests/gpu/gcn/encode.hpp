@@ -104,4 +104,12 @@ constexpr std::uint32_t vopc(unsigned op, unsigned src0, unsigned vsrc1) {
     return 0x3eu << 25 | op << 17 | vsrc1 << 9 | src0;
 }
 
+// VOP3. `low` is ORed into the first dword (sdst << 8 for VOP3b) and `high` into the second. The
+// sources are 9-bit operand codes.
+inline std::vector<std::uint32_t> vop3(unsigned op, unsigned vdst, unsigned src0, unsigned src1 = 0,
+                                       unsigned src2 = 0, std::uint32_t low = 0,
+                                       std::uint32_t high = 0) {
+    return {0x34u << 26 | op << 17 | low | vdst, src2 << 18 | src1 << 9 | src0 | high};
+}
+
 }  // namespace bb::test::gcn

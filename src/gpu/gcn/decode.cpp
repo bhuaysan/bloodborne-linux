@@ -99,8 +99,10 @@ public:
             return detail::decode_ds_flat(code_, index_);
         } else if (detail::is_memory_encoding(w)) {
             return detail::decode_memory(code_, index_);
+        } else if (bits(w, 26, 6) == 0x34) {
+            return detail::decode_vop3(code_, index_);
         } else if (bits(w, 31, 1) == 0) {
-            return detail::decode_vop(code_, index_);  // VOP1, VOP2, VOPC (VOP3 not yet)
+            return detail::decode_vop(code_, index_);  // VOP1, VOP2, VOPC
         } else {
             fail("unsupported encoding");
         }

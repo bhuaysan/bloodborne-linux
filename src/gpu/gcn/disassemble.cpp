@@ -239,7 +239,8 @@ Literal literal_rule(const Instruction& inst, unsigned src) {
         return Literal::hex;
     case Format::vop2:
     case Format::vop1:
-    case Format::vopc: {
+    case Format::vopc:
+    case Format::vop3: {
         const auto& table = detail::vop_opcodes(inst.format);
         if (inst.opcode >= table.size()) {
             return Literal::vector;
