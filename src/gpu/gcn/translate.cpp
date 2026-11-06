@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <format>
 #include <map>
 #include <optional>
@@ -121,6 +122,36 @@ constexpr VectorOp vector_ops[] = {
     {"v_lshlrev_b32", Op::OpShiftLeftLogical, true},  // by the low 5 bits
 };
 
+// Float VALU operations on two sources, `rev` swaps them.
+struct FloatBinary {
+    std::string_view name;
+    Op op;
+    bool rev = false;
+};
+constexpr FloatBinary float_binary[] = {
+    {"v_add_f32", Op::OpFAdd},
+    {"v_sub_f32", Op::OpFSub},
+    {"v_subrev_f32", Op::OpFSub, true},
+    {"v_mul_f32", Op::OpFMul},
+};
+
+// Float VALU operations of one source that GLSL.std.450 has an instruction for.
+struct FloatUnary {
+    std::string_view name;
+    GLSLstd450 inst;
+};
+constexpr FloatUnary float_unary[] = {
+    {"v_fract_f32", GLSLstd450Fract},   {"v_trunc_f32", GLSLstd450Trunc},
+    {"v_ceil_f32", GLSLstd450Ceil},     {"v_floor_f32", GLSLstd450Floor},
+    {"v_rndne_f32", GLSLstd450RoundEven},
+};
+
+// COMPUTE_PGM_RSRC1 float mode: FP_ROUND_32 in bits 12-13 (0 nearest even, 3 toward zero),
+// FP_DENORM_32 in bits 16-17 (0 flush source and result, 3 keep), and DX10_CLAMP in bit 21.
+constexpr unsigned rsrc1_round_shift = 12;
+constexpr unsigned rsrc1_denorm_shift = 16;
+constexpr std::uint32_t rsrc1_dx10_clamp = 1u << 21;
+
 class Translator {
 public:
     Translator(std::span<const std::uint32_t> code, const ShaderKey& key)
@@ -155,6 +186,7 @@ public:
             b_.extension("SPV_KHR_maximal_reconvergence");
             b_.execution_mode(main, spv::ExecutionMode::MaximallyReconvergesKHR);
         }
+        float_modes(main);
         return {b_.words(),
                 {.buffers = find_buffer_sources(program_, cfg_, user_sgprs()),
                  .wave_size_dependent = wave_size_dependent_,
@@ -467,10 +499,13 @@ private:
 
     // VOP1, VOP2 and VOP3: the result is written as select(active, new, old).
     void vector(const Instruction& inst) {
-        if (inst.neg != 0 || inst.abs != 0 || inst.omod != 0 || (inst.flags & flag::clamp) != 0) {
+        const std::string_view name = strip_encoding(inst.name);
+        if (float_vector(inst, name)) {  // takes the modifiers itself
+            return;
+        }
+        if (has_modifiers(inst)) {
             fail(std::format("modifiers of {} are not supported yet", inst.name));
         }
-        const std::string_view name = strip_encoding(inst.name);
         if (name == "v_nop") {
             return;
         }
@@ -618,6 +653,205 @@ private:
         b_.capability(spv::Capability::GroupNonUniformVote);
         return b_.op(Op::OpGroupNonUniformAny, bool_,
                      {b_.constant_u32(spirv_word(spv::Scope::Subgroup)), v});
+    }
+
+    // ---- Float VALU, on f32 ----
+    // The registers hold u32, so a float source is a bit cast. VOP3's neg and abs apply to float
+    // sources (abs first), omod and clamp to float results. A source or result of another type
+    // with such a modifier is an error, as the modifiers of the integer instructions are.
+
+    static bool has_modifiers(const Instruction& inst) {
+        return inst.neg != 0 || inst.abs != 0 || inst.omod != 0 || (inst.flags & flag::clamp) != 0;
+    }
+
+    // The float VALU instructions. Returns false for any other instruction.
+    bool float_vector(const Instruction& inst, std::string_view name) {
+        const Id f32 = b_.type_float(32);
+        const auto src = [&](unsigned i) { return float_source(inst, i); };
+        const auto ext = [&](GLSLstd450 f, std::initializer_list<Id> args) {
+            SpirvBuilder::Words words = {b_.import_extended("GLSL.std.450"), f};
+            words.insert(words.end(), args.begin(), args.end());
+            return b_.op(Op::OpExtInst, f32, words);
+        };
+        Id r = 0;     // an f32 result
+        Id bits = 0;  // a u32 result
+        const auto b = std::ranges::find(float_binary, name, &FloatBinary::name);
+        const auto u = std::ranges::find(float_unary, name, &FloatUnary::name);
+        if (b != std::end(float_binary)) {
+            r = arith(b->op, src(b->rev ? 1 : 0), src(b->rev ? 0 : 1));
+        } else if (u != std::end(float_unary)) {
+            r = ext(u->inst, {src(0)});
+            if (u->inst == GLSLstd450Fract) {
+                // x - floor(x) rounds to 1.0 for a tiny negative x; the hardware stays below 1
+                // (LLVM's model of CI and later: min(x - floor(x), 0x1.fffffep-1)). A NaN is no
+                // 1.0 and stays.
+                const Id is_one = b_.op(Op::OpFOrdEqual, bool_, {r, b_.constant_f32(1.0f)});
+                const Id below_one = b_.constant_f32(std::nextafter(1.0f, 0.0f));
+                r = b_.op(Op::OpSelect, f32, {is_one, below_one, r});
+            }
+        } else if (name == "v_mul_legacy_f32") {
+            r = legacy_mul(src(0), src(1));
+        } else if (name == "v_mac_f32" || name == "v_mac_legacy_f32") {  // vdst += src0 * src1
+            note_float();
+            r = fmad(name == "v_mac_legacy_f32", src(0), src(1),
+                     b_.op(Op::OpBitcast, f32, {load(u32_, vgpr(inst.dst[0].code))}));
+        } else if (name == "v_mad_f32" || name == "v_mad_legacy_f32" || name == "v_madmk_f32" ||
+                   name == "v_madak_f32") {  // src0 * src1 + src2, with K in place of one source
+            r = fmad(name == "v_mad_legacy_f32", src(0), src(1), src(2));
+        } else if (name == "v_fma_f32") {
+            r = ext(GLSLstd450Fma, {src(0), src(1), src(2)});
+        } else if (name == "v_min_f32" || name == "v_max_f32") {  // a NaN operand gives the other
+            const Id a = src(0), b = src(1);
+            const Id m = ext(name == "v_min_f32" ? GLSLstd450FMin : GLSLstd450FMax, {a, b});
+            const Id not_b = b_.op(Op::OpSelect, f32, {is_nan(b), a, m});
+            r = b_.op(Op::OpSelect, f32, {is_nan(a), b, not_b});
+        } else if (name == "v_min_legacy_f32" || name == "v_max_legacy_f32") {
+            const bool min = name == "v_min_legacy_f32";
+            const Id a = src(0), b = src(1);
+            const Id first = b_.op(min ? Op::OpFOrdLessThan : Op::OpFOrdGreaterThanEqual, bool_,
+                                   {a, b});
+            r = b_.op(Op::OpSelect, f32, {first, a, b});
+        } else if (name == "v_cvt_f32_i32" || name == "v_cvt_f32_u32") {
+            no_source_modifiers(inst);
+            r = b_.op(name == "v_cvt_f32_i32" ? Op::OpConvertSToF : Op::OpConvertUToF, f32,
+                      {read(inst.src[0])});
+        } else if (name == "v_cvt_i32_f32" || name == "v_cvt_u32_f32" ||
+                   name == "v_cvt_flr_i32_f32" || name == "v_cvt_rpi_i32_f32") {
+            Id x = src(0);  // floor(x + 0.5) for rpi
+            if (name == "v_cvt_flr_i32_f32") {
+                x = ext(GLSLstd450Floor, {x});
+            } else if (name == "v_cvt_rpi_i32_f32") {
+                x = ext(GLSLstd450Floor, {arith(Op::OpFAdd, x, b_.constant_f32(0.5f))});
+            }
+            bits = float_to_int(x, name != "v_cvt_u32_f32");
+        } else {
+            return false;
+        }
+        note_float();
+        if (bits != 0) {  // an integer result takes no omod or clamp
+            if (inst.omod != 0 || (inst.flags & flag::clamp) != 0) {
+                fail(std::format("modifiers of {} are not supported yet", inst.name));
+            }
+            write_vector(inst.dst[0], bits);
+        } else {
+            write_vector(inst.dst[0], b_.op(Op::OpBitcast, u32_, {float_result(inst, r)}));
+        }
+        return true;
+    }
+
+    // Source `i` as an f32, with its abs and neg modifiers.
+    Id float_source(const Instruction& inst, unsigned i) {
+        const Id f32 = b_.type_float(32);
+        Id x = b_.op(Op::OpBitcast, f32, {read(inst.src[i])});
+        if ((inst.abs >> i & 1) != 0) {
+            x = b_.op(Op::OpExtInst, f32, {b_.import_extended("GLSL.std.450"), GLSLstd450FAbs, x});
+        }
+        if ((inst.neg >> i & 1) != 0) {
+            x = b_.op(Op::OpFNegate, f32, {x});
+        }
+        return x;
+    }
+
+    void no_source_modifiers(const Instruction& inst) const {
+        if (inst.neg != 0 || inst.abs != 0) {
+            fail(std::format("modifiers of {} are not supported yet", inst.name));
+        }
+    }
+
+    // A float result after omod (1: x2, 2: x4, 3: /2), then clamp to [0, 1]. With DX10_CLAMP a
+    // NaN clamps to 0, without it the NaN stays.
+    Id float_result(const Instruction& inst, Id x) {
+        const Id f32 = b_.type_float(32);
+        static constexpr float scale[] = {1.0f, 2.0f, 4.0f, 0.5f};
+        if (inst.omod != 0) {
+            x = arith(Op::OpFMul, x, b_.constant_f32(scale[inst.omod & 3]));
+        }
+        if ((inst.flags & flag::clamp) != 0) {
+            const Id glsl = b_.import_extended("GLSL.std.450");
+            const Id c = b_.op(Op::OpExtInst, f32,
+                               {glsl, GLSLstd450FClamp, x, b_.constant_f32(0.0f),
+                                b_.constant_f32(1.0f)});
+            const bool dx10 = (key_.pgm_rsrc1 & rsrc1_dx10_clamp) != 0;
+            x = b_.op(Op::OpSelect, f32, {is_nan(x), dx10 ? b_.constant_f32(0.0f) : x, c});
+        }
+        return x;
+    }
+
+    Id is_nan(Id x) { return b_.op(Op::OpIsNan, bool_, {x}); }
+
+    // A float add, subtract or multiply that the driver must not fuse with the operation before
+    // or after it: GCN rounds every instruction's result, and only v_fma_f32 fuses.
+    Id arith(Op op, Id x, Id y) {
+        const Id r = b_.op(op, b_.type_float(32), {x, y});
+        b_.decorate(r, spv::Decoration::NoContraction);
+        return r;
+    }
+
+    // x * y + z with the product rounded first, as v_mad_f32 does. The legacy form takes 0 for a
+    // product with a zero operand, also with an infinity or NaN as the other.
+    Id fmad(bool legacy, Id x, Id y, Id z) {
+        return arith(Op::OpFAdd, legacy ? legacy_mul(x, y) : arith(Op::OpFMul, x, y), z);
+    }
+
+    Id legacy_mul(Id x, Id y) {
+        const Id f32 = b_.type_float(32);
+        const Id zero = b_.constant_f32(0.0f);
+        const Id either = b_.op(Op::OpLogicalOr, bool_, {b_.op(Op::OpFOrdEqual, bool_, {x, zero}),
+                                                         b_.op(Op::OpFOrdEqual, bool_, {y, zero})});
+        return b_.op(Op::OpSelect, f32, {either, zero, arith(Op::OpFMul, x, y)});
+    }
+
+    // A float converted to a 32-bit integer, rounded toward zero and saturated; a NaN gives 0.
+    Id float_to_int(Id x, bool is_signed) {
+        const Id f32 = b_.type_float(32);
+        const Id glsl = b_.import_extended("GLSL.std.450");
+        // The largest float below 2^31 and below 2^32 keep the conversion in range.
+        const float low = is_signed ? -2147483648.0f : 0.0f;
+        const float high = is_signed ? 2147483520.0f : 4294967040.0f;
+        const Id in_range = b_.op(Op::OpExtInst, f32,
+                                  {glsl, GLSLstd450FClamp, x, b_.constant_f32(low),
+                                   b_.constant_f32(high)});
+        Id r = b_.op(is_signed ? Op::OpConvertFToS : Op::OpConvertFToU, u32_, {in_range});
+        const Id over = b_.op(Op::OpFOrdGreaterThanEqual, bool_,
+                              {x, b_.constant_f32(is_signed ? 2147483648.0f : 4294967296.0f)});
+        r = b_.op(Op::OpSelect, u32_, {over, b_.constant_u32(is_signed ? 0x7fffffff : ~0u), r});
+        return b_.op(Op::OpSelect, u32_, {is_nan(x), b_.constant_u32(0), r});
+    }
+
+    // The first float instruction asks for the execution modes of the key's float mode.
+    void note_float() { float_used_ = true; }
+
+    // The f32 execution modes: GCN keeps signed zeros, infinities and NaNs, rounds to nearest even
+    // or toward zero and flushes denormals or keeps them, as COMPUTE_PGM_RSRC1 says. The driver
+    // must support them (the float controls properties); the run time checks that.
+    void float_modes(Id main) {
+        if (!float_used_) {
+            return;
+        }
+        const unsigned round = key_.pgm_rsrc1 >> rsrc1_round_shift & 3;
+        const unsigned denorm = key_.pgm_rsrc1 >> rsrc1_denorm_shift & 3;
+        if ((round != 0 && round != 3) || (denorm != 0 && denorm != 3)) {
+            throw GcnError(std::format("COMPUTE_PGM_RSRC1 {:#x}: this float mode is not supported",
+                                       key_.pgm_rsrc1),
+                           0, 0);
+        }
+        const auto mode = [&](spv::Capability cap, spv::ExecutionMode m) {
+            b_.capability(cap);
+            b_.execution_mode(main, m, {32});
+        };
+        using Cap = spv::Capability;
+        using Mode = spv::ExecutionMode;
+        mode(Cap::SignedZeroInfNanPreserve, Mode::SignedZeroInfNanPreserve);
+        if (round == 0) {
+            mode(Cap::RoundingModeRTE, Mode::RoundingModeRTE);
+        } else {
+            mode(Cap::RoundingModeRTZ, Mode::RoundingModeRTZ);
+        }
+        if (denorm == 0) {
+            mode(Cap::DenormFlushToZero, Mode::DenormFlushToZero);
+        } else {
+            mode(Cap::DenormPreserve, Mode::DenormPreserve);
+        }
     }
 
     // flat_store_dword reaches guest memory through the address bias, in active lanes only. There
@@ -1054,6 +1288,7 @@ private:
     std::multimap<unsigned, unsigned> mask_copies_;  // mask_flow() between masks: source, dest
     bool uses_subgroup_ = false;
     bool wave_size_dependent_ = false;
+    bool float_used_ = false;
 };
 
 }  // namespace

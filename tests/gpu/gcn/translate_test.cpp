@@ -165,6 +165,8 @@ std::string error(const std::vector<std::uint32_t>& code, const ShaderKey& key =
 TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
     EXPECT_EQ(error({vopc(0x01, 256, 1), s_endpgm}),  // v_cmp_lt_f32_e32 vcc, v0, v1
               "unsupported instruction v_cmp_lt_f32_e32 at offset 0x0 (word 0x7c020300)");
+    EXPECT_EQ(error({vop1(42, 1, 256), s_endpgm}),  // v_rcp_f32_e32 v1, v0
+              "unsupported instruction v_rcp_f32_e32 at offset 0x0 (word 0x7e025500)");
     EXPECT_EQ(error({sop1(3, 0, 108), s_endpgm}),  // s_mov_b32 s0, tba_lo
               "unsupported register operand 108 of s_mov_b32 at offset 0x0 (word 0xbe80036c)");
     EXPECT_EQ(error({s_endpgm}, {.stage = bb::gcn::Stage::pixel}),
@@ -219,6 +221,25 @@ TEST(GcnTranslate, BufferMemoryErrors) {
                     .starts_with("unsupported instruction buffer_load_ubyte at offset"));
     EXPECT_TRUE(message(mubuf(12, 3, 1, 4, 128, 0, buf::offen | buf::tfe))
                     .starts_with("buffer_load_dword with tfe or lds is not supported yet at"));
+}
+
+// The float instructions take neg, abs, omod and clamp where the source or result is a float,
+// and reject them elsewhere.
+TEST(GcnTranslate, FloatModifiers) {
+    const auto with = [](unsigned op, std::uint32_t low, std::uint32_t high) {
+        auto code = vop3(op, 2, 256, 0, 0, low, high);
+        code.push_back(s_endpgm);
+        return code;
+    };
+    EXPECT_EQ(error(with(0x1a4, 0, neg(1))), "no error");  // v_floor_f32_e64 -v0
+    EXPECT_EQ(error(with(0x188, abs_clamp(1), 0)), "no error");       // v_cvt_i32_f32_e64 |v0|
+    EXPECT_EQ(error(with(0x188, abs_clamp(0, true), 0)),  // clamp on an integer result
+              "modifiers of v_cvt_i32_f32_e64 are not supported yet at offset 0x0 "
+              "(word 0xd3100802)");
+    EXPECT_EQ(error(with(0x185, 0, neg(1))),  // -v0 on an integer source
+              "modifiers of v_cvt_f32_i32_e64 are not supported yet at offset 0x0 "
+              "(word 0xd30a0002)");
+    EXPECT_EQ(error(with(0x185, abs_clamp(0, true), omod(2))), "no error");
 }
 
 }  // namespace

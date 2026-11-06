@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -144,6 +146,44 @@ TEST_F(TranslateExec, MaskCompare) {
             expected = expected << 1 | bit;
         }
         EXPECT_EQ(out[i], expected);
+    }
+}
+
+// f32 arithmetic with and without modifiers, conversions and rounding, against the same
+// operations on the host (which rounds to nearest even, like the shader's float mode).
+TEST_F(TranslateExec, FloatAlu) {
+    constexpr std::uint32_t stages = 31;
+    const auto out = run("float_alu", {}, stages * lanes);
+    const auto f32 = [](std::uint32_t bits) { return std::bit_cast<float>(bits); };
+    const auto u32 = [](float f) { return std::bit_cast<std::uint32_t>(f); };
+    for (std::uint32_t i = 0; i < lanes; ++i) {
+        const float x = static_cast<float>(i) - 32, y = 0.75f * x;
+        const float inf = std::numeric_limits<float>::infinity();
+        const float prod = x * y, third = 0.75f;
+        const std::uint32_t expected[stages] = {
+            u32(x + third), u32(third - x), u32(x - third), u32(prod + x),
+            u32(std::fma(x, y, 1.0f)),
+            u32(std::max(third, x)), u32(std::min(0.0f, x)), u32(-std::fabs(x) * y),
+            u32(std::clamp(prod, 0.0f, 1.0f)), u32(std::clamp(4 * prod, 0.0f, 1.0f)),
+            u32(prod / 2), static_cast<std::uint32_t>(static_cast<std::int32_t>(y)),
+            y <= 0 ? 0u : static_cast<std::uint32_t>(y),
+            x < 0 ? 0x8000'0000u : (x > 0 ? 0x7fff'ffffu : 0u), x != 0 ? ~0u : 0u,
+            static_cast<std::uint32_t>(static_cast<std::int32_t>(std::floor(y))),
+            static_cast<std::uint32_t>(static_cast<std::int32_t>(std::floor(y + 0.5f))),
+            u32(y - std::floor(y)), u32(std::floor(y)), u32(std::ceil(y)), u32(std::trunc(y)),
+            u32(std::nearbyint(y)), u32(i == 0 ? 0.0f : 1.0f), u32(x == 0 ? 0.0f : inf * x),
+            u32(inf * x), u32(2.0f + 0.75f * x), u32(x * 0.75f + y), u32(prod + third),
+            u32(third < x ? third : x), u32(third >= x ? third : x),
+            u32(std::nextafter(1.0f, 0.0f)),  // fract(-2^-26) stays below 1
+        };
+        for (std::uint32_t stage = 0; stage < stages; ++stage) {
+            if (stage == 24 && x == 0) {  // infinity * 0 is a NaN, whatever its sign
+                EXPECT_TRUE(std::isnan(f32(out[stage * lanes + i]))) << "lane " << i;
+            } else {
+                EXPECT_EQ(out[stage * lanes + i], expected[stage])
+                    << "stage " << stage << ", lane " << i << ", x " << x;
+            }
+        }
     }
 }
 

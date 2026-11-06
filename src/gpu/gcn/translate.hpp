@@ -23,6 +23,13 @@ inline constexpr std::uint32_t draw_block_size = 80;
 // interfaces and ShaderKey"). So far the compute stage's register values.
 struct ShaderKey {
     Stage stage = Stage::compute;
+    // COMPUTE_PGM_RSRC1. Only the float mode matters: FLOAT_MODE (bits 12-19: the rounding mode
+    // and denormal handling of f32 in bits 12-13 and 16-17), DX10_CLAMP (bit 21) and IEEE_MODE
+    // (bit 23). A shader that uses floats gets the execution modes of the f32 fields (round to
+    // nearest even or to zero, flush or keep denormals); the rounding modes toward the
+    // infinities and the half-flushing denormal modes are rejected. The rest (register counts,
+    // priority, debug bits) is ignored.
+    std::uint32_t pgm_rsrc1 = 0;
     // COMPUTE_PGM_RSRC2. USER_SGPR (at most 16) gives the user data in s0 and up; v0 holds the
     // thread ID in X. The fields that add initial registers (SCRATCH_EN, TGID_*_EN, TG_SIZE_EN,
     // TIDIG_COMP_CNT) are rejected so far. The others (TRAP_PRESENT, EXCP_EN_MSB, LDS_SIZE,
