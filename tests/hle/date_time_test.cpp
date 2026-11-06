@@ -64,7 +64,9 @@ TEST(DateTime, InvalidDatesAndTicksFail) {
                                  GuestDate{2015, 1, 1, 0, 60, 0, 0}, GuestDate{2015, 1, 1, 0, 0, 60, 0},
                                  GuestDate{2015, 1, 1, 0, 0, 0, 1'000'000},
                                  GuestDate{1599, 12, 31, 0, 0, 0, 0},
-                                 GuestDate{10000, 1, 1, 0, 0, 0, 0}}) {
+                                 GuestDate{10000, 1, 1, 0, 0, 0, 0},
+                                 GuestDate{2015, 257, 1, 0, 0, 0, 0},
+                                 GuestDate{2015, 1, 257, 0, 0, 0, 0}}) {
         EXPECT_EQ(date_to_tick(&bad, &tick), invalid) << bad.year << "-" << bad.month;
     }
     GuestDate date{};
@@ -104,6 +106,7 @@ TEST(DateTime, DayOfWeek) {
     }
     EXPECT_EQ(day_of_week(2015, 2, 29), invalid);
     EXPECT_EQ(day_of_week(2015, 0, 1), invalid);
+    EXPECT_EQ(day_of_week(40000, 1, 1), invalid);
 }
 
 TEST(DateTime, TickConversionsAndTextKeepTheGameOnItsDefaults) {

@@ -55,7 +55,9 @@ std::int32_t date_now(GuestDate* out) {
 }
 
 std::int32_t date_to_tick(const GuestDate* date, std::uint64_t* tick) {
-    if (date == nullptr || tick == nullptr) {
+    // chrono's month and day keep 8 bits, so wider values are refused before they wrap.
+    if (date == nullptr || tick == nullptr || date->month < 1 || date->month > 12 ||
+        date->day < 1 || date->day > 31) {
         return invalid;
     }
     const year_month_day ymd{year{date->year}, month{date->month}, day{date->day}};
@@ -108,7 +110,7 @@ std::int32_t tick_convert_setting_flag(const std::uint64_t* in, std::uint64_t* o
 }
 
 std::int32_t day_of_week(std::int32_t y, std::int32_t m, std::int32_t d) {
-    if (m < 1 || m > 12 || d < 1 || d > 31) {
+    if (y < 1 || y > 9999 || m < 1 || m > 12 || d < 1 || d > 31) {
         return invalid;
     }
     const year_month_day ymd{year{y}, month{static_cast<unsigned>(m)},

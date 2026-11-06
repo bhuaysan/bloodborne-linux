@@ -13,9 +13,9 @@ A 16-byte struct. The game builds one at 0x20ee3c5–0x20ee3e0 and reads one bac
 | 0 | 2 | year, full (e.g. 2015) | the reader accepts `year - 0x641 <= 0x9be`, years 1601..4095 (0x20ee240) |
 | 2 | 2 | month, 1..12 | months are normalised to 1..12 with a carry into the year (0x20ee368–0x20ee3a7) |
 | 4 | 2 | day, from 1 | the builder starts from day 1 and adds `(day - 1) * 86400e6` (0x20ee3af, 0x20ee41d–0x20ee42a) |
-| 6 | 2 | hour | |
-| 8 | 2 | minute | |
-| 10 | 2 | second | |
+| 6 | 2 | hour | the builder stores it at 6 (0x20ee3d2–0x20ee3dc) and scales it by 3,600,000,000 µs (0x20ee439–0x20ee46a); the reader packs it into bits 34+ (0x20ee2c8–0x20ee302) |
+| 8 | 2 | minute | the builder stores it at 8 (0x20ee3d2–0x20ee3dc) and scales it by 60,000,000 µs (0x20ee439–0x20ee46a); the reader packs it into bits 39+ (0x20ee2c8–0x20ee302) |
+| 10 | 2 | second | the builder stores it at 10 (0x20ee3d2–0x20ee3dc) and scales it by 1,000,000 µs (0x20ee439–0x20ee46a); the reader packs it into bits 45+ (0x20ee2c8–0x20ee302) |
 | 12 | 4 | microsecond | the builder stores milliseconds × 1000, the reader divides by 1000 (0x20ee3c5–0x20ee3e0, 0x20ee23d–0x20ee302) |
 
 The field order is also the order the game prints: `%04d%02d%02d%02d%02d%02d_%d_%04d` (0x493a7e3, used at 0x1fe5c56) and the save-name format at 0x493af66 (fed at 0x2ba0da1–0x2ba0df2).
@@ -39,7 +39,7 @@ The **epoch is not shown**: no epoch constant appears in the text segment. **Our
 | `M1TvFst-jrM` | 11, e.g. 0x20ee626, 0x2ba0d58 | `(const u64* in, u64* out)`: applied when bit 51 of the game's packed date is set; the result is packed with the bit cleared (0x20ee5f0–0x20ee690) |
 | `8Yr143yEnRo` | 0x15696ae, 0x20ee6e2 | the same form, applied when bit 51 is clear; the result is packed with the bit set (0x20ee6a0–0x20ee730) |
 | `CyIK-i4XdgQ` | 0x20ee2a9 | `(year, month, day)` to the day of the week, stored in 3 bits (0x20ee2a2–0x20ee2b1). Which value is the first day is not shown; **our choice:** 0 = Sunday to 6 = Saturday, as C's `tm_wday` |
-| `AxHBk3eat04` | 0x1fe5ca9 | `(char* buffer, 0)`: text for a signed upload request, copied after `PUT\n\ntext/txt\n` (0x493a822, 0x1fe5f6f–0x1fe5fb9). On failure the game uses an empty default. **Our choice:** fail, since uploads need the network |
+| `AxHBk3eat04` | 0x1fe5ca9 | `(char* buffer, 0)`: date text for a signed upload request, copied after `PUT\n\ntext/txt\n` (0x493a822, 0x1fe5f6f–0x1fe5fb9) and later sent as the value of the `Date` header (string 0x493a83b, used at 0x1fe64ac with the buffer read at 0x1fe64c6–0x1fe64d0). On failure the game uses an empty default. **Our choice:** fail, since uploads need the network |
 
 What `M1TvFst-jrM` and `8Yr143yEnRo` shift (a time zone, DST, something else) is not shown: no scaling or offset is visible around them. **Our choice:** the runtime keeps one time zone, UTC, so both copy the tick unchanged. If the game turns out to show local times, they are where a zone offset belongs.
 
