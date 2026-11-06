@@ -93,6 +93,8 @@ struct Query {
         info.name = props.properties.deviceName;
         info.driver = std::string(p12.driverName) + " " + p12.driverInfo;
         info.subgroup_size = p11.subgroupSize;
+        info.subgroup_quad = (p11.subgroupSupportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+                             (p11.subgroupSupportedOperations & VK_SUBGROUP_FEATURE_QUAD_BIT) != 0;
         info.min_subgroup_size = p13.minSubgroupSize;
         info.max_subgroup_size = p13.maxSubgroupSize;
         info.denorm_preserve_f32 = p12.shaderDenormPreserveFloat32;
@@ -122,7 +124,8 @@ std::string DeviceInfo::describe() const {
         << "\nf32 denormals flushed: " << denorm_flush_f32
         << "\nf32 round to nearest even: " << round_rte_f32
         << "\nf32 round toward zero: " << round_rtz_f32
-        << "\nf32 signed zero, inf and NaN preserved: " << signed_zero_inf_nan_f32 << '\n';
+        << "\nf32 signed zero, inf and NaN preserved: " << signed_zero_inf_nan_f32
+        << "\nquad subgroup operations: " << subgroup_quad << '\n';
     return out.str();
 }
 

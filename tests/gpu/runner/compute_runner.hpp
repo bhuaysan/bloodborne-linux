@@ -24,6 +24,7 @@ struct DeviceInfo {
     bool denorm_preserve_f32 = false, denorm_flush_f32 = false;
     bool round_rte_f32 = false, round_rtz_f32 = false;
     bool signed_zero_inf_nan_f32 = false;
+    bool subgroup_quad = false;  // the quad subgroup operations in compute, for s_wqm_b64
 
     std::string describe() const;  // one line per property
 };
