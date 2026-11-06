@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "common/log.hpp"
 #include "hle/hle.hpp"
 
 namespace {
@@ -63,6 +64,28 @@ TEST(KernelTime, UnknownClockIdsFail) {
         EXPECT_EQ(*guest_errno_location(), guest_einval) << id;
         EXPECT_EQ(clock_gettime_sce(id, &t), sce_error(guest_einval)) << id;
     }
+}
+
+// Unknown clock ids are logged like stub calls: calls 1 to 10, then every 1000th. Other tests may
+// have counted already, so the first 10 calls are made without looking; any 1000 calls after
+// them then log exactly once.
+TEST(KernelTime, UnknownClockIdsAreLoggedRateLimited) {
+    bb::common::set_log_filter(bb::common::LogFilter{});  // info and above
+    GuestTimespec t{};
+    for (int i = 0; i < 10; ++i) {
+        guest_clock_gettime(-1, &t);
+    }
+    testing::internal::CaptureStderr();
+    for (int i = 0; i < 1000; ++i) {
+        EXPECT_EQ(guest_clock_gettime(-1, &t), -1);
+    }
+    const std::string log = testing::internal::GetCapturedStderr();
+    std::size_t lines = 0;
+    for (std::size_t at = log.find("unknown clock id -1"); at != std::string::npos;
+         at = log.find("unknown clock id -1", at + 1)) {
+        ++lines;
+    }
+    EXPECT_EQ(lines, 1U) << log;
 }
 
 TEST(KernelTime, CountersNeverGoBackwards) {

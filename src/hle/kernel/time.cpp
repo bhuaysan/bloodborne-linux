@@ -20,7 +20,8 @@ static_assert(sizeof(GuestRusage) == 144 && offsetof(GuestRusage, stime) == 16);
 
 std::atomic<GettimeofdayObserver> observer{nullptr};
 
-// Logs an unknown clock id on calls 1 to 10 of `call`, then every 1000th, as for stubs.
+// Logs an unknown clock id on calls 1 to 10 of `call`, then every 1000th, as for stubs. The
+// count is per call site, not per clock id.
 void log_unknown_clock(std::atomic<std::uint64_t>& calls, std::string_view call,
                        std::int32_t clock) {
     if (should_log(++calls)) {

@@ -370,6 +370,8 @@ int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
         const std::scoped_lock lock(table_mutex);
         error = map_locked(m, *prot, reserved, out);
     }
+    // Logged after the lock is released, so lines from different threads may come out of the
+    // table's order. Accepted: they are debug lines.
     if (error == 0) {
         log(LogLevel::debug, "map {:#x}-{:#x} prot {:#x} flags {:#x} '{}'", out, out + m.length,
             m.prot, m.flags, m.name);
@@ -408,7 +410,7 @@ int restore_reservation(std::uintptr_t start, std::uint64_t length) {
         erase_range(start, end);
         table.emplace(start, Region{start, end, 0, 0, 0, "reserved", true});
     }
-    log(LogLevel::debug, "reserve again {:#x}-{:#x}", start, end);
+    log(LogLevel::debug, "reserve again {:#x}-{:#x}", start, end);  // after the lock, as in map
     return 0;
 }
 
@@ -424,7 +426,7 @@ int unmap(std::uintptr_t start, std::uint64_t length) {
         }
         erase_range(start, end);
     }
-    log(LogLevel::debug, "unmap {:#x}-{:#x}", start, end);
+    log(LogLevel::debug, "unmap {:#x}-{:#x}", start, end);  // after the lock, as in map
     return 0;
 }
 

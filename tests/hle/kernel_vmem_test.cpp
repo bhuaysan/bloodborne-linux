@@ -19,6 +19,7 @@
 
 #include <gtest/gtest.h>
 
+#include "common/log.hpp"
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
 #include "support/hle.hpp"
@@ -304,6 +305,17 @@ TEST(KernelVmem, RuntimeMemoryIsNeverUnmapped) {
     EXPECT_EQ(sceKernelMunmap(runtime_page, sizeof runtime_page), sce_einval);
     EXPECT_EQ(sceKernelMprotect(runtime_page, sizeof runtime_page, 1), sce_einval);
     runtime_page[0] = 1;  // still mapped and writable
+}
+
+TEST(KernelVmem, MapAndUnmapLinesAreDebugOnly) {
+    bb::common::set_log_filter(bb::common::LogFilter{});  // info and above
+    testing::internal::CaptureStderr();
+    const std::uintptr_t p = map_pages(1);
+    const int unmapped = sceKernelMunmap(ptr(p), page_size);
+    const std::string log = testing::internal::GetCapturedStderr();
+    ASSERT_NE(p, 0U);
+    EXPECT_EQ(unmapped, 0);
+    EXPECT_EQ(log.find("map "), std::string::npos) << log;  // "map " and "unmap "
 }
 
 TEST(KernelVmem, ExtraProtectionBitsAreAcceptedAndLoggedOnce) {
