@@ -241,7 +241,7 @@ TEST(GcnVop3, ModifierCombinations) {
 // Encodings that LLVM's syntax can't express: the decoder accepts what the fields allow.
 TEST(GcnVop3, EncodingsLlvmRejects) {
     const std::vector<Case> rejected = {
-        // Modifiers on instructions without them, and clamp on a compare.
+        // Modifiers on instructions without them, and clamp and omod on a compare.
         {vop3(0x143, 1, v + 2, v + 3, v + 4, 0, neg(1)), "v_mad_u32_u24 v1, -v2, v3, v4"},
         {vop3(0x143, 1, v + 2, v + 3, v + 4, abs_clamp(0, true)),
          "v_mad_u32_u24 v1, v2, v3, v4 clamp"},
@@ -249,6 +249,10 @@ TEST(GcnVop3, EncodingsLlvmRejects) {
         {vop3(0x125, 1, v + 2, v + 3, 0, 2 << 8, neg(1)), "v_add_i32_e64 v1, s[2:3], -v2, v3"},
         {vop3(0x01, 2, v + 1, v + 2, 0, abs_clamp(0, true)),
          "v_cmp_lt_f32_e64 s[2:3], v1, v2 clamp"},
+        {vop3(0x01, 2, v + 1, v + 2, 0, 0, omod(1)), "v_cmp_lt_f32_e64 s[2:3], v1, v2 mul:2"},
+        {vop3(0x01, 2, v + 1, v + 2, 0, 0, omod(3)), "v_cmp_lt_f32_e64 s[2:3], v1, v2 div:2"},
+        {vop3(0x11, 2, v + 1, v + 2, 0, 0, omod(1)), "v_cmpx_lt_f32_e64 s[2:3], v1, v2 mul:2"},
+        {vop3(0x88, 2, v + 1, v + 2, 0, 0, omod(1)), "v_cmp_class_f32_e64 s[2:3], v1, v2 mul:2"},
         // Modifiers on the integer operand of a float instruction, and on v_cndmask_b32.
         {vop3(0x12b, 1, v + 2, v + 3, 0, 0, neg(2)), "v_ldexp_f32_e64 v1, v2, -v3"},
         {vop3(0x88, 2, v + 1, v + 2, 0, 0, neg(2)), "v_cmp_class_f32_e64 s[2:3], v1, -v2"},
