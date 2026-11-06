@@ -3,9 +3,13 @@
 #include <stdlib.h>
 
 #include <cerrno>
+#include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -19,7 +23,9 @@ namespace fs = std::filesystem;
 using namespace bb::hle::kernel;
 
 // Guest open flags (docs/formats/kernel-abi.md).
-constexpr int o_rdonly = 0, o_rdwr = 2;
+constexpr int o_rdonly = 0, o_rdwr = 2, o_directory = 0x20000;
+// Guest d_type values.
+constexpr int dt_dir = 4, dt_reg = 8;
 
 std::int32_t sce(int host_errno) {
     return sce_error(guest_errno(host_errno).value());
@@ -55,6 +61,131 @@ protected:
 
     fs::path tmp_, game_, save0_, save1_;
 };
+
+struct Record {
+    std::uint32_t fileno;
+    std::uint16_t reclen;
+    std::uint8_t type;
+    std::string name;
+};
+
+// Parses the records that a getdirentries call wrote to `bytes`.
+std::vector<Record> parse(const std::byte* bytes, std::size_t length) {
+    std::vector<Record> out;
+    for (std::size_t at = 0; at < length;) {
+        GuestDirent d;
+        std::memcpy(&d, bytes + at, 8);
+        std::string name(reinterpret_cast<const char*>(bytes + at + 8), d.namlen);
+        EXPECT_EQ(d.reclen, dirent_length(d.namlen));
+        EXPECT_EQ(bytes[at + 8 + d.namlen], std::byte{0});
+        out.push_back({d.fileno, d.reclen, d.type, std::move(name)});
+        at += d.reclen;
+    }
+    return out;
+}
+
+// Every record of directory `fd`, read with buffers of `size` bytes at an odd address.
+std::vector<Record> list_all(std::int32_t fd, std::int32_t size) {
+    std::vector<std::byte> buffer(static_cast<std::size_t>(size) + 1);
+    std::vector<Record> all;
+    for (int calls = 0; calls < 10000; ++calls) {
+        std::int64_t base = -1;
+        const std::int32_t n = sceKernelGetdirentries(fd, buffer.data() + 1, size, &base);
+        EXPECT_GE(n, 0);
+        EXPECT_GE(base, 0);
+        if (n <= 0) {
+            break;
+        }
+        for (Record& r : parse(buffer.data() + 1, static_cast<std::size_t>(n))) {
+            all.push_back(std::move(r));
+        }
+    }
+    return all;
+}
+
+TEST_F(DirTest, ListsMoreEntriesThanOneBufferHoldsAndHidesJunk) {
+    std::map<std::string, int> expected{{".", 0}, {"..", 0}, {"sub", 0}};
+    for (int i = 0; i < 200; ++i) {
+        const std::string name = "file_with_a_longer_name_" + std::to_string(i) + ".bin";
+        write(save0_ / name, "x");
+        expected[name] = 0;
+    }
+    fs::create_directory(save0_ / "sub");
+    write(save0_ / "._file_0.bin", "junk");
+    write(save0_ / ".DS_Store", "junk");
+
+    const std::int32_t fd = sceKernelOpen("/savedata0", o_rdonly | o_directory, 0);
+    ASSERT_GE(fd, 3);
+    const std::vector<Record> all = list_all(fd, 100);  // at most two records per call
+    std::map<std::string, int> seen;
+    for (const Record& r : all) {
+        ++seen[r.name];
+        EXPECT_NE(r.fileno, 0u) << r.name;
+        EXPECT_EQ(r.type, r.name == "sub" || r.name.starts_with(".") ? dt_dir : dt_reg) << r.name;
+    }
+    for (auto& [name, count] : expected) {
+        count = 1;
+    }
+    EXPECT_EQ(seen, expected);
+    EXPECT_EQ(sceKernelClose(fd), 0);
+}
+
+TEST_F(DirTest, SeekingBackToTheBaseListsTheSameRecords) {
+    for (int i = 0; i < 20; ++i) {
+        write(save0_ / ("f" + std::to_string(i)), "");
+    }
+    const std::int32_t fd = sceKernelOpen("/savedata0", o_rdonly | o_directory, 0);
+    ASSERT_GE(fd, 3);
+    std::byte first[64], again[64];
+    std::int64_t base0 = -1, base1 = -1, base2 = -1;
+    ASSERT_GT(sceKernelGetdirentries(fd, first, sizeof first, &base0), 0);
+    const std::int32_t n = sceKernelGetdirentries(fd, first, sizeof first, &base1);
+    ASSERT_GT(n, 0);
+    EXPECT_NE(base1, base0);
+    EXPECT_EQ(sceKernelLseek(fd, base1, 0), base1);
+    ASSERT_EQ(sceKernelGetdirentries(fd, again, sizeof again, &base2), n);
+    EXPECT_EQ(base2, base1);
+    EXPECT_EQ(std::memcmp(first, again, static_cast<std::size_t>(n)), 0);
+    // A null base is allowed (libSceFios2 0x2d425).
+    EXPECT_GT(sceKernelGetdirentries(fd, again, sizeof again, nullptr), 0);
+    EXPECT_EQ(sceKernelClose(fd), 0);
+}
+
+TEST_F(DirTest, RefusesBuffersTooSmallForTheNextRecordAndNonDirectories) {
+    write(save0_ / "a_name_of_twenty_two_b", "");
+    const std::int32_t fd = sceKernelOpen("/savedata0", o_rdonly | o_directory, 0);
+    ASSERT_GE(fd, 3);
+    std::byte buffer[512];
+    EXPECT_EQ(sceKernelGetdirentries(fd, buffer, 8, nullptr), sce(EINVAL));
+    EXPECT_EQ(sceKernelGetdirentries(fd, buffer, -1, nullptr), sce(EINVAL));
+    EXPECT_EQ(sceKernelGetdirentries(fd, nullptr, 512, nullptr), sce(EFAULT));
+    // The refused calls didn't move the read position.
+    std::map<std::string, int> seen;
+    for (const Record& r : list_all(fd, sizeof buffer)) {
+        ++seen[r.name];
+    }
+    EXPECT_EQ(seen.size(), 3u);
+    EXPECT_EQ(seen["a_name_of_twenty_two_b"], 1);
+    EXPECT_EQ(sceKernelClose(fd), 0);
+
+    const std::int32_t file = sceKernelOpen("/app0/dvdroot_ps4/a.txt", o_rdonly, 0);
+    ASSERT_GE(file, 3);
+    EXPECT_EQ(sceKernelGetdirentries(file, buffer, sizeof buffer, nullptr), sce(EINVAL));
+    EXPECT_EQ(sceKernelClose(file), 0);
+    EXPECT_EQ(sceKernelGetdirentries(1000, buffer, sizeof buffer, nullptr), sce(EBADF));
+}
+
+TEST_F(DirTest, ListsTheGameDirectory) {
+    write(game_ / "dvdroot_ps4" / "._a.txt", "junk");
+    const std::int32_t fd = sceKernelOpen("/app0/dvdroot_ps4", o_rdonly | o_directory, 0);
+    ASSERT_GE(fd, 3);
+    std::map<std::string, int> seen;
+    for (const Record& r : list_all(fd, 512)) {
+        ++seen[r.name];
+    }
+    EXPECT_EQ(seen, (std::map<std::string, int>{{".", 1}, {"..", 1}, {"a.txt", 1}}));
+    EXPECT_EQ(sceKernelClose(fd), 0);
+}
 
 TEST_F(DirTest, CreatesAndRemovesDirectoriesAndFiles) {
     EXPECT_EQ(sceKernelMkdir("/savedata0/d", 0755), 0);
