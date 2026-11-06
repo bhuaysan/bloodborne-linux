@@ -364,9 +364,12 @@ protected:
 
 TEST_F(DsSwizzle, FullWorkgroup) { check(lanes); }
 
-// 44 lanes: the last subgroup is not full at any subgroup size. Lane 40 with xor 16 or 31 has a
-// source (56 or 55) that does not exist.
-TEST_F(DsSwizzle, PartialSubgroup) { check(44); }
+// 42 lanes: the last subgroup is not full at subgroup sizes 4 and 8 (and larger ones). At sizes 4
+// and 8 the quad patterns 0x801b and 0x80aa send lanes 40 and 41 to the missing lanes 42 and 43
+// of their own subgroup, which is the case the source-exists check is for. A missing source in
+// another subgroup is already 0 through the subgroup test. At sizes 16 and 32 no pattern reaches
+// a missing lane of the same subgroup from lanes 40 and 41.
+TEST_F(DsSwizzle, PartialSubgroup) { check(42); }
 
 // The user data of the memory programs: the output, the table through a pointer, the V# of a
 // buffer (stride, number of records) at the table, the V# of the buffer to store to, and soffset.
