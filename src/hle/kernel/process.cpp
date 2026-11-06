@@ -19,6 +19,7 @@
 #include <string_view>
 #include <utility>
 
+#include "common/log.hpp"
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
 #include "hle/kernel/process.hpp"
@@ -213,8 +214,11 @@ void report_status(std::uint32_t code, std::uint64_t argument) {
 // _exit (6Z83sYWFlA8): flush the log and end the process without host atexit handlers or static
 // destructors, which must not run under the game's threads.
 [[noreturn]] void exit_process(std::int32_t status) {
-    log(BB_CALLER(), "_exit({})", status);
-    std::fflush(nullptr);  // TODO(#84): flush the logger's file too once it exists.
+    // Through the logger, so that the log file records the game's exit status.
+    common::log(common::LogLevel::info, "hle.libkernel", "_exit({}) (caller {})", status,
+                BB_CALLER());
+    std::fflush(nullptr);
+    common::log_flush();
     ::_exit(status);
 }
 
