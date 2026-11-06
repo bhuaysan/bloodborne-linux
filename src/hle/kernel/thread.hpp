@@ -45,7 +45,17 @@ struct ThreadAttributes {
 
 using ThreadEntry = void* (*)(void*);
 
+// Every handle the guest sees must fit in 40 bits: the eboot's mutex (0x20368c0) keeps its
+// owner's handle masked with 0xffffffffff and compares that with the full handle, so a thread whose
+// handle is wider never sees that it took the lock. Thread objects therefore come from a pool
+// below 2 GiB (thread_pool.cpp), which also keeps them below the sanitizers' shadow memory.
+inline constexpr std::uintptr_t guest_handle_limit = std::uintptr_t{1} << 40;
+
 struct Thread {
+    // From the pool; throws std::bad_alloc when it is full.
+    static void* operator new(std::size_t size);
+    static void operator delete(void* object) noexcept;
+
     pthread_t host{};
     // Guarded by the thread table's lock: a rename from another thread changes them. The priority
     // and affinity calls change attributes.sched_priority and .affinity_mask.

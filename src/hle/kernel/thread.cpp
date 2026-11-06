@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -360,7 +361,12 @@ int create_thread(Thread** thread, const Cell* attr, ThreadEntry entry, void* ar
     if (thread == nullptr || entry == nullptr) {
         return EINVAL;
     }
-    auto t = std::make_unique<Thread>();
+    std::unique_ptr<Thread> t;
+    try {
+        t = std::make_unique<Thread>();
+    } catch (const std::bad_alloc&) {
+        return EAGAIN;  // the pool is full
+    }
     if (attr != nullptr) {
         const Attr* a = attr_at(attr);
         if (a == nullptr) {

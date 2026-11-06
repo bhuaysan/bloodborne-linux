@@ -297,15 +297,42 @@ TEST(Thread, DetachedThreadsFreeTheirObjectWhenTheyEnd) {
 // ---- self --------------------------------------------------------------------------------------
 
 TEST(Thread, SelfIsTheHandleTheCreatorGot) {
+    const Handle me = self();  // first, so the joined thread's freed slot can't become ours
     Handle thread = nullptr;
     ASSERT_EQ(create(&thread, nullptr, [](void*) -> void* { return self(); }, nullptr, nullptr), 0);
     void* value = nullptr;
     ASSERT_EQ(join(thread, &value), 0);
     EXPECT_EQ(value, thread);
     EXPECT_EQ(equal(self(), self()), 1);
-    EXPECT_EQ(equal(self(), thread), 0);
+    EXPECT_EQ(self(), me);
+    EXPECT_EQ(equal(me, thread), 0);
     yield();
     EXPECT_EQ(sched_yield(), 0);
+}
+
+// The eboot's mutex (0x20368c0) masks its owner's handle to 40 bits and compares it with the full
+// handle, so every handle must survive that mask.
+bool survives_the_owner_mask(Handle h) {
+    const auto value = reinterpret_cast<std::uintptr_t>(h);
+    return value != 0 && value < guest_handle_limit && (value & 0xffffffffff) == value;
+}
+
+TEST(Thread, EveryHandleFitsIn40Bits) {
+    std::array<Handle, 8> threads{};
+    release = false;
+    for (Handle& t : threads) {
+        ASSERT_EQ(create(&t, nullptr, wait_for_release, nullptr, nullptr), 0);
+        EXPECT_TRUE(survives_the_owner_mask(t));
+    }
+    release = true;
+    for (Handle t : threads) {
+        EXPECT_EQ(join(t, nullptr), 0);
+    }
+    Handle adopted = nullptr;
+    std::thread host([&] { adopted = self(); });
+    host.join();
+    EXPECT_TRUE(survives_the_owner_mask(adopted));
+    EXPECT_TRUE(survives_the_owner_mask(self()));
 }
 
 TEST(Thread, AThreadTheRuntimeDidntStartGetsAnObjectFreedAtItsExit) {
