@@ -65,6 +65,25 @@ TEST_F(TranslateExec, ExecLaneBits) {
     }
 }
 
+// The other writes to EXEC: from EXEC itself, the constants 0 and -1, a float
+// constant (the f64 1.0 is 0x3ff0'0000'0000'0000, lanes 52-61), and a 32-bit ALU write of one
+// half (EXEC = -1 first, so the high half keeps lanes 32-63).
+TEST_F(TranslateExec, ExecWrites) {
+    constexpr std::uint32_t mask_lo = 0x0000'f00f, mask_hi = 0xc300'0001;
+    constexpr std::uint64_t mask = (std::uint64_t{mask_hi} << 32) | mask_lo;
+    constexpr std::uint64_t stage_exec[] = {
+        mask, 0, ~std::uint64_t{0}, 0x3ff0'0000ull << 32, (~std::uint64_t{0} << 32) | 0x111,
+    };
+    const auto out = run("exec_writes", {mask_lo, mask_hi, 0x100}, 5 * lanes);
+    for (std::uint32_t stage = 0; stage < 5; ++stage) {
+        for (std::uint32_t i = 0; i < lanes; ++i) {
+            SCOPED_TRACE(testing::Message() << "stage " << stage << " lane " << i);
+            const bool active = ((stage_exec[stage] >> i) & 1) != 0;
+            EXPECT_EQ(out[stage * lanes + i], active ? 0x100 | i : 0u);
+        }
+    }
+}
+
 TEST_F(TranslateExec, ScalarLoopAndSkips) {
     const auto out = run("scalar_loop", {5, 0x8000'0001}, lanes + 1);
     for (std::uint32_t i = 0; i < lanes; ++i) {
