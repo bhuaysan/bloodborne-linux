@@ -150,9 +150,9 @@ TEST(Thread, AStackSizeTheHostCantGiveFailsTheCreate) {
     Cell attr = 0;
     ASSERT_EQ(attr_init(&attr), 0);
     Handle thread = reinterpret_cast<Handle>(&marker);  // a failed create leaves it alone
-    // Sizes that would wrap around when the reserve is added, and one beyond the address space.
+    // Sizes that wrap around with the reserve or the host guard page, and one too large to map.
     for (const std::size_t size : {SIZE_MAX, SIZE_MAX - thread_stack_reserve + 1,
-                                   std::size_t{1} << 62}) {
+                                   SIZE_MAX - thread_stack_reserve, std::size_t{1} << 62}) {
         SCOPED_TRACE(size);
         ASSERT_EQ(attr_setstacksize(&attr, size), 0);  // the setter only checks the minimum
         EXPECT_EQ(create(&thread, &attr, add_one, nullptr, nullptr), eagain);
