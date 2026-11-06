@@ -4,6 +4,7 @@ find_path(BB_SPIRV_INCLUDE_DIR spirv/unified1/spirv.hpp11 REQUIRED)
 
 add_library(bbgcn STATIC
     cfg.cpp
+    descriptors.cpp
     decode.cpp
     disassemble.cpp
     ds_flat.cpp

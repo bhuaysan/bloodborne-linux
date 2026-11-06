@@ -6,6 +6,8 @@
 #include <span>
 #include <vector>
 
+#include "gpu/gcn/descriptors.hpp"
+
 namespace bb::gcn {
 
 enum class Stage { vertex, pixel, compute };
@@ -32,6 +34,8 @@ struct ShaderKey {
 
 // What the run time must know about a translated shader.
 struct ShaderInterface {
+    // The sources of the buffer descriptors the program uses (see ResourceSource).
+    std::vector<ResourceSource> buffers;
     bool wave_size_dependent = false;  // the result can differ in lane-local mode
     // VCC or an SGPR mask pair is written as a value and read back as a value (flow-insensitive).
     // The value survives only in 64-lane subgroups: smaller ones lose the other lanes' bits.

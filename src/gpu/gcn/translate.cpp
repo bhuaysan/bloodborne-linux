@@ -19,6 +19,7 @@
 #include <spirv/unified1/GLSL.std.450.h>
 
 #include "gpu/gcn/cfg.hpp"
+#include "gpu/gcn/descriptors.hpp"
 #include "gpu/gcn/gcn.hpp"
 #include "gpu/gcn/spirv_builder.hpp"
 #include "gpu/gcn/structurize.hpp"
@@ -130,7 +131,9 @@ public:
             b_.execution_mode(main, spv::ExecutionMode::MaximallyReconvergesKHR);
         }
         return {b_.words(),
-                {.wave_size_dependent = wave_size_dependent_, .mask_round_trip = round_trip()}};
+                {.buffers = find_buffer_sources(program_, cfg_, user_sgprs()),
+                 .wave_size_dependent = wave_size_dependent_,
+                 .mask_round_trip = round_trip()}};
     }
 
 private:
