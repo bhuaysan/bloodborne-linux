@@ -154,6 +154,9 @@ private:
             add_src(src0(info.src0));
             add_src(vgpr(field, info.src1));
             return;
+        case Vop::ternary:
+        case Vop::ternary_sdst:
+            fail("VOP3-only operand layout");  // not in the table
         }
     }
 
