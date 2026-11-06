@@ -46,11 +46,11 @@ All fields little-endian. Offsets are from the start of the entry.
 | 0x2C | 1 | 1–7 | **hardware stage**: 1 VS (also the domain shaders), 2 PS, 3 GS, 4 CS, 5 ES, 6 LS, 7 HS. Agrees with the footer's program type in every entry |
 | 0x2D | 1 | 0x0F–0x22 and others | not interpreted |
 | 0x2E | 6 | 0 | not interpreted |
-| 0x34 | 4 | varies | not interpreted |
-| 0x38 | 4 | 0, 4–24 | **data rows** before the metadata |
-| 0x3C | 4 | varies | **code offset** of the first program, from 0x34 |
-| 0x40 | 4 | `FF FF FF FF` | not interpreted |
-| 0x44 | to the code | varies | not interpreted. Probably register values for the program; not checked |
+| 0x34 | 4 | varies | start of the first program's **shader object**, as the eboot's GNM layer reads it ([gnm.md](gnm.md#shader-objects-and-the-stage-writers), #271), up to the code. Bits 0–22 not interpreted (gnm.md: the offset of the embedded constant block); bits 24–31 the number of input-usage entries |
+| 0x38 | 4 | 0, 4–24 | **data rows** before the metadata (gnm.md: the constant block size in 16-byte units) |
+| 0x3C | 4 | varies | **code offset** of the first program, from 0x34. Dword 0 of the **register block**, which the stage register imports read as `PGM_LO` once the game has put the code address there |
+| 0x40 | 4 | `FF FF FF FF` | dword 1 of the register block, `PGM_HI`; a placeholder the game replaces |
+| 0x44 | to the code | varies | the rest of the register block (`RSRC1`, `RSRC2`, then per stage, [graphics.md](../design/graphics.md#decisions), "Stage register imports"), the input-usage table at the stage's offset (gnm.md), and for a GS the copy shader's VS object after it. The register values were checked against the code (#271) |
 
 ### Footer block
 
