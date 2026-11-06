@@ -51,12 +51,14 @@ public:
     const DeviceInfo& info() const;
 
     // The guest's GPU-visible memory: one host-visible buffer of `size` bytes at guest address
-    // `base`, zeroed. It replaces the previous one. The span stays valid until then.
+    // `base`, zeroed. It replaces the previous one. The span stays valid until then. Throws
+    // std::invalid_argument when `size` is 0.
     std::span<std::byte> guest_memory(std::uint64_t base, std::size_t size);
 
     // Runs `spirv` (a GLCompute entry point "main" with one 8-byte push constant, the device
     // address of the draw block) on `groups` workgroups and waits for it. Throws
-    // std::runtime_error when a Vulkan call fails.
+    // std::logic_error before the first guest_memory() and std::runtime_error when a Vulkan
+    // call fails.
     void run(std::span<const std::uint32_t> spirv, const DrawBlock& draw,
              std::array<std::uint32_t, 3> groups);
 

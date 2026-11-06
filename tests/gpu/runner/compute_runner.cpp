@@ -339,6 +339,9 @@ const DeviceInfo& ComputeRunner::info() const {
 }
 
 std::span<std::byte> ComputeRunner::guest_memory(std::uint64_t base, std::size_t size) {
+    if (size == 0) {
+        throw std::invalid_argument("guest memory needs at least one byte");
+    }
     State& s = *state_;
     s.destroy(s.guest);
     s.guest = s.create_buffer(size);
@@ -349,6 +352,9 @@ std::span<std::byte> ComputeRunner::guest_memory(std::uint64_t base, std::size_t
 void ComputeRunner::run(std::span<const std::uint32_t> spirv, const DrawBlock& draw,
                         std::array<std::uint32_t, 3> groups) {
     State& s = *state_;
+    if (s.guest.buffer == VK_NULL_HANDLE) {
+        throw std::logic_error("run needs guest memory first");
+    }
     // Device address = guest address + bias, modulo 2^64.
     const std::uint64_t bias = s.guest.address - s.guest_base;
     auto* block = static_cast<std::byte*>(s.draw.map);

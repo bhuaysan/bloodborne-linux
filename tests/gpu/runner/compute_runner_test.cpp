@@ -9,6 +9,7 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -162,35 +163,51 @@ TEST_F(ComputeRunnerTest, HandWrittenModuleWritesBuffer) {
     if (bb::test::gcn::have_spirv_val()) {
         ASSERT_EQ(bb::test::gcn::validate(module), "");
     }
-    // Guest addresses above 2^32, so the high words matter.
-    constexpr std::uint64_t base = 0x12'0000'0000;
+    // Guest addresses above 2^32, so the high words matter. The second run gets new guest
+    // memory at another base and reuses the command buffer and fence of the first.
+    constexpr struct {
+        std::uint64_t base;
+        std::uint32_t addend;
+    } runs[] = {{0x12'0000'0000, 7}, {0xffff'f000'0000, 0x8000'0000}};
     constexpr std::uint64_t in_offset = 0x100, out_offset = 0x400;
-    auto memory = runner_->guest_memory(base, 0x1000);
-    std::vector<std::uint32_t> in(lanes);
-    for (std::uint32_t i = 0; i < lanes; ++i) {
-        in[i] = 3 * i + 1;
-    }
-    std::memcpy(memory.data() + in_offset, in.data(), in.size() * 4);
+    for (const auto& r : runs) {
+        SCOPED_TRACE(testing::Message() << "base 0x" << std::hex << r.base);
+        auto memory = runner_->guest_memory(r.base, 0x1000);
+        std::vector<std::uint32_t> in(lanes);
+        for (std::uint32_t i = 0; i < lanes; ++i) {
+            in[i] = 3 * i + 1;
+        }
+        std::memcpy(memory.data() + in_offset, in.data(), in.size() * 4);
 
-    const auto low = [](std::uint64_t a) { return static_cast<std::uint32_t>(a); };
-    const auto high = [](std::uint64_t a) { return static_cast<std::uint32_t>(a >> 32); };
-    DrawBlock draw;
-    draw.user_data = {low(base + out_offset), high(base + out_offset), low(base + in_offset),
-                      high(base + in_offset), 7, lanes};
-    draw.code_address = 0xab'cdef'0100;
-    runner_->run(module, draw, {lanes / 64, 1, 1});
+        const auto low = [](std::uint64_t a) { return static_cast<std::uint32_t>(a); };
+        const auto high = [](std::uint64_t a) { return static_cast<std::uint32_t>(a >> 32); };
+        DrawBlock draw;
+        draw.user_data = {low(r.base + out_offset), high(r.base + out_offset),
+                          low(r.base + in_offset), high(r.base + in_offset), r.addend, lanes};
+        draw.code_address = 0xab'cdef'0100;
+        runner_->run(module, draw, {lanes / 64, 1, 1});
 
-    std::vector<std::uint32_t> out(lanes + 4);
-    std::memcpy(out.data(), memory.data() + out_offset, out.size() * 4);
-    for (std::uint32_t i = 0; i < lanes; ++i) {
-        EXPECT_EQ(out[i], 3 * i + 8) << "invocation " << i;
+        std::vector<std::uint32_t> out(lanes + 4);
+        std::memcpy(out.data(), memory.data() + out_offset, out.size() * 4);
+        for (std::uint32_t i = 0; i < lanes; ++i) {
+            EXPECT_EQ(out[i], 3 * i + 1 + r.addend) << "invocation " << i;
+        }
+        // The pipeline asks for no subgroup size, so any size in the device's range may run.
+        const DeviceInfo& info = runner_->info();
+        EXPECT_TRUE(std::has_single_bit(out[lanes])) << out[lanes];
+        EXPECT_GE(out[lanes], info.min_subgroup_size);
+        EXPECT_LE(out[lanes], info.max_subgroup_size);
+        EXPECT_EQ(out[lanes + 1], 0xcdef'0100u);
+        EXPECT_EQ(out[lanes + 2], 0xabu);
+        EXPECT_EQ(out[lanes + 3], 0u);
+        // The input is unchanged.
+        EXPECT_EQ(std::memcmp(memory.data() + in_offset, in.data(), in.size() * 4), 0);
     }
-    EXPECT_EQ(out[lanes], runner_->info().subgroup_size);
-    EXPECT_EQ(out[lanes + 1], 0xcdef'0100u);
-    EXPECT_EQ(out[lanes + 2], 0xabu);
-    EXPECT_EQ(out[lanes + 3], 0u);
-    // The input is unchanged.
-    EXPECT_EQ(std::memcmp(memory.data() + in_offset, in.data(), in.size() * 4), 0);
+}
+
+TEST_F(ComputeRunnerTest, RejectsRunWithoutGuestMemory) {
+    EXPECT_THROW(runner_->run(add_module(), DrawBlock{}, {1, 1, 1}), std::logic_error);
+    EXPECT_THROW(runner_->guest_memory(0, 0), std::invalid_argument);
 }
 
 // With no driver to load, creating the runner fails with a reason instead of throwing, so the
