@@ -28,6 +28,13 @@ constexpr std::uint64_t data_offset = 0x1400;   // the memory programs' table, a
 constexpr std::uint64_t store_offset = 0x1c00;  // and the buffer they store to
 constexpr std::uint32_t data_word(std::uint32_t i) { return 0xd0000 + i; }
 
+// The k-th operation of the SALU bitwise family (and, or, xor, andn2, orn2, nand, nor, xnor) on
+// two words (or the lowest bit of two).
+std::uint32_t bitwise(unsigned k, std::uint32_t a, std::uint32_t b) {
+    const std::uint32_t ops[] = {a & b, a | b, a ^ b, a & ~b, a | ~b, ~(a & b), ~(a | b), ~(a ^ b)};
+    return ops[k];
+}
+
 class TranslateExec : public testing::Test {
 protected:
     void SetUp() override {
@@ -275,6 +282,42 @@ TEST_F(TranslateExec, BufferMemory) {
             EXPECT_EQ(stored(pos), pos < store_records ? (0xa000 | i) : 0u) << "lane " << i;
             EXPECT_EQ(stored(pos + 4), pos + 4 < store_records ? (0xb000 | i) : 0u)
                 << "lane " << i;
+        }
+    }
+}
+
+// SALU lane masks: s_and_saveexec_b64 with v_cmpx (nested predication), and the eight bitwise
+// operations on two masks with every combination of bits in lanes 0 to 3.
+TEST_F(TranslateExec, MaskScalarOps) {
+    const auto out = run("mask_exec", {}, 2 * lanes);
+    for (std::uint32_t i = 0; i < lanes; ++i) {
+        SCOPED_TRACE(testing::Message() << "lane " << i);
+        EXPECT_EQ(out[i], (i < 4 ? 0x20u : 0u) | (i < 8 ? 0x12u : i < 32 ? 0x11u : 0u));
+        std::uint32_t bits = 0;
+        for (unsigned k = 0; k < 8; ++k) {
+            bits = bits << 1 | (bitwise(k, i & 1, i >> 1 & 1) & 1);
+        }
+        EXPECT_EQ(out[lanes + i], bits);
+    }
+}
+
+// SCC after a mask operation is any of the result, and after a value operation result != 0. The
+// data is the same in every lane, so the branches don't depend on the subgroup size. The
+// chain of the eight operations on values is checked against the same operations here.
+TEST_F(TranslateExec, SccAndBitwiseValues) {
+    constexpr std::uint32_t a = 0x1234'5678, other = 0x0f0f'ff00, c = 0x9abc'def0;
+    for (const std::uint32_t b : {a, other}) {
+        SCOPED_TRACE(b);
+        const auto out = run("mask_scc", {a, b, c}, 3 * lanes);
+        std::uint32_t chain = a & b;
+        const std::uint32_t srcs[] = {0, c, a, b, c, a, b, c};
+        for (unsigned k = 1; k < 8; ++k) {
+            chain = bitwise(k, chain, srcs[k]);
+        }
+        for (std::uint32_t i = 0; i < lanes; ++i) {
+            EXPECT_EQ(out[i], b == a ? 1u + 2 + 4 + 16 : 2u + 4 + 8 + 32);
+            EXPECT_EQ(out[lanes + i], 3u);
+            EXPECT_EQ(out[2 * lanes + i], chain);
         }
     }
 }

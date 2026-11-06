@@ -47,7 +47,9 @@ TEST(GcnTranslate, ProgramsPassSpirvVal) {
         const auto translation =
             translate(program_words(name), {}, {.pgm_rsrc2 = program_user_sgprs(name) << 1});
         EXPECT_EQ(validate(translation.spirv), "");
-        EXPECT_EQ(translation.interface.wave_size_dependent, name == "cross_lane");
+        // ballots and any(...) over the subgroup, for the SCC after a lane mask operation
+        EXPECT_EQ(translation.interface.wave_size_dependent,
+                  name == "cross_lane" || name == "mask_exec" || name == "mask_scc");
         EXPECT_EQ(translation.interface.mask_round_trip, name == "cross_lane");  // s[8:9]
     }
 }
@@ -156,6 +158,8 @@ TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
         code.insert(code.end(), rest.begin(), rest.end());
         return code;
     };
+    EXPECT_EQ(error({sop2(15, 2, 6, 126), s_endpgm}),  // s_and_b64 s[2:3], s[6:7], exec
+              "user data s2 is used as a mask at offset 0x0 (word 0x87827e06)");
     EXPECT_EQ(error(cmp(2, {s_endpgm})),
               "user data s2 is used as a mask at offset 0x0 (word 0xd1820002)");
     EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 1u << 7}),  // TGID_X_EN

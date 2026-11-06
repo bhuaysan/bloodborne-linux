@@ -42,6 +42,23 @@ constexpr std::uint32_t rsrc2_unsupported = 1u << 0 | 0xfu << 7 | 3u << 11;
 constexpr std::uint16_t op_cbranch_scc0 = 4;
 constexpr std::uint16_t op_cbranch_scc1 = 5;
 
+// The bitwise family of the SALU, in the order of its opcodes (s_<name>_b32, _b64, _saveexec_b64).
+constexpr std::string_view bitwise_names[] = {"and", "or", "xor", "andn2", "orn2", "nand", "nor",
+                                              "xnor"};
+
+// The index of `name` in the bitwise family: "s_and_b64" with the suffix "_b64" is 0.
+std::optional<unsigned> bitwise_op(std::string_view name, std::string_view suffix) {
+    if (!name.starts_with("s_") || !name.ends_with(suffix)) {
+        return std::nullopt;
+    }
+    const auto* it = std::ranges::find(
+        bitwise_names, name.substr(2, name.size() - 2 - suffix.size()));
+    if (it == std::end(bitwise_names)) {
+        return std::nullopt;
+    }
+    return static_cast<unsigned>(it - std::begin(bitwise_names));
+}
+
 // The VALU operations with a carry out in a mask (dst[1]) and, for the second three, a carry in
 // (src[2]).
 struct CarryOp {
@@ -197,6 +214,12 @@ private:
             return c->carry_in ? std::vector{&inst.dst[1], &inst.src[2]}
                                : std::vector{&inst.dst[1]};
         }
+        if (bitwise_op(name, "_b64")) {
+            return {&inst.dst[0], &inst.src[0], &inst.src[1]};
+        }
+        if (bitwise_op(name, "_saveexec_b64")) {
+            return {&inst.dst[0], &inst.src[0]};
+        }
         return {};
     }
 
@@ -335,6 +358,20 @@ private:
         } else if (name.starts_with("s_bcnt") || name.starts_with("s_ff") ||
                    name.starts_with("s_flbit")) {
             scalar_count(inst);
+        } else if (const auto op = bitwise_op(name, "_b32")) {
+            const Id r = combine(*op, u32_, read(inst.src[0]), read(inst.src[1]));
+            write_scalar(dst, r);
+            store(scc(), b_.op(Op::OpINotEqual, bool_, {r, b_.constant_u32(0)}));
+        } else if (const auto op = bitwise_op(name, "_b64")) {
+            const Id r = combine(*op, bool_, read_mask(inst.src[0]), read_mask(inst.src[1]));
+            write_mask(dst, r);
+            store(scc(), any(r));
+        } else if (const auto op = bitwise_op(name, "_saveexec_b64")) {  // dst = EXEC first
+            const Id old = active();
+            const Id r = combine(*op, bool_, read_mask(inst.src[0]), old);
+            write_mask(dst, old);
+            store(mask_exec(), r);
+            store(scc(), any(r));
         } else {
             unsupported();
         }
@@ -517,6 +554,41 @@ private:
             op = s ? Op::OpSGreaterThanEqual : Op::OpUGreaterThanEqual;
         }
         return b_.op(op, bool_, {a, b});
+    }
+
+    // The bitwise operation `op` of the SALU family on bools (lane bits) or u32 values.
+    Id combine(unsigned op, Id type, Id a, Id b) {
+        const bool logical = type == bool_;
+        const auto bin = [&](Op l, Op w, Id x, Id y) {
+            return b_.op(logical ? l : w, type, {x, y});
+        };
+        const auto inv = [&](Id x) {
+            return b_.op(logical ? Op::OpLogicalNot : Op::OpNot, type, {x});
+        };
+        const auto land = [&](Id x, Id y) { return bin(Op::OpLogicalAnd, Op::OpBitwiseAnd, x, y); };
+        const auto lor = [&](Id x, Id y) { return bin(Op::OpLogicalOr, Op::OpBitwiseOr, x, y); };
+        const auto lxor = [&](Id x, Id y) {
+            return bin(Op::OpLogicalNotEqual, Op::OpBitwiseXor, x, y);
+        };
+        switch (op) {
+        case 0: return land(a, b);
+        case 1: return lor(a, b);
+        case 2: return lxor(a, b);
+        case 3: return land(a, inv(b));
+        case 4: return lor(a, inv(b));
+        case 5: return inv(land(a, b));
+        case 6: return inv(lor(a, b));
+        default: return inv(lxor(a, b));
+        }
+    }
+
+    // True when `v` is true in any lane of the subgroup. This is the wave's "any" only if the
+    // subgroup is the whole wave, so the shader depends on the wave size.
+    Id any(Id v) {
+        cross_lane();
+        b_.capability(spv::Capability::GroupNonUniformVote);
+        return b_.op(Op::OpGroupNonUniformAny, bool_,
+                     {b_.constant_u32(spirv_word(spv::Scope::Subgroup)), v});
     }
 
     // flat_store_dword reaches guest memory through the address bias, in active lanes only. There
