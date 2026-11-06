@@ -342,7 +342,7 @@ The libkernel thread and thread attribute imports, `sched_yield`, and the libSce
 | sched policy | any `int` | recorded | eboot 0x263b3bd, 0xd1aae7: 1 |
 | inherit sched | any `int` | recorded | Fios 0x2eaa0: 0 |
 
-The host stack is the requested size plus a 64 KiB reserve for the runtime's own frames (design note, Threads). `scePthreadAttrGet(thread, attr)` fills an initialised attribute with the thread's attributes and its current detach state (libc 0x81abf, with Self as the thread).
+The host stack is the requested size plus a 64 KiB reserve for the runtime's own frames (design note, Threads). The setter takes any size from 0x4000 up; a size the host can't give, including one that doesn't fit in 64 bits with the reserve, fails the create with `EAGAIN`. `scePthreadAttrGet(thread, attr)` fills an initialised attribute with the thread's attributes and its current detach state (libc 0x81abf, with Self as the thread).
 
 **Exit.** `scePthreadExit(value)` and `pthread_exit(value)` end the calling thread with `value` as its result. The eboot's thread entry 0x263b1e0 never returns through its `ret`: it ends in 0x207f990, which calls `scePthreadExit` (0x207f99b). libc's wrapper (0x6190) and the eboot (0x667e0) pass an `int` sign-extended to 64 bits.
 

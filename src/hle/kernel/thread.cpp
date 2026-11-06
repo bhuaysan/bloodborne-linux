@@ -142,6 +142,11 @@ int create_thread(Thread** thread, const Cell* attr, ThreadEntry entry, void* ar
     common::log(common::LogLevel::debug, channel, "thread \"{}\": stack {:#x}", t->name,
                 t->attributes.stack_size);
 
+    // The setter takes any size from the minimum up, so a garbage size near SIZE_MAX would wrap
+    // around to a tiny host stack here. No host can give a stack that large anyway.
+    if (t->attributes.stack_size > SIZE_MAX - thread_stack_reserve) {
+        return EAGAIN;
+    }
     pthread_attr_t host;
     pthread_attr_init(&host);
     int error = pthread_attr_setstacksize(&host, t->attributes.stack_size + thread_stack_reserve);
