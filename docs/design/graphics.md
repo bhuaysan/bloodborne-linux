@@ -299,7 +299,7 @@ Structurizer (`src/gpu/gcn/structurize.hpp`, #124):
 
 - `structurize(cfg, builder, emitter)` emits into the current function. A caller block must be open (the prologue); the structurizer ends it with a branch and returns with no block open.
 - `BlockEmitter` has two callbacks: `body(block)` emits the block's instructions into the current SPIR-V block, and `condition(block)`, for a conditional exit, emits the branch condition after the body and returns its bool id (true takes the branch). Each is called once per reachable block.
-- Tests: synthetic programs pass `spirv-val`, and a small interpreter for the instructions the structurizer emits runs each module with scripted branch outcomes. The blocks it visits must match a walk over the graph. The cases are if/else, nested loops, early returns and breaks out of a loop to an outer merge node, and a continue from inside a scope. A randomized version over a few hundred random programs is planned for the third part, where irreducible graphs no longer throw.
+- Tests: synthetic programs pass `spirv-val`, and a small interpreter for the instructions the structurizer emits runs each module with scripted branch outcomes. The blocks it visits must match a walk over the graph. The cases are if/else, nested loops, early returns and breaks out of a loop to an outer merge node, a continue from inside a scope, and exits from an inner loop that continue the outer one or leave both. A randomized version over a few hundred random programs is planned for the third part, where irreducible graphs no longer throw.
 
 ## Offline test strategy
 
