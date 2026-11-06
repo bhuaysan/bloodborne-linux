@@ -69,10 +69,10 @@ jobs:
       # AddressSanitizer's shadow memory can collide with randomly placed
       # mappings, so the tests die at startup. 28 bits is the older kernel
       # default. The setting belongs to the host kernel; the container is
-      # privileged to change it.
+      # privileged to change it (the image has no sysctl).
       - name: Lower mmap randomisation for AddressSanitizer
         if: matrix.preset == 'debug'
-        run: sysctl -w vm.mmap_rnd_bits=28
+        run: echo 28 > /proc/sys/vm/mmap_rnd_bits
 
       # run-tests.sh runs the Python tests too and builds the debug preset
       # itself (already built above, so that step is a no-op).
