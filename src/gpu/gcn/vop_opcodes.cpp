@@ -95,8 +95,8 @@ Table make_vop2() {
                       "ashr_i32", "ashrrev_i32", "lshl_b32", "lshlrev_b32", "and_b32", "or_b32",
                       "xor_b32", "bfm_b32"});
     binary<1>(t, 31, {"mac_f32"});
-    set(t, 32, "madmk_f32", 1, 1, 1, Vop::madmk);  // CI
-    set(t, 33, "madak_f32", 1, 1, 1, Vop::madak);  // CI
+    set(t, 32, "madmk_f32", 1, 1, 1, Vop::madmk);
+    set(t, 33, "madak_f32", 1, 1, 1, Vop::madak);
     binary<3>(t, 34, {"bcnt_u32_b32", "mbcnt_lo_u32_b32", "mbcnt_hi_u32_b32"});
     constexpr std::array<const char*, 3> carry_out = {"add_i32", "sub_i32", "subrev_i32"};
     constexpr std::array<const char*, 3> carry = {"addc_u32", "subb_u32", "subbrev_u32"};
