@@ -1,10 +1,18 @@
 #include "hle/kernel/vmem.hpp"
 
+#include <linux/audit.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -46,6 +54,31 @@ std::uintptr_t map_pages(std::uint64_t pages, int prot = 3) {
     std::uintptr_t out = 0;
     EXPECT_EQ(vmem::map(anonymous(pages, prot), out), 0);
     return out;
+}
+
+// Makes every host mmap of PROT_NONE at `address` fail with ENOMEM, as at the host's map count
+// limit. For a death test's child only: the filter stays until the process exits.
+bool refuse_reservations_at(std::uintptr_t address) {
+    const auto low = static_cast<std::uint32_t>(address);
+    const auto high = static_cast<std::uint32_t>(address >> 32);
+    constexpr std::uint32_t args = offsetof(seccomp_data, args);
+    sock_filter filter[] = {
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, arch)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 0, 9),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, nr)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_mmap, 0, 7),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, args),  // the address, low half
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, low, 0, 5),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, args + 4),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, high, 0, 3),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, args + 2 * 8),  // the protection
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, PROT_NONE, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | ENOMEM),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    const sock_fprog program{static_cast<unsigned short>(std::size(filter)), filter};
+    return ::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0 &&
+           ::prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program) == 0;
 }
 
 // The guest errno after a POSIX call; resets it.
@@ -179,6 +212,37 @@ TEST(KernelVmem, AnUnmappedRangeInTheWindowStaysReserved) {
     // To the guest it is unmapped: libc.prx's msync probe (0x541a5) finds no page.
     EXPECT_EQ(guest_msync(ptr(p), 0x1000, 1), -1);
     EXPECT_EQ(take_errno(), 12);
+}
+
+// If the host refuses to reserve an unmapped range of the window again, the range may still hold
+// the guest mapping or be the host's: it is no guest mapping any more, and no map lands there.
+TEST(KernelVmem, ARangeTheHostWontReserveAgainIsNeverMappedAgain) {
+    const auto run = [] {
+        std::uintptr_t p = 0;
+        if (vmem::map(anonymous(1), p) != 0 || !refuse_reservations_at(p)) {
+            ::_exit(1);
+        }
+        if (vmem::unmap(p, page_size) != ENOMEM) {
+            ::_exit(2);
+        }
+        if (vmem::find(p) || vmem::unmap(p, page_size) != EINVAL ||
+            vmem::protect(p, page_size, 3) != EINVAL) {
+            ::_exit(3);
+        }
+        vmem::Mapping m = anonymous(1);
+        std::uintptr_t lowest = 0, hinted = 0, fixed = 0;
+        m.address = p;
+        if (vmem::map(anonymous(1), lowest) != 0 || lowest == p || vmem::map(m, hinted) != 0 ||
+            hinted == p) {
+            ::_exit(4);
+        }
+        m.fixed = true;
+        if (vmem::map(m, fixed) != EEXIST) {
+            ::_exit(5);
+        }
+        ::_exit(0);
+    };
+    EXPECT_EXIT(run(), testing::ExitedWithCode(0), "again: failed, the range is dropped");
 }
 
 TEST(KernelVmem, ProtectAndUnmapSplitRegions) {

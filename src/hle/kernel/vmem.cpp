@@ -54,6 +54,11 @@ void* ptr(std::uintptr_t address) {
 std::mutex table_mutex;
 std::map<std::uintptr_t, Region> table;
 
+// The ranges of the window that reserve_again dropped, start to end. The host may still hold the
+// guest mapping there or may have reused the range, so placement in the window skips them for
+// good. They are no regions, so unmap, protect and the queries refuse them. Needs table_mutex.
+std::map<std::uintptr_t, std::uintptr_t> dropped;
+
 // Splits the region that holds `at` so that a region starts there. Needs table_mutex.
 void split_at(std::uintptr_t at) {
     auto it = table.upper_bound(at);
@@ -105,8 +110,9 @@ bool covered(std::uintptr_t start, std::uintptr_t end, std::optional<bool> reser
 
 // Reserves [start, end) again over the guest mappings there. A failed MAP_FIXED may already have
 // unmapped the range (ENOMEM at the host's map count limit, for one), so on failure the table
-// drops it: the host may reuse it, and no later guest map or unmap may touch that memory. A guest
-// mapping that survived on the host is only leaked. Returns 0 or errno. Needs table_mutex.
+// drops it and its part in the window goes to `dropped`: the host may reuse it, and no later
+// guest map or unmap may touch that memory. A guest mapping that survived on the host is only
+// leaked. Returns 0 or errno. Needs table_mutex.
 int reserve_again(std::uintptr_t start, std::uintptr_t end) {
     if (::mmap(ptr(start), end - start, PROT_NONE, reservation_flags | MAP_FIXED, -1, 0) !=
         MAP_FAILED) {
@@ -115,6 +121,11 @@ int reserve_again(std::uintptr_t start, std::uintptr_t end) {
     const int error = errno;
     log("reserve {:#x}-{:#x} again: failed, the range is dropped", start, end);
     erase_range(start, end);
+    const std::uintptr_t low = std::max(start, window_start);
+    const std::uintptr_t high = std::min(end, window_end);
+    if (low < high) {
+        dropped.emplace(low, high);
+    }
     return error;
 }
 
@@ -157,35 +168,42 @@ int reserve_window() {
     return error;
 }
 
-// Whether no region overlaps [start, end). Needs table_mutex.
-bool free_range(std::uintptr_t start, std::uintptr_t end) {
-    const auto it = table.lower_bound(start);
-    return (it == table.end() || it->first >= end) &&
-           (it == table.begin() || std::prev(it)->second.end <= start);
+// The end of a region or dropped range that overlaps [start, end), which lies past start, or
+// nothing. Needs table_mutex.
+std::optional<std::uintptr_t> taken_until(std::uintptr_t start, std::uintptr_t end) {
+    std::optional<std::uintptr_t> out;
+    const auto check = [&](const auto& ranges, const auto& end_of) {
+        auto it = ranges.lower_bound(start);
+        if (it != ranges.begin() && end_of(std::prev(it)->second) > start) {
+            --it;
+        }
+        if (it != ranges.end() && it->first < end) {
+            out = std::max(out.value_or(0), end_of(it->second));
+        }
+    };
+    check(table, [](const Region& r) { return r.end; });
+    check(dropped, [](std::uintptr_t e) { return e; });
+    return out;
 }
 
-// The lowest `alignment`-aligned start of `length` free bytes in the window at or above `low`.
-// Needs table_mutex.
+// Whether neither a region nor a dropped range overlaps [start, end). Needs table_mutex.
+bool free_range(std::uintptr_t start, std::uintptr_t end) {
+    return !taken_until(start, end);
+}
+
+// The lowest `alignment`-aligned start of `length` free bytes (free_range) in the window at or
+// above `low`. Needs table_mutex.
 std::optional<std::uintptr_t> find_free(std::uintptr_t low, std::uint64_t length,
                                         std::uint64_t alignment) {
     std::uintptr_t at = align_up(std::max(low, window_start), alignment);
-    auto it = table.upper_bound(at);
-    if (it != table.begin()) {
-        --it;
-    }
-    for (; it != table.end() && at < window_end; ++it) {
-        if (it->second.end <= at) {
-            continue;
+    while (at < window_end && window_end - at >= length) {
+        const std::optional<std::uintptr_t> taken = taken_until(at, at + length);
+        if (!taken) {
+            return at;
         }
-        if (it->first >= at && it->first - at >= length) {
-            break;
-        }
-        at = align_up(it->second.end, alignment);
+        at = align_up(*taken, alignment);
     }
-    if (at >= window_end || window_end - at < length) {
-        return std::nullopt;
-    }
-    return at;
+    return std::nullopt;
 }
 
 // Maps at an `alignment`-aligned address the host picks: reserves enough to find one, maps over
