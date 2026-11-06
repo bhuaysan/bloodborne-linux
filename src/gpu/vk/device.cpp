@@ -253,6 +253,7 @@ std::unique_ptr<Device> Device::create(const Instance& instance, const DeviceOpt
     DeviceProperties& p = device->properties_ = {query.props.properties, query.p11, query.p12,
                                                  query.p13};
     p.v11.pNext = p.v12.pNext = p.v13.pNext = nullptr;
+    vkGetPhysicalDeviceMemoryProperties(device->physical_, &device->memory_);
 
     // Only the required features are enabled.
     Query enable(device->physical_, true);
@@ -282,6 +283,16 @@ std::unique_ptr<Device> Device::create(const Instance& instance, const DeviceOpt
     common::log(common::LogLevel::info, "gpu.vk", "device {} ({} {}), sparse queue family {}",
                 p.core.deviceName, p.v12.driverName, p.v12.driverInfo, device->sparse().family);
     return device;
+}
+
+std::optional<std::uint32_t> Device::memory_type(std::uint32_t allowed,
+                                                 VkMemoryPropertyFlags flags) const {
+    for (std::uint32_t i = 0; i < memory_.memoryTypeCount; ++i) {
+        if ((allowed & (1u << i)) && (memory_.memoryTypes[i].propertyFlags & flags) == flags) {
+            return i;
+        }
+    }
+    return std::nullopt;
 }
 
 Device::~Device() {

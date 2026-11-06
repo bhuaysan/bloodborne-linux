@@ -104,6 +104,11 @@ public:
     VkPhysicalDevice physical() const { return physical_; }
     VkDevice handle() const { return device_; }
     const DeviceProperties& properties() const { return properties_; }
+    const VkPhysicalDeviceMemoryProperties& memory() const { return memory_; }
+    // The first memory type in `allowed` (a memoryTypeBits mask) with every flag of `flags`, or
+    // nothing.
+    std::optional<std::uint32_t> memory_type(std::uint32_t allowed,
+                                             VkMemoryPropertyFlags flags) const;
 
     // The queue for graphics, compute and transfers: the first family with graphics and compute.
     Queue& graphics() { return graphics_; }
@@ -116,6 +121,7 @@ private:
     VkPhysicalDevice physical_ = VK_NULL_HANDLE;
     VkDevice device_ = VK_NULL_HANDLE;
     DeviceProperties properties_;
+    VkPhysicalDeviceMemoryProperties memory_{};
     Queue graphics_;
     std::optional<Queue> sparse_;
 };
