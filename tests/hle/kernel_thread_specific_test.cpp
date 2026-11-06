@@ -36,6 +36,7 @@ auto* const setspecific = fn<std::int32_t(int, const void*)>("+BzXYkqYeLE");
 auto* const once = fn<std::int32_t(int*, void (*)())>("14bOACANTBo");
 
 constexpr std::int32_t einval = 0x80020016;
+constexpr std::int32_t eagain = 0x80020023;
 
 Handle start(ThreadEntry entry, void* arg = nullptr) {
     Handle thread = nullptr;
@@ -113,6 +114,49 @@ TEST(ThreadSpecific, ADeletedKeyIsRefusedAndItsValueDoesNotShowUnderANewKey) {
     EXPECT_EQ(second, first);  // the slot is reused
     EXPECT_EQ(getspecific(second), nullptr);
     EXPECT_EQ(key_delete(second), 0);
+}
+
+std::atomic<bool> value_set{false};
+std::atomic<bool> key_deleted{false};
+
+void* set_value_and_wait_for_delete(void* value) {
+    set_value(value);
+    value_set = true;
+    while (!key_deleted) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return nullptr;
+}
+
+TEST(ThreadSpecific, AKeyDeletedWhileAThreadHoldsAValueCallsNoDestructorAtItsExit) {
+    ASSERT_EQ(key_create(&key, record), 0);
+    destroyed.clear();
+    value_set = false;
+    key_deleted = false;
+    Handle thread = start(set_value_and_wait_for_delete, reinterpret_cast<void*>(0x50));
+    while (!value_set) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_EQ(key_delete(key), 0);
+    key_deleted = true;
+    ASSERT_EQ(join(thread, nullptr), 0);
+    EXPECT_TRUE(destroyed.empty());
+}
+
+TEST(ThreadSpecific, At256KeysCreateFailsWithEagain) {
+    std::vector<int> created;
+    int k = 0;
+    std::int32_t result = 0;
+    while ((result = key_create(&k, nullptr)) == 0 && created.size() <= 256) {
+        created.push_back(k);
+    }
+    EXPECT_EQ(result, eagain);
+    EXPECT_EQ(created.size(), 256u);
+    for (const int c : created) {
+        EXPECT_EQ(key_delete(c), 0);
+    }
+    ASSERT_EQ(key_create(&k, nullptr), 0);  // a freed slot can be used again
+    EXPECT_EQ(key_delete(k), 0);
 }
 
 TEST(ThreadSpecific, InvalidKeysAreRefused) {

@@ -118,7 +118,8 @@ int set_specific(Key key, const void* value) {
 // Runs at the end of every thread the runtime started (register_thread_exit_handler): calls the
 // destructor of each key that exists and has a value on this thread, with the value, after
 // setting it to null. A destructor may set values again, so this repeats up to
-// destructor_rounds times. Threads the runtime didn't start don't run it.
+// destructor_rounds times. A thread the runtime didn't start runs it only when it calls
+// exit_thread, which runs the exit handlers before the host's pthread_exit.
 void run_destructors() {
     Keys& k = keys();
     for (int round = 0; round < destructor_rounds; ++round) {
