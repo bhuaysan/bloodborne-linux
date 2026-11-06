@@ -101,6 +101,8 @@ public:
             return detail::decode_memory(code_, index_);
         } else if (bits(w, 26, 6) == 0x34) {
             return detail::decode_vop3(code_, index_);
+        } else if (bits(w, 26, 6) == 0x32) {
+            return detail::decode_vintrp(code_, index_);
         } else if (bits(w, 31, 1) == 0) {
             return detail::decode_vop(code_, index_);  // VOP1, VOP2, VOPC
         } else {

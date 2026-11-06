@@ -49,6 +49,8 @@ enum class OperandKind : std::uint8_t {
     sendmsg,   // message of s_sendmsg, in `value`
     vector,    // VGPR; `code` is the register number, `dwords` the size of the range
     off,       // an absent address, printed as "off"
+    interp_attr,   // VINTRP attribute: `value` is the attribute number * 4 + the channel (x to w)
+    interp_param,  // v_interp_mov_f32 parameter: `value` 0, 1, 2 for p10, p20, p0
 };
 
 // Operand codes of the scalar operand field with a fixed meaning.
@@ -68,7 +70,7 @@ inline constexpr std::uint16_t literal = 255;
 }  // namespace code
 
 // Bits of Instruction::flags, the address modes and the cache and LDS modifiers of the memory
-// formats.
+// formats, and the clamp modifier of VOP3.
 namespace flag {
 inline constexpr std::uint16_t gds = 1;     // DS: global data share instead of LDS
 inline constexpr std::uint16_t offen = 2;   // MUBUF, MTBUF: VGPR offset
@@ -85,6 +87,7 @@ inline constexpr std::uint16_t unorm = 2048;  // MIMG: unnormalized coordinates
 inline constexpr std::uint16_t r128 = 4096;   // MIMG: 128-bit resource descriptor
 inline constexpr std::uint16_t lwe = 8192;    // MIMG: LOD warning enable
 inline constexpr std::uint16_t da = 16384;    // MIMG: array of the resource's dimension
+inline constexpr std::uint16_t clamp = 32768;  // VOP3: clamp the result
 }  // namespace flag
 
 struct Operand {
@@ -115,6 +118,11 @@ struct Instruction {
     // MTBUF: the data format and numeric format fields. EXP: mem_offset is the target.
     std::uint8_t dfmt = 0;
     std::uint8_t nfmt = 0;
+    // VOP3: bit i is set when source i has the neg or abs modifier, and the output modifier
+    // (0 none, 1 mul:2, 2 mul:4, 3 div:2).
+    std::uint8_t neg = 0;
+    std::uint8_t abs = 0;
+    std::uint8_t omod = 0;
 };
 
 enum class Until {

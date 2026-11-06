@@ -49,7 +49,8 @@ const std::vector<VopInfo>& vop_opcodes(Format format);
 // Decodes the VOP1, VOP2 or VOPC instruction at code[index] (bit 31 clear). Throws GcnError.
 Instruction decode_vop(std::span<const std::uint32_t> code, std::size_t index);
 
-// Decodes the VOP3 instruction (2 dwords) at code[index] (vop3_decode.cpp). Throws GcnError.
+// Decodes the VOP3 instruction (2 dwords) or the VINTRP instruction at code[index] (vop3_decode.cpp).
 Instruction decode_vop3(std::span<const std::uint32_t> code, std::size_t index);
+Instruction decode_vintrp(std::span<const std::uint32_t> code, std::size_t index);
 
 }  // namespace bb::gcn::detail

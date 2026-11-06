@@ -226,6 +226,10 @@ std::string operand(const Operand& op, Literal literal) {
         return range("v", op.code, op.dwords);
     case OperandKind::off:
         return "off";
+    case OperandKind::interp_attr:
+        return std::format("attr{}.{}", op.value >> 2, "xyzw"[op.value & 3]);
+    case OperandKind::interp_param:
+        return op.value == 0 ? "p10" : op.value == 1 ? "p20" : "p0";
     }
     return "?";
 }
@@ -266,16 +270,32 @@ std::string disassemble(const Instruction& inst) {
     }
     std::string out(inst.name);
     const char* separator = " ";
-    auto append = [&](const Operand& op, Literal literal) {
+    // The VOP3 modifiers of source `i` (neg and abs; none for a destination). LLVM writes
+    // neg(x) for an inline constant, so that -1.0 keeps meaning the constant.
+    auto append = [&](const Operand& op, Literal literal, unsigned i = 8) {
+        std::string text = operand(op, literal);
+        if (inst.abs >> i & 1) {
+            text = "|" + text + "|";
+        }
+        if (inst.neg >> i & 1) {
+            text = op.kind == OperandKind::constant && !(inst.abs >> i & 1) ? "neg(" + text + ")"
+                                                                            : "-" + text;
+        }
         out += separator;
-        out += operand(op, literal);
+        out += text;
         separator = ", ";
     };
     for (unsigned i = 0; i < inst.num_dst; ++i) {
         append(inst.dst[i], Literal::hex);  // never a literal
     }
     for (unsigned i = 0; i < inst.num_src; ++i) {
-        append(inst.src[i], literal_rule(inst, i));
+        append(inst.src[i], literal_rule(inst, i), i);
+    }
+    if (inst.flags & flag::clamp) {
+        out += " clamp";
+    }
+    if (inst.omod != 0) {
+        out += inst.omod == 3 ? " div:2" : inst.omod == 2 ? " mul:4" : " mul:2";
     }
     if (inst.format == Format::ds || inst.format == Format::flat) {
         out += detail::ds_flat_modifiers(inst);

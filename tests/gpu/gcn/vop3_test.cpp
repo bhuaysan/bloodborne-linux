@@ -43,6 +43,20 @@ std::string text(const Words& words) {
     return disassemble(insts.at(0));
 }
 
+TEST(GcnVop3, Modifiers) {
+    // v_mad_f32 v1, -v2, |v3|, -v4 clamp mul:4: abs on src1, neg on src0 and src2.
+    auto inst = one(vop3(0x141, 1, v + 2, v + 3, v + 4, abs_clamp(2, true), neg(5) | omod(2)));
+    EXPECT_EQ(inst.format, Format::vop3);
+    EXPECT_EQ(inst.name, "v_mad_f32");
+    EXPECT_EQ(inst.opcode, 0x141);
+    EXPECT_EQ(inst.neg, 5);
+    EXPECT_EQ(inst.abs, 2);
+    EXPECT_EQ(inst.omod, 2);
+    EXPECT_EQ(inst.flags, flag::clamp);
+    ASSERT_EQ(inst.num_src, 3);
+    EXPECT_EQ(inst.src[2], vgpr(4));
+}
+
 TEST(GcnVop3, Operands) {
     // VOP3b: v_add_i32_e64 v1, s[2:3], v2, 5.
     auto inst = one(vop3(0x125, 1, v + 2, 133, 0, 2 << 8));
@@ -51,6 +65,7 @@ TEST(GcnVop3, Operands) {
     ASSERT_EQ(inst.num_src, 2);
     EXPECT_EQ(inst.dst[1], sreg(2, 2));
     EXPECT_EQ(inst.src[1].kind, OperandKind::constant);
+    EXPECT_EQ(inst.abs, 0);
 
     inst = one(vop3(0x01, code::vcc, v + 1, v + 2));  // v_cmp_lt_f32_e64 vcc, v1, v2
     ASSERT_EQ(inst.num_dst, 1);
@@ -73,7 +88,7 @@ TEST(GcnVop3, Operands) {
 
     inst = one(vop3(0x180, 0, 0));  // v_nop_e64: the other fields are unused
     EXPECT_EQ(inst.num_dst + inst.num_src, 0);
-    inst = one(vop3(0x180, 3, v + 1, 4, 5, 0x700, 0xf8000000));
+    inst = one(vop3(0x180, 3, v + 1, 4, 5, 0x700, 0xe0000000));
     EXPECT_EQ(inst.num_dst + inst.num_src, 0);
 }
 
@@ -87,21 +102,36 @@ TEST(GcnVop3, Errors) {
         vop3(0x183, 1, 254),                     // and as the 64-bit src0 of v_cvt_i32_f64
         vop3(0x103, 1, v, v, 0, 1 << 13),        // reserved bit 13
         vop3(0x180, 0, 0, 0, 0, 1 << 13),        // v_nop_e64 rejects reserved bits too
-        vop3(0x103, 1, v, v, 0, 1 << 8),         // abs, clamp, omod and neg are not decoded yet
-        vop3(0x103, 1, v, v, 0, 1 << 11),
-        vop3(0x103, 1, v, v, 0, 0, 1u << 27),
-        vop3(0x103, 1, v, v, 0, 0, 1u << 29),
         vop3(0x125, 1, v, v, 0, 2 << 8 | 1 << 15),  // VOP3b: reserved bit 15
         vop3(0x125, 1, v, v, 0, 3 << 8),         // misaligned SGPR pair
         vop3(0x01, 128, v, v),                   // a constant as the destination of a compare
         vop3(0x100, 1, v, v, v),                 // a VGPR as the mask
+        vop3(0x100, 1, v, v, 4, 0, neg(4)),      // neg on the mask
+        vop3(0x103, 1, v, v, 0, abs_clamp(4)),   // abs on src2 of a two-source instruction
+        vop3(0x181, 1, v, 0, 0, 0, neg(2)),      // neg on src1 of v_mov_b32_e64
         vop3(0x101, 1, v, v),                    // a VGPR as the lane select of v_readlane_b32
         {vop3(0x103, 1, v, v)[0]},               // truncated
+        {vintrp(3, 1, 2, 0, 0)},                 // unknown VINTRP opcode
+        {vintrp(0, 1, 2, 33, 0)},                // attribute 33
+        {vintrp(2, 1, 3, 0, 0)},                 // parameter 3
     };
     for (const auto& words : bad) {
         SCOPED_TRACE(words[0]);
         EXPECT_THROW(decode(words, Until::code_end), GcnError);
     }
+}
+
+TEST(GcnVintrp, Decode) {
+    auto inst = one({vintrp(1, 255, 7, 32, 3)});
+    EXPECT_EQ(inst.format, Format::vintrp);
+    EXPECT_EQ(inst.name, "v_interp_p2_f32");
+    EXPECT_EQ(inst.opcode, 1);
+    EXPECT_EQ(inst.dst[0], vgpr(255));
+    EXPECT_EQ(inst.src[0], vgpr(7));
+    EXPECT_EQ(inst.src[1], (Operand{OperandKind::interp_attr, 0, 0, 32 << 2 | 3}));
+
+    inst = one({vintrp(2, 1, 2, 5, 1)});  // v_interp_mov_f32: the vsrc field selects P0
+    EXPECT_EQ(inst.src[0], (Operand{OperandKind::interp_param, 0, 0, 2}));
 }
 
 struct Case {
@@ -111,13 +141,26 @@ struct Case {
 
 const std::vector<Case> cases = {
     {vop3(0x103, 1, v + 2, v + 3), "v_add_f32_e64 v1, v2, v3"},
+    {vop3(0x103, 1, v + 2, v + 3, 0, abs_clamp(2, true), neg(1) | omod(1)),
+     "v_add_f32_e64 v1, -v2, |v3| clamp mul:2"},
+    {vop3(0x103, 1, v + 2, v + 3, 0, abs_clamp(1), neg(1) | omod(3)),
+     "v_add_f32_e64 v1, -|v2|, v3 div:2"},
+    {vop3(0x103, 1, v + 2, v + 3, 0, 0, omod(2)), "v_add_f32_e64 v1, v2, v3 mul:4"},
     {vop3(0x103, 1, 243, v + 3), "v_add_f32_e64 v1, -1.0, v3"},
+    {vop3(0x103, 1, 242, v + 3, 0, 0, neg(1)), "v_add_f32_e64 v1, neg(1.0), v3"},
+    {vop3(0x103, 1, 133, v + 3, 0, 0, neg(1)), "v_add_f32_e64 v1, neg(5), v3"},
+    {vop3(0x103, 1, 133, v + 3, 0, abs_clamp(1)), "v_add_f32_e64 v1, |5|, v3"},
+    {vop3(0x103, 1, 133, v + 3, 0, abs_clamp(1), neg(1)), "v_add_f32_e64 v1, -|5|, v3"},
+    {vop3(0x103, 1, 2, v + 3, 0, abs_clamp(2), neg(1)), "v_add_f32_e64 v1, -s2, |v3|"},
     {vop3(0x103, 1, code::exec, v + 3), "v_add_f32_e64 v1, exec_lo, v3"},
+    {vop3(0x103, 1, code::scc, v + 3, 0, 0, neg(1)), "v_add_f32_e64 v1, -src_scc, v3"},
     {vop3(0x103, 255, code::lds_direct, v + 255), "v_add_f32_e64 v255, src_lds_direct, v255"},
     {vop3(0x181, 1, 133), "v_mov_b32_e64 v1, 5"},
     {vop3(0x181, 1, code::lds_direct), "v_mov_b32_e64 v1, src_lds_direct"},
+    {vop3(0x1aa, 1, v + 2, 0, 0, abs_clamp(1, true)), "v_rcp_f32_e64 v1, |v2| clamp"},
     {vop3(0x183, 1, 2), "v_cvt_i32_f64_e64 v1, s[2:3]"},
     {vop3(0x183, 1, 244), "v_cvt_i32_f64_e64 v1, 2.0"},
+    {vop3(0x183, 1, 244, 0, 0, 0, neg(1)), "v_cvt_i32_f64_e64 v1, neg(2.0)"},
     {vop3(0x180, 0, 0), "v_nop_e64"},
     {vop3(0x1c1, 0, 0), "v_clrexcp_e64"},
     {vop3(0x125, 1, v + 2, v + 3, 0, 2 << 8), "v_add_i32_e64 v1, s[2:3], v2, v3"},
@@ -126,19 +169,33 @@ const std::vector<Case> cases = {
     {vop3(0x12a, 1, v + 2, v + 3, code::vcc, 2 << 8),
      "v_subbrev_u32_e64 v1, s[2:3], v2, v3, vcc"},
     {vop3(0x100, 1, v + 2, v + 3, 4), "v_cndmask_b32_e64 v1, v2, v3, s[4:5]"},
+    {vop3(0x100, 1, v + 2, v + 3, 4, abs_clamp(2), neg(3)),
+     "v_cndmask_b32_e64 v1, -v2, -|v3|, s[4:5]"},
     {vop3(0x01, 2, v + 1, v + 2), "v_cmp_lt_f32_e64 s[2:3], v1, v2"},
+    {vop3(0x01, code::exec, v + 1, v + 2, 0, abs_clamp(3), neg(2)),
+     "v_cmp_lt_f32_e64 exec, |v1|, -|v2|"},
     {vop3(0x21, 2, v + 1, v + 4), "v_cmp_lt_f64_e64 s[2:3], v[1:2], v[4:5]"},
     {vop3(0x88, 2, v + 1, 133), "v_cmp_class_f32_e64 s[2:3], v1, 5"},
     {vop3(0xb8, 2, 4, v + 4), "v_cmpx_class_f64_e64 s[2:3], s[4:5], v4"},
     {vop3(0xc6, 2, v + 1, v + 2), "v_cmp_ge_u32_e64 s[2:3], v1, v2"},
+    {vop3(0x141, 1, v + 2, v + 3, v + 4, abs_clamp(2, true), neg(5) | omod(2)),
+     "v_mad_f32 v1, -v2, |v3|, -v4 clamp mul:4"},
     {vop3(0x143, 1, v + 2, v + 3, 133), "v_mad_u32_u24 v1, v2, v3, 5"},
+    {vop3(0x14c, 2, v + 4, v + 6, 8, 0, neg(2)), "v_fma_f64 v[2:3], v[4:5], -v[6:7], s[8:9]"},
     {vop3(0x161, 2, v + 4, 133), "v_lshl_b64 v[2:3], v[4:5], 5"},
+    {vop3(0x168, 2, v + 4, v + 6, 0, 0, omod(1)), "v_ldexp_f64 v[2:3], v[4:5], v6 mul:2"},
     {vop3(0x16d, 1, v + 2, v + 3, v + 4, code::vcc << 8), "v_div_scale_f32 v1, vcc, v2, v3, v4"},
     {vop3(0x16e, 2, v + 4, v + 6, v + 8, 10 << 8),
      "v_div_scale_f64 v[2:3], s[10:11], v[4:5], v[6:7], v[8:9]"},
     {vop3(0x16f, 1, v + 2, v + 3, v + 4), "v_div_fmas_f32 v1, v2, v3, v4"},
     {vop3(0x177, 2, v + 3, v + 4, v + 6, 8 << 8), "v_mad_i64_i32 v[2:3], s[8:9], v3, v4, v[6:7]"},
     {vop3(0x175, 4, 8, v + 12, v + 16), "v_mqsad_u32_u8 v[4:7], s[8:9], v12, v[16:19]"},
+    {{vintrp(0, 1, 2, 0, 0)}, "v_interp_p1_f32 v1, v2, attr0.x"},
+    {{vintrp(1, 1, 2, 32, 3)}, "v_interp_p2_f32 v1, v2, attr32.w"},
+    {{vintrp(0, 255, 255, 12, 2)}, "v_interp_p1_f32 v255, v255, attr12.z"},
+    {{vintrp(2, 1, 0, 3, 1)}, "v_interp_mov_f32 v1, p10, attr3.y"},
+    {{vintrp(2, 1, 1, 3, 1)}, "v_interp_mov_f32 v1, p20, attr3.y"},
+    {{vintrp(2, 1, 2, 3, 1)}, "v_interp_mov_f32 v1, p0, attr3.y"},
 };
 
 TEST(GcnVop3, Text) {
@@ -156,9 +213,37 @@ TEST(GcnVop3, Text) {
     }
 }
 
+// Every combination of neg and abs on the three sources of v_mad_f32, with clamp and omod varying.
+TEST(GcnVop3, ModifierCombinations) {
+    std::vector<Words> all;
+    std::vector<std::string> lines;
+    for (unsigned n = 0; n < 8; ++n) {
+        for (unsigned a = 0; a < 8; ++a) {
+            all.push_back(
+                vop3(0x141, 1, v + 2, v + 3, 5, abs_clamp(a, (n ^ a) & 1), neg(n) | omod((n + a) & 3)));
+            lines.push_back(text(all.back()));
+        }
+    }
+    if (!have_llvm_mc()) {
+        GTEST_SKIP() << "llvm-mc not found";
+    }
+    const auto assembled = assemble(lines);
+    for (std::size_t i = 0; i < all.size(); ++i) {
+        EXPECT_EQ(assembled[i].words, all[i]) << lines[i];
+    }
+}
+
 // Encodings that LLVM's syntax can't express: the decoder accepts what the fields allow.
 TEST(GcnVop3, EncodingsLlvmRejects) {
     const std::vector<Case> rejected = {
+        // Modifiers on instructions without them, and clamp on a compare.
+        {vop3(0x143, 1, v + 2, v + 3, v + 4, 0, neg(1)), "v_mad_u32_u24 v1, -v2, v3, v4"},
+        {vop3(0x143, 1, v + 2, v + 3, v + 4, abs_clamp(0, true)),
+         "v_mad_u32_u24 v1, v2, v3, v4 clamp"},
+        {vop3(0x143, 1, v + 2, v + 3, v + 4, 0, omod(1)), "v_mad_u32_u24 v1, v2, v3, v4 mul:2"},
+        {vop3(0x125, 1, v + 2, v + 3, 0, 2 << 8, neg(1)), "v_add_i32_e64 v1, s[2:3], -v2, v3"},
+        {vop3(0x01, 2, v + 1, v + 2, 0, abs_clamp(0, true)),
+         "v_cmp_lt_f32_e64 s[2:3], v1, v2 clamp"},
         // The VOP3 forms of the lane instructions and v_mov_fed_b32.
         {vop3(0x101, 1, v + 2, 3), "v_readlane_b32_e64 s1, v2, s3"},
         {vop3(0x102, 1, 2, 3), "v_writelane_b32_e64 v1, s2, s3"},

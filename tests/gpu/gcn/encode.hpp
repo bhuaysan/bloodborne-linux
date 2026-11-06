@@ -104,12 +104,23 @@ constexpr std::uint32_t vopc(unsigned op, unsigned src0, unsigned vsrc1) {
     return 0x3eu << 25 | op << 17 | vsrc1 << 9 | src0;
 }
 
-// VOP3. `low` is ORed into the first dword (sdst << 8 for VOP3b) and `high` into the second. The
-// sources are 9-bit operand codes.
+// VOP3. `low` is ORed into the first dword (sdst for VOP3b, abs and clamp for VOP3a) and `high`
+// into the second (omod and neg). The sources are 9-bit operand codes.
 inline std::vector<std::uint32_t> vop3(unsigned op, unsigned vdst, unsigned src0, unsigned src1 = 0,
                                        unsigned src2 = 0, std::uint32_t low = 0,
                                        std::uint32_t high = 0) {
     return {0x34u << 26 | op << 17 | low | vdst, src2 << 18 | src1 << 9 | src0 | high};
+}
+
+constexpr std::uint32_t omod(unsigned n) { return n << 27; }
+constexpr std::uint32_t neg(unsigned mask) { return mask << 29; }
+constexpr std::uint32_t abs_clamp(unsigned abs, bool clamp = false) {
+    return abs << 8 | clamp << 11;
+}
+
+constexpr std::uint32_t vintrp(unsigned op, unsigned vdst, unsigned vsrc, unsigned attr,
+                               unsigned chan) {
+    return 0x32u << 26 | vdst << 18 | op << 16 | attr << 10 | chan << 8 | vsrc;
 }
 
 }  // namespace bb::test::gcn

@@ -1,4 +1,4 @@
-// Decoder for VOP3 (Sea Islands ISA manual, "Microcode Formats").
+// Decoder for VOP3 and VINTRP (Sea Islands ISA manual, "Microcode Formats").
 
 #include <format>
 #include <string>
@@ -42,18 +42,13 @@ public:
         if (bits(word_, vop3b ? 15 : 12, vop3b ? 2 : 5) != 0) {
             fail("reserved bits set");
         }
-        // The modifiers (abs, clamp, omod, neg) are decoded in the next part of #118.
-        const bool modifiers = bits(w1, 27, 5) != 0 || (!vop3b && bits(word_, 8, 4) != 0);
-        if (modifiers && info.kind != Vop::none) {
-            fail("VOP3 modifiers are not supported yet");
-        }
         const unsigned vdst = bits(word_, 0, 8);
         const unsigned s0 = bits(w1, 0, 9);
         const unsigned s1 = bits(w1, 9, 9);
         const unsigned s2 = bits(w1, 18, 9);
         switch (info.kind) {
         case Vop::none:
-            break;  // v_nop, v_clrexcp: the other fields are unused
+            return inst_;  // v_nop, v_clrexcp: the other fields are unused
         case Vop::sdst:
             add_dst(scalar_dst(vdst, 1));
             add_src(source(s0, info.src0, true));
@@ -102,6 +97,18 @@ public:
             break;
         default:
             fail("VOP3 opcode with a VOP2 operand layout");  // not in the table
+        }
+        // Source modifiers apply to the float sources, not to a mask, carry or lane select.
+        const bool tail = info.kind == Vop::cndmask || info.kind == Vop::carry ||
+                          info.kind == Vop::readlane || info.kind == Vop::writelane;
+        inst_.neg = static_cast<std::uint8_t>(bits(w1, 29, 3));
+        inst_.abs = static_cast<std::uint8_t>(vop3b ? 0 : bits(word_, 8, 3));
+        if (((inst_.neg | inst_.abs) >> (inst_.num_src - tail)) != 0) {
+            fail("source modifier on an operand without one");
+        }
+        inst_.omod = static_cast<std::uint8_t>(bits(w1, 27, 2));
+        if (!vop3b && bits(word_, 11, 1)) {
+            inst_.flags |= flag::clamp;
         }
         return inst_;
     }
@@ -158,6 +165,36 @@ private:
 
 Instruction decode_vop3(std::span<const std::uint32_t> code, std::size_t index) {
     return Vop3Decoder(code, index).run();
+}
+
+Instruction decode_vintrp(std::span<const std::uint32_t> code, std::size_t index) {
+    constexpr const char* names[] = {"v_interp_p1_f32", "v_interp_p2_f32", "v_interp_mov_f32"};
+    const std::uint32_t w = code[index];
+    Instruction inst;
+    inst.offset = static_cast<std::uint32_t>(index * 4);
+    inst.size = 1;
+    inst.format = Format::vintrp;
+    const unsigned op = bits(w, 16, 2);
+    const unsigned attr = bits(w, 10, 6);
+    const unsigned vsrc = bits(w, 0, 8);
+    if (op == 3) {
+        throw GcnError("unknown VINTRP opcode 3", inst.offset, w);
+    }
+    if (attr > 32) {
+        throw GcnError(std::format("invalid interpolation attribute {}", attr), inst.offset, w);
+    }
+    if (op == 2 && vsrc > 2) {
+        throw GcnError(std::format("invalid interpolation parameter {}", vsrc), inst.offset, w);
+    }
+    inst.opcode = static_cast<std::uint16_t>(op);
+    inst.name = names[op];
+    inst.dst[inst.num_dst++] = {OperandKind::vector, 1,
+                                static_cast<std::uint16_t>(bits(w, 18, 8)), 0};
+    inst.src[inst.num_src++] =
+        op == 2 ? Operand{OperandKind::interp_param, 0, 0, vsrc}
+                : Operand{OperandKind::vector, 1, static_cast<std::uint16_t>(vsrc), 0};
+    inst.src[inst.num_src++] = {OperandKind::interp_attr, 0, 0, attr << 2 | bits(w, 8, 2)};
+    return inst;
 }
 
 }  // namespace bb::gcn::detail
