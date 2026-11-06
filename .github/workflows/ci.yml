@@ -39,6 +39,8 @@ jobs:
       # which Ubuntu 24.04 doesn't package. Build the release the reference
       # machine uses from its source archive; the checksum is the digest GitHub
       # lists for that release asset. No tests or examples, shared library only.
+      # The runner has no X11 or Wayland headers, which SDL refuses without
+      # SDL_UNIX_CONSOLE_BUILD; CI only compiles and links against it.
       - name: Build SDL3
         env:
           SDL_VERSION: 3.4.18
@@ -49,7 +51,8 @@ jobs:
           echo "${SDL_SHA256}  $RUNNER_TEMP/sdl3.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/sdl3.tar.gz" -C "$RUNNER_TEMP"
           cmake -S "$RUNNER_TEMP/SDL3-${SDL_VERSION}" -B "$RUNNER_TEMP/sdl3-build" -G Ninja \
-              -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_STATIC=OFF
+              -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_STATIC=OFF \
+              -DSDL_UNIX_CONSOLE_BUILD=ON
           cmake --build "$RUNNER_TEMP/sdl3-build"
           sudo cmake --install "$RUNNER_TEMP/sdl3-build"
           sudo ldconfig
