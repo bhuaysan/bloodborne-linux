@@ -6,7 +6,7 @@ bb_add_test(hle_save_data_test SOURCES save_data_test.cpp LIBS bbhle bbhlesystem
 bb_add_test(hle_video_test SOURCES video_test.cpp LIBS bbhle bbhlevideo)
 # Runs the PRX initialisers, so it needs the eboot's TLS reservation (docs/design/m3-core-os.md,
 # "TLS").
-bb_add_test(hle_prx_init_test SOURCES prx_init_test.cpp LIBS bbhle bbeboottls)
+bb_add_test(hle_prx_init_test SOURCES prx_init_test.cpp LIBS bbhle bbeboottls bbtestguestwindow)
 
 # One test executable per kernel module: kernel_<module>_test.cpp becomes the test
 # kernel_<module>_test, so that new kernel modules don't all edit this list.
@@ -21,3 +21,7 @@ target_link_libraries(kernel_tls_test PRIVATE bbeboottls)
 target_link_libraries(kernel_thread_test PRIVATE bbeboottls)
 target_link_libraries(kernel_thread_extras_test PRIVATE bbeboottls)
 target_link_libraries(kernel_thread_specific_test PRIVATE bbeboottls)
+# Their tests map guest memory in the guest window (tests/support/guest_window_asan.cpp).
+foreach(name IN ITEMS kernel_vmem_test kernel_dmem_test kernel_mmap_file_test)
+    target_link_libraries(${name} PRIVATE bbtestguestwindow)
+endforeach()
