@@ -3,6 +3,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <format>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -240,6 +242,67 @@ TEST(GcnTranslate, FloatModifiers) {
               "modifiers of v_cvt_f32_i32_e64 are not supported yet at offset 0x0 "
               "(word 0xd30a0002)");
     EXPECT_EQ(error(with(0x185, abs_clamp(0, true), omod(2))), "no error");
+}
+
+// The execution modes of the key's float mode come with the first float instruction only.
+TEST(GcnTranslate, FloatModes) {
+    // The execution modes with a width literal (OpExecutionMode of 4 words; LocalSize has 6).
+    const auto modes = [](const std::vector<std::uint32_t>& spirv) {
+        std::vector<std::uint32_t> found;
+        for (std::size_t i = 5; i < spirv.size(); i += spirv[i] >> 16) {
+            if ((spirv[i] & 0xffff) == 16 && (spirv[i] >> 16) == 4) {
+                found.push_back(spirv[i + 2]);
+            }
+        }
+        return found;
+    };
+    constexpr std::uint32_t preserve = 4459, flush = 4460, nan = 4461, rte = 4462, rtz = 4463;
+    const std::vector<std::uint32_t> add = {vop2(3, 1, 256, 2), s_endpgm};  // v_add_f32 v1, v0, v2
+    const auto build = [&](std::uint32_t rsrc1, const std::vector<std::uint32_t>& code) {
+        ShaderKey key = key5;
+        key.pgm_rsrc1 = rsrc1;
+        const auto spirv = translate(code, {}, key).spirv;
+        if (have_spirv_val()) {
+            EXPECT_EQ(validate(spirv), "");
+        }
+        return modes(spirv);
+    };
+    EXPECT_EQ(build(0, add), (std::vector<std::uint32_t>{nan, rte, flush}));
+    EXPECT_EQ(build(3u << 16 | 3u << 12, add), (std::vector<std::uint32_t>{nan, rtz, preserve}));
+    EXPECT_EQ(build(0, {s_endpgm}), std::vector<std::uint32_t>{});  // no float instruction
+    for (const std::uint32_t rsrc1 : {1u << 12, 2u << 12, 1u << 16, 2u << 16}) {
+        EXPECT_EQ(error(add, {.pgm_rsrc1 = rsrc1, .pgm_rsrc2 = 5u << 1}),
+                  std::format("COMPUTE_PGM_RSRC1 {:#x}: this float mode is not supported at "
+                              "offset 0x0 (word 0x00000000)", rsrc1));
+    }
+}
+
+// GCN rounds the result of every float instruction and only v_fma_f32 fuses a multiply and an
+// add, so the translated add, subtract and multiply (the mads, the omod multiply and the
+// legacy multiply included) all carry NoContraction. float_alu uses them all.
+TEST(GcnTranslate, FloatArithmeticIsNotContracted) {
+    constexpr std::uint16_t op_decorate = 71, op_fadd = 129, op_fsub = 131, op_fmul = 133;
+    constexpr std::uint32_t no_contraction = 42;
+    for (const char* name : {"float_alu"}) {
+        SCOPED_TRACE(name);
+        const auto spirv = translate(program_words(name), {}, key5).spirv;
+        std::set<std::uint32_t> decorated;
+        std::size_t arithmetic = 0;
+        for (std::size_t i = 5; i < spirv.size(); i += spirv[i] >> 16) {
+            const std::uint16_t op = spirv[i] & 0xffff;
+            if (op == op_decorate && spirv[i + 2] == no_contraction) {
+                decorated.insert(spirv[i + 1]);
+            }
+        }
+        for (std::size_t i = 5; i < spirv.size(); i += spirv[i] >> 16) {
+            const std::uint16_t op = spirv[i] & 0xffff;
+            if (op == op_fadd || op == op_fsub || op == op_fmul) {
+                ++arithmetic;
+                EXPECT_TRUE(decorated.contains(spirv[i + 2])) << "result id " << spirv[i + 2];
+            }
+        }
+        EXPECT_GT(arithmetic, 10u);
+    }
 }
 
 }  // namespace
