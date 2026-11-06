@@ -50,13 +50,15 @@ auto* const mutex_destroy = fn<int(Cell*)>(posix, "ltCfaGr2JGE");
 
 constexpr int eperm = 1, ebusy = 16, einval = 22, etimedout = 60;
 
-// A condition variable with `n` waiter threads, each counting its wakeups. Mutex and condition
-// variable start as static initialisers.
+// A condition variable with `n` waiter threads. Mutex and condition variable start as static
+// initialisers. `returns` counts every return from a wait, so a signal that woke more than one
+// waiter shows even though the extra ones would wait again.
 struct Waiters {
     Cell mutex = 0;
     Cell cond = 0;
     int ready = 0;     // waiters that hold the mutex and are about to wait
     int released = 0;  // wakeups the test has allowed
+    std::atomic<int> returns{0};
     std::atomic<int> woken{0};
     std::vector<std::thread> threads;
 
@@ -67,6 +69,7 @@ struct Waiters {
                 ++ready;
                 while (released == 0) {
                     EXPECT_EQ(sce_wait(&cond, &mutex), 0);
+                    ++returns;
                 }
                 --released;
                 ++woken;
@@ -109,13 +112,73 @@ TEST(KernelCond, SignalWakesOneWaiterAndBroadcastWakesAll) {
         std::this_thread::sleep_for(1ms);
     }
     std::this_thread::sleep_for(20ms);
+    EXPECT_EQ(w.returns, 1);
     EXPECT_EQ(w.woken, 1);
 
     w.release(2, true);
     while (w.woken < 3) {
         std::this_thread::sleep_for(1ms);
     }
+    EXPECT_EQ(w.returns, 3);
     EXPECT_EQ(w.woken, 3);
+}
+
+TEST(KernelCond, SignalWithoutWaitersIsNotKeptForTheNextWaiter) {
+    Cell mutex = 0, cond = 0;
+    EXPECT_EQ(sce_signal(&cond), 0);
+    EXPECT_EQ(sce_broadcast(&cond), 0);
+    mutex_lock(&mutex);
+    EXPECT_EQ(sce_timedwait(&cond, &mutex, 10000), sce_error(etimedout));
+    mutex_unlock(&mutex);
+    EXPECT_EQ(sce_destroy(&cond), 0);
+    EXPECT_EQ(mutex_destroy(&mutex), 0);
+}
+
+// The teardown "lock; set flag; broadcast; destroy" destroys while the woken waiters still wait
+// for the mutex. They are no longer blocked, so destroy succeeds (libSceFios2 traps on a failed
+// destroy, docs/formats/kernel-abi.md, "Condition variables").
+TEST(KernelCond, DestroyAfterBroadcastSucceedsWhileWokenWaitersWantTheMutex) {
+    Cell mutex = 0, cond = 0;
+    bool stop = false;
+    int ready = 0;
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 3; ++i) {
+        threads.emplace_back([&] {
+            mutex_lock(&mutex);
+            ++ready;
+            while (!stop) {
+                EXPECT_EQ(sce_wait(&cond, &mutex), 0);
+            }
+            mutex_unlock(&mutex);
+        });
+    }
+    for (;;) {
+        mutex_lock(&mutex);
+        if (ready == 3) {
+            break;  // every waiter is inside its wait, and the mutex stays held
+        }
+        mutex_unlock(&mutex);
+        std::this_thread::sleep_for(1ms);
+    }
+    stop = true;
+    EXPECT_EQ(sce_broadcast(&cond), 0);
+    EXPECT_EQ(sce_destroy(&cond), 0);
+    EXPECT_EQ(cond, 0u);
+    mutex_unlock(&mutex);
+    for (auto& t : threads) {
+        t.join();
+    }
+    EXPECT_EQ(mutex_destroy(&mutex), 0);
+}
+
+// A waiter that a signal released no longer counts, but the ones still blocked do.
+TEST(KernelCond, DestroyAfterSignalIsBusyWhileAnotherWaiterIsBlocked) {
+    Waiters w(2);
+    mutex_lock(&w.mutex);
+    w.released += 1;
+    EXPECT_EQ(sce_signal(&w.cond), 0);
+    EXPECT_EQ(sce_destroy(&w.cond), sce_error(ebusy));
+    mutex_unlock(&w.mutex);
 }
 
 TEST(KernelCond, SceTimedwaitTimesOutAfterItsMicroseconds) {
