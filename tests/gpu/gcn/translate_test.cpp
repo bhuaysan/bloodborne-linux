@@ -73,8 +73,9 @@ TEST(GcnTranslate, WaveSizeDependence) {
     EXPECT_TRUE(dependent(vop3(0x123, 1, 106, 128)));        // v_mbcnt_lo_u32_b32_e64 v1, vcc_lo, 0
 }
 
-// A value written to VCC or an SGPR mask pair and read back as a value sets mask_round_trip;
-// either one alone doesn't, and neither does EXEC.
+// A value written to VCC or an SGPR mask pair and read back as a value sets mask_round_trip, also
+// when s_mov_b64 copies it to the pair that is read, or writes a constant other than 0 and -1;
+// either one alone doesn't, a copy the other way doesn't, and neither does EXEC.
 TEST(GcnTranslate, MaskRoundTrip) {
     const auto round_trip = [](const std::vector<std::vector<std::uint32_t>>& parts) {
         std::vector<std::uint32_t> code;
@@ -90,6 +91,18 @@ TEST(GcnTranslate, MaskRoundTrip) {
     EXPECT_FALSE(round_trip({cmp, {sop1(3, 8, 0)}}));                   // s8 = s0
     EXPECT_TRUE(round_trip({{sop1(3, 106, 0)}, {sop1(3, 6, 107)}}));    // vcc_lo = s0, s6 = vcc_hi
     EXPECT_FALSE(round_trip({{sop1(3, 126, 0)}, {sop1(3, 6, 126)}}));   // exec_lo = s0, s6 = exec_lo
+
+    // s10 = s0, s11 = s1
+    const std::vector<std::uint32_t> values = {sop1(3, 10, 0), sop1(3, 11, 1)};
+    const std::vector<std::uint32_t> copy = {sop1(4, 8, 10)};       // s_mov_b64 s[8:9], s[10:11]
+    const std::vector<std::uint32_t> copy_back = {sop1(4, 10, 8)};  // s_mov_b64 s[10:11], s[8:9]
+    const std::vector<std::uint32_t> read_s8 = {sop1(3, 6, 8)};     // s6 = s8
+    EXPECT_TRUE(round_trip({cmp, values, copy, read_s8}));
+    EXPECT_TRUE(round_trip({cmp, values, copy, copy_back, {sop1(4, 12, 8)}, {sop1(3, 6, 12)}}));
+    EXPECT_FALSE(round_trip({cmp, values, copy_back, read_s8}));  // the value goes into s[10:11]
+    EXPECT_TRUE(round_trip({cmp, {sop1(4, 8, 133)}, read_s8}));   // s_mov_b64 s[8:9], 5
+    EXPECT_FALSE(round_trip({cmp, {sop1(4, 8, 128)}, read_s8}));  // s_mov_b64 s[8:9], 0
+    EXPECT_FALSE(round_trip({cmp, {sop1(4, 8, 193)}, read_s8}));  // s_mov_b64 s[8:9], -1
 }
 
 // Scalar ALU, a loop on SCC, and the vector ALU in VOP1, VOP2 and VOP3 encodings.

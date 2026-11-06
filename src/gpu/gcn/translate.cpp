@@ -14,6 +14,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <spirv/unified1/GLSL.std.450.h>
 
@@ -304,7 +305,7 @@ private:
         const std::string_view name = inst.name;
         const Operand& dst = inst.dst[0];
         if (name == "s_mov_b64" && is_mask(dst)) {
-            write_mask(dst, read_mask(inst.src[0]));
+            mask_copy(dst, inst.src[0]);
         } else if (name == "s_mov_b32" || name == "s_mov_b64") {
             const unsigned dwords = name == "s_mov_b64" ? 2 : 1;
             Id value[2] = {};
@@ -586,11 +587,23 @@ private:
         return ballot(load(bool_, mask_var(pair)));
     }
 
-    // Whether VCC or an SGPR mask pair is written as a value somewhere and read as a value
-    // somewhere (flow-insensitive, like the type pass): typically a compiler reusing a pair for
-    // other data.
+    // Whether a value written to VCC or an SGPR mask pair is read back as a value, from that pair
+    // or from one that s_mov_b64 copies it to, directly or through other pairs (flow-insensitive,
+    // like the type pass): typically a compiler reusing a pair for other data.
     bool round_trip() const {
-        return std::ranges::any_of(value_writes_,
+        std::set<unsigned> reached = value_writes_;
+        std::vector<unsigned> pending(value_writes_.begin(), value_writes_.end());
+        while (!pending.empty()) {
+            const unsigned pair = pending.back();
+            pending.pop_back();
+            const auto [first, last] = mask_copies_.equal_range(pair);
+            for (auto it = first; it != last; ++it) {
+                if (reached.insert(it->second).second) {
+                    pending.push_back(it->second);
+                }
+            }
+        }
+        return std::ranges::any_of(reached,
                                    [&](unsigned pair) { return value_reads_.contains(pair); });
     }
 
@@ -648,14 +661,20 @@ private:
         if (o.kind != OperandKind::constant) {
             fail(std::format("unsupported mask operand of {}", inst_->name));
         }
+        if (uniform_constant(o)) {
+            return b_.constant_bool(constant_word(o, 0) != 0);
+        }
         const std::uint32_t low = constant_word(o, 0);
         const std::uint32_t high = constant_word(o, 1);
-        if (low == high && (low == 0 || low == ~0u)) {
-            return b_.constant_bool(low != 0);
-        }
         const Id lower = b_.op(Op::OpULessThan, bool_, {lane_, b_.constant_u32(32)});
         return lane_bit(b_.op(Op::OpSelect, u32_,
                               {lower, b_.constant_u32(low), b_.constant_u32(high)}));
+    }
+
+    // Whether a mask constant is 0 or -1, the same bit for every lane.
+    bool uniform_constant(const Operand& o) const {
+        const std::uint32_t low = constant_word(o, 0);
+        return low == constant_word(o, 1) && (low == 0 || low == ~0u);
     }
 
     // Bit (lane ID modulo 32) of `word`.
@@ -685,6 +704,18 @@ private:
             unsupported();
         }
         store(value_sgpr(c), value);
+    }
+
+    // s_mov_b64 to a mask. A copy from another mask pair is recorded for mask_round_trip, and so
+    // is a constant other than 0 and -1, whose bits are a value rather than a uniform lane bit.
+    void mask_copy(const Operand& dst, const Operand& src) {
+        if (is_mask(src)) {
+            mask_copies_.emplace(src.code, dst.code);
+        } else if (src.kind == OperandKind::constant && !uniform_constant(src) &&
+                   dst.code != code::exec) {
+            value_writes_.insert(dst.code);
+        }
+        write_mask(dst, read_mask(src));
     }
 
     void write_mask(const Operand& o, Id value) {
@@ -754,6 +785,7 @@ private:
     std::set<unsigned> mask_sgprs_;                 // the first SGPR of each mask pair
     const Instruction* inst_ = nullptr;
     std::set<unsigned> value_writes_, value_reads_;  // mask pairs written or read as values
+    std::multimap<unsigned, unsigned> mask_copies_;  // s_mov_b64 between mask pairs: source, dest
     bool uses_subgroup_ = false;
     bool wave_size_dependent_ = false;
 };
