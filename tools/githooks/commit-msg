@@ -4,9 +4,11 @@
 . "$(dirname "$0")/privacy-lib.sh"
 FAILED=0
 msg_file="$1"
-msg="$(grep -v '^#' "$msg_file" || true)"
+# cut at git's scissors line (commit -v appends the diff after it), drop comments
+msg="$(sed '/^# -* >8 -*$/,$d' "$msg_file" | grep -v '^#' || true)"
 check_message "$msg" "commit message"
-check_subject "$(printf '%s\n' "$msg" | sed -n 1p)"
+# first non-blank line, without trailing whitespace (git strips it too)
+check_subject "$(printf '%s\n' "$msg" | sed -n '/[^[:space:]]/{s/[[:space:]]*$//;p;q;}')"
 
 [ "$FAILED" -eq 0 ] || exit 1
 exit 0

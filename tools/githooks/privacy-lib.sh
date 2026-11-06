@@ -84,7 +84,12 @@ check_subject() {
             return 0 ;;
         'Revert "'*|'Merge '*) return 0 ;;
     esac
-    subject_len="$(printf '%s' "$1" | wc -m | tr -d ' ')"
+    # count characters, not bytes: wc -m counts bytes in the C locale
+    if [ "$(printf '\303\251' | LC_ALL=C.UTF-8 wc -m 2>/dev/null | tr -d ' ')" = 1 ]; then
+        subject_len="$(printf '%s' "$1" | LC_ALL=C.UTF-8 wc -m | tr -d ' ')"
+    else
+        subject_len="$(printf '%s' "$1" | wc -m | tr -d ' ')"
+    fi
     if [ "$subject_len" -ge "$SUBJECT_LIMIT" ]; then
         fail "commit subject is $subject_len characters, the limit is under $SUBJECT_LIMIT: $1"
     fi

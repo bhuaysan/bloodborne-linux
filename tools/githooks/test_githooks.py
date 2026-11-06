@@ -1,5 +1,6 @@
 """Tests for the commit subject length check in commit-msg and privacy-check.sh."""
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -7,6 +8,7 @@ import unittest
 from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent
+SHELL = os.environ.get("TEST_SHELL", "sh")
 PRIVACY_CHECK = HOOKS.parent / "privacy-check.sh"
 
 
@@ -20,11 +22,12 @@ class CommitMsgTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.msg_file = Path(tmp.name) / "COMMIT_EDITMSG"
 
-    def run_hook(self, text):
-        self.msg_file.write_text(text)
+    def run_hook(self, text, env=None):
+        self.msg_file.write_bytes(text.encode())
         return subprocess.run(
-            ["sh", str(HOOKS / "commit-msg"), str(self.msg_file)],
-            capture_output=True, text=True, cwd=HOOKS)
+            [SHELL, str(HOOKS / "commit-msg"), str(self.msg_file)],
+            capture_output=True, text=True, errors="replace", cwd=HOOKS,
+            env={**os.environ, **(env or {})})
 
     def test_71_passes_and_72_fails(self):
         self.assertEqual(self.run_hook(subject(71) + "\n").returncode, 0)
@@ -46,6 +49,28 @@ class CommitMsgTest(unittest.TestCase):
         for prefix in ("fixup! ", "squash! ", "amend! ", 'Revert "', "Merge "):
             with self.subTest(prefix=prefix):
                 self.assertEqual(self.run_hook(subject(90, prefix) + "\n").returncode, 0)
+
+    def test_counts_characters_not_bytes(self):
+        for env in ({"LC_ALL": "C"}, {"LC_ALL": "C.UTF-8"}):
+            with self.subTest(env=env):
+                for text in ("\u2192" * 71, "\u00fc" * 71):
+                    self.assertEqual(self.run_hook(text + "\n", env).returncode, 0)
+                self.assertEqual(self.run_hook("\u00fc" * 72 + "\n", env).returncode, 1)
+
+    def test_trailing_whitespace_and_crlf_are_ignored(self):
+        self.assertEqual(self.run_hook(subject(69) + "   \n").returncode, 0)
+        self.assertEqual(self.run_hook(subject(71) + "\r\n\r\nbody\r\n").returncode, 0)
+        self.assertEqual(self.run_hook(subject(72) + "  \n").returncode, 1)
+
+    def test_leading_blank_lines_do_not_skip_the_check(self):
+        self.assertEqual(self.run_hook("\n\n" + subject(80) + "\n").returncode, 1)
+        self.assertEqual(self.run_hook("\n# c\n\n" + subject(10) + "\n").returncode, 0)
+
+    def test_scissors_diff_is_not_measured(self):
+        scissors = "# " + "-" * 24 + " >8 " + "-" * 24 + "\n"
+        diff = "diff --git a/x b/x\n+" + "y" * 100 + "\n"
+        self.assertEqual(self.run_hook("Short\n\n" + scissors + diff).returncode, 0)
+        self.assertEqual(self.run_hook(subject(80) + "\n" + scissors + diff).returncode, 1)
 
     def test_empty_message_is_left_to_git(self):
         self.assertEqual(self.run_hook("# only a comment\n").returncode, 0)
@@ -75,7 +100,7 @@ class PrivacyCheckTest(unittest.TestCase):
         self.git("commit", "-q", "--allow-empty", "-m", message)
 
     def check(self):
-        return subprocess.run(["sh", "tools/privacy-check.sh", "base"],
+        return subprocess.run([SHELL, "tools/privacy-check.sh", "base"],
                               cwd=self.repo, capture_output=True, text=True)
 
     def test_71_passes_and_72_fails(self):
