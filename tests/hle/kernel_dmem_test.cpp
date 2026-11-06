@@ -173,6 +173,51 @@ TEST(KernelDmem, GameSizedAllocationSucceeds) {
     EXPECT_EQ(release_direct(offset, length), 0);
 }
 
+TEST(KernelDmem, TypeQueryReportsTheAllocation) {
+    const std::uint64_t first = allocate(2 * page_size, 0, 3);
+    const std::uint64_t second = allocate(page_size, 0, 0);
+    ASSERT_EQ(second, first + 2 * page_size);  // adjacent, and kept apart
+    std::int32_t type = -1;
+    std::uint64_t start = 0, end = 0;
+    ASSERT_EQ(direct_memory_type(first + page_size + 0x10, &type, &start, &end), 0);
+    EXPECT_EQ(type, 3);
+    EXPECT_EQ(start, first);
+    EXPECT_EQ(end, first + 2 * page_size);
+    ASSERT_EQ(direct_memory_type(second, &type, &start, &end), 0);
+    EXPECT_EQ(type, 0);
+    EXPECT_EQ(start, second);
+    EXPECT_EQ(end, second + page_size);
+    // A partial release splits the bounds.
+    EXPECT_EQ(release_direct(first, page_size), 0);
+    ASSERT_EQ(direct_memory_type(first + page_size, &type, &start, &end), 0);
+    EXPECT_EQ(type, 3);
+    EXPECT_EQ(start, first + page_size);
+    // Free offsets and null outputs fail and change nothing.
+    type = 7;
+    EXPECT_NE(direct_memory_type(first, &type, &start, &end), 0);
+    EXPECT_NE(direct_memory_type(second + page_size, &type, &start, &end), 0);
+    EXPECT_EQ(type, 7);
+    EXPECT_EQ(direct_memory_type(second, nullptr, &start, &end), sce_einval);
+    EXPECT_EQ(direct_memory_type(second, &type, &start, nullptr), sce_einval);
+
+    EXPECT_EQ(release_direct(first + page_size, page_size), 0);
+    EXPECT_EQ(release_direct(second, page_size), 0);
+}
+
+// The eboot's type-3 test (0x26bae30): the mapping query's offset, then the type query.
+TEST(KernelDmem, TypeThreeTestOfTheEbootAnswersTrue) {
+    const std::uint64_t offset = allocate(0x10000, 0x10000, 3);  // as 0x26d3ee0
+    auto* const p = static_cast<char*>(map(offset, 0x10000, 0x10000));
+    QueryRecord record{};
+    ASSERT_EQ(query_mapping(p + page_size, 0, &record, sizeof record), 0);
+    std::int32_t type = -1;
+    std::uint64_t start = 0, end = 0;
+    ASSERT_EQ(direct_memory_type(record.offset, &type, &start, &end), 0);
+    EXPECT_EQ(type, 3);
+    EXPECT_EQ(sceKernelMunmap(p, 0x10000), 0);
+    EXPECT_EQ(release_direct(offset, 0x10000), 0);
+}
+
 TEST(KernelDmem, ImportsResolveToTheImplementations) {
     const auto resolve = [](const char* nid) {
         return bb::hle::resolve({nid, "libkernel", "libkernel", bb::loader::stt_func});
@@ -181,6 +226,7 @@ TEST(KernelDmem, ImportsResolveToTheImplementations) {
     EXPECT_EQ(resolve("rTXw65xmLIA"), addr(reinterpret_cast<void*>(&allocate_direct)));
     EXPECT_EQ(resolve("L-Q3LEjIbgA"), addr(reinterpret_cast<void*>(&map_direct)));
     EXPECT_EQ(resolve("MBuItvba6z8"), addr(reinterpret_cast<void*>(&release_direct)));
+    EXPECT_EQ(resolve("BC+OG5m9+bw"), addr(reinterpret_cast<void*>(&direct_memory_type)));
 }
 
 }  // namespace

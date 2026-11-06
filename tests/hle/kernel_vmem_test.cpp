@@ -388,13 +388,6 @@ TEST(KernelVmem, OnlyAMapIntoAReservationReplacesIt) {
     EXPECT_EQ(vmem::restore_reservation(r, page_size), EINVAL);
 }
 
-TEST(KernelVmem, DirectMemoryTypeFailsWithoutDirectMemory) {
-    std::int32_t type = 7;
-    std::uint64_t start = 0, end = 0;
-    EXPECT_NE(direct_memory_type(0, &type, &start, &end), 0);
-    EXPECT_EQ(type, 7);
-}
-
 TEST(KernelVmem, ImportsResolveToTheImplementations) {
     const auto resolve = [](const char* library, const char* nid) {
         return bb::hle::resolve({nid, library, "libkernel", bb::loader::stt_func});

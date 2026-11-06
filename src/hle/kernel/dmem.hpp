@@ -40,4 +40,8 @@ std::int32_t map_direct(void** address, std::uint64_t length, int prot, int flag
 // MBuItvba6z8: releases allocated direct memory; the length is rounded up to the page size.
 std::int32_t release_direct(std::uint64_t offset, std::uint64_t length);
 
+// BC+OG5m9+bw: the type and the bounds [*start, *end) of the allocation that holds `offset`.
+std::int32_t direct_memory_type(std::uint64_t offset, std::int32_t* type, std::uint64_t* start,
+                                std::uint64_t* end);
+
 }  // namespace bb::hle::kernel
