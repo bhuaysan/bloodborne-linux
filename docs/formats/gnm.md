@@ -296,7 +296,7 @@ The HLE registers these as logging stubs.
 
 ## Second wave
 
-Planned in [graphics.md](../design/graphics.md#command-buffers-to-the-first-frame-second-wave), items 15–20. The list below is what this note contributed.
+Planned in [graphics.md](../design/graphics.md#command-buffers-to-the-first-frame-second-wave), items 15–20 and 25–27 (item 3 below). The list below is what this note contributed.
 
 What the note gives the PM4 and submission issues:
 
