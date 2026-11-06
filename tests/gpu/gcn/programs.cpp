@@ -49,8 +49,10 @@ fs::path programs_dir() {
     return BB_GCN_PROGRAMS_DIR;
 }
 
-unsigned program_user_sgprs(std::string_view name) {
-    return name.starts_with("mem_") ? 13 : 5;
+std::uint32_t program_pgm_rsrc2(std::string_view name) {
+    const std::uint32_t user_sgprs = name.starts_with("mem_") ? 13 : 5;
+    constexpr std::uint32_t lds_size = 24;  // in units of 512 bytes
+    return user_sgprs << 1 | lds_size << 15;
 }
 
 std::vector<std::string> program_names() {

@@ -25,7 +25,15 @@ using bb::gcn::ShaderKey;
 using bb::gcn::translate;
 
 constexpr std::uint32_t s_endpgm = sopp(1);
-const ShaderKey key5 = {.pgm_rsrc2 = 5u << 1};  // 5 user SGPRs, s5 and up for masks
+
+// A DS instruction: the opcode, the address VGPR, data0, data1, the 16-bit offset and the GDS bit.
+std::vector<std::uint32_t> ds(unsigned op, unsigned vdst, unsigned addr, unsigned data0 = 0,
+                              unsigned data1 = 0, unsigned offset = 0, bool gds = false) {
+    return {0xd8000000u | op << 18 | unsigned{gds} << 17 | offset,
+            vdst << 24 | data1 << 16 | data0 << 8 | addr};
+}
+constexpr unsigned ds_write_b32 = 13, ds_swizzle_b32 = 53, ds_read_b32 = 54, ds_add_u64 = 64;
+const ShaderKey key5 = {.pgm_rsrc2 = 5u << 1 | 24u << 15};  // 5 user SGPRs, 12 KB of LDS
 
 // Whether the module declares the execution mode MaximallyReconvergesKHR.
 bool maximally_reconverges(const std::vector<std::uint32_t>& spirv) {
@@ -47,20 +55,21 @@ TEST(GcnTranslate, ProgramsPassSpirvVal) {
     for (const auto& name : program_names()) {
         SCOPED_TRACE(name);
         const auto translation =
-            translate(program_words(name), {}, {.pgm_rsrc2 = program_user_sgprs(name) << 1});
+            translate(program_words(name), {}, {.pgm_rsrc2 = program_pgm_rsrc2(name)});
         EXPECT_EQ(validate(translation.spirv), "");
-        // ballots and any(...) over the subgroup, for the SCC after a lane mask operation
+        // ballots and any(...) over the subgroup, for the SCC after a lane mask operation, and the
+        // LDS (whose accesses wait for the subgroup)
         EXPECT_EQ(translation.interface.wave_size_dependent,
                   name == "cross_lane" || name == "mask_exec" || name == "mask_scc" ||
-                      name == "mask_branch");
+                      name == "mask_branch" || name.starts_with("lds_"));
         // s[8:9] of cross_lane; the mask programs keep only lane masks in their mask pairs
         EXPECT_EQ(translation.interface.mask_round_trip, name == "cross_lane");
     }
 }
 
-// Ballots, v_readfirstlane_b32, v_readlane_b32 and the branches on VCC and EXEC make a shader
-// depend on the wave size and declare maximal reconvergence; the lane-local v_mbcnt with a
-// constant mask, v_writelane_b32, s_cmp and the branches on SCC don't.
+// Ballots, v_readfirstlane_b32, v_readlane_b32, the branches on VCC and EXEC and LDS accesses make
+// a shader depend on the wave size and declare maximal reconvergence; the lane-local v_mbcnt with
+// a constant mask, v_writelane_b32, s_cmp and the branches on SCC don't.
 TEST(GcnTranslate, WaveSizeDependence) {
     const auto dependent = [](std::vector<std::uint32_t> code) {
         code.push_back(s_endpgm);
@@ -82,6 +91,7 @@ TEST(GcnTranslate, WaveSizeDependence) {
     for (const unsigned op : {6, 7, 8, 9}) {  // s_cbranch_vccz, vccnz, execz, execnz
         EXPECT_TRUE(dependent({sopp(op, 1), sopp(0)})) << op;
     }
+    EXPECT_TRUE(dependent(ds(ds_read_b32, 1, 0)));           // ds_read_b32 v1, v0 (subgroup barrier)
 }
 
 // A value written to VCC or an SGPR mask pair and read back as a value sets mask_round_trip, also
@@ -190,6 +200,26 @@ TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
     EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 1u << 7}),  // TGID_X_EN
               "COMPUTE_PGM_RSRC2 0x80 is not supported yet at offset 0x0 (word 0x00000000)");
     EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 5u << 1 | 4u << 15}), "no error");  // LDS_SIZE
+    const auto with_ds = [](std::vector<std::uint32_t> inst) {
+        inst.push_back(s_endpgm);
+        return inst;
+    };
+    EXPECT_EQ(error(with_ds(ds(ds_swizzle_b32, 1, 0, 0, 0, 0x8000))),
+              "unsupported instruction ds_swizzle_b32 at offset 0x0 (word 0xd8d48000)");
+    EXPECT_EQ(error(with_ds(ds(ds_add_u64, 0, 0, 2))),
+              "unsupported instruction ds_add_u64 at offset 0x0 (word 0xd9000000)");
+    EXPECT_EQ(error(with_ds(ds(ds_read_b32, 1, 0, 0, 0, 0, true))),
+              "GDS is not supported yet at offset 0x0 (word 0xd8da0000)");
+    // LDS_SIZE counts 128 dwords: none, the most (64 KB), and one unit more
+    const auto lds = [](unsigned units) {
+        return ShaderKey{.pgm_rsrc2 = 5u << 1 | units << 15};
+    };
+    const auto write = with_ds(ds(ds_write_b32, 0, 0, 1));
+    EXPECT_EQ(error(write, lds(0)),
+              "LDS_SIZE of 0 dwords is not supported at offset 0x0 (word 0xd8340000)");
+    EXPECT_EQ(error(write, lds(129)),
+              "LDS_SIZE of 16512 dwords is not supported at offset 0x0 (word 0xd8340000)");
+    EXPECT_EQ(error(write, lds(128)), "no error");
     EXPECT_EQ(error({sop1(4, 0, 255), 1, s_endpgm}),  // s_mov_b64 s[0:1], 1 (a literal)
               "64-bit literals are not supported yet at offset 0x0 (word 0xbe8004ff)");
     EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 5u << 1, .num_threads = {0, 1, 1}}),

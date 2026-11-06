@@ -32,8 +32,9 @@ struct ShaderKey {
     std::uint32_t pgm_rsrc1 = 0;
     // COMPUTE_PGM_RSRC2. USER_SGPR (at most 16) gives the user data in s0 and up; v0 holds the
     // thread ID in X. The fields that add initial registers (SCRATCH_EN, TGID_*_EN, TG_SIZE_EN,
-    // TIDIG_COMP_CNT) are rejected so far. The others (TRAP_PRESENT, EXCP_EN_MSB, LDS_SIZE,
-    // EXCP_EN) don't change the initial registers and are ignored.
+    // TIDIG_COMP_CNT) are rejected so far. LDS_SIZE sizes the LDS (a DS instruction with none is
+    // an error). The others (TRAP_PRESENT, EXCP_EN_MSB, EXCP_EN) don't change the initial
+    // registers and are ignored.
     std::uint32_t pgm_rsrc2 = 0;
     // NUM_THREAD_FULL of COMPUTE_NUM_THREAD_X, _Y and _Z: the workgroup size.
     std::array<std::uint32_t, 3> num_threads = {64, 1, 1};
@@ -43,7 +44,7 @@ struct ShaderKey {
 struct ShaderInterface {
     // The sources of the buffer descriptors the program uses (see ResourceSource).
     std::vector<ResourceSource> buffers;
-    bool wave_size_dependent = false;  // the result can differ in lane-local mode
+    bool wave_size_dependent = false;  // the result can differ in lane-local mode (also: LDS)
     // VCC or an SGPR mask pair is written as a value and read back as a value (flow-insensitive).
     // The value survives only in 64-lane subgroups: smaller ones lose the other lanes' bits.
     bool mask_round_trip = false;

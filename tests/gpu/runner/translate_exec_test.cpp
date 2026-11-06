@@ -47,16 +47,19 @@ protected:
         }
     }
 
-    // Runs the program with user_data = {output address, then `inputs`} and returns the first
-    // `words` dwords of the guest memory, 0x3000 bytes with the table of the memory programs
-    // (data_word) at data_offset. `pgm_rsrc1` is the key's float mode.
+    // Runs the program in one workgroup of `threads` lanes with user_data = {output address, then
+    // `inputs`} and returns the first `words` dwords of the guest memory, at least 0x3000 bytes
+    // with the table of the memory programs (data_word) at data_offset. `pgm_rsrc1` is the key's
+    // float mode.
     std::vector<std::uint32_t> run(std::string_view name, std::vector<std::uint32_t> inputs,
-                                   std::uint32_t words, std::uint32_t pgm_rsrc1 = 0) {
+                                   std::uint32_t words, std::uint32_t pgm_rsrc1 = 0,
+                                   std::uint32_t threads = lanes) {
         const auto translation = bb::gcn::translate(
             bb::test::gcn::program_words(name), {},
             {.pgm_rsrc1 = pgm_rsrc1,
-             .pgm_rsrc2 = bb::test::gcn::program_user_sgprs(name) << 1});
-        auto memory = runner_->guest_memory(base, 0x3000);
+             .pgm_rsrc2 = bb::test::gcn::program_pgm_rsrc2(name),
+             .num_threads = {threads, 1, 1}});
+        auto memory = runner_->guest_memory(base, std::max<std::size_t>(0x3000, words * 4));
         for (std::uint32_t i = 0; i < 0x200; ++i) {
             const std::uint32_t word = data_word(i);
             std::memcpy(memory.data() + data_offset + 4 * i, &word, 4);
@@ -476,6 +479,48 @@ TEST_F(TranslateExec, ScalarCompares) {
     for (std::uint32_t i = 0; i < lanes; ++i) {
         EXPECT_EQ(out[i], mask(s2, s3)) << "lane " << i;
         EXPECT_EQ(out[lanes + i], mask(s3, s3)) << "lane " << i;
+    }
+}
+
+// LDS reads and writes in two waves: dwords, the pair and st64 forms of 32 and 64 bits, 96-bit
+// accesses, and the barrier that makes the other wave's writes visible. Stage k is out[128k + i].
+TEST_F(TranslateExec, LdsReadWrite) {
+    constexpr std::uint32_t n = 128;
+    const auto out = run("lds_rw", {}, 19 * n, 0, n);
+    for (std::uint32_t i = 0; i < n; ++i) {
+        SCOPED_TRACE(testing::Message() << "lane " << i);
+        EXPECT_EQ(out[i], 5 * (n - 1 - i) + 7);
+        EXPECT_EQ(out[n + i], 5 * i + 7);
+        EXPECT_EQ(out[2 * n + i], i);
+        EXPECT_EQ(out[3 * n + i], i);  // read2 with offset0:1 reads the second dword first
+        EXPECT_EQ(out[4 * n + i], 5 * i + 7);
+        EXPECT_EQ(out[5 * n + i], 5 * i + 7);
+        EXPECT_EQ(out[6 * n + i], i);
+        // write2st64_b64 with offsets 0 and 2 (512 bytes each) read back by read2_b64 with offsets
+        // 0 and 128 (8 bytes each), then write2_b64 with the pairs swapped read by read2st64_b64
+        const std::uint32_t first[4] = {5 * i + 7, i, 5 * i + 0x107, 2 * i};
+        const std::uint32_t swapped[4] = {5 * i + 0x107, 2 * i, 5 * i + 7, i};
+        for (std::uint32_t k = 0; k < 4; ++k) {
+            EXPECT_EQ(out[(7 + k) * n + i], first[k]) << "read2_b64 dword " << k;
+            EXPECT_EQ(out[(11 + k) * n + i], swapped[k]) << "read2st64_b64 dword " << k;
+        }
+        // write_b96 and write_b64 at 16i (the third dword is replaced), read_b96 at 16i, and the
+        // fourth dword by read_b32
+        EXPECT_EQ(out[15 * n + i], 5 * i + 7);
+        EXPECT_EQ(out[16 * n + i], i);
+        EXPECT_EQ(out[17 * n + i], i + 0x2000);
+        EXPECT_EQ(out[18 * n + i], i + 0x3000);
+    }
+}
+
+// Lanes of one wave exchange data through the LDS with no barrier: a read sees the neighbour's
+// earlier write and not its later one. Lavapipe's subgroups are 8 lanes, and the pair is inside
+// one.
+TEST_F(TranslateExec, LdsBetweenLanesOfAWave) {
+    const auto out = run("lds_wave", {}, 2 * lanes);
+    for (std::uint32_t i = 0; i < lanes; ++i) {
+        EXPECT_EQ(out[i], (i ^ 1) + 7) << "lane " << i;
+        EXPECT_EQ(out[lanes + i], i + 107) << "lane " << i;
     }
 }
 

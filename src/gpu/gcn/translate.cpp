@@ -1,8 +1,9 @@
 // GCN to SPIR-V: one invocation per lane, the registers as function variables, and EXEC as
 // predication (docs/design/graphics.md, "Execution model"). The instruction semantics follow the
-// Sea Islands ISA manual (scalar and vector ALU operations, FLAT); the compute stage's initial
-// registers follow COMPUTE_PGM_RSRC2 (Sea Islands register reference). Cross-lane operations run
-// over the subgroup in lane-local mode, at the subgroup's wave position (subgroup_base).
+// Sea Islands ISA manual (scalar and vector ALU operations, FLAT, DS on the LDS); the compute
+// stage's initial registers follow COMPUTE_PGM_RSRC2 (Sea Islands register reference). Cross-lane
+// operations run over the subgroup in lane-local mode, at the subgroup's wave position
+// (subgroup_base).
 
 #include "gpu/gcn/translate.hpp"
 
@@ -22,6 +23,7 @@
 #include "gpu/gcn/cfg.hpp"
 #include "gpu/gcn/descriptors.hpp"
 #include "gpu/gcn/gcn.hpp"
+#include "gpu/gcn/lds.hpp"
 #include "gpu/gcn/spirv_builder.hpp"
 #include "gpu/gcn/structurize.hpp"
 
@@ -38,6 +40,16 @@ using SC = spv::StorageClass;
 // are not supported yet.
 constexpr unsigned rsrc2_user_sgpr_shift = 1;
 constexpr std::uint32_t rsrc2_unsupported = 1u << 0 | 0xfu << 7 | 3u << 11;
+
+// LDS_SIZE in bits 15-23 of COMPUTE_PGM_RSRC2, in units of 128 dwords (512 bytes). shadPS4's
+// regs_shader.h says "lds_dwords is in units of 128 dwords". The LDS of one workgroup is at most
+// 64 KB.
+constexpr unsigned rsrc2_lds_size_shift = 15;
+constexpr std::uint32_t lds_dwords_per_unit = 128;
+constexpr std::uint32_t lds_max_dwords = 16384;
+
+// SOPP opcode of s_barrier.
+constexpr std::uint16_t op_barrier = 10;
 
 // SOPP opcodes of the conditional branches on SCC.
 constexpr std::uint16_t op_cbranch_scc0 = 4;
@@ -212,7 +224,8 @@ public:
         if (uses_subgroup_) {
             // A subgroup operation can follow a branch that isn't uniform in the subgroup (the
             // predicated store of flat()). Only maximal reconvergence promises that the
-            // invocations meet again at its merge, so that a ballot sees all of them.
+            // invocations meet again at its merge, so that a ballot or a subgroup barrier sees
+            // all of them.
             b_.extension("SPV_KHR_maximal_reconvergence");
             b_.execution_mode(main, spv::ExecutionMode::MaximallyReconvergesKHR);
         }
@@ -359,6 +372,10 @@ private:
         for (std::uint32_t i = block.first; i < block.first + block.count; ++i) {
             const Instruction& inst = program_[i];
             inst_ = &inst;
+            if (inst.format == Format::sopp && inst.opcode == op_barrier) {
+                barrier();
+                continue;
+            }
             if (branch_target(inst) || is_endpgm(inst) || inst.name == "s_nop" ||
                 inst.name == "s_waitcnt") {
                 continue;
@@ -385,6 +402,9 @@ private:
                 break;
             case Format::mubuf:
                 buffer_memory(inst);
+                break;
+            case Format::ds:
+                ds(inst);
                 break;
             default:
                 unsupported();
@@ -1089,6 +1109,108 @@ private:
                      {high, b_.op(Op::OpUConvert, u64_, {read(o, 0)})});
     }
 
+    // s_barrier: every wave of the workgroup waits, and its LDS writes become visible.
+    void barrier() {
+        b_.op_void(Op::OpControlBarrier,
+                   {b_.constant_u32(spirv_word(spv::Scope::Workgroup)),
+                    b_.constant_u32(spirv_word(spv::Scope::Workgroup)),
+                    b_.constant_u32(spirv_word(spv::MemorySemanticsMask::AcquireRelease) |
+                                    spirv_word(spv::MemorySemanticsMask::WorkgroupMemory))});
+    }
+
+    // The DS instructions of a wave reach the LDS in program order, so a lane sees what the other
+    // lanes wrote with the earlier ones, with no s_barrier. SPIR-V gives no such order between
+    // invocations of a subgroup, so every DS instruction waits for the earlier ones of the
+    // subgroup first. That equals the wave only in exact mode, and the shader says so
+    // (ShaderInterface::wave_size_dependent). The barrier needs the whole subgroup, also after
+    // the guarded write of lds_write(), so it declares maximal reconvergence like cross_lane().
+    void wave_sync() {
+        uses_subgroup_ = true;
+        b_.op_void(Op::OpControlBarrier,
+                   {b_.constant_u32(spirv_word(spv::Scope::Subgroup)),
+                    b_.constant_u32(spirv_word(spv::Scope::Workgroup)),
+                    b_.constant_u32(spirv_word(spv::MemorySemanticsMask::AcquireRelease) |
+                                    spirv_word(spv::MemorySemanticsMask::WorkgroupMemory))});
+    }
+
+    // DS on the LDS (docs/design/graphics.md, "Resources and memory"). The address is in a VGPR
+    // plus the offset field. An access outside the LDS reads 0 and is dropped; the clamp that M0
+    // sets on the hardware is ignored. Writes and atomics run only in active lanes.
+    void ds(const Instruction& inst) {
+        const auto d = detail::classify_ds(inst.name);
+        if (!d) {
+            unsupported();
+        }
+        if ((inst.flags & flag::gds) != 0) {
+            fail("GDS is not supported yet");
+        }
+        if (d->kind == detail::DsKind::nop) {
+            return;
+        }
+        if (d->kind == detail::DsKind::atomic || d->bytes < 4) {
+            unsupported();
+        }
+        wave_size_dependent_ = true;
+        wave_sync();
+        const Id address = read(inst.src[0]);
+        const unsigned dwords = std::max(1u, d->bytes / 4u);
+        for (unsigned n = 0; n < (d->pair ? 2u : 1u); ++n) {
+            const unsigned field = d->pair ? (inst.mem_offset >> (8 * n)) & 0xff : inst.mem_offset;
+            const unsigned offset = d->pair ? field * d->bytes * (d->stride64 ? 64 : 1) : field;
+            const Id at = b_.op(Op::OpIAdd, u32_, {address, b_.constant_u32(offset)});
+            for (unsigned k = 0; k < dwords; ++k) {
+                if (d->kind == detail::DsKind::read) {
+                    Operand dst = inst.dst[0];
+                    dst.code += n * dwords + k;
+                    write_vector(dst, lds_read(at, k));
+                } else {
+                    lds_write(at, read(inst.src[1 + n], k), k);
+                }
+            }
+        }
+    }
+
+    unsigned lds_dwords() {
+        const unsigned dwords = ((key_.pgm_rsrc2 >> rsrc2_lds_size_shift) & 0x1ff) *
+                                lds_dwords_per_unit;
+        if (dwords == 0 || dwords > lds_max_dwords) {
+            fail(std::format("LDS_SIZE of {} dwords is not supported", dwords));
+        }
+        return dwords;
+    }
+
+    // The dword of the LDS at byte `address` plus `dword` dwords, and whether it is in range. The
+    // pointer is valid even when it is not.
+    struct LdsRef {
+        Id pointer, in_range;
+    };
+    LdsRef lds_ref(Id address, unsigned dword) {
+        if (lds_ == 0) {
+            const Id array = b_.type_array(u32_, b_.constant_u32(lds_dwords()));
+            lds_ = b_.variable(b_.type_pointer(SC::Workgroup, array), SC::Workgroup);
+            interface_.push_back(lds_);
+        }
+        const Id index = b_.op(Op::OpIAdd, u32_,
+                               {b_.op(Op::OpShiftRightLogical, u32_, {address, b_.constant_u32(2)}),
+                                b_.constant_u32(dword)});
+        const Id in_range = b_.op(Op::OpULessThan, bool_, {index, b_.constant_u32(lds_dwords())});
+        const Id safe = b_.op(Op::OpSelect, u32_, {in_range, index, b_.constant_u32(0)});
+        return {b_.op(Op::OpAccessChain, b_.type_pointer(SC::Workgroup, u32_), {lds_, safe}),
+                in_range};
+    }
+
+    // Dword `k` of an access at `address`.
+    Id lds_read(Id address, unsigned k) {
+        const auto [pointer, in_range] = lds_ref(address, k);
+        return b_.op(Op::OpSelect, u32_, {in_range, load(u32_, pointer), b_.constant_u32(0)});
+    }
+
+    void lds_write(Id address, Id value, unsigned k) {
+        const auto [pointer, in_range] = lds_ref(address, k);
+        const Id guard = b_.op(Op::OpLogicalAnd, bool_, {active(), in_range});
+        when(guard, [&] { b_.op_void(Op::OpStore, {pointer, value}); });
+    }
+
     // Dword `dword` of a source operand, as a u32.
     Id read(const Operand& o, unsigned dword = 0) {
         switch (o.kind) {
@@ -1341,7 +1463,7 @@ private:
     Cfg cfg_;
     SpirvBuilder b_;
     Id bool_ = 0, u32_ = 0, u64_ = 0;
-    Id lane_ = 0, bias_ = 0;
+    Id lane_ = 0, bias_ = 0, lds_ = 0;
     std::vector<Id> interface_;
     std::map<unsigned, Id> sgprs_, vgprs_, bools_;  // bools_: masks and SCC by operand code
     std::map<std::uint32_t, Id> builtins_;
