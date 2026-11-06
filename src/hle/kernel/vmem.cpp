@@ -93,6 +93,21 @@ bool covered(std::uintptr_t start, std::uintptr_t end, std::optional<bool> reser
     return false;
 }
 
+// Reserves [start, end) again over the guest mappings there. A failed MAP_FIXED may already have
+// unmapped the range (ENOMEM at the host's map count limit, for one), so on failure the table
+// drops it: the host may reuse it, and no later guest map or unmap may touch that memory. A guest
+// mapping that survived on the host is only leaked. Returns 0 or errno. Needs table_mutex.
+int reserve_again(std::uintptr_t start, std::uintptr_t end) {
+    if (::mmap(reinterpret_cast<void*>(start), end - start, PROT_NONE,
+               reservation_flags | MAP_FIXED, -1, 0) != MAP_FAILED) {
+        return 0;
+    }
+    const int error = errno;
+    log("reserve {:#x}-{:#x} again: failed, the range is dropped", start, end);
+    erase_range(start, end);
+    return error;
+}
+
 // The host protection for a guest protection, or nothing for unknown bits.
 std::optional<int> host_protection(int guest) {
     const Flags host = host_prot(guest & ~prot_extra);
@@ -139,16 +154,8 @@ int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
         // MAP_FIXED replaces the reservation in one call, so no other mapping can come between.
         at = ::mmap(hint, m.length, *prot, m.host_flags | MAP_FIXED, m.fd, m.fd_offset);
         if (at == MAP_FAILED) {
-            // A failed MAP_FIXED may already have unmapped the range (ENOMEM at the host's map
-            // count limit, for one), so reserve it again. If that fails too, the range is no
-            // longer reserved on the host, and the table must not say it is: a later map into
-            // it would replace whatever the host put there in the meantime.
             const int error = errno;
-            if (::mmap(hint, m.length, PROT_NONE, reservation_flags | MAP_FIXED, -1, 0) ==
-                MAP_FAILED) {
-                log("map {:#x}-{:#x}: failed, and the reservation is lost", m.address, end);
-                erase_range(m.address, end);
-            }
+            reserve_again(m.address, end);  // the failed MAP_FIXED may have unmapped the range
             return error;
         }
         erase_range(m.address, end);
@@ -219,9 +226,8 @@ int restore_reservation(std::uintptr_t start, std::uint64_t length) {
     if (const int error = check_range(start, length, end)) {
         return error;
     }
-    if (::mmap(reinterpret_cast<void*>(start), end - start, PROT_NONE,
-               reservation_flags | MAP_FIXED, -1, 0) == MAP_FAILED) {
-        return errno;
+    if (const int error = reserve_again(start, end)) {
+        return error;
     }
     erase_range(start, end);
     table.emplace(start, Region{start, end, 0, 0, 0, "reserved", true});
