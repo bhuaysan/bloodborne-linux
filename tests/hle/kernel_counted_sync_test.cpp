@@ -140,10 +140,19 @@ TEST(KernelCountedSync, PostWakesWaitersInTheOrderOfTheirRequests) {
 TEST(KernelCountedSync, TimedOutHeadLetsTheNextRequestThrough) {
     const std::uint64_t h = make(1, 5);
     std::atomic<int> result{-1};
-    const std::uint32_t timeout = 30000;
-    std::thread head([&] { EXPECT_EQ(wait(h, 3, &timeout), sce_error(etimedout)); });
-    std::this_thread::sleep_for(10ms);
+    const std::uint32_t timeout = 200000;
+    std::atomic<bool> head_done{false};
+    std::thread head([&] {
+        EXPECT_EQ(wait(h, 3, &timeout), sce_error(etimedout));
+        head_done = true;
+    });
+    std::this_thread::sleep_for(20ms);
+    // The queued head holds back a request that the count would cover.
+    EXPECT_EQ(try_wait(h, 1), sce_error(ebusy));
     std::thread next([&] { result = wait(h, 1, nullptr); });
+    std::this_thread::sleep_for(20ms);
+    EXPECT_FALSE(head_done);
+    EXPECT_EQ(result, -1);
     head.join();
     next.join();
     EXPECT_EQ(result, 0);
