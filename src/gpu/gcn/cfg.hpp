@@ -1,5 +1,4 @@
-// Control flow graph of a GCN program and its analysis (docs/design/graphics.md, "Control
-// flow").
+// Control flow graph of a GCN program and its analysis (docs/design/graphics.md, "Control flow").
 #pragma once
 
 #include <cstdint>

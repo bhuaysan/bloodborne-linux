@@ -144,9 +144,8 @@ Cfg build_cfg(std::span<const Instruction> program) {
             throw GcnError("control runs off the end of the program", last.offset, 0);
         }
     }
-    // The order doesn't matter. A skip nested in another one's region keeps its taken edge
-    // inside that region or on its target, which the outer check allows either way. Two
-    // overlapping skips each give the other a second entry or exit, so both stay branches.
+    // The order doesn't matter: a nested skip's taken edge stays inside the outer region or on
+    // its target either way, and two overlapping skips each give the other a second entry or exit.
     for (std::uint32_t b = 0; b < cfg.blocks.size(); ++b) {
         Block& block = cfg.blocks[b];
         const Instruction& last = program[block.first + block.count - 1];
