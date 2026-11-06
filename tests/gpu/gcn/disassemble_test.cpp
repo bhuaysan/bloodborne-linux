@@ -42,7 +42,10 @@ const std::vector<Case> cases = {
     {{sopk(18, 0, 0x0000)}, "s_getreg_b32 s0, hwreg(0, 0, 1)"},
     {{sopk(18, 0, 0xffff)}, "s_getreg_b32 s0, hwreg(63, 31, 32)"},
     {{sopk(19, 3, 4 | 4 << 6 | 7 << 11)}, "s_setreg_b32 hwreg(HW_REG_HW_ID, 4, 8), s3"},
-    {{sopk(21, 0, 9 | 3 << 11), 3}, "s_setreg_imm32_b32 hwreg(9, 0, 4), 0x3"},
+    {{sopk(21, 0, 9 | 3 << 11), 3}, "s_setreg_imm32_b32 hwreg(9, 0, 4), 3"},
+    {{sopk(21, 0, 1), 0xfffffff0}, "s_setreg_imm32_b32 hwreg(HW_REG_MODE, 0, 1), -16"},
+    {{sopk(21, 0, 1), 0x41}, "s_setreg_imm32_b32 hwreg(HW_REG_MODE, 0, 1), 0x41"},
+    {{sopk(21, 0, 1), 0x3f800000}, "s_setreg_imm32_b32 hwreg(HW_REG_MODE, 0, 1), 0x3f800000"},
     {{sopk(17, 4, 0xffff)}, "s_cbranch_i_fork s[4:5], -1"},
     // SOP1: register names of every kind, constants of both sizes.
     {{sop1(4, code::vcc, code::exec)}, "s_mov_b64 vcc, exec"},
@@ -77,7 +80,9 @@ const std::vector<Case> cases = {
     // SOPP: counts, branches, s_waitcnt and s_sendmsg.
     {{sopp(1)}, "s_endpgm"},
     {{sopp(0, 7)}, "s_nop 7"},
-    {{sopp(18, 0xffff)}, "s_trap 65535"},
+    {{sopp(0, 64)}, "s_nop 64"},  // counts above 64 print in hex
+    {{sopp(13, 65)}, "s_sethalt 0x41"},
+    {{sopp(18, 0xffff)}, "s_trap 0xffff"},
     {{sopp(4, 0x0002)}, "s_cbranch_scc0 2"},
     {{sopp(2, 0xffff)}, "s_branch -1"},
     {{sopp(12, 0x007f)}, "s_waitcnt lgkmcnt(0)"},
@@ -130,9 +135,9 @@ TEST(GcnDisassemble, AssemblesToTheSameWords) {
     for (const Case& c : cases) {
         lines.push_back(c.text);
     }
-    const auto words = assemble(lines);
+    const auto assembled = assemble(lines);
     for (std::size_t i = 0; i < cases.size(); ++i) {
-        EXPECT_EQ(words[i], cases[i].words) << cases[i].text;
+        EXPECT_EQ(assembled[i].words, cases[i].words) << cases[i].text;
     }
 }
 

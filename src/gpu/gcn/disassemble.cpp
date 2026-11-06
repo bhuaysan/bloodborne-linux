@@ -149,9 +149,27 @@ std::string sendmsg(std::uint32_t v) {
     return std::to_string(v);
 }
 
-// `may_inline`: the operand field could hold an inline constant instead of the literal, so a
-// literal with an inline value needs lit() to keep its encoding.
-std::string operand(const Operand& op, bool may_inline) {
+// A value as LLVM prints the 16-bit counts and the literal of s_setreg_imm32_b32: the integers
+// of the inline constants (-16 to 64) in decimal, others in hex. LLVM prints the float
+// constants' patterns as floats there too, but reads such a float back as another value, so they
+// stay in hex.
+std::string immediate(std::uint32_t value) {
+    if (value <= 64 || value >= 0xfffffff0) {
+        return std::to_string(static_cast<std::int32_t>(value));
+    }
+    return std::format("{:#x}", value);
+}
+
+// How a literal prints.
+enum class Literal {
+    lit,        // SOP2, SOP1, SOPC: the field could hold an inline constant instead, so a literal
+                // with an inline value needs lit() to keep its encoding
+    immediate,  // s_setreg_imm32_b32: always a literal, printed like LLVM prints it
+    hex,        // SMRD offsets: LLVM encodes 255 or less in the immediate form, with or without
+                // lit()
+};
+
+std::string operand(const Operand& op, Literal literal) {
     switch (op.kind) {
     case OperandKind::none:
         break;
@@ -163,7 +181,10 @@ std::string operand(const Operand& op, bool may_inline) {
         }
         return std::to_string(static_cast<std::int32_t>(op.value));
     case OperandKind::literal:
-        if (may_inline && inlinable(op.value, op.dwords)) {
+        if (literal == Literal::immediate) {
+            return immediate(op.value);
+        }
+        if (literal == Literal::lit && inlinable(op.value, op.dwords)) {
             return std::format("lit({:#x})", op.value);
         }
         return std::format("{:#x}", op.value);
@@ -171,7 +192,7 @@ std::string operand(const Operand& op, bool may_inline) {
     case OperandKind::simm:
         return std::format("{:#x}", op.value);
     case OperandKind::count:
-        return std::to_string(op.value);
+        return immediate(op.value);
     case OperandKind::branch:
         return std::to_string(static_cast<std::int32_t>(op.value));
     case OperandKind::hwreg:
@@ -187,15 +208,14 @@ std::string operand(const Operand& op, bool may_inline) {
 }  // namespace
 
 std::string disassemble(const Instruction& inst) {
-    // The literal of s_setreg_imm32_b32 is part of the encoding, and an SMRD offset of 255 or less
-    // always gets the immediate form in LLVM, with or without lit().
-    const bool may_inline =
-        inst.format == Format::sop2 || inst.format == Format::sop1 || inst.format == Format::sopc;
+    const Literal literal = inst.format == Format::sopk   ? Literal::immediate
+                            : inst.format == Format::smrd ? Literal::hex
+                                                          : Literal::lit;
     std::string out(inst.name);
     const char* separator = " ";
     auto append = [&](const Operand& op) {
         out += separator;
-        out += operand(op, may_inline);
+        out += operand(op, literal);
         separator = ", ";
     };
     for (unsigned i = 0; i < inst.num_dst; ++i) {
