@@ -211,7 +211,8 @@ TEST(GcnTranslate, CompareSwapLoopsStartWithAnAtomicLoad) {
     const auto atomic_loads = [](std::string_view name) {
         return count_ops(translate(program_words(name), {}, key5).spirv, spv::Op::OpAtomicLoad);
     };
-    EXPECT_EQ(atomic_loads("lds_atomic"), 4u);
+    // inc, dec, rsub (twice: the second runs in lane 0 alone) and mskor
+    EXPECT_EQ(atomic_loads("lds_atomic"), 5u);
     EXPECT_EQ(atomic_loads("lds_rw"), 0u);
 }
 

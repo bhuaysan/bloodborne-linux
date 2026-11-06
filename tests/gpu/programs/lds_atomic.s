@@ -48,6 +48,10 @@ v_mov_b32_e32 v11, 5
 ds_dec_u32 v30, v11 offset:44
 v_mov_b32_e32 v11, 30
 ds_rsub_u32 v30, v11 offset:48
+v_cmp_eq_u32_e32 vcc, 0, v0         ; one more rsub from lane 0 alone: the 128 above undo each other
+s_mov_b64 exec, vcc
+ds_rsub_u32 v30, v11 offset:48
+s_mov_b64 exec, -1
 v_mov_b32_e32 v11, 0x00ff00ff
 v_mov_b32_e32 v13, 0x12003400
 ds_mskor_b32 v30, v11, v13 offset:52
