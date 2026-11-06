@@ -9,6 +9,8 @@
 #include <span>
 #include <string>
 
+#include "gpu/gcn/translate.hpp"
+
 namespace bb::test::vk {
 
 // What the execution tests need to know about the device.
@@ -26,12 +28,11 @@ struct DeviceInfo {
     std::string describe() const;  // one line per property
 };
 
-// The layout of the draw block that the push constant points to, as the shader reads it
-// (docs/design/graphics.md, "Per-draw data"): user_data[16], then two 64-bit addresses.
-inline constexpr std::uint32_t draw_user_data_offset = 0;
-inline constexpr std::uint32_t draw_address_bias_offset = 64;
-inline constexpr std::uint32_t draw_code_address_offset = 72;
-inline constexpr std::uint32_t draw_block_size = 80;
+// The layout of the draw block, as the translator reads it.
+using bb::gcn::draw_address_bias_offset;
+using bb::gcn::draw_block_size;
+using bb::gcn::draw_code_address_offset;
+using bb::gcn::draw_user_data_offset;
 
 struct DrawBlock {
     std::array<std::uint32_t, 16> user_data{};
