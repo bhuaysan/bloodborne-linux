@@ -129,18 +129,29 @@ int reserve_again(std::uintptr_t start, std::uintptr_t end) {
     return error;
 }
 
-// Gives guest memory back: unmaps the part outside the window and reserves the part in it again
-// (reserve_again's rules), so the window keeps its whole range. Returns 0 or errno. Needs
-// table_mutex.
+// Gives guest memory back: unmaps the parts outside the window and reserves the part in it again
+// (reserve_again's rules), so the window keeps its whole range. The table drops each part outside
+// the window as soon as it is unmapped, so a failure on a later part leaves no region over memory
+// the host may reuse. Returns 0 or errno. Needs table_mutex.
 int release(std::uintptr_t start, std::uintptr_t end) {
     const std::uintptr_t low = std::clamp(start, window_start, window_end);
     const std::uintptr_t high = std::clamp(end, window_start, window_end);
-    if (start < low && ::munmap(ptr(start), std::min(end, window_start) - start) != 0) {
-        return errno;
+    const auto unmap_outside = [](std::uintptr_t from, std::uintptr_t to) {
+        if (::munmap(ptr(from), to - from) != 0) {
+            return errno;
+        }
+        erase_range(from, to);
+        return 0;
+    };
+    if (start < low) {
+        if (const int error = unmap_outside(start, std::min(end, window_start))) {
+            return error;
+        }
     }
-    if (high < end && ::munmap(ptr(std::max(start, window_end)),
-                               end - std::max(start, window_end)) != 0) {
-        return errno;
+    if (high < end) {
+        if (const int error = unmap_outside(std::max(start, window_end), end)) {
+            return error;
+        }
     }
     return low < high ? reserve_again(low, high) : 0;
 }

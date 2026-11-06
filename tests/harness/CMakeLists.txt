@@ -28,5 +28,7 @@ set_tests_properties(harness_eboot_test PROPERTIES SKIP_REGULAR_EXPRESSION "\\[ 
 add_executable(harness_load_set_test load_set_test.cpp main.cpp)
 target_link_libraries(harness_load_set_test PRIVATE bbeboottest bbgame bbhle bbeboottls
                                                     bb_warnings)
+# Its tests map guest memory in the guest window (main.cpp).
+target_compile_definitions(harness_load_set_test PRIVATE BB_TEST_GUEST_WINDOW)
 add_test(NAME harness_load_set_test COMMAND harness_load_set_test)
 set_tests_properties(harness_load_set_test PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
