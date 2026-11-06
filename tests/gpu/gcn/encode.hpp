@@ -56,6 +56,25 @@ inline std::vector<std::uint32_t> mubuf(unsigned op, unsigned vdata, unsigned va
                  second(srsrc / 4, 16) | second(soffset, 24) | flags);
 }
 
+// MTBUF: the layout of MUBUF with a 3-bit opcode and the data and numeric formats in its place.
+inline std::vector<std::uint32_t> mtbuf(unsigned op, unsigned vdata, unsigned vaddr,
+                                        unsigned srsrc, unsigned soffset, unsigned offset,
+                                        unsigned dfmt, unsigned nfmt, std::uint64_t flags = 0) {
+    return split(0x3aull << 26 | op << 16 | dfmt << 19 | nfmt << 23 | offset | second(vaddr, 0) |
+                 second(vdata, 8) | second(srsrc / 4, 16) | second(soffset, 24) | flags);
+}
+
+namespace xp {  // EXP
+inline constexpr std::uint64_t compr = 1u << 10, done = 1u << 11, vm = 1u << 12;
+}  // namespace xp
+
+inline std::vector<std::uint32_t> xport(unsigned en, unsigned target, unsigned vsrc0,
+                                      unsigned vsrc1, unsigned vsrc2, unsigned vsrc3,
+                                      std::uint64_t flags = 0) {
+    return split(0x3eull << 26 | en | target << 4 | flags | second(vsrc0, 0) | second(vsrc1, 8) |
+                 second(vsrc2, 16) | second(vsrc3, 24));
+}
+
 // `src0` is the 9-bit operand code (256 + n for vn). `vdst` is a VGPR number, or the operand code
 // of an SGPR destination.
 constexpr std::uint32_t vop1(unsigned op, unsigned vdst, unsigned src0) {

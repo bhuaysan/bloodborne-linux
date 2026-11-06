@@ -252,6 +252,9 @@ Literal literal_rule(const Instruction& inst, unsigned src) {
 }  // namespace
 
 std::string disassemble(const Instruction& inst) {
+    if (inst.format == Format::exp) {
+        return detail::export_text(inst);
+    }
     std::string out(inst.name);
     const char* separator = " ";
     auto append = [&](const Operand& op, Literal literal) {
@@ -268,7 +271,7 @@ std::string disassemble(const Instruction& inst) {
     if (inst.format == Format::ds || inst.format == Format::flat) {
         out += detail::ds_flat_modifiers(inst);
     }
-    if (inst.format == Format::mubuf) {
+    if (inst.format == Format::mubuf || inst.format == Format::mtbuf) {
         out += detail::memory_fields(inst);
     }
     return out;

@@ -1,6 +1,6 @@
-// MUBUF (Sea Islands ISA manual, "Microcode Formats"): its opcode table, written from the opcode
-// list with regular families built in loops, the decoder, and the fields in LLVM's gfx7 syntax.
-// Bits that the manual marks as reserved are ignored.
+// MUBUF, MTBUF and EXP (Sea Islands ISA manual, "Microcode Formats"): the opcode tables, written
+// from the opcode lists with regular families built in loops, the decoders, and the fields in
+// LLVM's gfx7 syntax. Bits that the manual marks as reserved are ignored.
 
 #include <array>
 #include <format>
@@ -86,6 +86,22 @@ const Table& mubuf_table() {
     return table;
 }
 
+// MTBUF has only the typed loads and stores of 1 to 4 components.
+Table make_mtbuf() {
+    Table t;
+    for (unsigned i = 0; i < components.size(); ++i) {
+        const auto n = static_cast<std::uint8_t>(i + 1);
+        set(t, i, std::string("tbuffer_load_format_") + components[i], MemKind::load, n);
+        set(t, 4 + i, std::string("tbuffer_store_format_") + components[i], MemKind::store, n);
+    }
+    return t;
+}
+
+const Table& mtbuf_table() {
+    static const Table table = make_mtbuf();
+    return table;
+}
+
 // Builds the operands of one instruction. Errors name its offset and first word.
 class Operands {
 public:
@@ -136,20 +152,24 @@ private:
 }  // namespace
 
 bool is_memory_encoding(std::uint32_t word) {
-    return bits(word, 26, 6) == 0x38;  // MUBUF
+    const std::uint32_t encoding = bits(word, 26, 6);
+    return encoding == 0x38 || encoding == 0x3a || encoding == 0x3e;  // MUBUF, MTBUF, EXP
 }
 
-Instruction decode_memory(std::span<const std::uint32_t> code, std::size_t index) {
+namespace {
+
+// MUBUF and MTBUF share the layout except for the opcode field and the typed format.
+Instruction decode_buffer(std::span<const std::uint32_t> code, std::size_t index, bool typed) {
     const std::uint32_t w0 = code[index];
     Instruction inst;
     inst.offset = static_cast<std::uint32_t>(index * 4);
     inst.size = 2;
-    inst.format = Format::mubuf;
-    inst.opcode = static_cast<std::uint16_t>(bits(w0, 18, 7));
+    inst.format = typed ? Format::mtbuf : Format::mubuf;
+    inst.opcode = static_cast<std::uint16_t>(typed ? bits(w0, 16, 3) : bits(w0, 18, 7));
     const Operands ops(inst.offset, w0);
-    const Table& table = mubuf_table();
+    const Table& table = typed ? mtbuf_table() : mubuf_table();
     if (inst.opcode >= table.size() || table[inst.opcode].name.empty()) {
-        ops.fail(std::format("unknown MUBUF opcode {}", inst.opcode));
+        ops.fail(std::format("unknown {} opcode {}", typed ? "MTBUF" : "MUBUF", inst.opcode));
     }
     const MemOp& info = table[inst.opcode];
     inst.name = info.name;
@@ -168,7 +188,12 @@ Instruction decode_memory(std::span<const std::uint32_t> code, std::size_t index
     set_if(bits(w0, 13, 1), flag::idxen);
     set_if(bits(w0, 14, 1), flag::glc);
     set_if(bits(w0, 15, 1), flag::addr64);
-    set_if(bits(w0, 16, 1), flag::lds);
+    if (typed) {
+        inst.dfmt = static_cast<std::uint8_t>(bits(w0, 19, 4));
+        inst.nfmt = static_cast<std::uint8_t>(bits(w0, 23, 3));
+    } else {
+        set_if(bits(w0, 16, 1), flag::lds);
+    }
     set_if(bits(w1, 22, 1), flag::slc);
     set_if(bits(w1, 23, 1), flag::tfe);
     const bool lds = inst.flags & flag::lds, tfe = inst.flags & flag::tfe;
@@ -196,10 +221,95 @@ Instruction decode_memory(std::span<const std::uint32_t> code, std::size_t index
     return inst;
 }
 
+// The export targets: mrt0-7 are 0-7, mrtz 8, null 9, pos0-3 12-15 and param0-31 32-63.
+bool valid_target(unsigned t) {
+    return t <= 9 || (t >= 12 && t <= 15) || t >= 32;
+}
+
+// EXP: the target in mem_offset, the four sources in src (a VGPR, or `off` where the enable bit
+// is clear). With `compr` each VGPR holds two 16-bit values and en has a bit per value: the
+// source at position N is then vsrc[N / 2].
+Instruction decode_export(std::span<const std::uint32_t> code, std::size_t index) {
+    const std::uint32_t w0 = code[index];
+    Instruction inst;
+    inst.offset = static_cast<std::uint32_t>(index * 4);
+    inst.size = 2;
+    inst.format = Format::exp;
+    inst.name = "exp";
+    const Operands ops(inst.offset, w0);
+    if (index + 1 >= code.size()) {
+        ops.fail("second dword past the end of the code");
+    }
+    const std::uint32_t w1 = code[index + 1];
+    const unsigned target = bits(w0, 4, 6);
+    if (!valid_target(target)) {
+        ops.fail(std::format("reserved export target {}", target));
+    }
+    inst.mem_offset = static_cast<std::uint16_t>(target);
+    const bool compr = bits(w0, 10, 1) != 0;
+    if (bits(w0, 11, 1)) {
+        inst.flags |= flag::done;
+    }
+    if (compr) {
+        inst.flags |= flag::compr;
+    }
+    if (bits(w0, 12, 1)) {
+        inst.flags |= flag::vm;
+    }
+    for (unsigned i = 0; i < 4; ++i) {
+        const unsigned vsrc = bits(w1, 8 * (compr ? i / 2 : i), 8);
+        inst.src[inst.num_src++] =
+            bits(w0, i, 1) ? ops.vgpr(vsrc, 1) : Operand{OperandKind::off, 0, 0, 0};
+    }
+    return inst;
+}
+
+}  // namespace
+
+Instruction decode_memory(std::span<const std::uint32_t> code, std::size_t index) {
+    switch (bits(code[index], 26, 6)) {
+    case 0x3a:
+        return decode_buffer(code, index, true);
+    case 0x3e:
+        return decode_export(code, index);
+    default:
+        return decode_buffer(code, index, false);
+    }
+}
+
+namespace {
+
+constexpr std::array<const char*, 16> data_formats = {
+    "INVALID",     "8",         "16",          "8_8",         "32",       "16_16",
+    "10_11_11",    "11_11_10",  "10_10_10_2",  "2_10_10_10",  "8_8_8_8",  "32_32",
+    "16_16_16_16", "32_32_32",  "32_32_32_32", "RESERVED_15"};
+constexpr std::array<const char*, 8> num_formats = {"UNORM", "SNORM", "USCALED",   "SSCALED",
+                                                    "UINT",  "SINT",  "SNORM_OGL", "FLOAT"};
+
+// LLVM leaves out the data format 8 and the numeric format UNORM, and the whole field when both
+// are left out.
+std::string typed_format(const Instruction& inst) {
+    constexpr unsigned default_dfmt = 1, default_nfmt = 0;
+    std::string parts;
+    if (inst.dfmt != default_dfmt) {
+        parts += std::string("BUF_DATA_FORMAT_") + data_formats[inst.dfmt & 15];
+    }
+    if (inst.nfmt != default_nfmt) {
+        parts += parts.empty() ? "" : ",";
+        parts += std::string("BUF_NUM_FORMAT_") + num_formats[inst.nfmt & 7];
+    }
+    return parts.empty() ? parts : " format:[" + parts + "]";
+}
+
+}  // namespace
+
 std::string memory_fields(const Instruction& inst) {
     std::string out;
     if (inst.num_src == 0) {
         return out;  // the cache invalidations have no fields
+    }
+    if (inst.format == Format::mtbuf) {
+        out += typed_format(inst);
     }
     auto field = [&](std::uint16_t f, std::string_view name) {
         if (inst.flags & f) {
@@ -217,6 +327,31 @@ std::string memory_fields(const Instruction& inst) {
     field(flag::slc, "slc");
     field(flag::lds, "lds");
     field(flag::tfe, "tfe");
+    return out;
+}
+
+// The whole line of an EXP instruction: the target comes before the sources.
+std::string export_text(const Instruction& inst) {
+    const unsigned t = inst.mem_offset;
+    std::string out = "exp ";
+    if (t <= 7) {
+        out += std::format("mrt{}", t);
+    } else if (t == 8) {
+        out += "mrtz";
+    } else if (t == 9) {
+        out += "null";
+    } else if (t <= 15) {
+        out += std::format("pos{}", t - 12);
+    } else {
+        out += std::format("param{}", t - 32);
+    }
+    for (unsigned i = 0; i < inst.num_src; ++i) {
+        out += i == 0 ? " " : ", ";
+        out += inst.src[i].kind == OperandKind::off ? "off" : std::format("v{}", inst.src[i].code);
+    }
+    out += inst.flags & flag::done ? " done" : "";
+    out += inst.flags & flag::compr ? " compr" : "";
+    out += inst.flags & flag::vm ? " vm" : "";
     return out;
 }
 
