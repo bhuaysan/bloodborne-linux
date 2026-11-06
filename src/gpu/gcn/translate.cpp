@@ -21,6 +21,7 @@
 
 #include <spirv/unified1/GLSL.std.450.h>
 
+#include "gpu/gcn/alu.hpp"
 #include "gpu/gcn/buffer_format.hpp"
 #include "gpu/gcn/cfg.hpp"
 #include "gpu/gcn/descriptors.hpp"
@@ -65,6 +66,12 @@ constexpr std::uint16_t op_cbranch_execnz = 9;
 
 // EXEC as a 64-bit operand, the implicit source and destination of the saveexec forms.
 constexpr Operand exec_operand{.kind = OperandKind::scalar, .dwords = 2, .code = code::exec};
+
+// The SALU operations of scalar_arithmetic() that read their sources as plain values.
+constexpr std::string_view salu_arithmetic[] = {
+    "s_not_b32", "s_cselect_b32", "s_lshl_b32", "s_lshr_b32", "s_ashr_i32", "s_bfe_u32",
+    "s_bfe_i32",
+};
 
 // The bitwise family of the SALU, in the order of its opcodes (s_<name>_b32, _b64, _saveexec_b64).
 constexpr std::string_view bitwise_names[] = {"and", "or", "xor", "andn2", "orn2", "nand", "nor",
@@ -111,7 +118,8 @@ std::optional<Compare> parse_compare(std::string_view name) {
         name = end == std::string_view::npos ? std::string_view() : name.substr(end + 1);
     }
     if (!name.empty() || (part[0] != "v" && part[0] != "s") ||
-        (part[1] != "cmp" && !(part[1] == "cmpx" && part[0] == "v")) ||
+        (part[1] != "cmp" && !(part[1] == "cmpx" && part[0] == "v") &&
+         !(part[1] == "cmpk" && part[0] == "s")) ||
         (part[3] != "i32" && part[3] != "u32")) {
         return std::nullopt;
     }
@@ -325,7 +333,7 @@ private:
         if (bitwise_op(name, "_b64")) {
             return {&inst.dst[0], &inst.src[0], &inst.src[1]};
         }
-        if (bitwise_op(name, "_saveexec_b64")) {
+        if (bitwise_op(name, "_saveexec_b64") || name == "s_not_b64" || name == "s_wqm_b64") {
             return {&inst.dst[0], &inst.src[0]};
         }
         return {};
@@ -418,6 +426,7 @@ private:
             switch (inst.format) {
             case Format::sop1:
             case Format::sop2:
+            case Format::sopk:
                 scalar(inst);
                 break;
             case Format::sopc:
@@ -519,6 +528,92 @@ private:
             write_mask(dst, old);
             store(mask_exec(), r);
             store(scc(), any(r));
+        } else if (!scalar_arithmetic(inst)) {
+            unsupported();
+        }
+    }
+
+    // The SALU integer arithmetic, shifts, selects, the bit field extract, the SOPK forms with a
+    // 16-bit immediate, and the mask operations s_not_b64 and s_wqm_b64 (SCC as the manual says
+    // for each). Returns false for any other instruction.
+    bool scalar_arithmetic(const Instruction& inst) {
+        const std::string_view name = inst.name;
+        const Operand& dst = inst.dst[0];
+        const auto u = [&](Op op, Id x, Id y) { return b_.op(op, u32_, {x, y}); };
+        const auto nonzero = [&](Id r) {
+            store(scc(), b_.op(Op::OpINotEqual, bool_, {r, b_.constant_u32(0)}));
+        };
+        if (inst.format == Format::sopk) {
+            scalar_immediate(inst);
+            return true;
+        }
+        if (name == "s_not_b64" || name == "s_wqm_b64") {
+            mask_flow(inst.src[0], dst);
+            const Id bit = read_mask(inst.src[0]);
+            const Id r = name == "s_not_b64" ? b_.op(Op::OpLogicalNot, bool_, {bit})
+                                             : alu_.quad_any(bit);
+            uses_subgroup_ = true;  // the quad swap needs the whole quad
+            write_mask(dst, r);
+            store(scc(), any(r));
+            return true;
+        }
+        if (std::ranges::find(salu_arithmetic, name) == std::end(salu_arithmetic)) {
+            return false;
+        }
+        const Id a = read(inst.src[0]);
+        const Id b = inst.num_src > 1 ? read(inst.src[1]) : 0;
+        const Id c31 = b_.constant_u32(31);
+        Id r = 0;
+        if (name == "s_not_b32") {
+            r = b_.op(Op::OpNot, u32_, {a});
+            nonzero(r);
+        } else if (name == "s_cselect_b32") {
+            r = b_.op(Op::OpSelect, u32_, {load(bool_, scc()), a, b});
+        } else if (name == "s_lshl_b32" || name == "s_lshr_b32" || name == "s_ashr_i32") {
+            r = u(name == "s_lshl_b32"   ? Op::OpShiftLeftLogical
+                  : name == "s_lshr_b32" ? Op::OpShiftRightLogical
+                                         : Op::OpShiftRightArithmetic,
+                  a, u(Op::OpBitwiseAnd, b, c31));
+            nonzero(r);
+        } else if (name == "s_bfe_u32" || name == "s_bfe_i32") {  // the width is S1[22:16]
+            const Id width = u(Op::OpBitwiseAnd, u(Op::OpShiftRightLogical, b, b_.constant_u32(16)),
+                               b_.constant_u32(0x7f));
+            const Id too_wide = b_.op(Op::OpUGreaterThan, bool_, {width, b_.constant_u32(32)});
+            const Id clamped = b_.op(Op::OpSelect, u32_, {too_wide, b_.constant_u32(32), width});
+            r = alu_.bit_field(a, u(Op::OpBitwiseAnd, b, c31), clamped, name == "s_bfe_i32");
+            nonzero(r);
+        }
+        write_scalar(dst, r);
+        return true;
+    }
+
+    // SOPK: the destination is also the first source, the 16-bit immediate sign-extends except in
+    // the unsigned compares.
+    void scalar_immediate(const Instruction& inst) {
+        const std::string_view name = inst.name;
+        const auto compare = parse_compare(name);
+        const Operand& imm = inst.src[compare ? 1 : 0];
+        const Id simm = b_.constant_u32(compare && !compare->is_signed
+                                            ? imm.value & 0xffff
+                                            : static_cast<std::uint32_t>(
+                                                  static_cast<std::int16_t>(imm.value)));
+        if (compare) {
+            store(scc(), int_compare(*compare, read(inst.src[0]), simm));
+        } else if (name == "s_movk_i32") {
+            write_scalar(inst.dst[0], simm);
+        } else if (name == "s_cmovk_i32") {
+            const Id old = read(inst.dst[0]);
+            write_scalar(inst.dst[0], b_.op(Op::OpSelect, u32_, {load(bool_, scc()), simm, old}));
+        } else if (name == "s_addk_i32") {  // SCC: signed overflow
+            const Id d = read(inst.dst[0]);
+            const Id r = b_.op(Op::OpIAdd, u32_, {d, simm});
+            const Id same = b_.op(Op::OpBitwiseAnd, u32_,
+                                  {b_.op(Op::OpBitwiseXor, u32_, {d, r}),
+                                   b_.op(Op::OpBitwiseXor, u32_, {simm, r})});
+            write_scalar(inst.dst[0], r);
+            store(scc(), b_.op(Op::OpSLessThan, bool_, {same, b_.constant_u32(0)}));
+        } else if (name == "s_mulk_i32") {
+            write_scalar(inst.dst[0], b_.op(Op::OpIMul, u32_, {read(inst.dst[0]), simm}));
         } else {
             unsupported();
         }
@@ -1829,6 +1924,7 @@ private:
     Cfg cfg_;
     SpirvBuilder b_;
     detail::StageIo stage_{b_, key_, *this};
+    detail::Alu alu_{b_};
     Id bool_ = 0, u32_ = 0, u64_ = 0;
     Id lane_ = 0, bias_ = 0, lds_ = 0;
     Id draw_ = 0;  // the draw block's pointer

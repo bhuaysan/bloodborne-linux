@@ -62,11 +62,13 @@ TEST(GcnTranslate, ProgramsPassSpirvVal) {
         const auto translation =
             translate(program_words(name), {}, {.pgm_rsrc2 = program_pgm_rsrc2(name)});
         EXPECT_EQ(validate(translation.spirv), "");
-        // ballots and any(...) over the subgroup, for the SCC after a lane mask operation, and the
-        // LDS (whose accesses wait for the subgroup), and the shuffles of ds_swizzle_b32
+        // ballots and any(...) over the subgroup, for the SCC after a lane mask operation (also
+        // s_wqm_b64 and s_not_b64 in salu_arith), and the LDS (whose accesses wait for the
+        // subgroup), and the shuffles of ds_swizzle_b32
         EXPECT_EQ(translation.interface.wave_size_dependent,
                   name == "cross_lane" || name == "mask_exec" || name == "mask_scc" ||
-                      name == "mask_branch" || name == "ds_swizzle" || name.starts_with("lds_"));
+                      name == "mask_branch" || name == "salu_arith" || name == "ds_swizzle" ||
+                      name.starts_with("lds_"));
         // s[8:9] of cross_lane; the mask programs keep only lane masks in their mask pairs
         EXPECT_EQ(translation.interface.mask_round_trip, name == "cross_lane");
     }
@@ -260,6 +262,10 @@ TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
               "unsupported register operand 108 of s_mov_b32 at offset 0x0 (word 0xbe80036c)");
     EXPECT_EQ(error({sop1(4, 126, 108), s_endpgm}),  // s_mov_b64 exec, tba
               "unsupported mask operand of s_mov_b64 at offset 0x0 (word 0xbefe046c)");
+    EXPECT_EQ(error({sopk(18, 0, 1), s_endpgm}),  // s_getreg_b32 s0, hwreg(HW_REG_MODE)
+              "unsupported instruction s_getreg_b32 at offset 0x0 (word 0xb9000001)");
+    EXPECT_EQ(error({sop2(31, 0, 2, 3), s_endpgm}),  // s_lshl_b64 s[0:1], s[2:3], s3
+              "unsupported instruction s_lshl_b64 at offset 0x0 (word 0x8f800302)");
     EXPECT_EQ(error({sopc(12, 0, 1), s_endpgm}),  // s_bitcmp0_b32 s0, s1
               "unsupported instruction s_bitcmp0_b32 at offset 0x0 (word 0xbf0c0100)");
     // v_cmp_lt_u32_e64 s[6:7], v0, v1 makes s[6:7] a mask

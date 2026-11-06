@@ -240,6 +240,40 @@ TEST_F(TranslateExec, FloatEdgeCases) {
     }
 }
 
+// The SALU arithmetic with its SCC results (collected into one word, the first one highest), the
+// SOPK forms, s_cselect_b32, and s_not_b64 and s_wqm_b64 on a lane mask. Every lane stores the
+// same scalar results.
+TEST_F(TranslateExec, ScalarArithmetic) {
+    if (!runner_->info().subgroup_quad) {  // s_wqm_b64 swaps within the quad
+        GTEST_SKIP() << "no quad subgroup operations in compute";
+    }
+    constexpr std::uint32_t stages = 18;
+    const auto out = run("salu_arith", {}, stages * lanes);
+    const std::uint32_t max = 0x7fffffff, m16 = 0xfffffff0, five = 5, count = 35 & 31;
+    const std::uint32_t d = 0x12f4a6b8;
+    const std::uint32_t expected[] = {
+        d << count, m16 >> count,
+        static_cast<std::uint32_t>(static_cast<std::int32_t>(m16) >> count), 0, 0xa6, 0xffffffa6, 0, 0xffff8000, 0x80000000, static_cast<std::uint32_t>(-15), 0x1234,
+        7, max, five, ~1u,
+    };
+    for (std::uint32_t k = 0; k < std::size(expected); ++k) {
+        EXPECT_EQ(out[k * lanes], expected[k]) << "stage " << k;
+    }
+    // The SCC of: the three shifts and the shift to 0, the bit fields (stages 4 to 6), s_addk_i32,
+    // the three s_cmpk_* and s_not_b32.
+    const bool flags[] = {1, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1};
+    std::uint32_t scc = 0;
+    for (const bool flag : flags) {
+        scc = scc << 1 | flag;
+    }
+    EXPECT_EQ(out[15 * lanes], scc);
+    for (std::uint32_t i = 0; i < lanes; ++i) {
+        SCOPED_TRACE(testing::Message() << "lane " << i);
+        EXPECT_EQ(out[16 * lanes + i], i % 16 / 4 == 1 ? 1u : 0u);  // the quad of lane 5
+        EXPECT_EQ(out[17 * lanes + i], i % 16 == 5 ? 0u : 1u);
+    }
+}
+
 // All 16 float compare conditions with NaN operands, the VOP3 form with modifiers, and v_cmpx.
 TEST_F(TranslateExec, FloatCompare) {
     const auto out = run("float_cmp", {}, 3 * lanes);
