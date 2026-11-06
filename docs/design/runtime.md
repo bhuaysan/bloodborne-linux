@@ -262,7 +262,8 @@ After loading, the harness takes a **baseline snapshot** of all writable memory 
 - the image's writable segments (data and `.bss`, about 6 MiB),
 - the data-import blocks,
 - the regions its caller passes (`extra`), for state outside the image: with the load set loaded, the PRXs' writable segments, the game's heap and the test thread's TLS ([m3-core-os.md](m3-core-os.md#memory), "Harness"),
-- the **arena**, an mmap'd region of 16 MiB that the harness owns for test inputs.
+- the **arena**, an mmap'd region of 16 MiB that the harness owns for test inputs,
+- optionally a `State` for what isn't memory it can copy: with the load set loaded, the guest mappings and direct memory's allocations ("Guest memory" below).
 
 A region is either **dense**, every byte copied and compared, or **sparse**: a shared mapping of a sparse file, such as direct memory (the 116 MiB heap of the game's allocator is a view of the direct memory memfd). For a sparse region the harness keeps only the pages that are data in the file, found with `lseek(SEEK_DATA/SEEK_HOLE)`, since a hole reads zero. The restore punches a hole (`fallocate(FALLOC_FL_PUNCH_HOLE)`) into every data page the baseline didn't have and copies the baseline's pages back; the comparison looks only at the pages that are data after either call, and reads a page that is a hole as zeros rather than through the mapping, which would allocate it. So a sparse region costs time and memory in proportion to the pages a test touches, not to its size. Unlike page residency (`mincore`), the file's data/hole map doesn't depend on whether a page is in memory: tmpfs reports a swapped-out page as data. A sparse region's address, file offset and size must be multiples of the host page size (the constructor throws `std::invalid_argument` otherwise).
 
@@ -291,15 +292,23 @@ struct Region {
     int fd = -1;                     // sparse: the file that data maps, and data's offset in it
     std::uint64_t fd_offset = 0;
 };
+class State {                        // state outside the regions, with its own baseline
+    virtual std::string_view name() const = 0;          // in the report
+    virtual void restore() = 0;                         // baseline back, before the regions
+    virtual std::vector<std::string> changes() const = 0;  // since the baseline, compared
+};
 class Harness : private hle::StubObserver {  // installs itself as the stub observer
-    explicit Harness(loader::Image& image, std::vector<Region> extra = {});  // takes the baseline
+    explicit Harness(loader::Image& image, std::vector<Region> extra = {},
+                     State* state = nullptr);  // takes the baseline
     Arena& arena();
-    void restore();                  // baseline back into every region, arena allocation at 0,
-                                     // empty stub log
+    void restore();                  // baseline back into the state and every region, arena
+                                     // allocation at 0, empty stub log
     const std::vector<StubCall>& log() const;  // stub calls since the last restore
     void declare_arity(std::string_view library, std::string_view nid, int n);  // 0..6
     template <class Sig, class Build>
     Result compare(std::uint64_t link_addr, Sig* replacement, Build&& build);
+    template <class Sig, class Build>  // a synthetic original of this process, for harness tests
+    Result compare_functions(Sig* original, Sig* replacement, Build&& build);
 };
 class Result {                       // true when nothing differs
     const std::string& report() const;  // one line per difference, empty when true
@@ -309,7 +318,7 @@ class Result {                       // true when nothing differs
 
 The arena is a bump allocator that starts at offset 0 again at every restore, so a builder that makes the same calls gets the same addresses in both runs, and the layout is the same in every run of a build. `alloc` throws `std::length_error` when the arena is full. The builder returns a `std::tuple` that converts to the parameter types of `Sig`. Floating-point return values are compared bitwise, so NaN payloads and the sign of zero count, and a `void` signature compares only memory and the stub log.
 
-A report line names each difference: `return value: original 0x28, replacement 0x29`, or `memory: image 0x4100..0x4101 differs: original 15, replacement 16` (link addresses, end exclusive, up to 8 bytes of each side shown) and `memory: arena +0x4..+0x5 differs: …` (offsets). At most 8 ranges are listed, then their total. A data block is the region `data block <library> <nid>`, reported as offsets like the arena. Only the blocks that exist when the harness is constructed are in the snapshot. A stub log difference gives `stub log: differs at call 2 (original 2 calls, replacement 2)` (counted from 1), then up to 16 calls of each side as `  original 1: libTest harnessImpA (?) 0x… 0x… 0x… 0x… 0x… 0x…` (library, NID, name, all six arguments). `declare_arity` throws `std::invalid_argument` outside 0..6. Only one harness may exist at a time, because it is the process's stub observer from construction to destruction. The constructor throws `std::logic_error` if a stub observer is already installed, so a second harness cannot silently take the log away from the first. The harness core needs only a mapped and relocated `Image`, so its tests use a synthetic ELF with hand-assembled functions and run without the game.
+A report line names each difference: `return value: original 0x28, replacement 0x29`, or `memory: image 0x4100..0x4101 differs: original 15, replacement 16` (link addresses, end exclusive, up to 8 bytes of each side shown) and `memory: arena +0x4..+0x5 differs: …` (offsets). At most 8 ranges are listed, then their total. A data block is the region `data block <library> <nid>`, reported as offsets like the arena. Only the blocks that exist when the harness is constructed are in the snapshot. A stub log difference gives `stub log: differs at call 2 (original 2 calls, replacement 2)` (counted from 1), then up to 16 calls of each side as `  original 1: libTest harnessImpA (?) 0x… 0x… 0x… 0x… 0x… 0x…` (library, NID, name, all six arguments). A state difference gives `guest memory: differs at change 1 (original 1 changes, replacement 1)`, then up to 16 changes of each side as `  original 1: <line>`. `declare_arity` throws `std::invalid_argument` outside 0..6. Only one harness may exist at a time, because it is the process's stub observer from construction to destruction. The constructor throws `std::logic_error` if a stub observer is already installed, so a second harness cannot silently take the log away from the first. The harness core needs only a mapped and relocated `Image`, so its tests use a synthetic ELF with hand-assembled functions and run without the game.
 
 ### One comparison
 
@@ -327,13 +336,26 @@ EXPECT_TRUE(r) << r.report();
    - every byte of the snapshot regions. The report lists the first differing ranges, as link addresses for the image and arena offsets for the arena,
    - the stub log: same imports in the same order. Arguments are compared only up to the arity the test declares for an import (`harness.declare_arity(library, nid, n)`), default none, because the arity of an unnamed import is unknown and unused argument registers hold leftovers that differ between the two compiled versions. All six are recorded and shown in the report. Calls to registered HLE implementations are not logged or compared. Compared pointer arguments are normalized first: a pointer into a snapshot region compares by region and offset, a pointer into the calling thread's stack compares only as "a stack pointer" (the original and the replacement lay out their frames differently), any other value compares as is.
 
+   - the state's changes, line by line.
+
 Not compared: the stack below the call, registers other than the return registers, the code segment.
+
+### Guest memory
+
+A map call during a test (#206) changes state that no region holds: the kernel's region table, a new host mapping in the guest window and, for direct memory, the allocations and the memfd pages behind them. `LoadSetTest` gives its harness a `State` for it (`GuestMemory` in `tests/harness/load_set.cpp`), which takes its baseline together with the harness's, after the heap exists. The kernel side is a small API for the harness only:
+
+- `vmem::regions()` is the snapshot of the region table. `vmem::restore(baseline)` gives back every region that isn't in the baseline as `unmap` does (the guest window's part is reserved again), so the next map without a fixed address takes the same lowest free range again ([m3-core-os.md](m3-core-os.md#memory), "Guest window"). It can't map a region of the baseline back, so if one is gone or changed (unmapped, reprotected, split) it changes nothing and returns `EINVAL`; the fixture's `restore` then throws `std::runtime_error`. A test must leave the baseline's mappings alone, which also keeps them readable for the snapshot.
+- `dmem::allocations()` is the snapshot of the allocations. `dmem::restore_allocations(baseline)` puts them back and punches a hole into the memfd wherever an allocation lies now that the baseline doesn't cover, so the next allocation gets the same offset and reads zeros. The data of the baseline's allocations stays the harness's to restore: the heap is a sparse region. Data of a baseline allocation that no region maps isn't restored.
+
+`changes()` lists the mappings that aren't in the baseline (`mapping <start>..<end> prot <p> flags <f> offset <o>`, plus `reserved` for a reservation), then the allocations made (`direct memory allocated <start>..<end> type <t>`) and released (`… released …`), each in address order. Since the placement is deterministic, the original's and the replacement's mappings compare by address, length, protection, kind and direct memory offset. Not compared: the contents of mappings made during the call (a test reads them through the return value if it needs them) and names. Map calls go to HLE implementations, so they aren't in the stub log.
+
+No eboot function that maps memory is a small leaf: the map calls (0x2081dbe, 0x33eb0d, 0x26d3fda) sit in allocator methods that lock and fill their own tables. The tests in `tests/harness/load_set_test.cpp` therefore use synthetic guest-ABI originals compiled into the test, which call the eboot's imports as those call sites do, through `compare_functions`. A version that maps a different size or protection, or allocates a different size, fails; two runs of a map get the same address and read zeros.
 
 ### Limits for M2
 
 - No TLS: functions that use `%fs` must not be called until M3 sets up TLS. The harness doesn't set `%fs`, so such a function would read and possibly overwrite glibc's own TLS block and thread control block, which can crash or corrupt the test process. From M3 the eboot test executables (`harness_eboot_test`, `game_eboot_test`) link the eboot's TLS reservation (`bbeboottls`), so `%fs` accesses land in it. `EbootTest` doesn't snapshot it; `LoadSetTest` does.
 - HLE implementations called from a diff test must be stateless, or keep their state in a snapshot region. Other state isn't restored between the two calls, and calls to implementations aren't compared.
-- No heap with `EbootTest`: an import such as `malloc` is a stub that returns 0. `LoadSetTest` runs libc.prx's `malloc`, the game's allocator, on a heap that is a snapshot region. A map call during a test (the heap growing, or a function that maps memory itself) is not deterministic yet: the host picks the address, and the restore neither unmaps it nor takes back the region table or direct memory's allocations.
+- No heap with `EbootTest`: an import such as `malloc` is a stub that returns 0. `LoadSetTest` runs libc.prx's `malloc`, the game's allocator, on a heap that is a snapshot region. A map call during a test (the heap growing, or a function that maps memory itself) is taken back by the restore and compared ("Guest memory").
 - A crash in the original or the replacement kills the test binary. Isolating each call in a forked child can come later if it is needed.
 - The original code isn't instrumented by AddressSanitizer. Only the replacement and the harness are.
 - AddressSanitizer's stack-use-after-return detection, on by default, moves an instrumented function's locals into fake stack frames on the heap. Pointers to the replacement's locals would then not look like stack pointers and would compare unequal. The harness turns it off with `__asan_default_options()` returning `detect_stack_use_after_return=0`, defined in the harness tests' own main (`tests/harness/main.cpp`, instead of `gtest_main`) so the linker keeps it.

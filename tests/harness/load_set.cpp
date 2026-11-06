@@ -2,8 +2,10 @@
 
 #include <sys/mman.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <optional>
@@ -31,6 +33,7 @@ namespace bb::test {
 namespace {
 
 using harness::Region;
+namespace vmem = hle::kernel::vmem;
 
 // libc's malloc and free, which libc.prx exports (symbols/nids.csv).
 constexpr std::string_view malloc_nid = "gQX+4GDQjpM", free_nid = "tIhsqj0qsFE";
@@ -101,15 +104,66 @@ std::vector<Region> load_set_regions(const loader::LoadSet& set) {
     return regions;
 }
 
+// The guest mappings and the direct memory allocations (docs/design/runtime.md, "Guest
+// memory"): the restore unmaps what a test mapped and takes back its allocations, so the next
+// call gets the same addresses and offsets; the changes are the mappings made and the
+// allocations made or released since the baseline.
+class GuestMemory : public harness::State {
+public:
+    std::string_view name() const override { return "guest memory"; }
+
+    void restore() override {
+        if (const int error = vmem::restore(mappings_)) {
+            throw std::runtime_error(
+                std::format("harness: guest mappings not restored: {}", std::strerror(error)));
+        }
+        if (const int error = hle::kernel::dmem::restore_allocations(allocations_)) {
+            throw std::runtime_error(
+                std::format("harness: direct memory not restored: {}", std::strerror(error)));
+        }
+    }
+
+    std::vector<std::string> changes() const override {
+        std::vector<std::string> out;
+        for (const vmem::Region& r : vmem::regions()) {
+            if (std::ranges::find(mappings_, r) == mappings_.end()) {
+                out.push_back(std::format("mapping {:#x}..{:#x} prot {:#x} flags {:#x} offset "
+                                          "{:#x}{}",
+                                          r.start, r.end, r.prot, r.flags, r.offset,
+                                          r.reserved ? " reserved" : ""));
+            }
+        }
+        const std::vector<Allocated> now = hle::kernel::dmem::allocations();
+        auto list = [&](const std::vector<Allocated>& from, const std::vector<Allocated>& other,
+                        std::string_view what) {
+            for (const Allocated& a : from) {
+                if (std::ranges::find(other, a) == other.end()) {
+                    out.push_back(std::format("direct memory {} {:#x}..{:#x} type {}", what,
+                                              a.start, a.end, a.type));
+                }
+            }
+        };
+        list(now, allocations_, "allocated");
+        list(allocations_, now, "released");
+        return out;
+    }
+
+private:
+    using Allocated = hle::kernel::dmem::AllocatedRange;
+    std::vector<vmem::Region> mappings_ = vmem::regions();
+    std::vector<Allocated> allocations_ = hle::kernel::dmem::allocations();
+};
+
 // The load set and its harness, from the first test that needs them until the process exits.
 struct Loaded {
     loader::LoadSet set;
+    std::optional<GuestMemory> memory;
     std::optional<harness::Harness> harness;
     std::thread::id thread = std::this_thread::get_id();
 };
 
 Loaded* load(const std::filesystem::path& game) {
-    auto* l = new Loaded{loader::map_load_set(game), std::nullopt};
+    auto* l = new Loaded{loader::map_load_set(game), std::nullopt, std::nullopt};
     hle::link(l->set);
     // Game memory holds pointers to runtime objects, such as the host mutexes behind libc's.
     for (loader::LoadedModule& m : l->set.modules) {
@@ -127,7 +181,8 @@ Loaded* load(const std::filesystem::path& game) {
     auto* malloc = libc_export<void*(std::size_t)>(l->set, malloc_nid);
     auto* free = libc_export<void(void*)>(l->set, free_nid);
     free(malloc(1));
-    l->harness.emplace(eboot, load_set_regions(l->set));
+    l->memory.emplace();
+    l->harness.emplace(eboot, load_set_regions(l->set), &*l->memory);
     return l;
 }
 
