@@ -6,7 +6,7 @@ Sources: the eboot of CUSA03173 patch 1.09 (disassembled with `objdump` over byt
 
 Addresses are eboot link addresses. Register names are those of the register reference, which lists every register named in this note unless the text says otherwise.
 
-**The packet names are unverified.** The opcode numbers are what the eboot writes. The SI programming guide describes packets by name and body but gives no opcode numbers, and no logged source pairs numbers with names. The pairings in the table below come from general knowledge of AMD's open-source PM4 headers, not from a source read for this note. They hold only once checked against one of those headers (see [open questions](#open-questions-and-next-steps)). Names that the SI guide doesn't describe at all are marked *not in guide*. Each packet's length and operands were checked against the writer that emits it, unless the row says otherwise.
+**The packet names are checked** against AMD's `si_ci_vi_merged_pm4_it_opcodes.h` (`third_party/amd-gcn/`): every opcode-to-name pairing in the table below matches the header's `IT_*` enum (the header spells 0x33 `INDIRECT_BUFFER_CNST`). The opcode numbers are what the eboot writes. The SI programming guide describes packets by name and body but gives no opcode numbers. Names that the SI guide doesn't describe at all are marked *not in guide*; the header names them (`RELEASE_MEM`, `DMA_DATA`, `ACQUIRE_MEM`, `REWIND`, `SET_QUEUE_REG`, `SET_UCONFIG_REG`, the two `*_MULTI` draws as `DRAW_INDIRECT_MULTI` and `DRAW_INDEX_INDIRECT_MULTI`). The header gives no field layouts. Each packet's length and operands were checked against the writer that emits it, unless the row says otherwise.
 
 ## Summary
 
@@ -16,7 +16,7 @@ Addresses are eboot link addresses. Register names are those of the register ref
 - **Compute queues are used.** The game maps compute queues on its own ring buffers, writes `INDIRECT_BUFFER` packets into the ring and reports the write pointer through an import.
 - **Fetch shaders are generated at run time** by eboot code (0x10877c0), from the vertex shader's input-usage table. The address goes into the first two user-data SGPRs of the vertex stage (VS, or ES/LS when those run the vertex shader), where the shader's `s_swappc_b64 s[0:1], s[0:1]` finds it.
 - **Of the 50 imports, 30 are reachable** from game code, 20 are not (their wrappers have no callers). Two of the reachable ones only matter when GPU profiling is on, which the HLE reports as off.
-- **Two packet opcodes have no name yet** (0x8C, 0x8D). The parser has to log them until their meaning is known.
+- **Two packet opcodes have no name yet** (0x8C, 0x8D): AMD's opcode header has neither (it lists 0x8B `SWITCH_BUFFER` and then 0x91). The parser has to log them until their meaning is known.
 
 ## Where the code lives
 
@@ -59,7 +59,7 @@ All packets are type 3 (`0xC0000000 | (count - 1) << 16 | opcode << 8 | bits`), 
 
 A header found by a byte scan counts only once a writer is found that stores it: the scan also matches bytes that span several instructions. For example, `0xC00B8A00` at 0x107255f is the end of a `movl $4, …`, a `mov (%rbx), %cl` and the first byte of a `shr`, inside a function that returns a size and writes no packet.
 
-| Opcode | Name (unverified) | Example writer | Notes |
+| Opcode | Name | Example writer | Notes |
 |---|---|---|---|
 | 0x10 | `NOP` | 0x10783c0 | Padding, tags and embedded data (below) |
 | 0x11 | `SET_BASE` | 0x10742f0 | Base for indirect draws |
@@ -288,8 +288,8 @@ The HLE registers these as logging stubs.
 ## Open questions and next steps
 
 - **Register blocks of the stage writers.** Which register each dword of the blocks at shader object +0x8 holds. Next step: item 2 parses the footer; compare its values with the bitfields of `SPI_SHADER_PGM_RSRC1/2_*` and the context registers in the register guide. Until then the HLE can write `SPI_SHADER_PGM_LO/HI` and `RSRC1/2` from the first four dwords and fill the rest with a `NOP`.
-- **Opcodes 0x8C, 0x8D.** No name yet. 0x8C/0x8D come in pairs with compute-side writers whose bodies differ from the graphics ones, and 0x8D sits where a draw sits; they may belong to a draw path that uses a compute command buffer. The header check above may name them. Next step: count them in captured streams once the game runs, and log each opcode once as the design says.
-- **Packet names and field layouts.** Every opcode-to-name pairing in the packet table, and the field layouts of the packets the SI guide doesn't describe (`RELEASE_MEM`, `DMA_DATA`, `ACQUIRE_MEM`, `REWIND`, `SET_QUEUE_REG`, `SET_UCONFIG_REG`, the two `*_MULTI` draws), need checking against an AMD PM4 header (Linux `amdgpu`/`radeon` or Mesa) before the parser hard-codes them. The check is logged as a code-source row in references.md; the request goes to the research agent. The same check can name event type 0x35 and uconfig register 0x200.
+- **Opcodes 0x8C, 0x8D.** AMD's opcode header does not name them, so they stay unnamed (likely Sony-specific). 0x8C/0x8D come in pairs with compute-side writers whose bodies differ from the graphics ones, and 0x8D sits where a draw sits; they may belong to a draw path that uses a compute command buffer. Next step: count them in captured streams once the game runs, and log each opcode once as the design says.
+- **Field layouts.** The packet names are checked (see the top of this note). The field layouts of the packets the SI guide doesn't describe (`RELEASE_MEM`, `DMA_DATA`, `ACQUIRE_MEM`, `REWIND`, `SET_QUEUE_REG`, `SET_UCONFIG_REG`, the two `*_MULTI` draws) still need a source; the opcode header has none. Event type 0x35 and uconfig register 0x200 are not named by it either (it holds no event types).
 - **`iCO804ZgzdA`'s start-up probe.** Find what the renderer flag at +0x121 (set at 0x216b1b3) switches before choosing the HLE result. Returning `0x80d13fff` keeps the feature off, which is the safer first choice.
 - **`1qXLHIpROPE`, `TLV4mswiZ4A`, `ln33zjBrfjk`.** Roles above are partial. Each is called once or twice; a runtime log of their arguments once the renderer starts will settle them.
 - **Reading the driver HLE code of an emulator** would answer the dword layouts directly. Since 2026-11-06 the source policy allows it.
@@ -300,7 +300,7 @@ Planned in [graphics.md](../design/graphics.md#command-buffers-to-the-first-fram
 
 What the note gives the PM4 and submission issues:
 
-1. **PM4 parser core** (`bbpm4`), after the packet names are checked (open questions): type-3 headers and the type-2 filler, the four register spaces and the predicate/shader-type bits, `NOP` skipping, `INDIRECT_BUFFER`/`INDIRECT_BUFFER_CONST`, `REWIND` (wait for the valid bit), and a log of unknown opcodes. Tests with synthetic streams.
+1. **PM4 parser core** (`bbpm4`; the packet names are checked): type-3 headers and the type-2 filler, the four register spaces and the predicate/shader-type bits, `NOP` skipping, `INDIRECT_BUFFER`/`INDIRECT_BUFFER_CONST`, `REWIND` (wait for the valid bit), and a log of unknown opcodes. Tests with synthetic streams.
 2. **Constant engine**: CE RAM, `WRITE_CONST_RAM`/`DUMP_CONST_RAM`, the CE/DE counters, running a DCB and its CCB together.
 3. **Draw and dispatch state**: the draw packets in the table, index state, user data, and the snapshot for the backend.
 4. **`libSceGnmDriver` HLE, submission**: the three submits, the call after flip, default-state writers (standard packets from the AMD default, padded), markers (`NOP` with the string), the profiling queries returning 0, and logging stubs for the unreachable imports.

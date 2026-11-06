@@ -1,0 +1,30 @@
+The two headers in this directory are copied unchanged from shadPS4
+(https://github.com/shadps4-emu/shadPS4, externals/gcn/include/gcn/ at
+commit ff1b7a2e87eef8f301377e0cabbbeeeb73cc3b49). They are AMD's register offset and PM4 opcode headers.
+shadPS4 keeps them without a separate license file; each header carries the
+license below in its own comment. The copyright lines are those of the
+headers: 2014-2021 for si_ci_vi_merged_offset.h, 2015-2021 for
+si_ci_vi_merged_pm4_it_opcodes.h.
+
+The MIT License
+
+Copyright (c) 2014-2021 (offset header) and 2015-2021 (opcode header)
+Advanced Micro Devices, Inc. All Rights Reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
