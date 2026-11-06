@@ -23,6 +23,10 @@ target_include_directories(bbtestsupport PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(bbtestsupport PRIVATE BB_MAIN_CHECKOUT="${BB_MAIN_CHECKOUT}")
 target_link_libraries(bbtestsupport PUBLIC bbcommon GTest::gtest PRIVATE bb_warnings)
 
+# Linked into the test binaries whose tests map guest memory (support/guest_window_asan.cpp). An
+# OBJECT library, so that the linker keeps its __asan_default_options.
+add_library(bbtestguestwindow OBJECT support/guest_window_asan.cpp)
+
 # bb_add_test(<name> SOURCES <files...> LIBS <targets...>) builds one test binary with gtest_main.
 function(bb_add_test name)
     cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "SOURCES;LIBS")

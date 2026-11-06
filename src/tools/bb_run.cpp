@@ -45,6 +45,12 @@
 #include "tools/main_loop_probe.hpp"
 #include "tools/run_options.hpp"
 
+// The guest window lies in AddressSanitizer's shadow gap, which ASan keeps PROT_NONE without this
+// option (docs/design/m3-core-os.md, Memory, "Guest window"). Unused without ASan.
+extern "C" const char* __asan_default_options() {
+    return "protect_shadow_gap=0";
+}
+
 namespace {
 
 using bb::common::LogLevel;
