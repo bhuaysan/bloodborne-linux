@@ -190,12 +190,11 @@ const std::map<std::string, std::string_view> expected_init_stubs = {
     // Constructor 0x5fad0 jumps to 0x81a80, which counts the CPUs in the calling thread's
     // affinity mask (attr init, self, attr get, get affinity, attr destroy) into 0xd1c54, what
     // libc's std::thread::hardware_concurrency (0x5fac0) returns. No module of the load set
-    // imports that. Thread attributes are #94; with the stubs the mask and the count stay 0.
-    {"libkernel nsYoNRywwNg", "scePthreadAttrInit, CPU count (#94)"},
+    // imports that. The second threads PR of #94 implements the three that are still stubs;
+    // until then the mask and the count stay 0.
     {"libkernel aI+OeCz8xrQ", "scePthreadSelf, CPU count (#94)"},
     {"libkernel x1X76arYMxU", "scePthreadAttrGet, CPU count (#94)"},
     {"libkernel 8+s5BzZjxSg", "scePthreadAttrGetaffinity, CPU count (#94)"},
-    {"libkernel 62KCwEMmzcM", "scePthreadAttrDestroy, CPU count (#94)"},
 };
 
 // Both initialisers return 0 (run_prx_initialiser aborts otherwise). libc's preinit accepts the
