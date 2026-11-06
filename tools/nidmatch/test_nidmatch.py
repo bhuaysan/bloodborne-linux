@@ -449,10 +449,6 @@ class FreebsdIndexTest(unittest.TestCase):
                          {"au_bsm_to_fcntl_cmd", "au_fcntl_cmd_to_bsm"})
 
 
-@unittest.skipUnless(load_game_dir()
-                     and all(path.is_file()
-                             for path in pinned_elf_paths(m.ELF_DIR, elfimports.PINNED_ELFS)),
-                     "needs BB_GAME_DIR and the self2elf outputs in analysis/elf/")
 class Shadps4NamesTest(unittest.TestCase):
     NID_A, NID_B = "ttHNfU+qDBU", "gKqzW-zWhvY"
 
@@ -487,6 +483,10 @@ class Shadps4NamesTest(unittest.TestCase):
                 shadps4names.revision(root)
 
 
+@unittest.skipUnless(load_game_dir()
+                     and all(path.is_file()
+                             for path in pinned_elf_paths(m.ELF_DIR, elfimports.PINNED_ELFS)),
+                     "needs BB_GAME_DIR and the self2elf outputs in analysis/elf/")
 class GameTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
