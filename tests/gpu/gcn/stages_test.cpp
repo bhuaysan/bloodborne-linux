@@ -94,6 +94,9 @@ TEST(GcnStages, ProgramsPassSpirvVal) {
     const auto vs = translate(program_words("vs_attrs"), {}, vertex_key);
     EXPECT_EQ(validate(vs.spirv), "");
     EXPECT_EQ(count(vs.spirv, spv::Op::OpEntryPoint, 1, 0), 1);  // Vertex
+    EXPECT_EQ(count(vs.spirv, spv::Op::OpExecutionMode, 2,
+                    static_cast<std::uint32_t>(spv::ExecutionMode::LocalSize)),
+              0);
     EXPECT_EQ(count(vs.spirv, spv::Op::OpUDiv), 2);              // v1 and v2
     EXPECT_FALSE(vs.interface.wave_size_dependent);
     // pos0 and param0 store all four channels, param1 only x, at location 1.
