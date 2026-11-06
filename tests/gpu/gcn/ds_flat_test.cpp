@@ -147,6 +147,25 @@ TEST(GcnDsFlat, EncodingsLlvmCannotExpress) {
     }
 }
 
+// Fields that an instruction doesn't use are decoded but left out of the text, so reassembling
+// the text clears them: the corpus round trip lists them as known differences.
+TEST(GcnDsFlat, UnusedFieldsAreLeftOutOfTheText) {
+    // LLVM's ds_nop takes no offset.
+    const Instruction nop = one(ds(20, {.offset = 4}));
+    EXPECT_EQ(nop.mem_offset, 4);
+    EXPECT_EQ(disassemble(nop), "ds_nop");
+    // ds_read_b32 has no data operands.
+    EXPECT_EQ(disassemble(one(ds(54, {.addr = 1, .data0 = 2, .data1 = 3, .vdst = 4}))),
+              "ds_read_b32 v4, v1");
+    // The reserved bit 16.
+    Words reserved = ds(54, {.addr = 1, .vdst = 4});
+    reserved[0] |= 1u << 16;
+    EXPECT_EQ(disassemble(one(reserved)), "ds_read_b32 v4, v1");
+    if (have_llvm_mc()) {
+        EXPECT_EQ(assemble({"ds_nop"}).at(0).words, ds(20, {}));
+    }
+}
+
 // Every opcode of a table, with distinct registers in every field, through llvm-mc and back.
 // `known` is the number of words that decode, `rejected` the opcodes LLVM has no syntax for.
 void round_trip(Format format, const std::vector<Words>& all, unsigned known,
