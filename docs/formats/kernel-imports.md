@@ -69,7 +69,7 @@ The other NIDs stay unnamed. The FreeBSD manual page lists and the derivation ru
 
 ### Virtual and direct memory
 
-`src/hle/kernel/vmem.cpp` implements the virtual memory calls of this table on the region table, `src/hle/kernel/dmem.cpp` the direct memory calls on a memfd (design note, Memory). `2SKEx6bSq-4` and `7oxv3PPCumo` still go to logging stubs, and `BC+OG5m9+bw` still fails for every offset; all three wait for a follow-up issue (design note, Memory, "Not yet").
+`src/hle/kernel/vmem.cpp` implements the virtual memory calls of this table on the region table, `src/hle/kernel/dmem.cpp` the direct memory calls on a memfd (design note, Memory). `2SKEx6bSq-4` and `7oxv3PPCumo` still go to logging stubs, and `BC+OG5m9+bw` still fails for every offset; all three wait for #177 (design note, Memory, "Not yet").
 
 | NID | Callers | Behaviour |
 |---|---|---|

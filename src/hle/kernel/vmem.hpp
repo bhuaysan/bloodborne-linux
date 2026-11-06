@@ -114,7 +114,7 @@ struct QueryRecord {
 static_assert(sizeof(QueryRecord) == 0x48);
 
 // BC+OG5m9+bw: (direct memory offset, &type, &start, &end). Fails for every offset until direct
-// memory's types are read from dmem.cpp (follow-up issue; m3-core-os.md, Memory, "Not yet").
+// memory's types are read from dmem.cpp (#177; m3-core-os.md, Memory, "Not yet").
 std::int32_t direct_memory_type(std::uint64_t offset, std::int32_t* type, std::uint64_t* start,
                                 std::uint64_t* end);
 
