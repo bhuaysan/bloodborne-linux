@@ -38,8 +38,7 @@ struct OpInfo {
 // Sea Islands ISA manual. Empty for formats that aren't decoded yet.
 const std::vector<OpInfo>& opcodes(Format format);
 
-// DS (ds_flat.cpp): 2 dwords long, with its own opcode table. FLAT is to follow in the same file
-// (second part of #119); until then is_ds_flat matches DS words only.
+// DS and FLAT (ds_flat.cpp). Both are 2 dwords long and have their own opcode tables.
 bool is_ds_flat(std::uint32_t word);
 Instruction decode_ds_flat(std::span<const std::uint32_t> code, std::size_t index);
 std::string ds_flat_modifiers(const Instruction& inst);  // " offset:16 gds", or empty

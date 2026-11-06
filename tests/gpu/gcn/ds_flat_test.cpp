@@ -1,5 +1,5 @@
-// DS: decoding and text of words encoded by hand from the Sea Islands ISA manual, and a round
-// trip of every opcode in the table through llvm-mc.
+// DS and FLAT: decoding and text of words encoded by hand from the Sea Islands ISA manual, and a
+// round trip of every opcode in the tables through llvm-mc.
 
 #include <cstdint>
 #include <set>
@@ -30,6 +30,16 @@ Words ds(unsigned op, DsFields f) {
             f.vdst << 24 | f.data1 << 16 | f.data0 << 8 | f.addr};
 }
 
+struct FlatFields {
+    unsigned addr = 0, data = 0, vdst = 0;
+    bool glc = false, slc = false, tfe = false;
+};
+
+Words flat(unsigned op, FlatFields f) {
+    return {0x37u << 26 | op << 18 | unsigned{f.slc} << 17 | unsigned{f.glc} << 16,
+            f.vdst << 24 | unsigned{f.tfe} << 23 | f.data << 8 | f.addr};
+}
+
 Instruction one(const Words& words) {
     auto insts = decode(words, Until::code_end);
     EXPECT_EQ(insts.size(), 1u);
@@ -58,13 +68,29 @@ TEST(GcnDsFlat, DecodesDsFields) {
     EXPECT_EQ(insts[1].offset, 8u);
 }
 
+TEST(GcnDsFlat, DecodesFlatFields) {
+    const Instruction inst = one(flat(81, {.addr = 2, .data = 4, .vdst = 8, .glc = true}));
+    EXPECT_EQ(inst.format, Format::flat);
+    EXPECT_EQ(inst.name, "flat_atomic_cmpswap_x2");
+    EXPECT_EQ(inst.size, 2);
+    ASSERT_EQ(inst.num_dst, 1);
+    EXPECT_EQ(inst.dst[0], (Operand{OperandKind::vector, 2, 8, 0}));
+    ASSERT_EQ(inst.num_src, 2);
+    EXPECT_EQ(inst.src[0], (Operand{OperandKind::vector, 2, 2, 0}));
+    EXPECT_EQ(inst.src[1], (Operand{OperandKind::vector, 4, 4, 0}));
+    EXPECT_EQ(inst.flags, flag::glc);
+    EXPECT_EQ(one(flat(12, {.slc = true, .tfe = true})).flags, flag::slc | flag::tfe);
+}
+
 TEST(GcnDsFlat, Errors) {
-    EXPECT_THROW(one(ds(21, {})), GcnError);  // unknown DS opcode
-    // FLAT (bits 31-26 = 0x37, flat_load_dword) is not decoded yet, and not taken for DS.
-    EXPECT_THROW(decode(Words{0x37u << 26 | 12u << 18, 0}, Until::code_end), GcnError);
+    EXPECT_THROW(one(ds(21, {})), GcnError);    // unknown DS opcode
+    EXPECT_THROW(one(flat(52, {})), GcnError);  // no atomic rsub on FLAT
+    EXPECT_THROW(one(flat(0, {})), GcnError);
     // A register range past v255.
     EXPECT_THROW(one(ds(255, {.vdst = 253})), GcnError);
     EXPECT_THROW(one(ds(77, {.addr = 0, .data0 = 255})), GcnError);
+    EXPECT_THROW(one(flat(12, {.addr = 255})), GcnError);
+    EXPECT_THROW(one(flat(12, {.vdst = 255, .tfe = true})), GcnError);
     // The second dword is missing.
     try {
         decode(Words{ds(54, {})[0]}, Until::code_end);
@@ -81,7 +107,7 @@ struct Case {
 };
 
 const std::vector<Case> cases = {
-    // Offsets of every kind, gds, every kind of operand list.
+    // DS: offsets of every kind, gds, every kind of operand list.
     {ds(0, {.addr = 1, .data0 = 2, .offset = 16, .gds = true}), "ds_add_u32 v1, v2 offset:16 gds"},
     {ds(54, {.addr = 2, .vdst = 1, .offset = 0xffff}), "ds_read_b32 v1, v2 offset:65535"},
     {ds(14, {.addr = 1, .data0 = 2, .data1 = 3, .offset = 0x0804}),
@@ -105,6 +131,17 @@ const std::vector<Case> cases = {
     {ds(222, {.addr = 1, .data0 = 2}), "ds_write_b96 v1, v[2:4]"},
     {ds(255, {.addr = 255, .vdst = 252}), "ds_read_b128 v[252:255], v255"},
     {ds(126, {.addr = 3, .data0 = 4, .vdst = 1}), "ds_condxchg32_rtn_b64 v[1:2], v3, v[4:5]"},
+    // FLAT: loads, stores, atomics with and without return.
+    {flat(12, {.addr = 2, .vdst = 1, .glc = true, .slc = true}),
+     "flat_load_dword v1, v[2:3] glc slc"},
+    {flat(15, {.addr = 2, .vdst = 4}), "flat_load_dwordx3 v[4:6], v[2:3]"},
+    {flat(31, {.addr = 2, .data = 4}), "flat_store_dwordx3 v[2:3], v[4:6]"},
+    {flat(24, {.addr = 254, .data = 1, .slc = true}), "flat_store_byte v[254:255], v1 slc"},
+    {flat(50, {.addr = 2, .data = 1}), "flat_atomic_add v[2:3], v1"},
+    {flat(50, {.addr = 2, .data = 1, .glc = true}), "flat_atomic_add v0, v[2:3], v1 glc"},
+    {flat(49, {.addr = 2, .data = 4}), "flat_atomic_cmpswap v[2:3], v[4:5]"},
+    {flat(94, {.addr = 2, .data = 4, .vdst = 0, .glc = true}),
+     "flat_atomic_fcmpswap_x2 v[0:1], v[2:3], v[4:7] glc"},
 };
 
 TEST(GcnDsFlat, Text) {
@@ -135,6 +172,9 @@ TEST(GcnDsFlat, AssemblesToTheSameWords) {
 // Encodings that LLVM's gfx7 syntax can't express. The text is still LLVM's syntax.
 TEST(GcnDsFlat, EncodingsLlvmCannotExpress) {
     const std::vector<Case> rejected = {
+        // TFE on FLAT, which also writes one more dword.
+        {flat(12, {.addr = 2, .vdst = 1, .tfe = true}), "flat_load_dword v[1:2], v[2:3] tfe"},
+        {flat(28, {.addr = 2, .data = 1, .tfe = true}), "flat_store_dword v[2:3], v1 tfe"},
         // GWS and ordered count without gds, ds_nop with it.
         {ds(25, {.addr = 1}), "ds_gws_init v1"},
         {ds(63, {.addr = 2, .vdst = 1}), "ds_ordered_count v1, v2"},
@@ -167,6 +207,22 @@ TEST(GcnDsFlat, UnusedFieldsAreLeftOutOfTheText) {
     EXPECT_EQ(disassemble(one(reserved)), "ds_read_b32 v4, v1");
     if (have_llvm_mc()) {
         EXPECT_EQ(assemble({"ds_nop"}).at(0).words, ds(20, {}));
+    }
+}
+
+// A FLAT atomic without glc returns nothing, so its VDST field is unused. The reserved bits of
+// both dwords (15-0 of the first, 22-16 of the second) are ignored.
+TEST(GcnDsFlat, UnusedFlatFieldsAreLeftOutOfTheText) {
+    const Instruction atomic = one(flat(50, {.addr = 2, .data = 1, .vdst = 9}));
+    EXPECT_EQ(atomic.num_dst, 0);
+    EXPECT_EQ(disassemble(atomic), "flat_atomic_add v[2:3], v1");
+    Words reserved = flat(12, {.addr = 2, .vdst = 1});
+    reserved[0] |= 0xffffu;
+    reserved[1] |= 0x7fu << 16;
+    EXPECT_EQ(disassemble(one(reserved)), "flat_load_dword v1, v[2:3]");
+    if (have_llvm_mc()) {
+        EXPECT_EQ(assemble({"flat_atomic_add v[2:3], v1"}).at(0).words,
+                  flat(50, {.addr = 2, .data = 1}));
     }
 }
 
@@ -215,6 +271,17 @@ TEST(GcnDsFlat, RoundTripEveryDsOpcode) {
                               .gds = op != 20}));
     }
     round_trip(Format::ds, all, 140, {"ds_condxchg32_rtn_b128"});
+}
+
+TEST(GcnDsFlat, RoundTripEveryFlatOpcode) {
+    std::vector<Words> all;
+    for (unsigned op = 0; op < 128; ++op) {
+        for (bool glc : {false, true}) {
+            all.push_back(
+                flat(op, {.addr = 10, .data = 20, .vdst = 40, .glc = glc, .slc = !glc}));
+        }
+    }
+    round_trip(Format::flat, all, 92, {});
 }
 
 }  // namespace

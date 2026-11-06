@@ -1,5 +1,5 @@
 // Decoder for the scalar microcode formats (Sea Islands ISA manual, "Microcode Formats"). DS is
-// decoded in ds_flat.cpp, MUBUF in memory.cpp. FLAT is not decoded yet (second part of #119).
+// decoded in ds_flat.cpp (with FLAT), MUBUF in memory.cpp.
 
 #include <algorithm>
 #include <array>

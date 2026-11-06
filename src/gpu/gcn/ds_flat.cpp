@@ -1,5 +1,5 @@
-// The DS format (LDS and GDS): opcode table, decoding and modifier text, from the Sea Islands
-// ISA manual (chapter "Microcode Formats"). Regular families are built in loops.
+// The DS (LDS and GDS) and FLAT formats: opcode tables, decoding and modifier text, from the
+// Sea Islands ISA manual (chapter "Microcode Formats"). Regular families are built in loops.
 
 #include <array>
 #include <cstddef>
@@ -16,7 +16,8 @@ namespace bb::gcn::detail {
 
 namespace {
 
-constexpr unsigned ds_encoding = 0x36;  // bits 31-26
+constexpr unsigned ds_encoding = 0x36;    // bits 31-26
+constexpr unsigned flat_encoding = 0x37;  // bits 31-26 (CI)
 
 std::uint32_t bits(std::uint32_t word, unsigned low, unsigned count) {
     return (word >> low) & ((1u << count) - 1);
@@ -42,7 +43,17 @@ struct DsOp {
     DsOffset offset = DsOffset::single;
 };
 
-void set(std::vector<DsOp>& t, unsigned op, DsOp row) {
+// One FLAT opcode. The address is always a VGPR pair. An atomic returns `data` dwords into VDST
+// (half of them for the compare-swaps) when GLC is set.
+struct FlatOp {
+    std::string name;
+    std::uint8_t dst = 0;
+    std::uint8_t data = 0;
+    bool atomic = false;
+};
+
+template <typename Op>
+void set(std::vector<Op>& t, unsigned op, Op row) {
     if (t.size() <= op) {
         t.resize(op + 1);
     }
@@ -126,8 +137,49 @@ std::vector<DsOp> make_ds() {
     return t;
 }
 
+std::vector<FlatOp> make_flat() {
+    std::vector<FlatOp> t;
+    // Loads at 8-15 and stores at 24-31, with the 3-dword forms after the 4-dword ones.
+    constexpr std::array<std::pair<const char*, std::uint8_t>, 8> loads = {{
+        {"ubyte", 1}, {"sbyte", 1}, {"ushort", 1}, {"sshort", 1},
+        {"dword", 1}, {"dwordx2", 2}, {"dwordx4", 4}, {"dwordx3", 3}}};
+    for (unsigned i = 0; i < loads.size(); ++i) {
+        set(t, 8 + i, {std::string("flat_load_") + loads[i].first, loads[i].second, 0});
+    }
+    constexpr std::array<std::pair<unsigned, const char*>, 2> narrow = {{{24, "byte"},
+                                                                          {26, "short"}}};
+    for (auto [op, name] : narrow) {
+        set(t, op, {std::string("flat_store_") + name, 0, 1});
+    }
+    for (unsigned i = 4; i < loads.size(); ++i) {
+        set(t, 24 + i, {std::string("flat_store_") + loads[i].first, 0, loads[i].second});
+    }
+    // Atomics at 48-64, and their 64-bit forms at 80-96. 52 is unused.
+    constexpr std::array<const char*, 17> atomics = {
+        "swap", "cmpswap", "add", "sub", nullptr, "smin", "umin", "smax", "umax",
+        "and",  "or",      "xor", "inc", "dec",   "fcmpswap", "fmin", "fmax"};
+    for (unsigned i = 0; i < atomics.size(); ++i) {
+        if (atomics[i] == nullptr) {
+            continue;
+        }
+        const bool cmpswap = i == 1 || i == 14;
+        for (std::uint8_t size : {1, 2}) {
+            const auto data = static_cast<std::uint8_t>(cmpswap ? 2 * size : size);
+            set(t, (size == 1 ? 48 : 80) + i,
+                {std::format("flat_atomic_{}{}", atomics[i], size == 1 ? "" : "_x2"), size, data,
+                 true});
+        }
+    }
+    return t;
+}
+
 const std::vector<DsOp>& ds_table() {
     static const std::vector<DsOp> t = make_ds();
+    return t;
+}
+
+const std::vector<FlatOp>& flat_table() {
+    static const std::vector<FlatOp> t = make_flat();
     return t;
 }
 
@@ -169,6 +221,31 @@ void decode_ds(Instruction& inst, std::uint32_t w0, std::uint32_t w1) {
     }
 }
 
+void decode_flat(Instruction& inst, std::uint32_t w0, std::uint32_t w1) {
+    const auto& table = flat_table();
+    const unsigned op = bits(w0, 18, 7);
+    if (op >= table.size() || table[op].name.empty()) {
+        fail(inst, w0, std::format("unknown FLAT opcode {}", op));
+    }
+    const FlatOp& info = table[op];
+    inst.format = Format::flat;
+    inst.opcode = static_cast<std::uint16_t>(op);
+    inst.name = info.name;
+    inst.flags = static_cast<std::uint16_t>((bits(w0, 16, 1) ? flag::glc : 0) |
+                                            (bits(w0, 17, 1) ? flag::slc : 0) |
+                                            (bits(w1, 23, 1) ? flag::tfe : 0));
+    // TFE writes one more dword after the result.
+    const bool returns = !info.atomic || (inst.flags & flag::glc);
+    if (info.dst && returns) {
+        const unsigned dwords = info.dst + ((inst.flags & flag::tfe) ? 1 : 0);
+        inst.dst[inst.num_dst++] = vgpr(inst, w0, bits(w1, 24, 8), dwords);
+    }
+    inst.src[inst.num_src++] = vgpr(inst, w0, bits(w1, 0, 8), 2);
+    if (info.data) {
+        inst.src[inst.num_src++] = vgpr(inst, w0, bits(w1, 8, 8), info.data);
+    }
+}
+
 // The offset modifiers of a DS instruction, as LLVM prints them: offsets in decimal, left out
 // when 0. LLVM prints the swizzle pattern in its swizzle() form, and accepts the number.
 std::string ds_offset(const Instruction& inst) {
@@ -203,7 +280,7 @@ std::string ds_offset(const Instruction& inst) {
 }  // namespace
 
 bool is_ds_flat(std::uint32_t word) {
-    return bits(word, 26, 6) == ds_encoding;
+    return bits(word, 26, 6) == ds_encoding || bits(word, 26, 6) == flat_encoding;
 }
 
 Instruction decode_ds_flat(std::span<const std::uint32_t> code, std::size_t index) {
@@ -214,14 +291,22 @@ Instruction decode_ds_flat(std::span<const std::uint32_t> code, std::size_t inde
     if (index + 1 >= code.size()) {
         fail(inst, w0, "instruction past the end of the code");
     }
-    decode_ds(inst, w0, code[index + 1]);
+    if (bits(w0, 26, 6) == ds_encoding) {
+        decode_ds(inst, w0, code[index + 1]);
+    } else {
+        decode_flat(inst, w0, code[index + 1]);
+    }
     return inst;
 }
 
 std::string ds_flat_modifiers(const Instruction& inst) {
-    std::string out = ds_offset(inst);
-    if (inst.flags & flag::gds) {
-        out += " gds";
+    std::string out = inst.format == Format::ds ? ds_offset(inst) : "";
+    constexpr std::array<std::pair<std::uint16_t, const char*>, 4> names = {
+        {{flag::gds, " gds"}, {flag::glc, " glc"}, {flag::slc, " slc"}, {flag::tfe, " tfe"}}};
+    for (auto [bit, name] : names) {
+        if (inst.flags & bit) {
+            out += name;
+        }
     }
     return out;
 }
