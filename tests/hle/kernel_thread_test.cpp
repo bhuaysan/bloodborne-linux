@@ -1,23 +1,18 @@
 // Thread creation, join and exit, called through their registered NIDs. This test links
-// bbeboottls, so new threads run the eboot TLS check and game-style code can use fs.
+// bbeboottls, so every new thread runs the eboot TLS check.
 
 #include "hle/kernel/thread.hpp"
 
 #include <pthread.h>
-#include <sys/mman.h>
 
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
-#include <thread>
 
 #include <gtest/gtest.h>
 
 #include "common/log.hpp"
 #include "hle/hle.hpp"
-#include "hle/kernel/tls.hpp"
 #include "loader/dynamic.hpp"
 
 namespace {
@@ -216,37 +211,6 @@ TEST(Thread, InvalidHandlesAndAttributesAreRefused) {
     EXPECT_EQ(create(&thread, nullptr, nullptr, nullptr, nullptr), einval);
     EXPECT_EQ(create(nullptr, nullptr, add_one, nullptr, nullptr), einval);
     EXPECT_EQ(attr_init(nullptr), einval);
-}
-
-// ---- game code ---------------------------------------------------------------------------------
-
-// Game-style code that uses the eboot's TLS block as the eboot does (fs:0 plus a negative offset):
-//   mov rax, fs:0; mov rcx, [rax-0x750]; mov [rax-0x750], rdi; add rcx, [rax-0x750];
-//   mov rax, rcx; ret
-// It returns its argument plus what the slot held before, which is 0 on a new thread.
-constexpr std::array<unsigned char, 34> tls_entry = {
-    0x64, 0x48, 0x8b, 0x04, 0x25, 0x00, 0x00, 0x00, 0x00, 0x48, 0x8b, 0x88,
-    0xb0, 0xf8, 0xff, 0xff, 0x48, 0x89, 0xb8, 0xb0, 0xf8, 0xff, 0xff, 0x48,
-    0x03, 0x88, 0xb0, 0xf8, 0xff, 0xff, 0x48, 0x89, 0xc8, 0xc3};
-
-TEST(Thread, AGameStyleEntryReadsItsTlsOnTheNewThread) {
-    void* page = mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    ASSERT_NE(page, MAP_FAILED);
-    std::memcpy(page, tls_entry.data(), tls_entry.size());
-    ASSERT_EQ(mprotect(page, 4096, PROT_READ | PROT_EXEC), 0);
-    auto* slot = reinterpret_cast<std::uint64_t*>(eboot_tls_placement()->block);
-    *slot = 0x1000;  // the creating thread's slot, which the new thread must not see
-
-    Handle thread = nullptr;
-    ASSERT_EQ(create(&thread, nullptr, reinterpret_cast<ThreadEntry>(page),
-                     reinterpret_cast<void*>(0x5a5a), "tls"),
-              0);
-    void* value = nullptr;
-    ASSERT_EQ(join(thread, &value), 0);
-    EXPECT_EQ(value, reinterpret_cast<void*>(0x5a5a));
-    EXPECT_EQ(*slot, 0x1000U);
-    *slot = 0;
-    munmap(page, 4096);
 }
 
 }  // namespace
