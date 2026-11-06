@@ -45,21 +45,20 @@ std::vector<std::uint32_t> words(std::string_view bytes) {
     return out;
 }
 
-}  // namespace
-
-bool have_llvm_mc() {
-    return !std::string_view(BB_LLVM_MC).empty();
-}
-
-std::vector<std::vector<std::uint32_t>> assemble_file(const fs::path& source) {
+// Every instruction llvm-mc assembles from the source file, in order.
+std::vector<Assembled> assemble_path(const fs::path& source) {
     const std::string output = run(std::string("'") + BB_LLVM_MC +
                                    "' -triple=amdgcn -mcpu=bonaire -show-encoding '" +
                                    source.string() + "'");
-    std::vector<std::vector<std::uint32_t>> out;
+    // Each line is "\t<text> ; encoding: [<bytes>]", with the text padded by spaces.
+    std::vector<Assembled> out;
     std::istringstream stream(output);
     for (std::string line; std::getline(stream, line);) {
         if (auto pos = line.find("; encoding: ["); pos != std::string::npos) {
-            out.push_back(words(std::string_view(line).substr(pos)));
+            const auto first = line.find_first_not_of(" \t");
+            const auto last = line.find_last_not_of(' ', pos - 1);
+            out.push_back({line.substr(first, last + 1 - first),
+                           words(std::string_view(line).substr(pos))});
         }
     }
     if (output.find("error:") != std::string::npos) {
@@ -72,7 +71,21 @@ std::vector<std::vector<std::uint32_t>> assemble_file(const fs::path& source) {
     return out;
 }
 
-std::vector<std::vector<std::uint32_t>> assemble(const std::vector<std::string>& lines) {
+}  // namespace
+
+bool have_llvm_mc() {
+    return !std::string_view(BB_LLVM_MC).empty();
+}
+
+std::vector<std::vector<std::uint32_t>> assemble_file(const fs::path& source) {
+    std::vector<std::vector<std::uint32_t>> out;
+    for (auto& inst : assemble_path(source)) {
+        out.push_back(std::move(inst.words));
+    }
+    return out;
+}
+
+std::vector<Assembled> assemble(const std::vector<std::string>& lines) {
     std::string path = (fs::temp_directory_path() / "bb-gcn-XXXXXX").string();
     int fd = ::mkstemp(path.data());
     if (fd < 0) {
@@ -85,9 +98,9 @@ std::vector<std::vector<std::uint32_t>> assemble(const std::vector<std::string>&
             source << line << '\n';
         }
     }
-    std::vector<std::vector<std::uint32_t>> out;
+    std::vector<Assembled> out;
     try {
-        out = assemble_file(path);
+        out = assemble_path(path);
     } catch (...) {
         fs::remove(path);
         throw;
