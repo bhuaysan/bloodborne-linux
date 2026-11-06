@@ -141,6 +141,48 @@ int fd() {
     return memfd;
 }
 
+namespace {
+
+// A shared view of the memfd at `offset`, as a direct region of the region table.
+vmem::Mapping direct_mapping(std::uintptr_t address, std::uint64_t length, int prot,
+                             std::uint64_t offset) {
+    vmem::Mapping m;
+    m.address = address;
+    m.length = length;
+    m.prot = prot;
+    m.host_flags = MAP_SHARED;
+    m.fd = fd();
+    m.fd_offset = static_cast<off_t>(offset);
+    m.flags = vmem::region_direct;
+    m.offset = offset;
+    return m;
+}
+
+// One entry of the batch map: 0 or a host errno.
+int run_batch_entry(const BatchEntry& e) {
+    if (e.operation == batch_unmap) {
+        return vmem::restore_reservation(e.address, e.length);
+    }
+    if (e.operation != batch_map) {
+        common::log(LogLevel::warn, channel, "direct memory: batch operation {} refused",
+                    e.operation);
+        return EINVAL;
+    }
+    if (!valid_range(e.offset, e.length)) {
+        return EINVAL;
+    }
+    const std::scoped_lock lock(table_mutex);
+    if (!covered(e.offset, e.offset + e.length)) {
+        return EINVAL;
+    }
+    vmem::Mapping m = direct_mapping(e.address, e.length, e.prot, e.offset);
+    m.fixed = true;
+    m.into_reservation = true;
+    std::uintptr_t out = 0;
+    return vmem::map(m, out);
+}
+
+}  // namespace
 }  // namespace bb::hle::kernel::dmem
 
 namespace bb::hle::kernel {
@@ -192,15 +234,8 @@ std::int32_t map_direct(void** address, std::uint64_t length, int prot, int flag
     if (!covered(offset, offset + length)) {
         return sce_error(guest_einval);
     }
-    vmem::Mapping m;
-    m.address = reinterpret_cast<std::uintptr_t>(*address);
-    m.length = length;
-    m.prot = prot;
-    m.host_flags = MAP_SHARED;
-    m.fd = fd();
-    m.fd_offset = static_cast<off_t>(offset);
-    m.flags = vmem::region_direct;
-    m.offset = offset;
+    vmem::Mapping m =
+        direct_mapping(reinterpret_cast<std::uintptr_t>(*address), length, prot, offset);
     m.alignment = *align;
     std::uintptr_t out = 0;
     if (const int error = vmem::map(m, out)) {
@@ -254,10 +289,56 @@ std::int32_t direct_memory_type(std::uint64_t offset, std::int32_t* type, std::u
     return 0;
 }
 
+// The only caller (0x2901fbd) passes flags 0x80 and alignment 0, and releases the range with
+// sceKernelMunmap.
+std::int32_t reserve_range(void** address, std::uint64_t length, int flags,
+                           std::uint64_t alignment) {
+    if ((flags & ~map_flag_0x80) != 0) {
+        common::log(LogLevel::warn, channel, "direct memory: reserve flags {:#x} refused", flags);
+        return sce_error(guest_einval);
+    }
+    const std::optional<std::uint64_t> align = checked_alignment(alignment);
+    if (address == nullptr || !align) {
+        return sce_error(guest_einval);
+    }
+    std::uintptr_t out = 0;
+    if (const int error =
+            vmem::reserve(reinterpret_cast<std::uintptr_t>(*address), length, *align, out)) {
+        return sce_fail(error);
+    }
+    *address = reinterpret_cast<void*>(out);
+    return 0;
+}
+
+// 0x2901eb0 maps blocks of direct memory into a reservation with batch_map and passes `done`; on
+// failure it undoes the first *done entries with batch_unmap and a null `done` (0x2902101), then
+// unmaps the whole reservation (0x2902115).
+std::int32_t map_direct_batch(const BatchEntry* entries, std::int32_t count, std::int32_t* done) {
+    if (done != nullptr) {
+        *done = 0;
+    }
+    if (entries == nullptr || count < 0) {
+        return sce_error(guest_einval);
+    }
+    for (std::int32_t i = 0; i < count; ++i) {
+        if (const int error = run_batch_entry(entries[i])) {
+            common::log(LogLevel::warn, channel, "direct memory: batch entry {} of {} failed: {}",
+                        i, count, std::strerror(error));
+            return sce_fail(error);
+        }
+        if (done != nullptr) {
+            *done = i + 1;
+        }
+    }
+    return 0;
+}
+
 BB_HLE_FUNCTION("libkernel", "pO96TwzOm5E", direct_memory_size);  // name unknown
 BB_HLE_FUNCTION("libkernel", "rTXw65xmLIA", allocate_direct);     // name unknown
 BB_HLE_FUNCTION("libkernel", "L-Q3LEjIbgA", map_direct);          // name unknown
 BB_HLE_FUNCTION("libkernel", "MBuItvba6z8", release_direct);      // name unknown
 BB_HLE_FUNCTION("libkernel", "BC+OG5m9+bw", direct_memory_type);  // name unknown
+BB_HLE_FUNCTION("libkernel", "7oxv3PPCumo", reserve_range);       // name unknown
+BB_HLE_FUNCTION("libkernel", "2SKEx6bSq-4", map_direct_batch);    // name unknown
 
 }  // namespace bb::hle::kernel
