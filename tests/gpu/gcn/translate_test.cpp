@@ -7,6 +7,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -179,6 +180,29 @@ std::string lds_events(const std::vector<std::uint32_t>& module) {
 // structure of the module tells: lds_wave writes, reads, writes and reads again.
 TEST(GcnTranslate, DsInstructionsWaitForTheSubgroup) {
     EXPECT_EQ(lds_events(translate(program_words("lds_wave"), {}, key5).spirv), "SWSRSWSR");
+}
+
+// How many instructions of `op` the module has.
+unsigned count_ops(const std::vector<std::uint32_t>& module, spv::Op op) {
+    unsigned count = 0;
+    for (std::size_t at = 5; at < module.size(); at += module[at] >> 16) {  // 5 header words
+        count += (module[at] & 0xffff) == static_cast<std::uint32_t>(op);
+    }
+    return count;
+}
+
+// A ds_write_b8 or ds_write_b16 merges its bits into the dword with one compare-and-swap loop that
+// starts from an atomic load. An atomic AND followed by an atomic OR would let another lane's
+// write show between the two, and lavapipe runs the lanes in order, so only the structure of the
+// module tells. lds_narrow has two of each.
+TEST(GcnTranslate, SubDwordWritesAreOneCompareSwapLoop) {
+    const auto count = [](spv::Op op) {
+        return count_ops(translate(program_words("lds_narrow"), {}, key5).spirv, op);
+    };
+    EXPECT_EQ(count(spv::Op::OpAtomicLoad), 4u);
+    EXPECT_EQ(count(spv::Op::OpAtomicCompareExchange), 4u);
+    EXPECT_EQ(count(spv::Op::OpAtomicAnd), 0u);
+    EXPECT_EQ(count(spv::Op::OpAtomicOr), 0u);
 }
 
 // Scalar ALU, a loop on SCC, and the vector ALU in VOP1, VOP2 and VOP3 encodings.
