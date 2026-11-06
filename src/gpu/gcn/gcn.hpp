@@ -74,9 +74,9 @@ inline constexpr std::uint16_t gds = 1;     // DS: global data share instead of 
 inline constexpr std::uint16_t offen = 2;   // MUBUF: VGPR offset
 inline constexpr std::uint16_t idxen = 4;   // MUBUF: VGPR index
 inline constexpr std::uint16_t addr64 = 8;  // MUBUF: 64-bit VGPR address
-inline constexpr std::uint16_t glc = 16;    // MUBUF
-inline constexpr std::uint16_t slc = 32;    // MUBUF
-inline constexpr std::uint16_t tfe = 64;    // MUBUF
+inline constexpr std::uint16_t glc = 16;    // MUBUF, FLAT
+inline constexpr std::uint16_t slc = 32;    // MUBUF, FLAT
+inline constexpr std::uint16_t tfe = 64;    // MUBUF, FLAT
 inline constexpr std::uint16_t lds = 128;   // MUBUF: load into LDS
 }  // namespace flag
 

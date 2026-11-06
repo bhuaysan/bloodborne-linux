@@ -211,13 +211,13 @@ TEST(GcnDsFlat, UnusedFieldsAreLeftOutOfTheText) {
 }
 
 // A FLAT atomic without glc returns nothing, so its VDST field is unused. The reserved bits of
-// both dwords (15-0 of the first, 22-16 of the second) are ignored.
+// both dwords (25 and 15-0 of the first, 22-16 of the second) are ignored.
 TEST(GcnDsFlat, UnusedFlatFieldsAreLeftOutOfTheText) {
     const Instruction atomic = one(flat(50, {.addr = 2, .data = 1, .vdst = 9}));
     EXPECT_EQ(atomic.num_dst, 0);
     EXPECT_EQ(disassemble(atomic), "flat_atomic_add v[2:3], v1");
     Words reserved = flat(12, {.addr = 2, .vdst = 1});
-    reserved[0] |= 0xffffu;
+    reserved[0] |= 1u << 25 | 0xffffu;
     reserved[1] |= 0x7fu << 16;
     EXPECT_EQ(disassemble(one(reserved)), "flat_load_dword v1, v[2:3]");
     if (have_llvm_mc()) {
