@@ -1,5 +1,6 @@
 // Differential tests of an eboot function that allocates, against C++ versions written for these
 // tests only, with the load set loaded and initialised (LoadSetTest).
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -226,6 +227,31 @@ TEST_F(LoadSetTest, MapCallsCatchWrongVersions) {
                                                      &map_direct_pages_allocating_twice,
                                                      length(0x10000)),
                   "guest memory: differs at change 2 (original 2 changes, replacement 2)");
+}
+
+std::optional<vmem::Region> heap;  // a read-write mapping of the baseline
+
+int protects_the_heap(std::uint64_t prot) {
+    return vmem::protect(heap->start, heap->end - heap->start, static_cast<int>(prot));
+}
+
+// A replacement that changes a baseline mapping fails without reading the regions, which it may
+// have made unreadable. The original protects the mapping as it already is.
+TEST_F(LoadSetTest, MapCallsCatchAChangedBaselineMapping) {
+    const std::vector<vmem::Region> mappings = vmem::regions();
+    const auto it = std::ranges::find(mappings, 3, &vmem::Region::prot);
+    ASSERT_NE(it, mappings.end());
+    heap = *it;
+    const Result r = harness().compare_functions<int(std::uint64_t)>(
+        &protects_the_heap, +[](std::uint64_t) { return protects_the_heap(0); }, length(3));
+    const auto mapping = [&](int prot) {
+        return std::format("mapping {:#x}..{:#x} prot {:#x} flags {:#x} offset {:#x}", heap->start,
+                           heap->end, prot, heap->flags, heap->offset);
+    };
+    expect_report(r, "memory: not compared, the guest memory baseline changed\nguest memory: "
+                     "differs at change 1 (original 0 changes, replacement 2)\n  replacement 1: " +
+                         mapping(3) + " removed\n  replacement 2: " + mapping(0) + "\n");
+    ASSERT_EQ(protects_the_heap(3), 0);  // the baseline back for the next test
 }
 
 // The restore takes back the mappings and the allocations, so the same calls get the same

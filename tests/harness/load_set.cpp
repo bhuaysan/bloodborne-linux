@@ -125,14 +125,20 @@ public:
 
     std::vector<std::string> changes() const override {
         std::vector<std::string> out;
-        for (const vmem::Region& r : vmem::regions()) {
-            if (std::ranges::find(mappings_, r) == mappings_.end()) {
-                out.push_back(std::format("mapping {:#x}..{:#x} prot {:#x} flags {:#x} offset "
-                                          "{:#x}{}",
-                                          r.start, r.end, r.prot, r.flags, r.offset,
-                                          r.reserved ? " reserved" : ""));
+        const std::vector<vmem::Region> table = vmem::regions();
+        auto mappings = [&](const std::vector<vmem::Region>& from,
+                            const std::vector<vmem::Region>& other, std::string_view what) {
+            for (const vmem::Region& r : from) {
+                if (std::ranges::find(other, r) == other.end()) {
+                    out.push_back(std::format("mapping {:#x}..{:#x} prot {:#x} flags {:#x} offset "
+                                              "{:#x}{}{}",
+                                              r.start, r.end, r.prot, r.flags, r.offset,
+                                              r.reserved ? " reserved" : "", what));
+                }
             }
-        }
+        };
+        mappings(mappings_, table, " removed");  // or changed: then also listed as made
+        mappings(table, mappings_, "");
         const std::vector<Allocated> now = hle::kernel::dmem::allocations();
         auto list = [&](const std::vector<Allocated>& from, const std::vector<Allocated>& other,
                         std::string_view what) {
@@ -146,6 +152,12 @@ public:
         list(now, allocations_, "allocated");
         list(allocations_, now, "released");
         return out;
+    }
+
+    bool intact() const override {
+        const std::vector<vmem::Region> now = vmem::regions();
+        return std::ranges::all_of(
+            mappings_, [&](const vmem::Region& r) { return std::ranges::find(now, r) != now.end(); });
     }
 
 private:

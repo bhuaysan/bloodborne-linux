@@ -90,6 +90,8 @@ public:
     // What changed since the baseline, one line each, in an order that doesn't depend on the
     // order of the calls that changed it. Compared line by line between the two calls.
     virtual std::vector<std::string> changes() const = 0;
+    // False if the baseline's state is gone or changed, which may leave the regions unreadable.
+    virtual bool intact() const { return true; }
 };
 
 // What one comparison found. True when nothing differs; report() then is empty.

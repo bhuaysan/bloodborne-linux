@@ -236,6 +236,10 @@ void Harness::take(std::size_t i, Contents& out) const {
 }
 
 void Harness::keep_original() {
+    if (state_ != nullptr && !state_->intact()) {
+        throw std::runtime_error(
+            std::format("harness: the original changed the {} baseline", state_->name()));
+    }
     after_original_.resize(regions_.size());
     for (std::size_t i = 0; i < regions_.size(); ++i) {
         take(i, after_original_[i]);
@@ -248,7 +252,11 @@ void Harness::keep_original() {
 
 void Harness::compare_state(Result& result) const {
     std::size_t ranges = 0;
-    for (std::size_t i = 0; i < regions_.size(); ++i) {
+    const bool readable = state_ == nullptr || state_->intact();
+    if (!readable) {
+        result.add(std::format("memory: not compared, the {} baseline changed", state_->name()));
+    }
+    for (std::size_t i = 0; readable && i < regions_.size(); ++i) {
         compare_region(i, result, ranges);
     }
     if (ranges > max_ranges) {
