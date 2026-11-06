@@ -1,4 +1,4 @@
-// MUBUF, MTBUF and EXP: decoding and LLVM's syntax for words encoded by hand from the Sea Islands
+// MUBUF, MTBUF, MIMG and EXP: decoding and LLVM's syntax for words encoded by hand from the Sea Islands
 // ISA manual, and a round trip through llvm-mc for every opcode and export target.
 
 #include <cstdint>
@@ -345,6 +345,148 @@ TEST(GcnMemory, TypedAndExportEncodingsLlvmCannotExpress) {
             } catch (const std::runtime_error&) {
                 // rejected
             }
+        }
+    }
+}
+
+TEST(GcnMemory, Image) {
+    // A sample: vdata is the destination, one register per dmask bit and one for the status
+    // under tfe. The resource is 8 SGPRs and the sampler 4.
+    Instruction inst = one(mimg(32, 1, 4, 8, 12, 0x5, img::tfe | img::glc | img::slc | img::da));
+    EXPECT_EQ(inst.format, Format::mimg);
+    EXPECT_EQ(inst.size, 2);
+    EXPECT_EQ(inst.opcode, 32);
+    EXPECT_EQ(inst.num_dst, 1);
+    EXPECT_EQ(inst.dst[0], v(1, 3));
+    ASSERT_EQ(inst.num_src, 3);
+    EXPECT_EQ(inst.src[0], v(4));
+    EXPECT_EQ(inst.src[1], (Operand{OperandKind::scalar, 8, 8, 0}));
+    EXPECT_EQ(inst.src[2], (Operand{OperandKind::scalar, 4, 12, 0}));
+    EXPECT_EQ(inst.mem_offset, 0x5);  // the dmask
+    EXPECT_EQ(inst.flags, flag::tfe | flag::glc | flag::slc | flag::da);
+
+    // A load has no sampler, and dmask 0 still returns one register. A store and an atomic read
+    // vdata. A gather returns four registers. The address is the shortest LLVM accepts.
+    inst = one(mimg(0, 2, 4, 8, 0, 0, img::unorm | img::r128 | img::lwe));
+    EXPECT_EQ(inst.dst[0], v(2));
+    EXPECT_EQ(inst.num_src, 2);
+    EXPECT_EQ(inst.flags, flag::unorm | flag::r128 | flag::lwe);
+    inst = one(mimg(8, 2, 4, 8, 0, 0xf));
+    EXPECT_EQ(inst.num_dst, 0);
+    EXPECT_EQ(inst.src[0], v(2, 4));
+    inst = one(mimg(17, 2, 4, 8, 0, 0x3));  // image_atomic_add
+    EXPECT_EQ(inst.src[0], v(2, 2));
+    inst = one(mimg(68, 2, 4, 8, 12, 0x2, img::tfe));  // image_gather4_l
+    EXPECT_EQ(inst.dst[0], v(2, 5));
+    inst = one(mimg(111, 2, 4, 8, 12, 0xf));  // image_sample_c_cd_cl_o
+    EXPECT_EQ(inst.src[0], v(4, 4));
+
+    EXPECT_NE(error(mimg(6, 1, 4, 8, 0, 1)).find("unknown MIMG opcode 6 at offset 0x0"),
+              std::string::npos);
+    EXPECT_NE(error(mimg(66, 1, 4, 8, 12, 1)).find("unknown MIMG opcode 66"), std::string::npos);
+    EXPECT_NE(error({mimg(0, 1, 4, 8, 0, 1)[0]}).find("second dword past the end"),
+              std::string::npos);
+    EXPECT_NE(error(mimg(0, 253, 4, 8, 0, 0xf)).find("VGPR range v253 with 4 dwords"),
+              std::string::npos);
+    EXPECT_NE(error(mimg(0, 1, 4, 104, 0, 1)).find("invalid 8-dword descriptor operand 104"),
+              std::string::npos);
+    EXPECT_NE(error(mimg(32, 1, 4, 8, 124, 1)).find("invalid 4-dword descriptor operand 124"),
+              std::string::npos);
+}
+
+const std::vector<Case> image_cases = {
+    // The starting point of the design: a sample with all four components.
+    {mimg(32, 0, 4, 8, 12, 0xf), "image_sample v[0:3], v4, s[8:15], s[12:15] dmask:0xf"},
+    {mimg(0, 1, 4, 8, 0, 0), "image_load v1, v4, s[8:15]"},
+    {mimg(0, 1, 4, 96, 0, 0x1), "image_load v1, v4, s[96:103] dmask:0x1"},
+    // The flags print in LLVM's order, and r128 still prints eight SGPRs.
+    {mimg(32, 1, 4, 8, 12, 0xf,
+          img::unorm | img::glc | img::slc | img::r128 | img::tfe | img::lwe | img::da),
+     "image_sample v[1:5], v4, s[8:15], s[12:15] dmask:0xf unorm glc slc r128 tfe lwe da"},
+    {mimg(8, 4, 8, 16, 0, 0x7), "image_store v[4:6], v8, s[16:23] dmask:0x7"},
+    {mimg(16, 0, 4, 8, 0, 0x3, img::glc),
+     "image_atomic_cmpswap v[0:1], v4, s[8:15] dmask:0x3 glc"},
+    {mimg(14, 2, 4, 8, 0, 0xf), "image_get_resinfo v[2:5], v4, s[8:15] dmask:0xf"},
+    {mimg(104, 0, 4, 8, 12, 0xf), "image_sample_cd v[0:3], v[4:5], s[8:15], s[12:15] dmask:0xf"},
+    {mimg(93, 0, 4, 8, 12, 0x4),
+     "image_gather4_c_b_o v[0:3], v[4:7], s[8:15], s[12:15] dmask:0x4"},
+    {mimg(96, 0, 4, 8, 12, 0x3), "image_get_lod v[0:1], v4, s[8:15], s[12:15] dmask:0x3"},
+    {mimg(39, 8, 252, 96, 100, 0x1),
+     "image_sample_lz v8, v252, s[96:103], s[100:103] dmask:0x1"},
+};
+
+TEST(GcnMemory, ImageText) {
+    for (const Case& c : image_cases) {
+        SCOPED_TRACE(c.text);
+        EXPECT_EQ(text(c.words), c.text);
+    }
+}
+
+TEST(GcnMemory, ImageAssemblesToTheSameWords) {
+    if (!have_llvm_mc()) {
+        GTEST_SKIP() << "llvm-mc not found";
+    }
+    expect_assembles(image_cases);
+}
+
+// Every opcode with typical operands through llvm-mc and back: each kind of dmask, and tfe.
+TEST(GcnMemory, RoundTripImage) {
+    std::vector<Case> all;
+    for (unsigned op = 0; op < 128; ++op) {
+        try {
+            const bool atomic = op >= 15 && op < 32, gather = op >= 64 && op < 96;
+            const unsigned dmask = atomic ? 3 : gather ? 2 : 0xb;
+            const unsigned ssamp = op >= 32 && op != 126 ? 12 : 0;  // the sampling opcodes
+            for (std::uint64_t flags : {std::uint64_t{0}, img::tfe | img::glc | img::da}) {
+                const auto w = mimg(op, 1, 4, 8, ssamp, dmask, flags);
+                all.push_back({w, text(w)});
+            }
+        } catch (const GcnError&) {
+        }
+    }
+    EXPECT_EQ(all.size(), 2u * 93);
+    if (!have_llvm_mc()) {
+        GTEST_SKIP() << "llvm-mc not found";
+    }
+    expect_assembles(all);
+}
+
+// Every dmask of a load and a sample through llvm-mc, and the other flag combinations.
+TEST(GcnMemory, RoundTripImageDmaskAndFlags) {
+    std::vector<Case> all;
+    for (unsigned dmask = 0; dmask < 16; ++dmask) {
+        for (unsigned op : {0u, 8u, 32u}) {
+            const auto w = mimg(op, 1, 4, 8, op == 32 ? 12 : 0, dmask, dmask & 1 ? img::tfe : 0);
+            all.push_back({w, text(w)});
+        }
+    }
+    for (unsigned flags = 0; flags < 128; ++flags) {
+        const std::uint64_t f = (flags & 1 ? img::unorm : 0) | (flags & 2 ? img::glc : 0) |
+                                (flags & 4 ? img::slc : 0) | (flags & 8 ? img::r128 : 0) |
+                                (flags & 16 ? img::tfe : 0) | (flags & 32 ? img::lwe : 0) |
+                                (flags & 64 ? img::da : 0);
+        const auto w = mimg(37, 1, 4, 8, 12, 1, f);
+        all.push_back({w, text(w)});
+    }
+    if (!have_llvm_mc()) {
+        GTEST_SKIP() << "llvm-mc not found";
+    }
+    expect_assembles(all);
+}
+
+// Encodings that llvm-mc rejects: a gather4 whose dmask has more or fewer than one bit, and an
+// atomic with a dmask other than 1 or 3.
+TEST(GcnMemory, ImageEncodingsLlvmCannotExpress) {
+    const std::vector<Case> differ = {
+        {mimg(64, 0, 4, 8, 12, 0x3), "image_gather4 v[0:3], v4, s[8:15], s[12:15] dmask:0x3"},
+        {mimg(64, 0, 4, 8, 12, 0), "image_gather4 v[0:3], v4, s[8:15], s[12:15]"},
+        {mimg(17, 0, 4, 8, 0, 0x7), "image_atomic_add v[0:2], v4, s[8:15] dmask:0x7"},
+    };
+    for (const Case& c : differ) {
+        SCOPED_TRACE(c.text);
+        EXPECT_EQ(text(c.words), c.text);
+        if (have_llvm_mc()) {
+            EXPECT_THROW(assemble({c.text}), std::runtime_error);
         }
     }
 }

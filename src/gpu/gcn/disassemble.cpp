@@ -271,7 +271,8 @@ std::string disassemble(const Instruction& inst) {
     if (inst.format == Format::ds || inst.format == Format::flat) {
         out += detail::ds_flat_modifiers(inst);
     }
-    if (inst.format == Format::mubuf || inst.format == Format::mtbuf) {
+    if (inst.format == Format::mubuf || inst.format == Format::mtbuf ||
+        inst.format == Format::mimg) {
         out += detail::memory_fields(inst);
     }
     return out;

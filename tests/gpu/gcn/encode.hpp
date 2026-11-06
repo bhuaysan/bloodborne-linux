@@ -64,6 +64,18 @@ inline std::vector<std::uint32_t> mtbuf(unsigned op, unsigned vdata, unsigned va
                  second(vdata, 8) | second(srsrc / 4, 16) | second(soffset, 24) | flags);
 }
 
+namespace img {  // MIMG: the flags are bits of the first dword
+inline constexpr std::uint64_t unorm = 1u << 12, glc = 1u << 13, da = 1u << 14, r128 = 1u << 15,
+                               tfe = 1u << 16, lwe = 1u << 17, slc = 1u << 25;
+}  // namespace img
+
+// MIMG: vdata and vaddr are VGPR numbers, srsrc and ssamp their first SGPR (a multiple of 4).
+inline std::vector<std::uint32_t> mimg(unsigned op, unsigned vdata, unsigned vaddr, unsigned srsrc,
+                                       unsigned ssamp, unsigned dmask, std::uint64_t flags = 0) {
+    return split(0x3cull << 26 | op << 18 | dmask << 8 | flags | second(vaddr, 0) |
+                 second(vdata, 8) | second(srsrc / 4, 16) | second(ssamp / 4, 21));
+}
+
 namespace xp {  // EXP
 inline constexpr std::uint64_t compr = 1u << 10, done = 1u << 11, vm = 1u << 12;
 }  // namespace xp

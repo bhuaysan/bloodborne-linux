@@ -1,8 +1,10 @@
-// MUBUF, MTBUF and EXP (Sea Islands ISA manual, "Microcode Formats"): the opcode tables, written
+// MUBUF, MTBUF, MIMG and EXP (Sea Islands ISA manual, "Microcode Formats"): the opcode tables, written
 // from the opcode lists with regular families built in loops, the decoders, and the fields in
 // LLVM's gfx7 syntax. Bits that the manual marks as reserved are ignored.
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <format>
 #include <string>
 #include <string_view>
@@ -20,6 +22,8 @@ enum class MemKind : std::uint8_t {
     load,    // vdata is the destination
     store,   // vdata is a source
     atomic,  // vdata is a source; with glc the old value returns into its first registers
+    sample,  // MIMG: a load that also takes a sampler
+    gather,  // MIMG: a sample that returns four registers, whatever dmask is
 };
 
 // One opcode.
@@ -102,6 +106,77 @@ const Table& mtbuf_table() {
     return table;
 }
 
+// One MIMG opcode. `addr` is the shortest address LLVM accepts: the number of coordinates and
+// parameters follows from the dimension of the resource, which the instruction doesn't name.
+struct ImgOp {
+    std::string name;  // empty for opcodes the format doesn't define
+    MemKind kind = MemKind::load;
+    std::uint8_t addr = 1;
+};
+
+using ImgTable = std::vector<ImgOp>;
+
+void set(ImgTable& t, unsigned op, std::string name, MemKind kind, unsigned addr = 1) {
+    if (t.size() <= op) {
+        t.resize(op + 1);
+    }
+    t[op] = {std::move(name), kind, static_cast<std::uint8_t>(addr)};
+}
+
+ImgTable make_mimg() {
+    ImgTable t;
+    constexpr std::array<const char*, 6> loads = {"load",         "load_mip",     "load_pck",
+                                                  "load_pck_sgn", "load_mip_pck", "load_mip_pck_sgn"};
+    for (unsigned i = 0; i < loads.size(); ++i) {
+        set(t, i, std::string("image_") + loads[i], MemKind::load);
+    }
+    constexpr std::array<const char*, 4> stores = {"store", "store_mip", "store_pck",
+                                                   "store_mip_pck"};
+    for (unsigned i = 0; i < stores.size(); ++i) {
+        set(t, 8 + i, std::string("image_") + stores[i], MemKind::store);
+    }
+    set(t, 14, "image_get_resinfo", MemKind::load);
+    for (unsigned i = 0; i < atomics.size(); ++i) {
+        set(t, 15 + i, std::string("image_atomic_") + atomics[i], MemKind::atomic);
+    }
+    // Sampling: 8 variants in the low 3 bits, a compare value (+8) and an offset (+16). The
+    // derivatives and the bias each add an address dword; the LOD and clamp variants add none.
+    constexpr std::array<const char*, 8> variants = {"", "_cl", "_d", "_d_cl", "_l", "_b", "_b_cl",
+                                                     "_lz"};
+    constexpr std::array<unsigned, 8> extra = {0, 0, 1, 1, 0, 1, 1, 0};
+    for (unsigned o = 0; o < 2; ++o) {
+        for (unsigned c = 0; c < 2; ++c) {
+            for (unsigned m = 0; m < 8; ++m) {
+                const std::string suffix = std::string(c ? "_c" : "") + variants[m] + (o ? "_o" : "");
+                const unsigned addr = 1 + c + o + extra[m];
+                const unsigned op = o * 16 + c * 8 + m;
+                set(t, 32 + op, "image_sample" + suffix, MemKind::sample, addr);
+                if (m != 2 && m != 3) {  // gather4 has no derivatives
+                    set(t, 64 + op, "image_gather4" + suffix, MemKind::gather, addr);
+                }
+            }
+        }
+    }
+    set(t, 96, "image_get_lod", MemKind::sample);
+    // The variants with derivatives per quad: compare value (+2), offset (+4) and clamp (+1).
+    for (unsigned o = 0; o < 2; ++o) {
+        for (unsigned c = 0; c < 2; ++c) {
+            for (unsigned cl = 0; cl < 2; ++cl) {
+                const std::string suffix =
+                    std::string(c ? "_c" : "") + "_cd" + (cl ? "_cl" : "") + (o ? "_o" : "");
+                set(t, 104 + o * 4 + c * 2 + cl, "image_sample" + suffix, MemKind::sample,
+                    2 + c + o);
+            }
+        }
+    }
+    return t;
+}
+
+const ImgTable& mimg_table() {
+    static const ImgTable table = make_mimg();
+    return table;
+}
+
 // Builds the operands of one instruction. Errors name its offset and first word.
 class Operands {
 public:
@@ -153,7 +228,7 @@ private:
 
 bool is_memory_encoding(std::uint32_t word) {
     const std::uint32_t encoding = bits(word, 26, 6);
-    return encoding == 0x38 || encoding == 0x3a || encoding == 0x3e;  // MUBUF, MTBUF, EXP
+    return encoding == 0x38 || encoding == 0x3a || encoding == 0x3c || encoding == 0x3e;
 }
 
 namespace {
@@ -221,6 +296,51 @@ Instruction decode_buffer(std::span<const std::uint32_t> code, std::size_t index
     return inst;
 }
 
+// MIMG: vdata, vaddr, the image descriptor and, for sampling, the sampler. The dmask goes to
+// mem_offset. vdata is a register per dmask bit (at least one) and a gather's four, with a status
+// register more under tfe. The address is its shortest form: see ImgOp.
+Instruction decode_image(std::span<const std::uint32_t> code, std::size_t index) {
+    const std::uint32_t w0 = code[index];
+    Instruction inst;
+    inst.offset = static_cast<std::uint32_t>(index * 4);
+    inst.size = 2;
+    inst.format = Format::mimg;
+    inst.opcode = static_cast<std::uint16_t>(bits(w0, 18, 7));
+    const Operands ops(inst.offset, w0);
+    const ImgTable& table = mimg_table();
+    if (inst.opcode >= table.size() || table[inst.opcode].name.empty()) {
+        ops.fail(std::format("unknown MIMG opcode {}", inst.opcode));
+    }
+    const ImgOp& info = table[inst.opcode];
+    inst.name = info.name;
+    if (index + 1 >= code.size()) {
+        ops.fail("second dword past the end of the code");
+    }
+    const std::uint32_t w1 = code[index + 1];
+    inst.mem_offset = static_cast<std::uint16_t>(bits(w0, 8, 4));
+    const std::array<std::pair<unsigned, std::uint16_t>, 7> modes = {{
+        {12, flag::unorm}, {13, flag::glc}, {14, flag::da},  {15, flag::r128},
+        {16, flag::tfe},   {17, flag::lwe}, {25, flag::slc}}};
+    for (const auto& [bit, f] : modes) {
+        if (bits(w0, bit, 1)) {
+            inst.flags |= f;
+        }
+    }
+    const unsigned dmask = inst.mem_offset;
+    unsigned data = info.kind == MemKind::gather ? 4 : std::max(1, std::popcount(dmask));
+    data += inst.flags & flag::tfe ? 1 : 0;
+    const Operand vdata = ops.vgpr(bits(w1, 8, 8), data);
+    const bool is_source = info.kind == MemKind::store || info.kind == MemKind::atomic;
+    (is_source ? inst.src[inst.num_src++] : inst.dst[inst.num_dst++]) = vdata;
+    inst.src[inst.num_src++] = ops.vgpr(bits(w1, 0, 8), info.addr);
+    // The resource is 8 SGPRs, also with r128, which then uses only the first 4.
+    inst.src[inst.num_src++] = ops.descriptor(bits(w1, 16, 5), 8);
+    if (info.kind == MemKind::sample || info.kind == MemKind::gather) {
+        inst.src[inst.num_src++] = ops.descriptor(bits(w1, 21, 5), 4);
+    }
+    return inst;
+}
+
 // The export targets: mrt0-7 are 0-7, mrtz 8, null 9, pos0-3 12-15 and param0-31 32-63.
 bool valid_target(unsigned t) {
     return t <= 9 || (t >= 12 && t <= 15) || t >= 32;
@@ -270,6 +390,8 @@ Instruction decode_memory(std::span<const std::uint32_t> code, std::size_t index
     switch (bits(code[index], 26, 6)) {
     case 0x3a:
         return decode_buffer(code, index, true);
+    case 0x3c:
+        return decode_image(code, index);
     case 0x3e:
         return decode_export(code, index);
     default:
@@ -301,10 +423,31 @@ std::string typed_format(const Instruction& inst) {
     return parts.empty() ? parts : " format:[" + parts + "]";
 }
 
+// MIMG: dmask (left out when 0), then the flags in LLVM's order.
+std::string image_fields(const Instruction& inst) {
+    std::string out;
+    if (inst.mem_offset != 0) {
+        out += std::format(" dmask:{:#x}", inst.mem_offset);
+    }
+    constexpr std::array<std::pair<std::uint16_t, const char*>, 7> names = {{
+        {flag::unorm, "unorm"}, {flag::glc, "glc"}, {flag::slc, "slc"}, {flag::r128, "r128"},
+        {flag::tfe, "tfe"},     {flag::lwe, "lwe"}, {flag::da, "da"}}};
+    for (const auto& [f, name] : names) {
+        if (inst.flags & f) {
+            out += ' ';
+            out += name;
+        }
+    }
+    return out;
+}
+
 }  // namespace
 
 std::string memory_fields(const Instruction& inst) {
     std::string out;
+    if (inst.format == Format::mimg) {
+        return image_fields(inst);
+    }
     if (inst.num_src == 0) {
         return out;  // the cache invalidations have no fields
     }

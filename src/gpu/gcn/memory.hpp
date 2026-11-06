@@ -1,6 +1,6 @@
-// The vector memory formats (internal to bbgcn), MUBUF and MTBUF so far, and EXP, in memory.cpp.
+// The vector memory formats (internal to bbgcn): MUBUF, MTBUF, MIMG and EXP, in memory.cpp.
 // Their instructions are two dwords; the fields that aren't operands go to Instruction::mem_offset
-// and ::flags (MTBUF also ::dfmt and ::nfmt; EXP keeps its target in mem_offset).
+// and ::flags (MTBUF also ::dfmt and ::nfmt; MIMG keeps its dmask and EXP its target in mem_offset).
 #pragma once
 
 #include <cstddef>
@@ -12,10 +12,10 @@
 
 namespace bb::gcn::detail {
 
-// Whether `word` starts an instruction of MUBUF, MTBUF or EXP.
+// Whether `word` starts an instruction of MUBUF, MTBUF, MIMG or EXP.
 bool is_memory_encoding(std::uint32_t word);
 
-// Decodes the MUBUF, MTBUF or EXP instruction at code[index]. Throws GcnError.
+// Decodes the MUBUF, MTBUF, MIMG or EXP instruction at code[index]. Throws GcnError.
 Instruction decode_memory(std::span<const std::uint32_t> code, std::size_t index);
 
 // The fields of a vector memory instruction that are set, as LLVM prints them after the operands.
