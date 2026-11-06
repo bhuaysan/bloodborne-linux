@@ -74,9 +74,9 @@ inline constexpr std::uint16_t gds = 1;     // DS: global data share instead of 
 inline constexpr std::uint16_t offen = 2;   // MUBUF, MTBUF: VGPR offset
 inline constexpr std::uint16_t idxen = 4;   // MUBUF, MTBUF: VGPR index
 inline constexpr std::uint16_t addr64 = 8;  // MUBUF, MTBUF: 64-bit VGPR address
-inline constexpr std::uint16_t glc = 16;    // MUBUF, FLAT
-inline constexpr std::uint16_t slc = 32;    // MUBUF, FLAT
-inline constexpr std::uint16_t tfe = 64;    // MUBUF, FLAT
+inline constexpr std::uint16_t glc = 16;    // MUBUF, MTBUF, FLAT
+inline constexpr std::uint16_t slc = 32;    // MUBUF, MTBUF, FLAT
+inline constexpr std::uint16_t tfe = 64;    // MUBUF, MTBUF, FLAT
 inline constexpr std::uint16_t lds = 128;   // MUBUF: load into LDS
 inline constexpr std::uint16_t done = 256;   // EXP: last export of the program
 inline constexpr std::uint16_t compr = 512;  // EXP: two 16-bit values per source
@@ -104,8 +104,8 @@ struct Instruction {
     std::array<Operand, 2> dst;
     std::array<Operand, 4> src;
     // Memory formats: the offset field (DS: offset1 in the high byte, offset0 in the low byte,
-    // read as one 16-bit offset by the instructions that take one; MUBUF: the 12-bit unsigned
-    // byte offset), and the flag bits.
+    // read as one 16-bit offset by the instructions that take one; MUBUF, MTBUF: the 12-bit
+    // unsigned byte offset), and the flag bits.
     std::uint16_t mem_offset = 0;
     std::uint16_t flags = 0;
     // MTBUF: the data format and numeric format fields. EXP: mem_offset is the target.
