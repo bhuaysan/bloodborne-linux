@@ -1154,7 +1154,7 @@ private:
     }
 
     // s_barrier: every wave of the workgroup waits, and its LDS writes become visible. The LDS
-    // and the workgroup are compute-only so far; a graphics stage has neither in SPIR-V.
+    // and the workgroup are compute-only so far; a Vulkan graphics stage has neither.
     void barrier() {
         if (graphics()) {
             fail("s_barrier in a graphics stage is not supported yet");
