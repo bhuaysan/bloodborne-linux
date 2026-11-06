@@ -16,8 +16,11 @@ ROOT = Path(__file__).resolve().parents[2]
 NID = r"[A-Za-z0-9+_-]{11}"
 REGISTRATION = re.compile(r'^BB_HLE_FUNCTION\("[^"]+", "(' + NID + r')",[^;]*\);\s*(?://\s*(.*))?$')
 NAME_ONLY = re.compile(r"^// (\w+)$")
+# A NID may start or end with '+' or '-', where \b doesn't hold, so the NID is delimited by lookarounds.
+NID_START = r"(?<![A-Za-z0-9+_-])"
+NID_END = r"(?![A-Za-z0-9+_-])"
 UNKNOWN_BESIDE_NID = re.compile(
-    r"(?:\b(" + NID + r")\b[^\n]{0,40}\bname unknown\b|\bName unknown \(NID (" + NID + r")\))")
+    NID_START + "(" + NID + ")" + NID_END + r"[^\n]{0,40}\bname unknown\b|\bName unknown \(NID (" + NID + r")\)")
 
 
 def known_names() -> dict[str, str]:
@@ -27,6 +30,20 @@ def known_names() -> dict[str, str]:
 
 def sources() -> list[Path]:
     return sorted(p for p in (ROOT / "src" / "hle").rglob("*") if p.suffix in (".cpp", ".hpp"))
+
+
+class UnknownNameCommentPatternTest(unittest.TestCase):
+    def nids_in(self, line: str) -> list[str]:
+        return [m.group(1) or m.group(2) for m in UNKNOWN_BESIDE_NID.finditer(line)]
+
+    def test_finds_nids_that_start_or_end_with_punctuation(self) -> None:
+        for nid in ("-2IRUCO--PM", "-+3hY+y8bNo", "2SKEx6bSq-4", "4J2sUJmuHZQ"):
+            self.assertEqual(self.nids_in(f'BB_HLE_FUNCTION("libkernel", "{nid}", f);  // name unknown'), [nid])
+            self.assertEqual(self.nids_in(f"// {nid}, name unknown:"), [nid])
+            self.assertEqual(self.nids_in(f"// Name unknown (NID {nid})"), [nid])
+
+    def test_ignores_a_longer_run_of_nid_characters(self) -> None:
+        self.assertEqual(self.nids_in("// x-2IRUCO--PMy, name unknown"), [])
 
 
 class HleNameCommentsTest(unittest.TestCase):
