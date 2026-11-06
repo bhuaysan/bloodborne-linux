@@ -1,4 +1,4 @@
-// Thread creation, join and exit, called through their registered NIDs. This test links
+// Threads and thread attributes, called through their registered NIDs. This test links
 // bbeboottls, so every new thread runs the eboot TLS check.
 
 #include "hle/kernel/thread.hpp"
@@ -6,8 +6,10 @@
 #include <pthread.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <thread>
 
 #include <gtest/gtest.h>
 
@@ -34,6 +36,16 @@ auto* const exit = fn<void(void*)>("3kg7rT0NQIs");
 auto* const attr_init = fn<std::int32_t(Cell*)>("nsYoNRywwNg");
 auto* const attr_destroy = fn<std::int32_t(Cell*)>("62KCwEMmzcM");
 auto* const attr_setstacksize = fn<std::int32_t(Cell*, std::size_t)>("UTXzJbWhhTE");
+auto* const detach = fn<std::int32_t(Handle)>("4qGrR6eoP9Y");
+auto* const self = fn<Handle()>("aI+OeCz8xrQ");
+auto* const equal = fn<int(Handle, Handle)>("3PtV6p3QNX4");
+auto* const yield = fn<void()>("T72hz6ffq08");
+auto* const sched_yield = fn<int()>("6XG4B33N09g");
+auto* const attr_setdetachstate = fn<std::int32_t(Cell*, int)>("-Wreprtu0Qs");
+auto* const attr_setschedparam = fn<std::int32_t(Cell*, const int*)>("DzES9hQF4f4");
+auto* const attr_setschedpolicy = fn<std::int32_t(Cell*, int)>("4+h9EzwKF4I");
+auto* const attr_setinheritsched = fn<std::int32_t(Cell*, int)>("eXbUSpEaTsA");
+auto* const attr_get = fn<std::int32_t(Handle, Cell*)>("x1X76arYMxU");
 
 constexpr std::int32_t esrch = 0x80020003, edeadlk = 0x8002000b, einval = 0x80020016,
                        eagain = 0x80020023;
@@ -211,6 +223,168 @@ TEST(Thread, InvalidHandlesAndAttributesAreRefused) {
     EXPECT_EQ(create(&thread, nullptr, nullptr, nullptr, nullptr), einval);
     EXPECT_EQ(create(nullptr, nullptr, add_one, nullptr, nullptr), einval);
     EXPECT_EQ(attr_init(nullptr), einval);
+}
+
+// ---- detach ------------------------------------------------------------------------------------
+
+std::atomic<bool> release{false};
+
+void* wait_for_release(void*) {
+    while (!release) {
+        std::this_thread::yield();
+    }
+    return nullptr;
+}
+
+// Waits until `thread` has left the thread table, which AttrGet tells by ESRCH.
+bool freed(Handle thread) {
+    Cell attr = 0;
+    EXPECT_EQ(attr_init(&attr), 0);
+    std::int32_t result = 0;
+    for (int i = 0; i < 2000 && (result = attr_get(thread, &attr)) == 0; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_EQ(attr_destroy(&attr), 0);
+    return result == esrch;
+}
+
+TEST(Thread, DetachedThreadsFreeTheirObjectWhenTheyEnd) {
+    Cell attr = 0;
+    ASSERT_EQ(attr_init(&attr), 0);
+    EXPECT_EQ(attr_setdetachstate(&attr, 2), einval);
+    ASSERT_EQ(attr_setdetachstate(&attr, guest_create_detached), 0);
+    release = false;
+    Handle thread = nullptr;
+    ASSERT_EQ(create(&thread, &attr, wait_for_release, nullptr, nullptr), 0);
+    EXPECT_EQ(attr_destroy(&attr), 0);
+    EXPECT_EQ(join(thread, nullptr), einval);
+    EXPECT_EQ(detach(thread), einval);
+
+    Handle running = nullptr;  // detached while it runs
+    ASSERT_EQ(create(&running, nullptr, wait_for_release, nullptr, nullptr), 0);
+    ASSERT_EQ(detach(running), 0);
+    EXPECT_EQ(detach(running), einval);
+    EXPECT_EQ(join(running, nullptr), einval);
+    release = true;
+    EXPECT_TRUE(freed(thread));
+    EXPECT_TRUE(freed(running));
+
+    Handle finished = nullptr;  // detached after it ended
+    ASSERT_EQ(create(&finished, nullptr, add_one, &marker, nullptr), 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));  // most likely ended by now
+    ASSERT_EQ(detach(finished), 0);
+    EXPECT_TRUE(freed(finished));
+    EXPECT_EQ(detach(nullptr), esrch);
+}
+
+// ---- self --------------------------------------------------------------------------------------
+
+TEST(Thread, SelfIsTheHandleTheCreatorGot) {
+    Handle thread = nullptr;
+    ASSERT_EQ(create(&thread, nullptr, [](void*) -> void* { return self(); }, nullptr, nullptr), 0);
+    void* value = nullptr;
+    ASSERT_EQ(join(thread, &value), 0);
+    EXPECT_EQ(value, thread);
+    EXPECT_EQ(equal(self(), self()), 1);
+    EXPECT_EQ(equal(self(), thread), 0);
+    yield();
+    EXPECT_EQ(sched_yield(), 0);
+}
+
+TEST(Thread, AThreadTheRuntimeDidntStartGetsAnObjectFreedAtItsExit) {
+    Handle other = nullptr;
+    std::atomic<bool> started{false};
+    release = false;
+    std::thread host([&] {
+        other = self();
+        started = true;
+        wait_for_release(nullptr);
+    });
+    while (!started) {
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(join(other, nullptr), einval);
+    EXPECT_EQ(detach(other), einval);
+    Cell attr = 0;
+    ASSERT_EQ(attr_init(&attr), 0);
+    EXPECT_EQ(attr_get(other, &attr), 0);
+    release = true;
+    host.join();  // returns after the thread's thread_local destructors
+    EXPECT_EQ(attr_get(other, &attr), esrch);
+    EXPECT_EQ(attr_destroy(&attr), 0);
+}
+
+// ---- exit handlers -----------------------------------------------------------------------------
+
+thread_local bool exit_handler_ran = false;
+std::atomic<int> probe_result{0};  // 1: the handler ran before the destructor, 2: it didn't
+
+void exit_handler() {
+    exit_handler_ran = true;
+}
+
+// Constructed on a thread's first use, so only the threads of use_probe have one.
+struct Probe {
+    bool used = false;
+    ~Probe() { probe_result = exit_handler_ran ? 1 : 2; }
+};
+thread_local Probe probe;
+
+void* use_probe(void* exits) {
+    probe.used = true;
+    if (exits != nullptr) {
+        exit(nullptr);
+    }
+    return nullptr;
+}
+
+TEST(Thread, ExitHandlersRunBeforeTheThreadLocalDestructors) {
+    register_thread_exit_handler(exit_handler);
+    for (void* exits : {static_cast<void*>(nullptr), static_cast<void*>(&marker)}) {
+        SCOPED_TRACE(exits != nullptr ? "exit" : "return");
+        probe_result = 0;
+        Handle thread = nullptr;
+        ASSERT_EQ(create(&thread, nullptr, use_probe, exits, nullptr), 0);
+        ASSERT_EQ(join(thread, nullptr), 0);
+        EXPECT_EQ(probe_result, 1);
+    }
+}
+
+// ---- AttrGet and the recorded attributes -------------------------------------------------------
+
+TEST(Thread, AttrGetCopiesTheAttributesAndTheCurrentDetachState) {
+    Cell attr = 0;
+    ASSERT_EQ(attr_init(&attr), 0);
+    constexpr std::size_t large = 64 << 20;
+    ASSERT_EQ(attr_setstacksize(&attr, large), 0);
+    const int priority = 700;  // recorded, not applied
+    EXPECT_EQ(attr_setschedparam(&attr, &priority), 0);
+    EXPECT_EQ(attr_setschedparam(&attr, nullptr), einval);
+    EXPECT_EQ(attr_setschedpolicy(&attr, 1), 0);
+    EXPECT_EQ(attr_setinheritsched(&attr, 0), 0);
+    release = false;
+    Handle thread = nullptr;
+    ASSERT_EQ(create(&thread, &attr, wait_for_release, nullptr, nullptr), 0);
+    EXPECT_EQ(attr_destroy(&attr), 0);
+    ASSERT_EQ(detach(thread), 0);
+
+    Cell copy = 0;
+    ASSERT_EQ(attr_init(&copy), 0);
+    ASSERT_EQ(attr_get(thread, &copy), 0);
+    Handle second = nullptr;  // detached, as the thread was when it was copied
+    ASSERT_EQ(create(&second, &copy, wait_for_release, nullptr, nullptr), 0);
+    EXPECT_EQ(join(second, nullptr), einval);
+    ASSERT_EQ(attr_setdetachstate(&copy, guest_create_joinable), 0);
+    EXPECT_GE(stack_size_of(&copy), large + thread_stack_reserve);
+    release = true;
+    EXPECT_TRUE(freed(thread));
+    EXPECT_TRUE(freed(second));
+    EXPECT_EQ(attr_get(thread, &copy), esrch);
+
+    Cell not_an_attr = 0;
+    EXPECT_EQ(attr_get(self(), &not_an_attr), einval);
+    EXPECT_EQ(attr_setschedpolicy(&not_an_attr, 1), einval);
+    EXPECT_EQ(attr_destroy(&copy), 0);
 }
 
 }  // namespace

@@ -1,10 +1,11 @@
-// libkernel thread creation, join and exit, and thread attributes, on glibc threads
+// libkernel threads and thread attributes, on glibc threads
 // (docs/design/m3-core-os.md, "Threads"; values and call sites in docs/formats/kernel-abi.md,
 // "Threads"). The core functions return a host errno, which the sce entry points translate.
 
 #include "hle/kernel/thread.hpp"
 
 #include <pthread.h>
+#include <sched.h>
 
 #include <cerrno>
 #include <csetjmp>
@@ -13,6 +14,7 @@
 #include <mutex>
 #include <string_view>
 #include <unordered_set>
+#include <vector>
 
 #include "common/log.hpp"
 #include "hle/hle.hpp"
@@ -33,6 +35,7 @@ constexpr std::string_view channel = "hle.libkernel";
 struct Table {
     std::mutex mutex;
     std::unordered_set<Thread*> threads;  // guarded by mutex
+    std::vector<void (*)()> exit_handlers;  // guarded by mutex
 };
 
 Table& table() {
@@ -41,6 +44,31 @@ Table& table() {
 }
 
 thread_local Thread* current = nullptr;
+
+// Frees the object of a thread the runtime didn't start when that thread exits.
+struct AdoptedThread {
+    Thread* thread = nullptr;
+    ~AdoptedThread() {
+        if (thread != nullptr) {
+            const std::lock_guard lock(table().mutex);
+            table().threads.erase(thread);
+            delete thread;
+            current = nullptr;
+        }
+    }
+};
+thread_local AdoptedThread adopted;
+
+void run_exit_handlers() {
+    std::vector<void (*)()> handlers;
+    {
+        const std::lock_guard lock(table().mutex);
+        handlers = table().exit_handlers;
+    }
+    for (void (*handler)() : handlers) {
+        handler();
+    }
+}
 
 // Runs the entry. exit_thread jumps back to the setjmp here; no frame in between has anything to
 // destroy (game code, the exit entry points).
@@ -58,8 +86,16 @@ void* start(void* argument) {
         common::set_thread_name(thread->name);
     }
     run_entry(thread);
+    run_exit_handlers();
     current = nullptr;
-    return nullptr;  // join_thread frees the object
+    const std::lock_guard lock(table().mutex);
+    if (thread->detached) {
+        table().threads.erase(thread);
+        delete thread;
+    } else {
+        thread->finished = true;  // join_thread or detach_thread frees it
+    }
+    return nullptr;
 }
 
 // ---- attributes ------------------------------------------------------------------------------
@@ -111,7 +147,71 @@ int attr_setstacksize(Cell* cell, std::size_t size) {
     return 0;
 }
 
+int attr_setdetachstate(Cell* cell, int state) {
+    Attr* attr = attr_at(cell);
+    if (attr == nullptr || (state != guest_create_joinable && state != guest_create_detached)) {
+        return EINVAL;
+    }
+    attr->values.detach_state = state;
+    return 0;
+}
+
+// The parameter is one int, the priority (FreeBSD struct sched_param).
+int attr_setschedparam(Cell* cell, const int* param) {
+    Attr* attr = attr_at(cell);
+    if (attr == nullptr || param == nullptr) {
+        return EINVAL;
+    }
+    attr->values.sched_priority = *param;
+    return 0;
+}
+
+int attr_setschedpolicy(Cell* cell, int policy) {
+    Attr* attr = attr_at(cell);
+    if (attr == nullptr) {
+        return EINVAL;
+    }
+    attr->values.sched_policy = policy;
+    return 0;
+}
+
+int attr_setinheritsched(Cell* cell, int inherit) {
+    Attr* attr = attr_at(cell);
+    if (attr == nullptr) {
+        return EINVAL;
+    }
+    attr->values.inherit_sched = inherit;
+    return 0;
+}
+
+// Fills an initialised attribute with the thread's attributes and its current detach state.
+int attr_get(Thread* thread, Cell* cell) {
+    Attr* attr = attr_at(cell);
+    if (attr == nullptr) {
+        return EINVAL;
+    }
+    const std::lock_guard lock(table().mutex);
+    if (!table().threads.contains(thread)) {
+        return ESRCH;
+    }
+    attr->values = thread->attributes;
+    attr->values.detach_state = thread->detached ? guest_create_detached : guest_create_joinable;
+    return 0;
+}
+
 // ---- entry points ----------------------------------------------------------------------------
+
+int equal(Thread* a, Thread* b) {
+    return a == b ? 1 : 0;
+}
+
+void yield() {
+    sched_yield();
+}
+
+int posix_sched_yield() {
+    return sched_yield() == 0 ? 0 : posix_fail(errno);
+}
 
 // Sce<f>::call wraps a core function `f` in the sce error form.
 template <auto F>
@@ -122,6 +222,26 @@ struct Sce<F> {
 };
 
 }  // namespace
+
+Thread* current_thread() {
+    if (current == nullptr) {
+        auto* thread = new Thread;
+        thread->host = pthread_self();
+        thread->adopted = true;
+        {
+            const std::lock_guard lock(table().mutex);
+            table().threads.insert(thread);
+        }
+        adopted.thread = thread;
+        current = thread;
+    }
+    return current;
+}
+
+void register_thread_exit_handler(void (*handler)()) {
+    const std::lock_guard lock(table().mutex);
+    table().exit_handlers.push_back(handler);
+}
 
 int create_thread(Thread** thread, const Cell* attr, ThreadEntry entry, void* arg,
                   const char* name) {
@@ -139,8 +259,12 @@ int create_thread(Thread** thread, const Cell* attr, ThreadEntry entry, void* ar
     t->name = name != nullptr ? name : "";
     t->entry = entry;
     t->arg = arg;
-    common::log(common::LogLevel::debug, channel, "thread \"{}\": stack {:#x}", t->name,
-                t->attributes.stack_size);
+    t->detached = t->attributes.detach_state == guest_create_detached;
+    const ThreadAttributes& v = t->attributes;
+    common::log(common::LogLevel::debug, channel,
+                "thread \"{}\": stack {:#x}, {}, policy {}, priority {}, inherit {} (not applied)",
+                t->name, v.stack_size, t->detached ? "detached" : "joinable", v.sched_policy,
+                v.sched_priority, v.inherit_sched);
 
     // The setter takes any size from the minimum up, so a garbage size near SIZE_MAX would wrap
     // around to a tiny host stack here. No host can give a stack that large anyway.
@@ -154,25 +278,28 @@ int create_thread(Thread** thread, const Cell* attr, ThreadEntry entry, void* ar
         pthread_attr_destroy(&host);
         return error;
     }
+    pthread_attr_setdetachstate(&host,
+                                t->detached ? PTHREAD_CREATE_DETACHED : PTHREAD_CREATE_JOINABLE);
 
     // The handle is published before the thread starts, as glibc stores its pthread_t: the entry
     // may read its handle variable, or pass its own handle on to be joined or detached, at once.
+    // The table's lock is held until the host handle is stored: join and detach read it under the
+    // lock, and a detached thread that ends at once frees its object under it.
     Thread* const previous = *thread;
-    {
-        const std::lock_guard lock(table().mutex);
-        table().threads.insert(t.get());
-    }
+    const std::lock_guard lock(table().mutex);
+    table().threads.insert(t.get());
     *thread = t.get();
-    error = pthread_create(&t->host, &host, start, t.get());
+    pthread_t host_thread{};
+    error = pthread_create(&host_thread, &host, start, t.get());
     pthread_attr_destroy(&host);
     if (error != 0) {
         *thread = previous;
-        const std::lock_guard lock(table().mutex);
         table().threads.erase(t.get());
         // glibc adds its guard page and refuses a size that then wraps around with EINVAL.
         return error == EINVAL ? EAGAIN : error;
     }
-    t.release();  // join_thread frees it
+    t->host = host_thread;
+    t.release();  // join_thread, detach_thread or the end of a detached thread frees it
     return 0;
 }
 
@@ -185,7 +312,7 @@ int join_thread(Thread* thread, void** value) {
         if (thread == current) {
             return EDEADLK;
         }
-        if (thread->joining) {
+        if (thread->adopted || thread->detached || thread->joining) {
             return EINVAL;
         }
         thread->joining = true;
@@ -205,13 +332,32 @@ int join_thread(Thread* thread, void** value) {
     return 0;
 }
 
+int detach_thread(Thread* thread) {
+    const std::lock_guard lock(table().mutex);
+    if (!table().threads.contains(thread)) {
+        return ESRCH;
+    }
+    if (thread->adopted || thread->detached || thread->joining) {
+        return EINVAL;
+    }
+    pthread_detach(thread->host);
+    if (thread->finished) {
+        table().threads.erase(thread);
+        delete thread;
+    } else {
+        thread->detached = true;  // the thread frees it when it ends
+    }
+    return 0;
+}
+
 void exit_thread(void* value) {
-    if (current != nullptr) {
+    if (current != nullptr && !current->adopted) {
         current->result = value;
         std::longjmp(current->exit_point, 1);
     }
     common::log(common::LogLevel::warn, channel,
                 "thread exit on a thread the runtime didn't start: host pthread_exit");
+    run_exit_handlers();
     pthread_exit(value);
 }
 
@@ -221,7 +367,18 @@ namespace k = bb::hle::kernel;
 
 BB_HLE_FUNCTION("libkernel", "6UgtwV+0zb4", k::Sce<k::create_thread>::call);
 BB_HLE_FUNCTION("libkernel", "onNY9Byn-W8", k::Sce<k::join_thread>::call);
+BB_HLE_FUNCTION("libkernel", "4qGrR6eoP9Y", k::Sce<k::detach_thread>::call);
 BB_HLE_FUNCTION("libkernel", "3kg7rT0NQIs", k::exit_thread);
+BB_HLE_FUNCTION("libkernel", "aI+OeCz8xrQ", k::current_thread);
+BB_HLE_FUNCTION("libkernel", "3PtV6p3QNX4", k::equal);
+BB_HLE_FUNCTION("libkernel", "T72hz6ffq08", k::yield);
+BB_HLE_FUNCTION("libkernel", "6XG4B33N09g", k::posix_sched_yield);
 BB_HLE_FUNCTION("libkernel", "nsYoNRywwNg", k::Sce<k::attr_init>::call);
 BB_HLE_FUNCTION("libkernel", "62KCwEMmzcM", k::Sce<k::attr_destroy>::call);
 BB_HLE_FUNCTION("libkernel", "UTXzJbWhhTE", k::Sce<k::attr_setstacksize>::call);
+BB_HLE_FUNCTION("libkernel", "-Wreprtu0Qs", k::Sce<k::attr_setdetachstate>::call);
+BB_HLE_FUNCTION("libkernel", "DzES9hQF4f4", k::Sce<k::attr_setschedparam>::call);
+BB_HLE_FUNCTION("libkernel", "4+h9EzwKF4I", k::Sce<k::attr_setschedpolicy>::call);
+BB_HLE_FUNCTION("libkernel", "eXbUSpEaTsA", k::Sce<k::attr_setinheritsched>::call);
+BB_HLE_FUNCTION("libkernel", "x1X76arYMxU", k::Sce<k::attr_get>::call);
+
