@@ -119,6 +119,21 @@ TEST(GcnStages, ProgramsPassSpirvVal) {
               3);  // SubgroupLocalInvocationId, VertexIndex, Position
 }
 
+// The float mode comes from the same RSRC1 as VGPR_COMP_CNT and applies to the VS as in compute.
+TEST(GcnStages, VertexFloatMode) {
+    ShaderKey key = vertex_key;
+    key.pgm_rsrc1 |= 3u << 12;  // FP_ROUND_32: toward zero
+    const Words add = {vop2(3, 1, 256, 2), s_endpgm};  // v_add_f32 v1, v0, v2
+    const auto vs = translate(add, {}, key).spirv;
+    if (have_spirv_val()) {
+        EXPECT_EQ(validate(vs), "");
+    }
+    EXPECT_EQ(count(vs, spv::Op::OpExecutionMode, 2,
+                    static_cast<std::uint32_t>(spv::ExecutionMode::RoundingModeRTZ)),
+              1);
+    EXPECT_EQ(count(vs, spv::Op::OpEntryPoint, 1, 0), 1);  // still a Vertex entry point
+}
+
 // The message of the GcnError that translating `code` throws.
 std::string error(std::vector<std::uint32_t> code, const ShaderKey& key) {
     code.push_back(s_endpgm);
@@ -146,6 +161,8 @@ TEST(GcnStages, ErrorsNameWhatIsUnsupported) {
     EXPECT_EQ(error({}, {.stage = Stage::vertex, .pgm_rsrc2 = 1u << 6}), "no error");  // TRAP
     EXPECT_EQ(error({}, {.stage = Stage::vertex, .pgm_rsrc2 = 17u << 1}),
               "USER_SGPR 17 is more than 16");
+    EXPECT_EQ(error({vop2(3, 1, 256, 2)}, {.stage = Stage::vertex, .pgm_rsrc1 = 1u << 12}),
+              "PGM_RSRC1 0x1000: this float mode is not supported");
 }
 
 }  // namespace
