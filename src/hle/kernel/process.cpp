@@ -12,7 +12,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <string>
@@ -27,7 +26,9 @@
 namespace bb::hle::kernel {
 namespace {
 
-constexpr std::string_view library = "libkernel";
+using common::LogLevel;
+
+constexpr std::string_view channel = "hle.libkernel";
 
 std::atomic<std::uintptr_t> process_parameters_block{0};
 
@@ -35,13 +36,19 @@ std::atomic<std::uintptr_t> process_parameters_block{0};
 // its stack guard (0x53f78) and the setjmp mask at +0x48 of a 0x58-byte jmp_buf (0x2fcc2).
 constexpr std::size_t guest_sigset_size = 16;
 
-// Until the logger of m3-core-os.md ("Logging", #84) exists: one line on stderr with the caller,
-// the return address of the HLE function, a runtime address in the calling module.
+// One line with the caller, the return address of the HLE function, a runtime address in the
+// calling module.
 template <class... Args>
-void log(const void* caller, std::format_string<Args...> format, Args&&... args) {
-    const std::string line = std::format("hle.{}: {} (caller {})\n", library,
-                                         std::format(format, std::forward<Args>(args)...), caller);
-    std::fputs(line.c_str(), stderr);
+std::string with_caller(const void* caller, std::format_string<Args...> format, Args&&... args) {
+    return std::format("{} (caller {})", std::format(format, std::forward<Args>(args)...), caller);
+}
+
+template <class... Args>
+void log(LogLevel level, const void* caller, std::format_string<Args...> format, Args&&... args) {
+    if (common::log_enabled(level, channel)) {
+        common::log_message(level, channel,
+                            with_caller(caller, format, std::forward<Args>(args)...));
+    }
 }
 
 // For calls that libc.prx makes often (sigprocmask around every setjmp and longjmp): logs call 1
@@ -50,7 +57,7 @@ template <class... Args>
 void log_often(std::atomic<std::uint64_t>& calls, const void* caller,
                std::format_string<Args...> format, Args&&... args) {
     if (should_log(++calls)) {
-        log(caller, format, std::forward<Args>(args)...);
+        log(LogLevel::info, caller, format, std::forward<Args>(args)...);
     }
 }
 
@@ -71,8 +78,8 @@ void fill_stack_guard(std::byte* block) {
     std::uint64_t guard = 0;
     while (guard == 0) {
         if (getrandom(&guard, sizeof guard, 0) != static_cast<ssize_t>(sizeof guard)) {
-            std::perror("hle.libkernel: getrandom for the stack guard");
-            std::abort();
+            common::log_fatal(channel, std::format("getrandom for the stack guard: {}",
+                                                   std::strerror(errno)));
         }
     }
     std::memcpy(block, &guard, sizeof guard);
@@ -80,9 +87,8 @@ void fill_stack_guard(std::byte* block) {
 
 // __stack_chk_fail (Ou3iL1abvng): a function's canary was overwritten.
 [[noreturn]] void stack_check_fail() {
-    log(BB_CALLER(), "stack guard overwritten, aborting");
     std::fflush(nullptr);
-    std::abort();
+    common::log_fatal(channel, with_caller(BB_CALLER(), "stack guard overwritten, aborting"));
 }
 
 // ---- process id and name ---------------------------------------------------------------------
@@ -114,12 +120,12 @@ std::int32_t sys_ctl(const std::int32_t* name, std::uint32_t name_length, void* 
                      std::uint64_t* old_length, const void* new_data, std::uint64_t new_length) {
     const void* caller = BB_CALLER();
     if (name == nullptr || old_length == nullptr) {
-        log(caller, "sysctl without a MIB or a length pointer: refused");
+        log(LogLevel::warn, caller, "sysctl without a MIB or a length pointer: refused");
         return posix_fail(EFAULT);
     }
     if (name_length == 4 && name[0] == 1 && name[1] == 14 && name[2] == 32 &&
         new_data == nullptr) {
-        log(caller, "sysctl kern.proc.vmmap pid {} -> empty map", name[3]);
+        log(LogLevel::info, caller, "sysctl kern.proc.vmmap pid {} -> empty map", name[3]);
         *old_length = 0;
         return 0;
     }
@@ -127,8 +133,9 @@ std::int32_t sys_ctl(const std::int32_t* name, std::uint32_t name_length, void* 
     for (std::uint32_t i = 0; i < name_length && i < 8; ++i) {
         mib += std::format("{}{}", i == 0 ? "" : ".", name[i]);
     }
-    log(caller, "sysctl {} (length {}, old {}, new {} size {}) unsupported: refused", mib,
-        name_length, old_data, new_data, new_length);
+    log(LogLevel::warn, caller,
+        "sysctl {} (length {}, old {}, new {} size {}) unsupported: refused", mib, name_length,
+        old_data, new_data, new_length);
     return posix_fail(ENOENT);
 }
 
@@ -138,7 +145,7 @@ std::int32_t sys_ctl(const std::int32_t* name, std::uint32_t name_length, void* 
 const void* process_parameters() {
     const std::uintptr_t block = process_parameters_block.load(std::memory_order_acquire);
     if (block == 0) {
-        log(BB_CALLER(), "process parameters requested before they were set");
+        log(LogLevel::warn, BB_CALLER(), "process parameters requested before they were set");
     }
     return reinterpret_cast<const void*>(block);
 }
@@ -148,7 +155,7 @@ const void* process_parameters() {
 
 std::uintptr_t signal_handler(std::int32_t signal, std::uintptr_t handler) {
     // libc.prx tail-calls it as signal(9, 0) at 0x13027.
-    log(BB_CALLER(), "signal({}, {:#x}) ignored", signal, handler);
+    log(LogLevel::info, BB_CALLER(), "signal({}, {:#x}) ignored", signal, handler);
     return 0;  // SIG_DFL as the previous handler
 }
 
@@ -188,7 +195,7 @@ std::int32_t signal_fill_set(void* set) {
 
 std::int32_t signal_return(const void* context) {
     // libc.prx 0x547bf, which reports 0xa002000b through OMDRKKAZ8I4 if it returns.
-    log(BB_CALLER(), "sigreturn({}) unsupported", context);
+    log(LogLevel::warn, BB_CALLER(), "sigreturn({}) unsupported", context);
     return 0;
 }
 
@@ -199,24 +206,24 @@ std::int32_t signal_return(const void* context) {
 // call (it falls into padding), so libc treats the report as the end of the process. We log and
 // abort, after flushing.
 [[noreturn]] void report_fatal_status(std::uint32_t code, std::uint64_t argument) {
-    log(BB_CALLER(), "fatal status report {:#x} ({:#x}), aborting", code, argument);
     std::fflush(nullptr);
-    std::abort();
+    common::log_fatal(channel, with_caller(BB_CALLER(),
+                                           "fatal status report {:#x} ({:#x}), aborting", code,
+                                           argument));
 }
 
 // zE-wXIZjLoM, name unknown: libc.prx reports a code and continues. Its exit paths call it right
 // before _exit (0x5ff2a with 0xa0020003 for status 0 and 0xa0020004 otherwise, 0x5ff8a), so it
 // must return.
 void report_status(std::uint32_t code, std::uint64_t argument) {
-    log(BB_CALLER(), "status report {:#x} ({:#x})", code, argument);
+    log(LogLevel::info, BB_CALLER(), "status report {:#x} ({:#x})", code, argument);
 }
 
 // _exit (6Z83sYWFlA8): flush the log and end the process without host atexit handlers or static
 // destructors, which must not run under the game's threads.
 [[noreturn]] void exit_process(std::int32_t status) {
     // Through the logger, so that the log file records the game's exit status.
-    common::log(common::LogLevel::info, "hle.libkernel", "_exit({}) (caller {})", status,
-                BB_CALLER());
+    common::log(LogLevel::info, channel, "_exit({}) (caller {})", status, BB_CALLER());
     std::fflush(nullptr);
     common::log_flush();
     ::_exit(status);

@@ -1,11 +1,11 @@
 #include "hle/kernel/paths.hpp"
 
 #include <cerrno>
-#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "common/log.hpp"
 #include "common/runtime_dirs.hpp"
 #include "hle/kernel/abi.hpp"
 
@@ -156,8 +156,8 @@ Resolved PathMap::resolve(std::string_view guest, Access access) {
 void PathMap::log_refused(const std::string& first, std::string_view why) {
     std::lock_guard lock(log_lock_);
     if (logged_.insert(first).second) {
-        std::fprintf(stderr, "hle.kernel: refusing guest paths under %s (%.*s)\n", first.c_str(),
-                     static_cast<int>(why.size()), why.data());
+        common::log(common::LogLevel::warn, "hle.libkernel", "refusing guest paths under {} ({})",
+                    first, why);
     }
 }
 

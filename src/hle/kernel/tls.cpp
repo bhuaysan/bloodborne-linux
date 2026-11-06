@@ -3,16 +3,15 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
-#include <cinttypes>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <mutex>
 #include <new>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
+#include "common/log.hpp"
 #include "hle/hle.hpp"
 #include "loader/relocate.hpp"
 
@@ -45,10 +44,11 @@ Templates& templates() {
 
 std::atomic<std::size_t> live_blocks{0};
 
+constexpr std::string_view channel = "hle.libkernel";
+
 [[noreturn]] void fail(const char* message, std::uint64_t module, std::uint64_t offset) {
-    std::fprintf(stderr, "hle.kernel: TLS helper: %s (module %" PRIu64 ", offset %#" PRIx64 ")\n",
-                 message, module, offset);
-    std::abort();
+    common::log_fatal(channel, std::format("TLS helper: {} (module {}, offset {:#x})", message,
+                                           module, offset));
 }
 
 // One thread's blocks. Frees them when the thread exits.
@@ -139,13 +139,12 @@ std::optional<EbootTlsPlacement> eboot_tls_placement() {
 void check_eboot_tls() {
     const auto placement = eboot_tls_placement();
     if (placement && !placement->ends_at_thread_pointer()) {
-        std::fprintf(stderr,
-                     "hle.kernel: the eboot's TLS reservation [%#" PRIxPTR ", %#" PRIxPTR
-                     ") does not end at the thread pointer %#" PRIxPTR
-                     " (docs/design/m3-core-os.md, \"TLS\")\n",
-                     placement->block, placement->block + eboot_tls_size,
-                     placement->thread_pointer);
-        std::abort();
+        common::log_fatal(channel,
+                          std::format("the eboot's TLS reservation [{:#x}, {:#x}) does not end at "
+                                      "the thread pointer {:#x} (docs/design/m3-core-os.md, "
+                                      "\"TLS\")",
+                                      placement->block, placement->block + eboot_tls_size,
+                                      placement->thread_pointer));
     }
 }
 

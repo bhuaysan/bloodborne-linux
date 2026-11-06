@@ -43,7 +43,7 @@ constexpr int errno_from_sce(std::int32_t result) {
 int* guest_errno_location();
 
 // Error results by family (docs/design/m3-core-os.md, "Errors"), each from a host errno. A host
-// errno without a guest counterpart becomes EIO and is reported on stderr once per value.
+// errno without a guest counterpart becomes EIO and is logged once per value.
 
 // open, read, mmap, clock_gettime, ...: sets the guest errno and returns -1.
 int posix_fail(int host_errno);

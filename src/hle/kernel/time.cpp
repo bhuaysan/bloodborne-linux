@@ -5,9 +5,10 @@
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
-#include <cstdio>
 #include <ctime>
+#include <string_view>
 
+#include "common/log.hpp"
 #include "hle/hle.hpp"
 
 namespace bb::hle::kernel {
@@ -18,6 +19,15 @@ static_assert(sizeof(GuestTimezone) == 8);
 static_assert(sizeof(GuestRusage) == 144 && offsetof(GuestRusage, stime) == 16);
 
 std::atomic<GettimeofdayObserver> observer{nullptr};
+
+// Logs an unknown clock id on calls 1 to 10 of `call`, then every 1000th, as for stubs.
+void log_unknown_clock(std::atomic<std::uint64_t>& calls, std::string_view call,
+                       std::int32_t clock) {
+    if (should_log(++calls)) {
+        common::log(common::LogLevel::warn, "hle.libkernel", "{}: unknown clock id {}", call,
+                    clock);
+    }
+}
 
 timespec now(clockid_t clock) {
     timespec t{};
@@ -88,7 +98,8 @@ GettimeofdayObserver set_gettimeofday_observer(GettimeofdayObserver next) {
 int guest_clock_gettime(std::int32_t clock, GuestTimespec* out) {
     const auto host = host_clock(clock);
     if (!host) {
-        std::fprintf(stderr, "hle.libkernel: clock_gettime: unknown clock id %d\n", clock);
+        static std::atomic<std::uint64_t> calls{0};
+        log_unknown_clock(calls, "clock_gettime", clock);
         return posix_fail(EINVAL);
     }
     if (out == nullptr) {
@@ -177,7 +188,8 @@ std::uint64_t process_counter_nsec() {
 std::int32_t clock_gettime_sce(std::int32_t clock, GuestTimespec* out) {
     const auto host = host_clock(clock);
     if (!host) {
-        std::fprintf(stderr, "hle.libkernel: QBi7HCK03hw: unknown clock id %d\n", clock);
+        static std::atomic<std::uint64_t> calls{0};
+        log_unknown_clock(calls, "QBi7HCK03hw", clock);
         return sce_fail(EINVAL);
     }
     if (out == nullptr) {

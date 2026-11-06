@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
-#include <cstdio>
 #include <cstring>
 #include <format>
 #include <iterator>
@@ -14,9 +13,11 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "common/log.hpp"
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
 #include "hle/kernel/file.hpp"
@@ -24,12 +25,13 @@
 namespace bb::hle::kernel::vmem {
 namespace {
 
-// Until the logger of m3-core-os.md ("Logging") exists.
+using common::LogLevel;
+
+constexpr std::string_view channel = "hle.libkernel";
+
 template <class... Args>
-void log(std::format_string<Args...> format, Args&&... args) {
-    const std::string line =
-        std::format("hle.kernel: {}\n", std::format(format, std::forward<Args>(args)...));
-    std::fputs(line.c_str(), stderr);
+void log(LogLevel level, std::format_string<Args...> format, Args&&... args) {
+    common::log(level, channel, format, std::forward<Args>(args)...);
 }
 
 // Larger lengths can't be mapped on x86-64 and would overflow the alignment arithmetic.
@@ -120,7 +122,7 @@ int reserve_again(std::uintptr_t start, std::uintptr_t end) {
         return 0;
     }
     const int error = errno;
-    log("reserve {:#x}-{:#x} again: failed, the range is dropped", start, end);
+    log(LogLevel::warn, "reserve {:#x}-{:#x} again: failed, the range is dropped", start, end);
     erase_range(start, end);
     const std::uintptr_t low = std::max(start, window_start);
     const std::uintptr_t high = std::min(end, window_end);
@@ -173,7 +175,7 @@ int reserve_window() {
     }
     if (error != 0) {
         // AddressSanitizer keeps the range as its PROT_NONE shadow gap without the option.
-        log("guest window {:#x}-{:#x} not reserved: {} (AddressSanitizer needs "
+        log(LogLevel::error, "guest window {:#x}-{:#x} not reserved: {} (AddressSanitizer needs "
             "protect_shadow_gap=0)",
             window_start, window_end, std::strerror(error));
     }
@@ -258,7 +260,8 @@ void* map_in_window(const Mapping& m, int prot) {
         at = find_free(window_start, m.length, m.alignment);
     }
     if (!at) {
-        log("guest window: no {:#x} bytes aligned to {:#x} free", m.length, m.alignment);
+        log(LogLevel::warn, "guest window: no {:#x} bytes aligned to {:#x} free", m.length,
+            m.alignment);
         errno = ENOMEM;
         return MAP_FAILED;
     }
@@ -276,12 +279,12 @@ void* map_in_window(const Mapping& m, int prot) {
 std::optional<int> host_protection(int guest) {
     const Flags host = host_prot(guest & ~prot_extra);
     if (host.unknown != 0) {
-        log("unknown protection bits {:#x}", host.unknown);
+        log(LogLevel::warn, "unknown protection bits {:#x}", host.unknown);
         return std::nullopt;
     }
     static std::atomic<bool> extra_logged{false};
     if ((guest & prot_extra) != 0 && !extra_logged.exchange(true)) {
-        log("protection bits {:#x} accepted and not applied", guest & prot_extra);
+        log(LogLevel::info, "protection bits {:#x} accepted and not applied", guest & prot_extra);
     }
     return host.value;
 }
@@ -295,18 +298,8 @@ int check_range(std::uintptr_t start, std::uint64_t length, std::uintptr_t& end)
     return end > start && covered(start, end) ? 0 : EINVAL;
 }
 
-// map() and reserve(): `reserved` marks the region as a reservation.
-int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
-    if (m.length == 0 || m.length % page_size != 0 || m.length > max_length ||
-        m.alignment < page_size || m.alignment > max_length ||
-        (m.alignment & (m.alignment - 1)) != 0 || (m.fixed && m.address % page_size != 0)) {
-        return EINVAL;
-    }
-    const std::optional<int> prot = host_protection(m.prot);
-    if (!prot) {
-        return EINVAL;
-    }
-    const std::scoped_lock lock(table_mutex);
+// The part of map_region under the lock, with the checked host protection. Needs table_mutex.
+int map_locked(const Mapping& m, int prot, bool reserved, std::uintptr_t& out) {
     if (const int error = reserve_window()) {
         return error;
     }
@@ -318,11 +311,11 @@ int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
     }
     if (m.fixed && m.into_reservation) {
         if (!covered(m.address, end, true)) {
-            log("map {:#x}-{:#x}: not all reserved", m.address, end);
+            log(LogLevel::warn, "map {:#x}-{:#x}: not all reserved", m.address, end);
             return EINVAL;
         }
         // MAP_FIXED replaces the reservation in one call, so no other mapping can come between.
-        at = ::mmap(hint, m.length, *prot, m.host_flags | MAP_FIXED, m.fd, m.fd_offset);
+        at = ::mmap(hint, m.length, prot, m.host_flags | MAP_FIXED, m.fd, m.fd_offset);
         if (at == MAP_FAILED) {
             const int error = errno;
             reserve_again(m.address, end);  // the failed MAP_FIXED may have unmapped the range
@@ -334,22 +327,22 @@ int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
         if (m.address < window_start || end > window_end || !free_range(m.address, end)) {
             return EEXIST;
         }
-        at = ::mmap(hint, m.length, *prot, m.host_flags | MAP_FIXED, m.fd, m.fd_offset);
+        at = ::mmap(hint, m.length, prot, m.host_flags | MAP_FIXED, m.fd, m.fd_offset);
         if (at == MAP_FAILED) {
             const int error = errno;
             reserve_again(m.address, end);  // as above
             return error;
         }
     } else if (m.fixed) {
-        at = ::mmap(hint, m.length, *prot, m.host_flags | MAP_FIXED_NOREPLACE, m.fd, m.fd_offset);
+        at = ::mmap(hint, m.length, prot, m.host_flags | MAP_FIXED_NOREPLACE, m.fd, m.fd_offset);
         if (at != MAP_FAILED && at != hint) {  // a kernel before 4.17 took it as a hint
             ::munmap(at, m.length);
             return EEXIST;
         }
     } else if ((m.host_flags & MAP_32BIT) != 0) {
-        at = map_host_placed(m, *prot);
+        at = map_host_placed(m, prot);
     } else {
-        at = map_in_window(m, *prot);
+        at = map_in_window(m, prot);
     }
     if (at == MAP_FAILED) {
         return errno;
@@ -357,9 +350,30 @@ int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
     out = reinterpret_cast<std::uintptr_t>(at);
     table.insert_or_assign(out,
                            Region{out, out + m.length, m.prot, m.flags, m.offset, m.name, reserved});
-    log("map {:#x}-{:#x} prot {:#x} flags {:#x} '{}'", out, out + m.length, m.prot, m.flags,
-        m.name);
     return 0;
+}
+
+// map() and reserve(): `reserved` marks the region as a reservation.
+int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
+    if (m.length == 0 || m.length % page_size != 0 || m.length > max_length ||
+        m.alignment < page_size || m.alignment > max_length ||
+        (m.alignment & (m.alignment - 1)) != 0 || (m.fixed && m.address % page_size != 0)) {
+        return EINVAL;
+    }
+    const std::optional<int> prot = host_protection(m.prot);
+    if (!prot) {
+        return EINVAL;
+    }
+    int error = 0;
+    {
+        const std::scoped_lock lock(table_mutex);
+        error = map_locked(m, *prot, reserved, out);
+    }
+    if (error == 0) {
+        log(LogLevel::debug, "map {:#x}-{:#x} prot {:#x} flags {:#x} '{}'", out, out + m.length,
+            m.prot, m.flags, m.name);
+    }
+    return error;
 }
 
 }  // namespace
@@ -381,31 +395,35 @@ int reserve(std::uintptr_t hint, std::uint64_t length, std::uint64_t alignment,
 }
 
 int restore_reservation(std::uintptr_t start, std::uint64_t length) {
-    const std::scoped_lock lock(table_mutex);
     std::uintptr_t end = 0;
-    if (const int error = check_range(start, length, end)) {
-        return error;
+    {
+        const std::scoped_lock lock(table_mutex);
+        if (const int error = check_range(start, length, end)) {
+            return error;
+        }
+        if (const int error = reserve_again(start, end)) {
+            return error;
+        }
+        erase_range(start, end);
+        table.emplace(start, Region{start, end, 0, 0, 0, "reserved", true});
     }
-    if (const int error = reserve_again(start, end)) {
-        return error;
-    }
-    erase_range(start, end);
-    table.emplace(start, Region{start, end, 0, 0, 0, "reserved", true});
-    log("reserve again {:#x}-{:#x}", start, end);
+    log(LogLevel::debug, "reserve again {:#x}-{:#x}", start, end);
     return 0;
 }
 
 int unmap(std::uintptr_t start, std::uint64_t length) {
-    const std::scoped_lock lock(table_mutex);
     std::uintptr_t end = 0;
-    if (const int error = check_range(start, length, end)) {
-        return error;
+    {
+        const std::scoped_lock lock(table_mutex);
+        if (const int error = check_range(start, length, end)) {
+            return error;
+        }
+        if (const int error = release(start, end)) {
+            return error;
+        }
+        erase_range(start, end);
     }
-    if (const int error = release(start, end)) {
-        return error;
-    }
-    erase_range(start, end);
-    log("unmap {:#x}-{:#x}", start, end);
+    log(LogLevel::debug, "unmap {:#x}-{:#x}", start, end);
     return 0;
 }
 
@@ -462,8 +480,8 @@ int restore(const std::vector<Region>& baseline) {
     for (const Region& r : baseline) {
         const auto it = table.find(r.start);
         if (it == table.end() || it->second != r) {
-            log("restore: the baseline's region {:#x}-{:#x} '{}' changed", r.start, r.end,
-                r.name);
+            log(LogLevel::warn, "restore: the baseline's region {:#x}-{:#x} '{}' changed",
+                r.start, r.end, r.name);
             return EINVAL;
         }
     }
@@ -479,7 +497,7 @@ int restore(const std::vector<Region>& baseline) {
             return error;
         }
         erase_range(start, end);
-        log("restore: unmap {:#x}-{:#x}", start, end);
+        log(LogLevel::debug, "restore: unmap {:#x}-{:#x}", start, end);
     }
     return 0;
 }
@@ -489,6 +507,7 @@ int restore(const std::vector<Region>& baseline) {
 namespace bb::hle::kernel {
 namespace {
 
+using common::LogLevel;
 using vmem::log;
 
 constexpr int guest_map_shared = 0x1;
@@ -503,7 +522,7 @@ std::int32_t map_anonymous_named(void** address, std::uint64_t length, int prot,
                                  std::string name) {
     if (address == nullptr || flags != 0) {
         if (flags != 0) {
-            log("anonymous map: flags {:#x} refused", flags);
+            log(LogLevel::warn, "anonymous map: flags {:#x} refused", flags);
         }
         return sce_error(22);
     }
@@ -531,7 +550,7 @@ void* guest_mmap(void* address, std::uint64_t length, int prot, int flags, int f
     const Flags host = host_map_flags(flags);
     const int sharing = flags & (guest_map_shared | guest_map_private);
     if (host.unknown != 0) {
-        log("mmap: unknown flags {:#x}", host.unknown);
+        log(LogLevel::warn, "mmap: unknown flags {:#x}", host.unknown);
         posix_fail(EINVAL);
         return map_failed;
     }
@@ -551,12 +570,12 @@ void* guest_mmap(void* address, std::uint64_t length, int prot, int flags, int f
     if ((flags & guest_map_anon) == 0) {
         file = fd_table().get(fd);
         if (!file) {
-            log("mmap: guest descriptor {} is not open", fd);
+            log(LogLevel::warn, "mmap: guest descriptor {} is not open", fd);
             posix_fail(EBADF);
             return map_failed;
         }
         if (offset < 0 || static_cast<std::uint64_t>(offset) % vmem::page_size != 0) {
-            log("mmap: file offset {:#x} refused", offset);
+            log(LogLevel::warn, "mmap: file offset {:#x} refused", offset);
             posix_fail(EINVAL);
             return map_failed;
         }
@@ -585,7 +604,7 @@ int guest_munmap(void* address, std::uint64_t length) {
 int guest_msync(void* address, std::uint64_t length, int flags) {
     const Flags host = host_msync_flags(flags);
     if (host.unknown != 0) {
-        log("msync: unknown or refused flags {:#x}", host.unknown);
+        log(LogLevel::warn, "msync: unknown or refused flags {:#x}", host.unknown);
         return posix_fail(EINVAL);
     }
     const auto start = reinterpret_cast<std::uintptr_t>(address);
