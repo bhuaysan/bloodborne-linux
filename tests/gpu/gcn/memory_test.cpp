@@ -475,8 +475,6 @@ TEST(GcnMemory, RoundTripImageDmaskAndFlags) {
     expect_assembles(all);
 }
 
-// Encodings that llvm-mc rejects: a gather4 whose dmask has more or fewer than one bit, and an
-// atomic with a dmask other than 1 or 3 (3 or 15 for the compare-and-swap atomics).
 // The compare-and-swap atomics take 3 or 15 as dmask, which the round trip over every opcode
 // (dmask 3) doesn't reach.
 TEST(GcnMemory, RoundTripImageCmpswapDmask15) {
@@ -491,6 +489,8 @@ TEST(GcnMemory, RoundTripImageCmpswapDmask15) {
     expect_assembles(all);
 }
 
+// Encodings that llvm-mc rejects: a gather4 whose dmask has more or fewer than one bit, and an
+// atomic with a dmask other than 1 or 3 (3 or 15 for the compare-and-swap atomics).
 TEST(GcnMemory, ImageEncodingsLlvmCannotExpress) {
     const std::vector<Case> differ = {
         {mimg(64, 0, 4, 8, 12, 0x3), "image_gather4 v[0:3], v4, s[8:15], s[12:15] dmask:0x3"},
