@@ -1,5 +1,5 @@
-// bb-gcn: disassembles a GCN shader binary (docs/design/graphics.md, "Source layout" and
-// "Decoder and disassembler").
+// bb-gcn: disassembles a GCN shader binary (docs/design/graphics.md, "Interface",
+// "Disassembler").
 
 #include <cstdint>
 #include <cstring>
