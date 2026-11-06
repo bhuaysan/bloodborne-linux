@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -24,6 +25,7 @@ using vmem::page_size;
 
 constexpr std::string_view channel = "hle.libkernel";
 
+constexpr int guest_enoent = 2;   // ours: the type query's only caller tests for non-zero
 constexpr int guest_einval = 22;
 constexpr int guest_enomem = 12;  // ours: every caller tests for non-zero only
 
@@ -33,7 +35,7 @@ struct Allocation {
 };
 
 // The allocations, keyed by start offset. They never overlap. Adjacent ones stay apart, so that
-// a type query (BC+OG5m9+bw, still in vmem.cpp) can report the bounds of each.
+// the type query (BC+OG5m9+bw) can report the bounds of each.
 std::mutex table_mutex;
 std::map<std::uint64_t, Allocation> table;
 
@@ -233,9 +235,29 @@ std::int32_t release_direct(std::uint64_t offset, std::uint64_t length) {
     return 0;
 }
 
+// The only caller (0x26bae74) passes the offset that the mapping query reports and tests the type
+// for 3.
+std::int32_t direct_memory_type(std::uint64_t offset, std::int32_t* type, std::uint64_t* start,
+                                std::uint64_t* end) {
+    if (type == nullptr || start == nullptr || end == nullptr) {
+        return sce_error(guest_einval);
+    }
+    const std::scoped_lock lock(table_mutex);
+    auto it = table.upper_bound(offset);
+    if (it == table.begin() || std::prev(it)->second.end <= offset) {
+        return sce_error(guest_enoent);
+    }
+    --it;
+    *type = it->second.type;
+    *start = it->first;
+    *end = it->second.end;
+    return 0;
+}
+
 BB_HLE_FUNCTION("libkernel", "pO96TwzOm5E", direct_memory_size);  // name unknown
 BB_HLE_FUNCTION("libkernel", "rTXw65xmLIA", allocate_direct);     // name unknown
 BB_HLE_FUNCTION("libkernel", "L-Q3LEjIbgA", map_direct);          // name unknown
 BB_HLE_FUNCTION("libkernel", "MBuItvba6z8", release_direct);      // name unknown
+BB_HLE_FUNCTION("libkernel", "BC+OG5m9+bw", direct_memory_type);  // name unknown
 
 }  // namespace bb::hle::kernel

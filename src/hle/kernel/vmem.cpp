@@ -459,10 +459,6 @@ std::int32_t query_mapping(const void* address, int flags, void* record, std::ui
     return 0;
 }
 
-std::int32_t direct_memory_type(std::uint64_t, std::int32_t*, std::uint64_t*, std::uint64_t*) {
-    return sce_error(2);  // ours: the only caller (0x26bae74) tests for non-zero
-}
-
 std::int32_t mapping_protection(const void* address, std::uint64_t* start, std::uint64_t* end,
                                 std::uint32_t* prot) {
     const auto region = vmem::find(reinterpret_cast<std::uintptr_t>(address));
@@ -496,7 +492,6 @@ BB_HLE_FUNCTION("libkernel", "mL8NDH86iQI", map_named_anonymous);  // name unkno
 BB_HLE_FUNCTION("libkernel", "IWIBBdTHit4", map_anonymous);        // name unknown
 BB_HLE_FUNCTION("libkernel", "teiItL2boFw", release_anonymous);    // name unknown
 BB_HLE_FUNCTION("libkernel", "rVjRvHJ0X6c", query_mapping);        // name unknown
-BB_HLE_FUNCTION("libkernel", "BC+OG5m9+bw", direct_memory_type);   // name unknown
 BB_HLE_FUNCTION("libkernel", "WFcfL2lzido", mapping_protection);   // name unknown
 
 }  // namespace bb::hle::kernel
