@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -109,11 +111,74 @@ TEST(KernelVmem, FixedMapNeverReplacesAMapping) {
     EXPECT_EQ(vmem::map(m, out), EEXIST);
     m.address = p + 0x1000;
     EXPECT_EQ(vmem::map(m, out), EINVAL);
+    m.address = vmem::window_start - page_size;  // across the start of the guest window
+    m.length = 2 * page_size;
+    EXPECT_EQ(vmem::map(m, out), EEXIST);
+    m.length = page_size;
     ASSERT_EQ(vmem::unmap(p, page_size), 0);
     m.address = p;
     ASSERT_EQ(vmem::map(m, out), 0);
     EXPECT_EQ(out, p);
     EXPECT_EQ(vmem::unmap(p, page_size), 0);
+}
+
+// The game keeps GPU addresses in 40 bits, so the mappings whose address the runtime picks go to
+// the guest window: the lowest free aligned range there, which an unmap frees for the next map.
+TEST(KernelVmem, MappingsWithoutAFixedAddressGoToTheGuestWindow) {
+    struct Placed {
+        std::uintptr_t start;
+        std::uint64_t length, alignment;
+    };
+    std::vector<Placed> placed;
+    vmem::Mapping m = anonymous(2);
+    m.alignment = 0x10000;
+    std::uintptr_t a = 0, r = 0, b = 0, hinted = 0;
+    ASSERT_EQ(vmem::map(m, a), 0);
+    placed.push_back({a, 2 * page_size, 0x10000});
+    ASSERT_EQ(vmem::reserve(0, 3 * page_size, 0x200000, r), 0);
+    placed.push_back({r, 3 * page_size, 0x200000});
+    ASSERT_EQ(vmem::map(anonymous(1), b), 0);
+    placed.push_back({b, page_size, page_size});
+    vmem::Mapping h = anonymous(1);
+    h.address = vmem::window_start + 0x40000000;  // a hint in the window: the search starts there
+    ASSERT_EQ(vmem::map(h, hinted), 0);
+    EXPECT_GE(hinted, h.address);
+    placed.push_back({hinted, page_size, page_size});
+    for (std::size_t i = 0; i < placed.size(); ++i) {
+        const Placed& p = placed[i];
+        SCOPED_TRACE(i);
+        EXPECT_GE(p.start, vmem::window_start);
+        EXPECT_LE(p.start + p.length, vmem::window_end);
+        EXPECT_EQ(p.start % p.alignment, 0U);
+        for (std::size_t j = 0; j < i; ++j) {
+            EXPECT_TRUE(p.start + p.length <= placed[j].start ||
+                        placed[j].start + placed[j].length <= p.start);
+        }
+    }
+
+    ASSERT_EQ(vmem::unmap(a, 2 * page_size), 0);
+    std::uintptr_t again = 0;
+    ASSERT_EQ(vmem::map(m, again), 0);
+    EXPECT_EQ(again, a);
+    for (const auto& [start, length] : {std::pair{again, 2 * page_size}, {r, 3 * page_size},
+                                        {b, page_size}, {hinted, page_size}}) {
+        EXPECT_EQ(vmem::unmap(start, length), 0);
+    }
+}
+
+// An unmapped range in the window is reserved again, not returned to the host.
+TEST(KernelVmem, AnUnmappedRangeInTheWindowStaysReserved) {
+    const std::uintptr_t p = map_pages(4);
+    ASSERT_EQ(sceKernelMunmap(ptr(p + page_size), 3 * page_size), 0);
+    ASSERT_EQ(sceKernelMunmap(ptr(p), page_size), 0);
+    void* const host =
+        ::mmap(ptr(p), page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    ASSERT_NE(host, MAP_FAILED);
+    EXPECT_FALSE(vmem::in_window(addr(host), addr(host) + page_size)) << host;
+    ::munmap(host, page_size);
+    // To the guest it is unmapped: libc.prx's msync probe (0x541a5) finds no page.
+    EXPECT_EQ(guest_msync(ptr(p), 0x1000, 1), -1);
+    EXPECT_EQ(take_errno(), 12);
 }
 
 TEST(KernelVmem, ProtectAndUnmapSplitRegions) {
