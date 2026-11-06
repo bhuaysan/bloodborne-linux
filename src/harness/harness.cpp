@@ -141,7 +141,8 @@ std::byte* Arena::bytes(std::span<const std::byte> b) {
     return p;
 }
 
-Harness::Harness(loader::Image& image, std::vector<Region> extra) : image_(image) {
+Harness::Harness(loader::Image& image, std::vector<Region> extra, State* state)
+    : image_(image), state_(state) {
     for (const loader::Segment& s : image.segments) {
         if (s.prot & PROT_WRITE) {
             regions_.push_back({"image", reinterpret_cast<std::byte*>(image.runtime(s.link_addr)),
@@ -189,6 +190,9 @@ void Harness::on_call(const hle::StubInfo& stub, const std::uint64_t args[6]) {
 }
 
 void Harness::restore() {
+    if (state_ != nullptr) {
+        state_->restore();
+    }
     const std::size_t page = common::page_size();
     for (std::size_t i = 0; i < regions_.size(); ++i) {
         const Region& r = regions_[i];
@@ -237,6 +241,9 @@ void Harness::keep_original() {
         take(i, after_original_[i]);
     }
     original_log_ = log_;
+    if (state_ != nullptr) {
+        original_changes_ = state_->changes();
+    }
 }
 
 void Harness::compare_state(Result& result) const {
@@ -248,6 +255,28 @@ void Harness::compare_state(Result& result) const {
         result.add(std::format("memory: {} differing ranges in all", ranges));
     }
     compare_log(result);
+    compare_changes(result);
+}
+
+void Harness::compare_changes(Result& result) const {
+    if (state_ == nullptr) {
+        return;
+    }
+    const std::vector<std::string>& orig = original_changes_;
+    const std::vector<std::string> repl = state_->changes();
+    const auto [o, r] = std::ranges::mismatch(orig, repl);
+    if (o == orig.end() && r == repl.end()) {
+        return;
+    }
+    result.add(std::format("{}: differs at change {} (original {} changes, replacement {})",
+                           state_->name(), o - orig.begin() + 1, orig.size(), repl.size()));
+    auto show = [&](std::string_view side, const std::vector<std::string>& lines) {
+        for (std::size_t i = 0; i < std::min(lines.size(), max_shown_calls); ++i) {
+            result.add(std::format("  {} {}: {}", side, i + 1, lines[i]));
+        }
+    };
+    show("original", orig);
+    show("replacement", repl);
 }
 
 void Harness::compare_region(std::size_t i, Result& result, std::size_t& ranges) const {

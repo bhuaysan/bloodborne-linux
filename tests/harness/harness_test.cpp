@@ -473,4 +473,41 @@ TEST(HarnessSparseTest, RefusesAnUnalignedRegion) {
     EXPECT_THROW(Harness(image, {region}), std::invalid_argument);
 }
 
+// A state that counts its restores and lists what the replacement under test adds.
+struct ListState : bb::harness::State {
+    std::string_view name() const override { return "list"; }
+    void restore() override {
+        ++restores;
+        lines.clear();
+    }
+    std::vector<std::string> changes() const override { return lines; }
+    int restores = 0;
+    std::vector<std::string> lines;
+};
+
+ListState* list_state = nullptr;  // the state of the running test, for the replacements
+
+int adds_a_change(int* p) {
+    list_state->lines.emplace_back("one");
+    return read_write(p);
+}
+
+TEST(HarnessStateTest, RestoresAndComparesTheState) {
+    ListState state;
+    list_state = &state;
+    Image image = load();
+    loaded = &image;
+    Harness harness{image, {}, &state};
+    const Result same = harness.compare<int(int*)>(read_write_at, &read_write, two_ints);
+    EXPECT_TRUE(same) << same.report();
+    EXPECT_EQ(state.restores, 2);  // before each call
+    expect_report(harness.compare<int(int*)>(read_write_at, &adds_a_change, two_ints),
+                  "list: differs at change 1 (original 0 changes, replacement 1)\n"
+                  "  replacement 1: one\n");
+    harness.restore();
+    EXPECT_TRUE(state.lines.empty());
+    loaded = nullptr;
+    list_state = nullptr;
+}
+
 }  // namespace

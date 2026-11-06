@@ -77,6 +77,21 @@ struct Region {
     std::uint64_t fd_offset = 0;
 };
 
+// State outside the regions that the harness puts back at every restore and compares between
+// the two calls, such as the guest mappings and direct memory (tests/harness/load_set.cpp). Its
+// baseline is its own, taken together with the harness's.
+class State {
+public:
+    virtual ~State() = default;
+    // The name in the report.
+    virtual std::string_view name() const = 0;
+    // Puts the baseline back. Called first by every Harness::restore(), before the regions.
+    virtual void restore() = 0;
+    // What changed since the baseline, one line each, in an order that doesn't depend on the
+    // order of the calls that changed it. Compared line by line between the two calls.
+    virtual std::vector<std::string> changes() const = 0;
+};
+
 // What one comparison found. True when nothing differs; report() then is empty.
 class Result {
 public:
@@ -99,17 +114,20 @@ struct StubCall {
 };
 
 // Takes the baseline of `image` (mapped and relocated) on construction: its writable segments,
-// the data blocks that bb::hle::resolve created so far, the `extra` regions and the arena. Applies
-// no hooks and runs no init code. Records the stub calls while it exists, so only one harness may
+// the data blocks that bb::hle::resolve created so far, the `extra` regions and the arena, and
+// restores and compares `state` (if given, it must outlive the harness) as well. Applies no hooks
+// and runs no init code. Records the stub calls while it exists, so only one harness may
 // exist at a time: throws std::logic_error if another stub observer (such as another harness) is
 // installed, std::invalid_argument for a region with an fd that isn't page-aligned.
 class Harness : private hle::StubObserver {
 public:
-    explicit Harness(loader::Image& image, std::vector<Region> extra = {});
+    explicit Harness(loader::Image& image, std::vector<Region> extra = {},
+                     State* state = nullptr);
     ~Harness() override;
 
     Arena& arena() { return arena_; }
-    // Puts the baseline back into every region, resets the arena and clears the stub log.
+    // Puts the baseline back into the state and every region, resets the arena and clears the
+    // stub log.
     void restore();
 
     // The stub calls since the last restore().
@@ -123,13 +141,18 @@ public:
     // region and the stub logs.
     template <class Sig, class Build>
     Result compare(std::uint64_t link_addr, Sig* replacement, Build&& build) {
-        return compare_as(link_addr, replacement, build, std::type_identity<Sig>{});
+        return compare_as(image_.fn<Sig>(link_addr), replacement, build);
+    }
+    // The same with the original as a function of this process, for tests of the harness with a
+    // synthetic original that has the guest ABI.
+    template <class Sig, class Build>
+    Result compare_functions(Sig* original, Sig* replacement, Build&& build) {
+        return compare_as(original, replacement, build);
     }
 
 private:
     template <class R, class... A, class Build>
-    Result compare_as(std::uint64_t link_addr, R (*replacement)(A...), Build& build,
-                      std::type_identity<R(A...)>) {
+    Result compare_as(R (*original_fn)(A...), R (*replacement)(A...), Build& build) {
         auto run = [&](R (*f)(A...)) {
             restore();
             std::tuple<A...> args = build(arena_);
@@ -140,7 +163,7 @@ private:
                 return std::apply(f, args);
             }
         };
-        const auto original = run(image_.fn<R(A...)>(link_addr));
+        const auto original = run(original_fn);
         keep_original();
         const auto replaced = run(replacement);
         Result result;
@@ -193,12 +216,15 @@ private:
     // Compares the regions and the stub log after the replacement's call with the saved ones.
     void compare_state(Result& result) const;
     void compare_log(Result& result) const;
+    void compare_changes(Result& result) const;
 
     loader::Image& image_;
+    State* state_;
     Arena arena_;
     std::vector<Region> regions_;
     std::vector<Contents> baseline_, after_original_;
     std::vector<StubCall> log_, original_log_;
+    std::vector<std::string> original_changes_;  // of state_ after the original's call
     std::unordered_map<std::string, int> arity_;  // by hle::import_key
     // The start and end of the stack of the thread that last ran compare_log, and that thread.
     mutable std::thread::id stack_thread_;
