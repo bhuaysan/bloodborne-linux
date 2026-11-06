@@ -50,10 +50,13 @@ bool is(std::span<const std::uint32_t> inst, spv::Op op) {
     return (inst[0] & 0xffff) == static_cast<std::uint32_t>(op);
 }
 
-// The key of ps_attrs, as its header describes the inputs and exports.
+// The key of ps_attrs, as its header describes the inputs and exports; attr3 is the default 1111.
 ShaderKey pixel_key() {
     ShaderKey key{.stage = Stage::pixel, .pgm_rsrc2 = 2u << 1};
     key.ps_input_ena = key.ps_input_addr = 1u << 1 | 1u << 6 | 1u << 8 | 1u << 9;
+    key.ps_input_cntl[1] = 1;
+    key.ps_input_cntl[2] = 2;
+    key.ps_input_cntl[3] = 0x20 | 3u << 8;
     key.col_format = 0x249;
     return key;
 }
@@ -92,6 +95,23 @@ std::multiset<std::uint32_t> stored_channels(const Words& spirv, spv::Decoration
         }
     }
     return stored;
+}
+
+// The other decorations of the variables at `location`, inputs and outputs. The translator
+// decorates a variable with its Location first.
+std::set<spv::Decoration> decorations(const Words& spirv, std::uint32_t location) {
+    std::set<std::uint32_t> at_location;
+    std::set<spv::Decoration> out;
+    for (const auto inst : instructions(spirv)) {
+        if (is(inst, spv::Op::OpDecorate) && inst.size() == 4 &&
+            inst[2] == static_cast<std::uint32_t>(spv::Decoration::Location) &&
+            inst[3] == location) {
+            at_location.insert(inst[1]);
+        } else if (is(inst, spv::Op::OpDecorate) && at_location.contains(inst[1])) {
+            out.insert(static_cast<spv::Decoration>(inst[2]));
+        }
+    }
+    return out;
 }
 
 TEST(GcnStages, ProgramsPassSpirvVal) {
@@ -134,23 +154,31 @@ TEST(GcnStages, ProgramsPassSpirvVal) {
     EXPECT_EQ(count(ps.spirv, spv::Op::OpDemoteToHelperInvocation), 1);
     EXPECT_EQ(count(ps.spirv, spv::Op::OpDecorate, 2,
                     static_cast<std::uint32_t>(spv::Decoration::Location)),
-              3);  // three render targets
+              6);  // three inputs, three render targets
     EXPECT_FALSE(ps.interface.wave_size_dependent);
-    using D = spv::Decoration;
-    EXPECT_EQ(stored_channels(ps.spirv, D::Location, 0), xyzw);  // 32_ABGR
+    using D = spv::Decoration;  // attr0 smooth at the center, attr1 linear centroid, attr2 flat
+    EXPECT_EQ(decorations(ps.spirv, 0), std::set<D>{});
+    EXPECT_EQ(decorations(ps.spirv, 1), (std::set{D::NoPerspective, D::Centroid}));
+    EXPECT_EQ(decorations(ps.spirv, 2), std::set{D::Flat});
+    EXPECT_EQ(count(ps.spirv, spv::Op::OpConstant, 3, 0x3f800000), 1);  // attr3.x of 1111
+    EXPECT_EQ(stored_channels(ps.spirv, D::Location, 0), xyzw);  // 32_ABGR, after input 0
     EXPECT_EQ(stored_channels(ps.spirv, D::Location, 2), (std::multiset<std::uint32_t>{0, 1}));
     const std::uint32_t frag_coord = static_cast<std::uint32_t>(spv::BuiltIn::FragCoord);
     EXPECT_EQ(count(ps.spirv, spv::Op::OpDecorate, 3, frag_coord), 1);  // POS_X and POS_Y
-    // mrt0 32_AR (x and w of the export), with v4 and v5 placed but not loaded: they hold 0.
+    // PERSP_SAMPLE for attr0 (v4 and v5 placed but not loaded: POS_*_FLOAT with a sample pair is
+    // an error), mrt0 32_AR (x and w of the export), and attr3 the default value 0001 (x is 0).
     ShaderKey other = pixel_key();
-    other.ps_input_addr = 1u << 1 | 1u << 6 | 1u << 8 | 1u << 9;
-    other.ps_input_ena = 1u << 1 | 1u << 6;
+    other.ps_input_addr = 1u << 0 | 1u << 6 | 1u << 10 | 1u << 11;
+    other.ps_input_ena = 1u << 0 | 1u << 6;
     other.col_format = 0x243;
+    other.ps_input_cntl[3] = 0x20 | 1u << 8;
     const auto ps2 = translate(program_words("ps_attrs"), {}, other);
-    EXPECT_EQ(validate(ps2.spirv), "");
+    EXPECT_EQ(validate(ps2.spirv), "");  // and the SampleRateShading capability of Sample
+    EXPECT_EQ(decorations(ps2.spirv, 0), std::set{D::Sample});
     EXPECT_EQ(count(ps2.spirv, spv::Op::OpDecorate, 3, frag_coord), 0);
+    EXPECT_EQ(count(ps2.spirv, spv::Op::OpConstant, 3, 0x3f800000), 0);  // attr3.x is 0
     EXPECT_EQ(stored_channels(ps2.spirv, D::Location, 0), (std::multiset<std::uint32_t>{0, 3}));
-    // POS_Z and POS_W in v4 and v5 (W is 1/FragCoord.w).
+    // POS_Z and POS_W in v4 and v5 (W is 1/FragCoord.w), with the center pair and 0001 again.
     other.ps_input_ena = other.ps_input_addr = 1u << 1 | 1u << 6 | 1u << 10 | 1u << 11;
     const auto ps3 = translate(program_words("ps_attrs"), {}, other);
     EXPECT_EQ(validate(ps3.spirv), "");
@@ -159,6 +187,19 @@ TEST(GcnStages, ProgramsPassSpirvVal) {
     for (const std::uint32_t format : {5u, 6u, 7u, 8u}) {  // mrt1 UNORM16, SNORM16, UINT16, SINT16
         other.col_format = 0x203 | format << 4;
         EXPECT_EQ(validate(translate(program_words("ps_attrs"), {}, other).spirv), "") << format;
+    }
+}
+
+// A default value is the same at the three vertices, so v_interp_mov_f32 of its differences P10
+// and P20 gives 0 and only p0 gives the value (attr3 is 1111 in pixel_key).
+TEST(GcnStages, DefaultValueDifferencesAreZero) {
+    for (const unsigned param : {0u, 1u, 2u}) {  // p10, p20, p0
+        const auto ps = translate(Words{vintrp(2, 6, param, 3, 0), s_endpgm}, {}, pixel_key());
+        if (have_spirv_val()) {
+            EXPECT_EQ(validate(ps.spirv), "") << param;
+        }
+        EXPECT_EQ(count(ps.spirv, spv::Op::OpConstant, 3, 0x3f800000), param == 2 ? 1 : 0)
+            << param;
     }
 }
 
@@ -225,6 +266,23 @@ TEST(GcnStages, PixelErrorsNameWhatIsUnsupported) {
               "an uncompressed export to mrt1 with SPI_SHADER_COL_FORMAT 4");
     EXPECT_EQ(error(xport(0xf, 3, 0, 1, 2, 3), pixel), "no error");  // mrt3 is ZERO
 
+    EXPECT_EQ(error({vintrp(0, 6, 0, 0, 0)}, vertex_key),
+              "v_interp_p1_f32 outside a pixel shader");
+    EXPECT_EQ(error({vintrp(0, 6, 4, 0, 0)}, pixel),  // v4 holds POS_X
+              "v_interp_p1_f32 reads v4, which holds no I barycentric");
+    EXPECT_EQ(error({vintrp(1, 6, 0, 0, 0)}, pixel),  // v0 holds I
+              "v_interp_p2_f32 reads v0, which holds no J barycentric");
+    EXPECT_EQ(error({vintrp(2, 6, 0, 2, 0)}, pixel),  // v_interp_mov_f32 v6, p10, attr2.x
+              "v_interp_mov_f32 of p10 or p20 is not supported yet");
+    // Attribute 4 shares location 0 with attribute 0, linear and centroid instead of perspective.
+    EXPECT_EQ(error({vintrp(0, 6, 0, 0, 0), vintrp(0, 7, 2, 4, 0)}, pixel),
+              "the input at location 0 is read with two interpolations");
+    ShaderKey flat = pixel;
+    flat.ps_input_cntl[0] = 1u << 10;  // FLAT_SHADE: p1 and p2 read the flat input of mov
+    EXPECT_EQ(error({vintrp(0, 6, 0, 0, 0), vintrp(2, 7, 2, 0, 1)}, flat), "no error");
+    EXPECT_EQ(error({vintrp(0, 6, 0, 0, 0), vintrp(2, 7, 2, 0, 1)}, pixel),
+              "the input at location 0 is read with two interpolations");
+
     ShaderKey key = pixel;
     key.ps_input_addr = 1u << 1;
     EXPECT_EQ(error({}, key),
@@ -233,8 +291,22 @@ TEST(GcnStages, PixelErrorsNameWhatIsUnsupported) {
     EXPECT_EQ(error({}, key), "SPI_PS_INPUT_ENA 0x1000 is not supported yet");
     key.ps_input_ena = 0;  // placed but not loaded: the VGPR holds 0
     EXPECT_EQ(error({}, key), "no error");
+    // A sample pair runs the shader per sample, which moves FragCoord off the pixel center.
+    key.ps_input_ena = key.ps_input_addr = 1u << 0 | 1u << 8;  // PERSP_SAMPLE, POS_X_FLOAT
+    EXPECT_EQ(error({}, key), "SPI_PS_INPUT_ENA 0x101: POS_*_FLOAT with a sample barycentric "
+                              "pair is not supported yet");
+    key.ps_input_ena = key.ps_input_addr = 1u << 4 | 1u << 11;  // LINEAR_SAMPLE, POS_W_FLOAT
+    EXPECT_EQ(error({}, key), "SPI_PS_INPUT_ENA 0x810: POS_*_FLOAT with a sample barycentric "
+                              "pair is not supported yet");
+    key.ps_input_ena = key.ps_input_addr = 1u << 2 | 1u << 8;  // PERSP_CENTROID: no error
+    EXPECT_EQ(error({}, key), "no error");
     EXPECT_EQ(error({}, {.stage = Stage::pixel, .pgm_rsrc2 = 1u}),  // SCRATCH_EN
               "SPI_SHADER_PGM_RSRC2_PS 0x1 is not supported yet");
+    ShaderKey cntl = pixel;
+    cntl.ps_input_cntl[5] = 1u << 17;  // PT_SPRITE_TEX
+    EXPECT_EQ(error({}, cntl), "SPI_PS_INPUT_CNTL_5 0x20000 is not supported yet");
+    cntl.ps_input_cntl[5] = 1u << 13 | 1;  // CYL_WRAP
+    EXPECT_EQ(error({}, cntl), "SPI_PS_INPUT_CNTL_5 0x2001 is not supported yet");
 }
 
 }  // namespace

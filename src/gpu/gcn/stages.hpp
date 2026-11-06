@@ -1,4 +1,4 @@
-// The graphics stages of the translator: their initial registers and exports
+// The graphics stages of the translator: their initial registers, exports and interpolation
 // (docs/design/graphics.md, "Stage interfaces and ShaderKey" and "Pixel shaders"). Internal to
 // the translator.
 #pragma once
@@ -24,6 +24,7 @@ public:
     virtual Id sgpr(unsigned n) = 0;  // the variable of s<n>, a u32
     virtual Id exec_var() = 0;        // the variable of this lane's EXEC bit, a bool
     virtual Id active() = 0;          // this lane's EXEC bit, loaded
+    virtual void write_vgpr(unsigned n, Id value) = 0;  // predicated by EXEC
     // Runs `body` in a selection on `cond`.
     virtual void guarded(Id cond, const std::function<void()>& body) = 0;
     [[noreturn]] virtual void fail(const std::string& message) const = 0;
@@ -51,6 +52,7 @@ public:
     void prologue(unsigned user_sgprs);
 
     void exp(const Instruction& inst);
+    void interpolate(const Instruction& inst);
 
     // The execution modes, after the function.
     void finish(Id main);
@@ -59,10 +61,23 @@ public:
     const std::vector<Id>& interface() const { return interface_; }
 
 private:
+    enum class Interp { flat, smooth, noperspective };
+    struct Input {
+        Id var;
+        Interp interp;
+        spv::Decoration where;  // Centroid, Sample, or Max for the pixel center
+    };
+    struct Barycentric {
+        Interp interp;
+        spv::Decoration where;
+        unsigned component;  // 0 for I, 1 for J
+    };
+
     void pixel_prologue(unsigned user_sgprs);
     void pixel_export(const Instruction& inst);
     Id builtin(spv::BuiltIn which, spv::StorageClass storage, Id type);
     Id output(std::uint32_t location, Id type);
+    Id input(std::uint32_t location, Interp interp, spv::Decoration where);
     void store_components(Id var, Id type, const Id (&values)[4]);
     void render_target(const Instruction& inst, unsigned n);
     Id value(const Operand& o);  // a VGPR as a float
@@ -77,8 +92,10 @@ private:
     const ShaderKey& key_;
     StageRegisters& regs_;
     std::vector<Id> interface_;
-    std::map<std::uint32_t, Id> builtins_;  // by BuiltIn
-    std::map<std::uint32_t, Id> outputs_;   // by location
+    std::map<std::uint32_t, Id> builtins_;   // by BuiltIn
+    std::map<std::uint32_t, Id> outputs_;    // by location
+    std::map<std::uint32_t, Input> inputs_;  // by location
+    std::map<unsigned, Barycentric> barycentrics_;  // by VGPR
     Id valid_ = 0;  // the valid mask of the last export with `vm`, a bool variable
 };
 

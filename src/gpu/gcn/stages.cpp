@@ -1,7 +1,7 @@
 // The vertex and pixel stages (docs/design/graphics.md, "Stage interfaces and ShaderKey" and
 // "Pixel shaders"). The register fields follow the Sea Islands register reference; the VS input
-// VGPRs, the PS input VGPR order and the export formats were checked against shadPS4 (facts only,
-// see docs/references.md). EXP follows the Sea Islands ISA manual.
+// VGPRs, the PS input VGPR order, SPI_PS_INPUT_CNTL and the export formats were checked against
+// shadPS4 (facts only, see docs/references.md). EXP and VINTRP follow the Sea Islands ISA manual.
 
 #include "gpu/gcn/stages.hpp"
 
@@ -27,6 +27,13 @@ constexpr std::uint32_t ps_rsrc2_unsupported = 1u << 0;  // SPI_SHADER_PGM_RSRC2
 constexpr unsigned ps_input_vgprs[16] = {2, 2, 2, 3, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1};
 // The bits that may be enabled so far: the six barycentric pairs and POS_*_FLOAT.
 constexpr std::uint32_t ps_input_supported = 0x77u | 0xfu << 8;
+// PERSP_SAMPLE and LINEAR_SAMPLE, and POS_*_FLOAT: rejected together ("Pixel: not in the key yet").
+constexpr std::uint32_t ps_input_sample = 1u << 0 | 1u << 4;
+constexpr std::uint32_t ps_input_pos_float = 0xfu << 8;
+// The interpolation location of the barycentric pairs, by bit modulo 4: sample, center, centroid.
+constexpr spv::Decoration center = spv::Decoration::Max;
+constexpr spv::Decoration ps_input_where[3] = {spv::Decoration::Sample, center,
+                                               spv::Decoration::Centroid};
 
 // Export targets (Instruction::mem_offset of EXP).
 constexpr unsigned target_mrtz = 8;
@@ -39,6 +46,12 @@ enum ExportFormat : unsigned {
     zero = 0, r32 = 1, gr32 = 2, ar32 = 3, fp16 = 4, unorm16 = 5, snorm16 = 6, uint16 = 7,
     sint16 = 8, abgr32 = 9,
 };
+
+// SPI_PS_INPUT_CNTL_<n>: OFFSET in bits 0-5 (0x20 and above select DEFAULT_VAL in bits 8-9),
+// FLAT_SHADE in bit 10. The other fields (CYL_WRAP, PT_SPRITE_TEX) aren't supported yet.
+constexpr std::uint32_t cntl_default = 0x20;
+constexpr std::uint32_t cntl_flat_shade = 1u << 10;
+constexpr std::uint32_t cntl_supported = 0x3fu | 3u << 8 | cntl_flat_shade;
 
 }  // namespace
 
@@ -59,6 +72,16 @@ void StageIo::check_key(const ShaderKey& key) {
     }
     if ((key.ps_input_ena & ~ps_input_supported) != 0) {
         reject(std::format("SPI_PS_INPUT_ENA {:#x} is not supported yet", key.ps_input_ena));
+    }
+    if ((key.ps_input_ena & ps_input_sample) != 0 && (key.ps_input_ena & ps_input_pos_float) != 0) {
+        reject(std::format("SPI_PS_INPUT_ENA {:#x}: POS_*_FLOAT with a sample barycentric pair is "
+                           "not supported yet", key.ps_input_ena));
+    }
+    for (std::size_t n = 0; n < key.ps_input_cntl.size(); ++n) {
+        if ((key.ps_input_cntl[n] & ~cntl_supported) != 0) {
+            reject(std::format("SPI_PS_INPUT_CNTL_{} {:#x} is not supported yet", n,
+                               key.ps_input_cntl[n]));
+        }
     }
 }
 
@@ -109,7 +132,10 @@ void StageIo::pixel_prologue(unsigned user_sgprs) {
         const bool enabled = ((key_.ps_input_ena >> bit) & 1) != 0;
         for (unsigned k = 0; k < ps_input_vgprs[bit]; ++k, ++v) {
             Id value = c0;
-            if (enabled && bit >= 8 && bit <= 11) {
+            if (enabled && bit < 7) {
+                barycentrics_[v] = {bit >= 4 ? Interp::noperspective : Interp::smooth,
+                                    ps_input_where[bit % 4], k};
+            } else if (enabled && bit >= 8 && bit <= 11) {
                 const Id vec4 = b_.type_vector(f32(), 4);
                 const Id coord = load(vec4, builtin(spv::BuiltIn::FragCoord, SC::Input, vec4));
                 Id c = b_.op(Op::OpCompositeExtract, f32(), {coord, bit - 8});
@@ -223,6 +249,54 @@ Id StageIo::half(Id packed, unsigned high, unsigned format, Id type) {
     return b_.op(Op::OpCompositeExtract, f32(), {pair, high});
 }
 
+// v_interp_p1_f32 and v_interp_p2_f32 both give the interpolated value of the attribute: the
+// interpolation itself is the input variable's, chosen by the barycentric VGPR they read (I for
+// p1, J for p2). v_interp_mov_f32 with p0 and an attribute with FLAT_SHADE read a flat input. An
+// attribute whose OFFSET selects a default value gives the constant, and as the constant is the
+// same at the three vertices, its differences P10 and P20 (v_interp_mov_f32 of p10 or p20) are 0.
+void StageIo::interpolate(const Instruction& inst) {
+    if (key_.stage != Stage::pixel) {
+        regs_.fail(std::format("{} outside a pixel shader", inst.name));
+    }
+    const unsigned attribute = inst.src[1].value >> 2;
+    const unsigned channel = inst.src[1].value & 3;
+    if (attribute >= key_.ps_input_cntl.size()) {
+        regs_.fail(std::format("attribute {} has no SPI_PS_INPUT_CNTL", attribute));
+    }
+    const std::uint32_t cntl = key_.ps_input_cntl[attribute];
+    const unsigned location = cntl & 0x3f;
+    const bool is_default = location >= cntl_default;
+    const bool difference = inst.opcode == 2 && inst.src[0].value != 2;  // mov of p10 or p20
+    Id result;
+    if (is_default && difference) {
+        result = b_.constant_u32(0);
+    } else if (is_default) {  // DEFAULT_VAL: 0000, 0001, 1110 or 1111 (XYZW)
+        const unsigned d = (cntl >> 8) & 3;
+        const bool one = channel == 3 ? (d & 1) != 0 : d >= 2;
+        result = b_.constant_u32(one ? 0x3f800000u : 0);
+    } else {
+        Interp interp = Interp::flat;
+        spv::Decoration where = center;
+        if (difference) {
+            regs_.fail("v_interp_mov_f32 of p10 or p20 is not supported yet");
+        }
+        if (inst.opcode != 2 && (cntl & cntl_flat_shade) == 0) {  // p1 or p2, not flat
+            const auto it = barycentrics_.find(inst.src[0].code);
+            if (it == barycentrics_.end() || it->second.component != inst.opcode) {
+                regs_.fail(std::format("{} reads v{}, which holds no {} barycentric", inst.name,
+                                       inst.src[0].code, inst.opcode == 0 ? "I" : "J"));
+            }
+            interp = it->second.interp;
+            where = it->second.where;
+        }
+        const Id vec4 = b_.type_vector(f32(), 4);
+        const Id all = load(vec4, input(location, interp, where));
+        result = b_.op(Op::OpBitcast, u32(),
+                       {b_.op(Op::OpCompositeExtract, f32(), {all, channel})});
+    }
+    regs_.write_vgpr(inst.dst[0].code, result);
+}
+
 void StageIo::finish(Id main) {
     if (key_.stage == Stage::pixel) {
         b_.execution_mode(main, spv::ExecutionMode::OriginUpperLeft);
@@ -253,6 +327,32 @@ Id StageIo::output(std::uint32_t location, Id type) {
         interface_.push_back(it->second);
     }
     return it->second;
+}
+
+Id StageIo::input(std::uint32_t location, Interp interp, spv::Decoration where) {
+    if (const auto it = inputs_.find(location); it != inputs_.end()) {
+        if (it->second.interp != interp || it->second.where != where) {
+            regs_.fail(std::format("the input at location {} is read with two interpolations",
+                                   location));
+        }
+        return it->second.var;
+    }
+    const Id vec4 = b_.type_vector(f32(), 4);
+    const Id var = b_.variable(b_.type_pointer(SC::Input, vec4), SC::Input);
+    b_.decorate(var, spv::Decoration::Location, {location});
+    if (interp != Interp::smooth) {
+        b_.decorate(var, interp == Interp::flat ? spv::Decoration::Flat
+                                                : spv::Decoration::NoPerspective);
+    }
+    if (where != center) {
+        b_.decorate(var, where);
+        if (where == spv::Decoration::Sample) {
+            b_.capability(spv::Capability::SampleRateShading);
+        }
+    }
+    inputs_.emplace(location, Input{var, interp, where});
+    interface_.push_back(var);
+    return var;
 }
 
 // Stores the channels of an export that have a value into `var`, in the active lanes.

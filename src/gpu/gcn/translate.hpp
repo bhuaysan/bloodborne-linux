@@ -48,10 +48,12 @@ struct ShaderKey {
     std::array<std::uint32_t, 2> instance_step_rate = {1, 1};
 
     // PS (docs/design/graphics.md, "Pixel key"): SPI_PS_INPUT_ADDR places the input VGPRs and
-    // SPI_PS_INPUT_ENA says which are loaded. Without SPI_BARYC_CNTL, POS_*_FLOAT are the pixel
-    // center ("Pixel: not in the key yet").
+    // SPI_PS_INPUT_ENA says which are loaded. SPI_PS_INPUT_CNTL_<n> gives attribute n its location,
+    // a default value or flat shading. Without SPI_BARYC_CNTL, POS_*_FLOAT are the pixel center
+    // ("Pixel: not in the key yet").
     std::uint32_t ps_input_ena = 0;
     std::uint32_t ps_input_addr = 0;
+    std::array<std::uint32_t, 32> ps_input_cntl = {};
     std::uint32_t col_format = 0;  // SPI_SHADER_COL_FORMAT, 4 bits per render target
 };
 

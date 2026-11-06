@@ -447,6 +447,9 @@ private:
             case Format::exp:
                 stage_.exp(inst);
                 break;
+            case Format::vintrp:
+                stage_.interpolate(inst);
+                break;
             default:
                 unsupported();
             }
@@ -1165,6 +1168,9 @@ private:
     }
 
     void guarded(Id cond, const std::function<void()>& body) override { when(cond, body); }
+    void write_vgpr(unsigned n, Id value) override {
+        write_vector({OperandKind::vector, 1, static_cast<std::uint16_t>(n), 0}, value);
+    }
     Id exec_var() override { return mask_exec(); }
 
     // MTBUF loads of 1 to 4 components of a typed element, in active lanes (docs/design/
