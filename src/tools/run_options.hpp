@@ -1,0 +1,70 @@
+// The command line of bb-run and the argument block it hands to the eboot's entry
+// (docs/design/m3-core-os.md, "Entry"; docs/design/runtime.md, "Tools").
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+
+#include "common/runtime_dirs.hpp"
+
+namespace bb::tools {
+
+inline constexpr std::string_view run_usage =
+    "usage: bb-run [--game-dir DIR] [--profile NAME] [--timeout SECONDS] [--stop-at-main-loop]\n"
+    "              [--log SPEC] [--no-log-file]\n"
+    "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
+    "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
+    "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
+    "                       most 32 characters; default: default)\n"
+    "  --timeout SECONDS    end the run with status 124 when the game still runs after SECONDS\n"
+    "  --stop-at-main-loop  exit with status 0 once the game reaches its main loop\n"
+    "  --log SPEC           log filter, as BB_LOG: <channel>=<level> or <level>, comma-separated\n"
+    "                       (replaces BB_LOG)\n"
+    "  --no-log-file        log to stderr only, not to a file in the logs directory\n";
+
+// The exit status of a run that hit --timeout, as timeout(1) has it.
+inline constexpr int timeout_status = 124;
+
+struct RunOptions {
+    std::optional<std::filesystem::path> game_dir;  // --game-dir, else the environment
+    std::string profile{common::default_profile};
+    std::optional<unsigned> timeout_seconds;
+    bool stop_at_main_loop = false;
+    std::optional<std::string> log_spec;  // --log, checked with LogFilter::parse
+    bool log_file = true;
+    bool help = false;  // -h or --help: print run_usage and exit 0
+};
+
+// Parses the arguments after argv[0]. Throws std::invalid_argument, naming the argument, for an
+// unknown option, a missing value, a profile name that valid_profile_name refuses, a timeout that
+// isn't a whole number from 1 to 86400 and a log spec that LogFilter::parse refuses.
+RunOptions parse_run_options(std::span<const std::string_view> args);
+
+// The eboot's entry reads argc from +0 of its first argument and takes argv at +8 (link address
+// 0xa4..0xb4), then calls main(argc, argv, nullptr).
+struct EntryArgs {
+    std::int32_t argc;
+    const char* argv[2];  // argv[argc] is null, as in C
+};
+static_assert(offsetof(EntryArgs, argc) == 0);
+static_assert(offsetof(EntryArgs, argv) == 8);
+
+// The game's path of its own executable, argv[0].
+inline constexpr const char* eboot_guest_path = "/app0/eboot.bin";
+
+// argc 1 and argv {eboot_guest_path, nullptr}.
+EntryArgs entry_args();
+
+// The function bb-run passes as the entry's second argument. The entry registers it with libc's
+// atexit, and libc's exit calls it; it does nothing, since PRX DT_FINI is not run in M3.
+void entry_exit_handler();
+
+// The eboot's entry point: entry(args, exit_handler).
+using EbootEntry = void(const EntryArgs* args, void (*exit_handler)());
+
+}  // namespace bb::tools
