@@ -12,8 +12,10 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "common/log.hpp"
@@ -82,8 +84,12 @@ void* start(void* argument) {
     auto* thread = static_cast<Thread*>(argument);
     current = thread;
     check_eboot_tls();
-    if (!thread->name.empty()) {
-        common::set_thread_name(thread->name);
+    {
+        // Under the lock, so that a rename from another thread comes either before or after.
+        const std::lock_guard lock(table().mutex);
+        if (!thread->name.empty()) {
+            common::set_thread_name(thread->name);
+        }
     }
     run_entry(thread);
     run_exit_handlers();
@@ -184,6 +190,24 @@ int attr_setinheritsched(Cell* cell, int inherit) {
     return 0;
 }
 
+int attr_setaffinity(Cell* cell, std::uint64_t mask) {
+    Attr* attr = attr_at(cell);
+    if (attr == nullptr) {
+        return EINVAL;
+    }
+    attr->values.affinity_mask = mask;
+    return 0;
+}
+
+int attr_getaffinity(Cell* cell, std::uint64_t* mask) {
+    const Attr* attr = attr_at(cell);
+    if (attr == nullptr || mask == nullptr) {
+        return EINVAL;
+    }
+    *mask = attr->values.affinity_mask;
+    return 0;
+}
+
 // Fills an initialised attribute with the thread's attributes and its current detach state.
 int attr_get(Thread* thread, Cell* cell) {
     Attr* attr = attr_at(cell);
@@ -197,6 +221,83 @@ int attr_get(Thread* thread, Cell* cell) {
     attr->values = thread->attributes;
     attr->values.detach_state = thread->detached ? guest_create_detached : guest_create_joinable;
     return 0;
+}
+
+// ---- names, priority and affinity ------------------------------------------------------------
+
+// The name goes to the log and the host. The log keeps a name per thread that only the thread
+// itself can set, so a thread renamed by another one keeps its old name in its own log lines.
+int rename_thread(Thread* thread, const char* name) {
+    if (name == nullptr) {
+        return EINVAL;
+    }
+    std::string old;
+    {
+        const std::lock_guard lock(table().mutex);
+        if (!table().threads.contains(thread)) {
+            return ESRCH;
+        }
+        old = std::exchange(thread->name, name);
+        if (thread != current && !thread->joining && !thread->finished) {
+            // A finished or joined host thread has no name left to set.
+            const std::string host(std::string_view(name).substr(0, 15));
+            pthread_setname_np(thread->host, host.c_str());
+        }
+    }
+    if (thread == current) {
+        common::set_thread_name(name);
+    }
+    common::log(common::LogLevel::info, channel, "thread \"{}\" renamed to \"{}\"", old, name);
+    return 0;
+}
+
+// Runs `change` on the attributes of a live thread under the table's lock.
+template <class F>
+int with_attributes(Thread* thread, F change) {
+    const std::lock_guard lock(table().mutex);
+    if (!table().threads.contains(thread)) {
+        return ESRCH;
+    }
+    change(thread->attributes);
+    return 0;
+}
+
+int set_affinity(Thread* thread, std::uint64_t mask) {
+    const int error = with_attributes(thread, [&](ThreadAttributes& a) { a.affinity_mask = mask; });
+    if (error == 0) {
+        common::log(common::LogLevel::debug, channel, "thread affinity {:#x} (not applied)", mask);
+    }
+    return error;
+}
+
+int get_affinity(Thread* thread, std::uint64_t* mask) {
+    if (mask == nullptr) {
+        return EINVAL;
+    }
+    return with_attributes(thread, [&](const ThreadAttributes& a) { *mask = a.affinity_mask; });
+}
+
+// W0Hpm2X0uPE (name unknown): (thread, priority). The eboot passes the attribute's priority
+// right after a create (0xd1ab46) and values from 0x100 to 0x2ff at 0x263b63d; Fios's wrapper
+// 0x2ec20 passes its arguments through. A failure at 0xd1ab46 fails the eboot's thread
+// creation, so any priority is taken.
+int set_priority(Thread* thread, int priority) {
+    const int error =
+        with_attributes(thread, [&](ThreadAttributes& a) { a.sched_priority = priority; });
+    if (error == 0) {
+        common::log(common::LogLevel::debug, channel, "thread priority {} (not applied)", priority);
+    }
+    return error;
+}
+
+// 1tKyG7RlMJo (name unknown): (thread, int* priority). The eboot reads the priority before it
+// changes it (0x263b59d); Fios's wrappers return it for a thread and for Self (0x2ec5b, 0x2eca3).
+int get_priority(Thread* thread, int* priority) {
+    if (priority == nullptr) {
+        return EINVAL;
+    }
+    return with_attributes(thread,
+                           [&](const ThreadAttributes& a) { *priority = a.sched_priority; });
 }
 
 // ---- entry points ----------------------------------------------------------------------------
@@ -273,9 +374,10 @@ int create_thread(Thread** thread, const Cell* attr, ThreadEntry entry, void* ar
     t->detached = t->attributes.detach_state == guest_create_detached;
     const ThreadAttributes& v = t->attributes;
     common::log(common::LogLevel::debug, channel,
-                "thread \"{}\": stack {:#x}, {}, policy {}, priority {}, inherit {} (not applied)",
+                "thread \"{}\": stack {:#x}, {}, policy {}, priority {}, inherit {}, affinity "
+                "{:#x} (not applied)",
                 t->name, v.stack_size, t->detached ? "detached" : "joinable", v.sched_policy,
-                v.sched_priority, v.inherit_sched);
+                v.sched_priority, v.inherit_sched, v.affinity_mask);
 
     // The setter takes any size from the minimum up, so a garbage size near SIZE_MAX would wrap
     // around to a tiny host stack here. No host can give a stack that large anyway.
@@ -392,6 +494,13 @@ BB_HLE_FUNCTION("libkernel", "DzES9hQF4f4", k::Sce<k::attr_setschedparam>::call)
 BB_HLE_FUNCTION("libkernel", "4+h9EzwKF4I", k::Sce<k::attr_setschedpolicy>::call);
 BB_HLE_FUNCTION("libkernel", "eXbUSpEaTsA", k::Sce<k::attr_setinheritsched>::call);
 BB_HLE_FUNCTION("libkernel", "x1X76arYMxU", k::Sce<k::attr_get>::call);
+BB_HLE_FUNCTION("libkernel", "3qxgM4ezETA", k::Sce<k::attr_setaffinity>::call);
+BB_HLE_FUNCTION("libkernel", "8+s5BzZjxSg", k::Sce<k::attr_getaffinity>::call);
+BB_HLE_FUNCTION("libkernel", "GBUY7ywdULE", k::Sce<k::rename_thread>::call);
+BB_HLE_FUNCTION("libkernel", "bt3CTBKmGyI", k::Sce<k::set_affinity>::call);
+BB_HLE_FUNCTION("libkernel", "rcrVFJsQWRY", k::Sce<k::get_affinity>::call);
+BB_HLE_FUNCTION("libkernel", "W0Hpm2X0uPE", k::Sce<k::set_priority>::call);
+BB_HLE_FUNCTION("libkernel", "1tKyG7RlMJo", k::Sce<k::get_priority>::call);
 
 // libScePosix: the same with POSIX error numbers. Jmi+9w9u0E4 is pthread_create with a name as
 // fifth argument (docs/formats/kernel-imports.md).

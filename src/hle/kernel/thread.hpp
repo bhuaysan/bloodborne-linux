@@ -27,6 +27,11 @@ inline constexpr std::size_t thread_stack_reserve = 0x10000;
 inline constexpr int guest_create_joinable = 0;
 inline constexpr int guest_create_detached = 1;
 
+// The CPU affinity mask of a new attribute and of a thread the runtime didn't start: the six cores
+// the eboot ever puts in a mask (it ands every mask with 0x3f, 0x207f9a4, 0x263b463). libc counts
+// its bits as the number of CPUs (0x81ae2).
+inline constexpr std::uint64_t default_affinity_mask = 0x3f;
+
 // What an attribute holds.
 struct ThreadAttributes {
     std::size_t stack_size = default_thread_stack_size;
@@ -35,12 +40,15 @@ struct ThreadAttributes {
     int sched_policy = 0;
     int sched_priority = 0;
     int inherit_sched = 0;
+    std::uint64_t affinity_mask = default_affinity_mask;
 };
 
 using ThreadEntry = void* (*)(void*);
 
 struct Thread {
     pthread_t host{};
+    // Guarded by the thread table's lock: a rename from another thread changes them. The priority
+    // and affinity calls change attributes.sched_priority and .affinity_mask.
     std::string name;
     ThreadAttributes attributes;
     ThreadEntry entry = nullptr;
