@@ -80,6 +80,7 @@ private:
     Id input(std::uint32_t location, Interp interp, spv::Decoration where);
     void store_components(Id var, Id type, const Id (&values)[4]);
     void render_target(const Instruction& inst, unsigned n);
+    void depth(const Instruction& inst);  // mrtz
     Id value(const Operand& o);  // a VGPR as a float
     Id half(Id packed, unsigned high, unsigned format, Id type);  // a 16-bit value of a pair
     Id valid();

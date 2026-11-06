@@ -55,6 +55,13 @@ struct ShaderKey {
     std::uint32_t ps_input_addr = 0;
     std::array<std::uint32_t, 32> ps_input_cntl = {};
     std::uint32_t col_format = 0;  // SPI_SHADER_COL_FORMAT, 4 bits per render target
+    // mrtz (docs/design/graphics.md, "Depth"): SPI_SHADER_Z_FORMAT (bits 0-3, the values of
+    // SPI_SHADER_COL_FORMAT) and DB_SHADER_CONTROL, whose Z_EXPORT_ENABLE (bit 0) makes the
+    // export's first channel FragDepth. Its stencil, sample mask and alpha to mask export enables
+    // (bits 1-2, 8 and 7) are rejected at an mrtz export whose format carries their channel; its
+    // other fields are ignored.
+    std::uint32_t z_format = 0;
+    std::uint32_t db_shader_control = 0;
 };
 
 // What the run time must know about a translated shader.

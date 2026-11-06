@@ -41,7 +41,7 @@ constexpr unsigned target_null = 9;
 constexpr unsigned target_pos0 = 12;
 constexpr unsigned target_param0 = 32;
 
-// SPI_SHADER_COL_FORMAT values, 4 bits per render target.
+// SPI_SHADER_COL_FORMAT values (4 bits per render target), also those of SPI_SHADER_Z_FORMAT.
 enum ExportFormat : unsigned {
     zero = 0, r32 = 1, gr32 = 2, ar32 = 3, fp16 = 4, unorm16 = 5, snorm16 = 6, uint16 = 7,
     sint16 = 8, abgr32 = 9,
@@ -52,6 +52,14 @@ enum ExportFormat : unsigned {
 constexpr std::uint32_t cntl_default = 0x20;
 constexpr std::uint32_t cntl_flat_shade = 1u << 10;
 constexpr std::uint32_t cntl_supported = 0x3fu | 3u << 8 | cntl_flat_shade;
+
+// DB_SHADER_CONTROL: Z_EXPORT_ENABLE, and the export enables of mrtz's other channels: the
+// stencil (y: STENCIL_TEST_VAL_EXPORT_ENABLE, STENCIL_OP_VAL_EXPORT_ENABLE), the sample mask (z:
+// MASK_EXPORT_ENABLE) and the alpha to mask (w: COVERAGE_TO_MASK_ENABLE).
+constexpr std::uint32_t db_z_export = 1u << 0;
+constexpr std::uint32_t db_stencil_export = 3u << 1;
+constexpr std::uint32_t db_mask_export = 1u << 8;
+constexpr std::uint32_t db_coverage_to_mask = 1u << 7;
 
 }  // namespace
 
@@ -187,6 +195,8 @@ void StageIo::pixel_export(const Instruction& inst) {
     const unsigned target = inst.mem_offset;
     if (target < target_mrtz) {
         render_target(inst, target);
+    } else if (target == target_mrtz) {
+        depth(inst);
     } else if (target != target_null) {
         regs_.fail(std::format("export target {} is not supported in this stage yet", target));
     }
@@ -249,6 +259,39 @@ Id StageIo::half(Id packed, unsigned high, unsigned format, Id type) {
     return b_.op(Op::OpCompositeExtract, f32(), {pair, high});
 }
 
+// mrtz: x is the depth, y the stencil, z the sample mask and w the alpha to mask, as far as
+// SPI_SHADER_Z_FORMAT carries them (32_R: x; 32_GR: x, y; 32_AR: x, w; 32_ABGR: all) and
+// DB_SHADER_CONTROL enables them. Only the depth is supported so far, as FragDepth.
+void StageIo::depth(const Instruction& inst) {
+    const unsigned format = key_.z_format & 0xf;
+    if (format == zero) {
+        return;
+    }
+    if (format != r32 && format != gr32 && format != ar32 && format != abgr32) {
+        regs_.fail(std::format("an export to mrtz with SPI_SHADER_Z_FORMAT {} is not supported yet",
+                               format));
+    }
+    if ((inst.flags & flag::compr) != 0) {
+        regs_.fail(std::format("a compressed export to mrtz with SPI_SHADER_Z_FORMAT {}", format));
+    }
+    const std::uint32_t control = key_.db_shader_control;
+    const bool y = format == gr32 || format == abgr32;
+    const bool w = format == ar32 || format == abgr32;
+    if ((y && (control & db_stencil_export) != 0) ||
+        (format == abgr32 && (control & db_mask_export) != 0) ||
+        (w && (control & db_coverage_to_mask) != 0)) {
+        regs_.fail(std::format("an export to mrtz with SPI_SHADER_Z_FORMAT {} and "
+                               "DB_SHADER_CONTROL {:#x} is not supported yet",
+                               format, control));
+    }
+    if ((control & db_z_export) == 0 || inst.src[0].kind == OperandKind::off) {
+        return;
+    }
+    const Id var = builtin(spv::BuiltIn::FragDepth, SC::Output, f32());
+    const Id v = value(inst.src[0]);
+    regs_.guarded(regs_.active(), [&] { store(var, v); });
+}
+
 // v_interp_p1_f32 and v_interp_p2_f32 both give the interpolated value of the attribute: the
 // interpolation itself is the input variable's, chosen by the barycentric VGPR they read (I for
 // p1, J for p2). v_interp_mov_f32 with p0 and an attribute with FLAT_SHADE read a flat input. An
@@ -298,8 +341,12 @@ void StageIo::interpolate(const Instruction& inst) {
 }
 
 void StageIo::finish(Id main) {
-    if (key_.stage == Stage::pixel) {
-        b_.execution_mode(main, spv::ExecutionMode::OriginUpperLeft);
+    if (key_.stage != Stage::pixel) {
+        return;
+    }
+    b_.execution_mode(main, spv::ExecutionMode::OriginUpperLeft);
+    if (builtins_.contains(spirv_word(spv::BuiltIn::FragDepth))) {
+        b_.execution_mode(main, spv::ExecutionMode::DepthReplacing);
     }
 }
 

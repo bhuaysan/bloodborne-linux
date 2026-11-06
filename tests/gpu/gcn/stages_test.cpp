@@ -50,7 +50,8 @@ bool is(std::span<const std::uint32_t> inst, spv::Op op) {
     return (inst[0] & 0xffff) == static_cast<std::uint32_t>(op);
 }
 
-// The key of ps_attrs, as its header describes the inputs and exports; attr3 is the default 1111.
+// The key of ps_attrs, as its header describes the inputs and exports; attr3 is the default 1111,
+// and mrtz is 32_R with Z_EXPORT_ENABLE.
 ShaderKey pixel_key() {
     ShaderKey key{.stage = Stage::pixel, .pgm_rsrc2 = 2u << 1};
     key.ps_input_ena = key.ps_input_addr = 1u << 1 | 1u << 6 | 1u << 8 | 1u << 9;
@@ -58,6 +59,8 @@ ShaderKey pixel_key() {
     key.ps_input_cntl[2] = 2;
     key.ps_input_cntl[3] = 0x20 | 3u << 8;
     key.col_format = 0x249;
+    key.z_format = 1;
+    key.db_shader_control = 1;
     return key;
 }
 
@@ -165,6 +168,10 @@ TEST(GcnStages, ProgramsPassSpirvVal) {
     EXPECT_EQ(stored_channels(ps.spirv, D::Location, 2), (std::multiset<std::uint32_t>{0, 1}));
     const std::uint32_t frag_coord = static_cast<std::uint32_t>(spv::BuiltIn::FragCoord);
     EXPECT_EQ(count(ps.spirv, spv::Op::OpDecorate, 3, frag_coord), 1);  // POS_X and POS_Y
+    const std::uint32_t frag_depth = static_cast<std::uint32_t>(spv::BuiltIn::FragDepth);
+    const std::uint32_t replacing = static_cast<std::uint32_t>(spv::ExecutionMode::DepthReplacing);
+    EXPECT_EQ(count(ps.spirv, spv::Op::OpDecorate, 3, frag_depth), 1);  // mrtz
+    EXPECT_EQ(count(ps.spirv, spv::Op::OpExecutionMode, 2, replacing), 1);
     // PERSP_SAMPLE for attr0 (v4 and v5 placed but not loaded: POS_*_FLOAT with a sample pair is
     // an error), mrt0 32_AR (x and w of the export), and attr3 the default value 0001 (x is 0).
     ShaderKey other = pixel_key();
@@ -187,6 +194,32 @@ TEST(GcnStages, ProgramsPassSpirvVal) {
     for (const std::uint32_t format : {5u, 6u, 7u, 8u}) {  // mrt1 UNORM16, SNORM16, UINT16, SINT16
         other.col_format = 0x203 | format << 4;
         EXPECT_EQ(validate(translate(program_words("ps_attrs"), {}, other).spirv), "") << format;
+    }
+}
+
+// mrtz writes FragDepth only with a format that carries the depth and Z_EXPORT_ENABLE. 32_GR,
+// 32_AR and 32_ABGR carry it too; their other channels go nowhere while DB_SHADER_CONTROL doesn't
+// enable them.
+TEST(GcnStages, PixelDepth) {
+    const std::uint32_t frag_depth = static_cast<std::uint32_t>(spv::BuiltIn::FragDepth);
+    const std::uint32_t replacing = static_cast<std::uint32_t>(spv::ExecutionMode::DepthReplacing);
+    // (SPI_SHADER_Z_FORMAT, DB_SHADER_CONTROL, whether the depth is written)
+    const struct {
+        std::uint32_t format, control;
+        bool depth;
+    } cases[] = {{0, 1, false}, {1, 0, false}, {1, 0x71, true},  // Z_ORDER, KILL_ENABLE: ignored
+                 {2, 1, true},  {3, 1, true},  {9, 1, true}};
+    for (const auto& c : cases) {
+        ShaderKey key = pixel_key();
+        key.z_format = c.format;
+        key.db_shader_control = c.control;
+        const auto ps = translate(program_words("ps_attrs"), {}, key);
+        if (have_spirv_val()) {
+            EXPECT_EQ(validate(ps.spirv), "") << c.format;
+        }
+        EXPECT_EQ(count(ps.spirv, spv::Op::OpDecorate, 3, frag_depth), c.depth ? 1 : 0) << c.format;
+        EXPECT_EQ(count(ps.spirv, spv::Op::OpExecutionMode, 2, replacing), c.depth ? 1 : 0)
+            << c.format;
     }
 }
 
@@ -277,8 +310,37 @@ TEST(GcnStages, PixelErrorsNameWhatIsUnsupported) {
     const ShaderKey pixel = pixel_key();
     EXPECT_EQ(error(xport(1, 12, 0, 0, 0, 0, xp::done), pixel),  // exp pos0 v0 done
               "export target 12 is not supported in this stage yet");
-    EXPECT_EQ(error(xport(1, 8, 0, 0, 0, 0, xp::done), pixel),  // exp mrtz v0 done
-              "export target 8 is not supported in this stage yet");
+    // exp mrtz v0 done: the formats with 16-bit channels, a compressed export, and the stencil,
+    // sample mask and alpha to mask channels where the format carries them and DB_SHADER_CONTROL
+    // enables them.
+    ShaderKey z = pixel;
+    z.z_format = 4;  // FP16_ABGR
+    EXPECT_EQ(error(xport(1, 8, 0, 0, 0, 0, xp::done), z),
+              "an export to mrtz with SPI_SHADER_Z_FORMAT 4 is not supported yet");
+    EXPECT_EQ(error(xport(0xf, 8, 0, 1, 0, 0, xp::done | xp::compr), pixel),
+              "a compressed export to mrtz with SPI_SHADER_Z_FORMAT 1");
+    const struct {
+        std::uint32_t format, control;
+        const char* message;
+    } channels[] = {
+        {1, 0x187, "no error"},  // 32_R: the depth alone
+        {2, 0x183, "an export to mrtz with SPI_SHADER_Z_FORMAT 2 and DB_SHADER_CONTROL 0x183 is "
+                   "not supported yet"},  // STENCIL_TEST_VAL_EXPORT_ENABLE
+        {2, 0x185, "an export to mrtz with SPI_SHADER_Z_FORMAT 2 and DB_SHADER_CONTROL 0x185 is "
+                   "not supported yet"},  // STENCIL_OP_VAL_EXPORT_ENABLE
+        {2, 0x181, "no error"},
+        {3, 0x81, "an export to mrtz with SPI_SHADER_Z_FORMAT 3 and DB_SHADER_CONTROL 0x81 is not "
+                  "supported yet"},  // COVERAGE_TO_MASK_ENABLE
+        {3, 0x107, "no error"},
+        {9, 0x101, "an export to mrtz with SPI_SHADER_Z_FORMAT 9 and DB_SHADER_CONTROL 0x101 is "
+                   "not supported yet"},  // MASK_EXPORT_ENABLE
+        {9, 0x1, "no error"},
+    };
+    for (const auto& c : channels) {
+        z.z_format = c.format;
+        z.db_shader_control = c.control;
+        EXPECT_EQ(error(xport(0xf, 8, 0, 1, 2, 3, xp::done), z), c.message) << c.format;
+    }
     EXPECT_EQ(error(xport(1, 9, 0, 0, 0, 0, xp::done), pixel), "no error");  // exp null
     EXPECT_EQ(error(xport(0xf, 0, 0, 1, 0, 0, xp::compr), pixel),  // mrt0 is 32_ABGR
               "a compressed export to mrt0 with SPI_SHADER_COL_FORMAT 9");
