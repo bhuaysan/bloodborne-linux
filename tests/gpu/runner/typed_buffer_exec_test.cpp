@@ -1,4 +1,4 @@
-// Execution tests of the typed buffer loads (MTBUF) on lavapipe: the program mem_typed loads 15
+// Execution tests of the typed buffer loads (MTBUF) on lavapipe: the program mem_typed loads 16
 // formats from a table, and each result is worked out here from the element's bytes with the
 // usual conversions of normalized, scaled and integer formats (docs/design/graphics.md, "Typed
 // buffer formats").
@@ -24,7 +24,7 @@ namespace {
 
 using namespace bb::test::vk;
 namespace nf {
-constexpr unsigned unorm = 0, snorm = 1, sscaled = 3, uint_ = 4, sint = 5, snorm_ogl = 6;
+constexpr unsigned unorm = 0, snorm = 1, uscaled = 2, sscaled = 3, uint_ = 4, sint = 5, snorm_ogl = 6;
 }  // the number formats the program uses
 
 constexpr std::uint64_t base = 0x12'0000'0000;  // guest address of the output
@@ -80,6 +80,7 @@ std::uint32_t component(const std::vector<std::uint8_t>& bytes, Field f, unsigne
     case nf::unorm: return std::bit_cast<std::uint32_t>(static_cast<float>(u) / max);
     case nf::snorm:
         return std::bit_cast<std::uint32_t>(std::max(static_cast<float>(s) / smax, -1.0f));
+    case nf::uscaled: return std::bit_cast<std::uint32_t>(static_cast<float>(u));
     case nf::sscaled: return std::bit_cast<std::uint32_t>(static_cast<float>(s));
     case nf::uint_: return static_cast<std::uint32_t>(u);
     case nf::sint: return static_cast<std::uint32_t>(s);
@@ -127,7 +128,7 @@ protected:
         }
     }
 
-    // Runs mem_typed with a table V# of `size` bytes and dst_sel `dst_sel`, and checks the 15
+    // Runs mem_typed with a table V# of `size` bytes and dst_sel `dst_sel`, and checks the 16
     // blocks of output. An element of 4 bytes or more is read from the aligned dwords (the two low
     // bits of its address are ignored), a narrower one byte by byte, and an element whose first
     // byte is outside the buffer reads 0 as a whole, in whatever number format. The V#'s dst_sel
@@ -173,7 +174,7 @@ protected:
             }
             ++k;
         }
-        EXPECT_EQ(k, 15u);
+        EXPECT_EQ(k, 16u);
     }
 
     std::unique_ptr<ComputeRunner> runner_;
