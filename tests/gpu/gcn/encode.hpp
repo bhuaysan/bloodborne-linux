@@ -56,4 +56,10 @@ inline std::vector<std::uint32_t> mubuf(unsigned op, unsigned vdata, unsigned va
                  second(srsrc / 4, 16) | second(soffset, 24) | flags);
 }
 
+// `src0` is the 9-bit operand code (256 + n for vn). `vdst` is a VGPR number, or the operand code
+// of an SGPR destination.
+constexpr std::uint32_t vop1(unsigned op, unsigned vdst, unsigned src0) {
+    return 0x3fu << 25 | vdst << 17 | op << 9 | src0;
+}
+
 }  // namespace bb::test::gcn

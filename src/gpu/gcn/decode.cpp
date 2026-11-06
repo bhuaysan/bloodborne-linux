@@ -11,6 +11,7 @@
 #include "gpu/gcn/gcn.hpp"
 #include "gpu/gcn/memory.hpp"
 #include "gpu/gcn/opcodes.hpp"
+#include "gpu/gcn/vop.hpp"
 
 namespace bb::gcn {
 
@@ -98,6 +99,8 @@ public:
             return detail::decode_ds_flat(code_, index_);
         } else if (detail::is_memory_encoding(w)) {
             return detail::decode_memory(code_, index_);
+        } else if (bits(w, 31, 1) == 0) {
+            return detail::decode_vop(code_, index_);  // VOP1 (VOP2 and VOPC not yet)
         } else {
             fail("unsupported encoding");
         }
@@ -132,6 +135,7 @@ private:
         return code_[index_ + 1];
     }
 
+public:
     // Operand from an 8-bit scalar source field or a 7-bit destination field.
     Operand scalar(unsigned c, std::uint8_t dwords) {
         auto c16 = static_cast<std::uint16_t>(c);
@@ -151,6 +155,7 @@ private:
         return {OperandKind::scalar, dwords, c16, 0};
     }
 
+private:
     Operand imm(OperandKind kind, std::uint32_t value) { return {kind, 0, 0, value}; }
 
     Operand branch(std::uint32_t simm16) {
@@ -254,6 +259,11 @@ private:
 };
 
 }  // namespace
+
+Operand detail::scalar_operand(std::span<const std::uint32_t> code, std::size_t index, unsigned c,
+                               std::uint8_t dwords) {
+    return Decoder(code, index).scalar(c, dwords);
+}
 
 std::vector<Instruction> decode(std::span<const std::uint32_t> code, Until until) {
     std::vector<Instruction> out;

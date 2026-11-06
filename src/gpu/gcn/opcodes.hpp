@@ -44,4 +44,9 @@ bool is_ds_flat(std::uint32_t word);
 Instruction decode_ds_flat(std::span<const std::uint32_t> code, std::size_t index);
 std::string ds_flat_modifiers(const Instruction& inst);  // " offset:16 gds", or empty
 
+// The operand with 8-bit operand code `c` and `dwords` dwords of the instruction at code[index],
+// as in a scalar source field. A literal comes from code[index + 1]. Throws GcnError.
+Operand scalar_operand(std::span<const std::uint32_t> code, std::size_t index, unsigned c,
+                       std::uint8_t dwords);
+
 }  // namespace bb::gcn::detail
