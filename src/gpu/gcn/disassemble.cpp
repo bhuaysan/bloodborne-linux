@@ -49,6 +49,8 @@ std::string scalar(unsigned c, unsigned dwords) {
         return "src_execz";
     case code::scc:
         return "src_scc";
+    case code::lds_direct:
+        return "src_lds_direct";
     default:
         break;
     }

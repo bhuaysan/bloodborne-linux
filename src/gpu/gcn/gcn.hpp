@@ -35,7 +35,7 @@ enum class Format : std::uint8_t {
 
 enum class OperandKind : std::uint8_t {
     none,
-    scalar,    // SGPR or special register; `code` is the 8-bit operand code
+    scalar,    // SGPR or special register (also LDS_DIRECT); `code` is the 8-bit operand code
     constant,  // inline constant; `code` is its operand code, `value` its 32-bit pattern
                // (on a 2-dword operand, an integer sign-extends it and a float is the f64 of the
                // same number, with `value` as its high dword and 0 as its low dword)
@@ -63,6 +63,7 @@ inline constexpr std::uint16_t exec = 126;  // pair 126-127
 inline constexpr std::uint16_t vccz = 251;
 inline constexpr std::uint16_t execz = 252;
 inline constexpr std::uint16_t scc = 253;
+inline constexpr std::uint16_t lds_direct = 254;  // vector ALU sources only
 inline constexpr std::uint16_t literal = 255;
 }  // namespace code
 

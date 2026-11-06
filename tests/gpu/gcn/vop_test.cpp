@@ -49,6 +49,9 @@ TEST(GcnVop, Vop1) {
     EXPECT_EQ(inst.name, "v_readfirstlane_b32");
     EXPECT_EQ(inst.dst[0], sreg(code::vcc));
 
+    inst = one({vop1(1, 1, code::lds_direct)});
+    EXPECT_EQ(inst.src[0], sreg(code::lds_direct));
+
     inst = one({vop1(0, 0, 0)});
     EXPECT_EQ(inst.name, "v_nop");
     EXPECT_EQ(inst.num_dst + inst.num_src, 0);
@@ -62,6 +65,8 @@ TEST(GcnVop, Errors) {
         {vop1(1, 1, 209)},  // reserved operand code
         {vop1(2, 128, v)},  // a constant as destination
         {vop1(1, 1, 255)},  // literal past the end
+        {vop1(15, 1, code::lds_direct)},  // LDS_DIRECT as a 64-bit source
+        {sop1(3, 1, code::lds_direct)},   // LDS_DIRECT in a scalar format
         {0x00000000},       // VOP2, not decoded yet
         {0x7c000000},       // VOPC, not decoded yet
     };
@@ -85,6 +90,8 @@ const std::vector<Case> cases = {
     {{vop1(1, 1, code::exec + 1)}, "v_mov_b32_e32 v1, exec_hi"},
     {{vop1(1, 255, code::scc)}, "v_mov_b32_e32 v255, src_scc"},
     {{vop1(1, 1, code::ttmp0 + 3)}, "v_mov_b32_e32 v1, ttmp3"},
+    {{vop1(1, 1, code::lds_direct)}, "v_mov_b32_e32 v1, src_lds_direct"},
+    {{vop1(4, 2, code::lds_direct)}, "v_cvt_f64_i32_e32 v[2:3], src_lds_direct"},
     {{vop1(4, 254, v + 1)}, "v_cvt_f64_i32_e32 v[254:255], v1"},
     {{vop1(15, 1, 2)}, "v_cvt_f32_f64_e32 v1, s[2:3]"},
     {{vop1(15, 1, 244)}, "v_cvt_f32_f64_e32 v1, 2.0"},
@@ -93,6 +100,7 @@ const std::vector<Case> cases = {
     {{vop1(15, 1, 255), 0x40000000}, "v_cvt_f32_f64_e32 v1, lit(0x40000000)"},
     {{vop1(15, 1, 255), 5}, "v_cvt_f32_f64_e32 v1, lit(0x5)"},
     {{vop1(2, code::vcc, v + 1)}, "v_readfirstlane_b32 vcc_lo, v1"},
+    {{vop1(2, 1, code::lds_direct)}, "v_readfirstlane_b32 s1, src_lds_direct"},
     {{vop1(0, 0, 0)}, "v_nop"},
     {{vop1(65, 0, 0)}, "v_clrexcp"},
 };

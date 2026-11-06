@@ -68,9 +68,16 @@ private:
         return op;
     }
 
+    // The 9-bit src0: a VGPR, LDS_DIRECT (32-bit sources only) or a scalar operand.
     Operand src0(std::uint8_t dwords) {
         const unsigned c = bits(word_, 0, 9);
-        return c >= 256 ? vgpr(c - 256, dwords) : scalar(c, dwords);
+        if (c >= 256) {
+            return vgpr(c - 256, dwords);
+        }
+        if (c == code::lds_direct && dwords == 1) {
+            return {OperandKind::scalar, 1, code::lds_direct, 0};
+        }
+        return scalar(c, dwords);
     }
 
     void operands(unsigned vdst) {
