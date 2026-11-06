@@ -12,6 +12,7 @@ add_library(bbgcn STATIC
     memory.cpp
     opcodes.cpp
     spirv_builder.cpp
+    stages.cpp
     structurize.cpp
     translate.cpp
     vop3_decode.cpp

@@ -11,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <format>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -25,6 +26,7 @@
 #include "gpu/gcn/gcn.hpp"
 #include "gpu/gcn/lds.hpp"
 #include "gpu/gcn/spirv_builder.hpp"
+#include "gpu/gcn/stages.hpp"
 #include "gpu/gcn/structurize.hpp"
 
 namespace bb::gcn {
@@ -188,13 +190,13 @@ constexpr FloatUnary float_unary[] = {
     {"v_rndne_f32", GLSLstd450RoundEven},
 };
 
-// COMPUTE_PGM_RSRC1 float mode: FP_ROUND_32 in bits 12-13 (0 nearest even, 3 toward zero),
+// PGM_RSRC1 float mode (any stage): FP_ROUND_32 in bits 12-13 (0 nearest even, 3 toward zero),
 // FP_DENORM_32 in bits 16-17 (0 flush source and result, 3 keep), and DX10_CLAMP in bit 21.
 constexpr unsigned rsrc1_round_shift = 12;
 constexpr unsigned rsrc1_denorm_shift = 16;
 constexpr std::uint32_t rsrc1_dx10_clamp = 1u << 21;
 
-class Translator {
+class Translator final : public detail::StageRegisters {
 public:
     Translator(std::span<const std::uint32_t> code, const ShaderKey& key)
         : code_(code), key_(key), program_(decode(code)), cfg_(build_cfg(program_)) {}
@@ -205,6 +207,9 @@ public:
         for (auto cap : {spv::Capability::Shader, spv::Capability::Int64,
                          spv::Capability::PhysicalStorageBufferAddresses}) {
             b_.capability(cap);
+        }
+        if (graphics()) {
+            b_.capability(spv::Capability::GroupNonUniform);  // the lane ID
         }
         b_.memory_model(spv::AddressingModel::PhysicalStorageBuffer64, spv::MemoryModel::GLSL450);
         bool_ = b_.type_bool();
@@ -218,9 +223,15 @@ public:
                     {.body = [this](std::uint32_t block) { body(block); },
                      .condition = [this](std::uint32_t block) { return condition(block); }});
         b_.end_function();
-        b_.entry_point(spv::ExecutionModel::GLCompute, main, "main", interface_);
-        b_.execution_mode(main, spv::ExecutionMode::LocalSize,
-                          {key_.num_threads[0], key_.num_threads[1], key_.num_threads[2]});
+        if (graphics()) {
+            interface_.insert(interface_.end(), stage_.interface().begin(),
+                              stage_.interface().end());
+            b_.entry_point(stage_.model(), main, "main", interface_);
+        } else {
+            b_.entry_point(spv::ExecutionModel::GLCompute, main, "main", interface_);
+            b_.execution_mode(main, spv::ExecutionMode::LocalSize,
+                              {key_.num_threads[0], key_.num_threads[1], key_.num_threads[2]});
+        }
         if (uses_subgroup_) {
             // A subgroup operation can follow a branch that isn't uniform in the subgroup (the
             // predicated store of flat()). Only maximal reconvergence promises that the
@@ -237,16 +248,19 @@ public:
     }
 
 private:
+    bool graphics() const { return key_.stage != Stage::compute; }
+
     void check_key() const {
-        if (key_.stage != Stage::compute) {
-            throw GcnError("only the compute stage is translated so far", 0, 0);
+        detail::StageIo::check_key(key_);
+        if (graphics() && user_sgprs() > 16) {
+            throw GcnError(std::format("USER_SGPR {} is more than 16", user_sgprs()), 0, 0);
         }
-        if ((key_.pgm_rsrc2 & rsrc2_unsupported) != 0 || user_sgprs() > 16) {
+        if (!graphics() && ((key_.pgm_rsrc2 & rsrc2_unsupported) != 0 || user_sgprs() > 16)) {
             throw GcnError(std::format("COMPUTE_PGM_RSRC2 {:#x} is not supported yet",
                                        key_.pgm_rsrc2),
                            0, 0);
         }
-        if (std::ranges::find(key_.num_threads, 0u) != key_.num_threads.end()) {
+        if (!graphics() && std::ranges::find(key_.num_threads, 0u) != key_.num_threads.end()) {
             throw GcnError("a workgroup size of 0", 0, 0);
         }
     }
@@ -319,8 +333,10 @@ private:
 
     unsigned user_sgprs() const { return (key_.pgm_rsrc2 >> rsrc2_user_sgpr_shift) & 31; }
 
-    // The draw block and the initial registers: user data in the first SGPRs, the thread ID in
-    // X in v0. The lane ID is LocalInvocationIndex modulo 64.
+    // The draw block and the initial registers: user data in the first SGPRs, then the stage's.
+    // In compute, the thread ID in X is in v0, and the lane ID is LocalInvocationIndex modulo 64.
+    // In the vertex stage the lane ID is the subgroup's (docs/design/graphics.md, "Execution
+    // model"), so subgroup_base is 0.
     void prologue() {
         const Id user_t = b_.type_array(u32_, b_.constant_u32(16));
         b_.decorate(user_t, spv::Decoration::ArrayStride, {4});
@@ -347,6 +363,11 @@ private:
         bias_ = load_global(
             u64_, b_.op(Op::OpAccessChain, global_pointer(u64_), {draw, b_.constant_u32(1)}), 8);
 
+        if (graphics()) {
+            lane_ = load(u32_, builtin(spv::BuiltIn::SubgroupLocalInvocationId));
+            stage_.prologue();
+            return;
+        }
         const Id index = load(u32_, builtin(spv::BuiltIn::LocalInvocationIndex, u32_));
         lane_ = b_.op(Op::OpBitwiseAnd, u32_, {index, b_.constant_u32(63)});
         const Id uvec3 = b_.type_vector(u32_, 3);
@@ -405,6 +426,9 @@ private:
                 break;
             case Format::ds:
                 ds(inst);
+                break;
+            case Format::exp:
+                stage_.exp(inst);
                 break;
             default:
                 unsupported();
@@ -905,7 +929,7 @@ private:
     void note_float() { float_used_ = true; }
 
     // The f32 execution modes: GCN keeps signed zeros, infinities and NaNs, rounds to nearest even
-    // or toward zero and flushes denormals or keeps them, as COMPUTE_PGM_RSRC1 says. The driver
+    // or toward zero and flushes denormals or keeps them, as the stage's RSRC1 says. The driver
     // must support them (the float controls properties); the run time checks that.
     void float_modes(Id main) {
         if (!float_used_) {
@@ -914,7 +938,7 @@ private:
         const unsigned round = key_.pgm_rsrc1 >> rsrc1_round_shift & 3;
         const unsigned denorm = key_.pgm_rsrc1 >> rsrc1_denorm_shift & 3;
         if ((round != 0 && round != 3) || (denorm != 0 && denorm != 3)) {
-            throw GcnError(std::format("COMPUTE_PGM_RSRC1 {:#x}: this float mode is not supported",
+            throw GcnError(std::format("PGM_RSRC1 {:#x}: this float mode is not supported",
                                        key_.pgm_rsrc1),
                            0, 0);
         }
@@ -1085,6 +1109,8 @@ private:
         return b_.op(Op::OpULessThan, bool_,
                      {add(offset, c64(4 * d)), b_.op(Op::OpIMul, u64_, {v.records, unit})});
     }
+
+    void guarded(Id cond, const std::function<void()>& body) override { when(cond, body); }
 
     // Runs `body` in the lanes where `cond` holds, as a selection.
     template <class F>
@@ -1568,7 +1594,7 @@ private:
         return sgpr(c);
     }
     Id sgpr(unsigned c) { return variable(sgprs_, c, u32_, b_.constant_u32(0)); }
-    Id vgpr(unsigned n) { return variable(vgprs_, n, u32_, b_.constant_u32(0)); }
+    Id vgpr(unsigned n) override { return variable(vgprs_, n, u32_, b_.constant_u32(0)); }
     Id mask_var(unsigned c) {
         return variable(bools_, c, bool_, b_.constant_bool(c == code::exec));
     }
@@ -1583,7 +1609,7 @@ private:
         return it->second;
     }
 
-    Id active() { return load(bool_, mask_exec()); }
+    Id active() override { return load(bool_, mask_exec()); }
 
     Id load(Id type, Id pointer) { return b_.op(Op::OpLoad, type, {pointer}); }
     void store(Id pointer, Id value) { b_.op_void(Op::OpStore, {pointer, value}); }
@@ -1593,7 +1619,7 @@ private:
                      {pointer, spirv_word(spv::MemoryAccessMask::Aligned), align});
     }
 
-    [[noreturn]] void fail(const std::string& message) const {
+    [[noreturn]] void fail(const std::string& message) const override {
         throw GcnError(message, inst_->offset, code_[inst_->offset / 4]);
     }
     [[noreturn]] void unsupported() const {
@@ -1605,6 +1631,7 @@ private:
     std::vector<Instruction> program_;
     Cfg cfg_;
     SpirvBuilder b_;
+    detail::StageIo stage_{b_, key_, *this};
     Id bool_ = 0, u32_ = 0, u64_ = 0;
     Id lane_ = 0, bias_ = 0, lds_ = 0;
     std::vector<Id> interface_;
@@ -1623,7 +1650,7 @@ private:
 
 Translation translate(std::span<const std::uint32_t> code, std::span<const std::uint32_t> fetch,
                       const ShaderKey& key) {
-    static_cast<void>(fetch);  // the vertex stages' fetch subroutine, not used in compute
+    static_cast<void>(fetch);  // the vertex stages' fetch subroutine, not inlined yet
     return Translator(code, key).run();
 }
 

@@ -55,6 +55,9 @@ TEST(GcnTranslate, ProgramsPassSpirvVal) {
         GTEST_SKIP() << "spirv-val not found";
     }
     for (const auto& name : program_names()) {
+        if (name.starts_with("vs_") || name.starts_with("ps_")) {
+            continue;  // the graphics programs, in stages_test.cpp
+        }
         SCOPED_TRACE(name);
         const auto translation =
             translate(program_words(name), {}, {.pgm_rsrc2 = program_pgm_rsrc2(name)});
@@ -254,8 +257,6 @@ TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
               "unsupported instruction v_rcp_f32_e32 at offset 0x0 (word 0x7e025500)");
     EXPECT_EQ(error({sop1(3, 0, 108), s_endpgm}),  // s_mov_b32 s0, tba_lo
               "unsupported register operand 108 of s_mov_b32 at offset 0x0 (word 0xbe80036c)");
-    EXPECT_EQ(error({s_endpgm}, {.stage = bb::gcn::Stage::pixel}),
-              "only the compute stage is translated so far at offset 0x0 (word 0x00000000)");
     EXPECT_EQ(error({sop1(4, 126, 108), s_endpgm}),  // s_mov_b64 exec, tba
               "unsupported mask operand of s_mov_b64 at offset 0x0 (word 0xbefe046c)");
     EXPECT_EQ(error({sopc(12, 0, 1), s_endpgm}),  // s_bitcmp0_b32 s0, s1
@@ -382,7 +383,7 @@ TEST(GcnTranslate, FloatModes) {
     EXPECT_EQ(build(0, {s_endpgm}), std::vector<std::uint32_t>{});  // no float instruction
     for (const std::uint32_t rsrc1 : {1u << 12, 2u << 12, 1u << 16, 2u << 16}) {
         EXPECT_EQ(error(add, {.pgm_rsrc1 = rsrc1, .pgm_rsrc2 = 5u << 1}),
-                  std::format("COMPUTE_PGM_RSRC1 {:#x}: this float mode is not supported at "
+                  std::format("PGM_RSRC1 {:#x}: this float mode is not supported at "
                               "offset 0x0 (word 0x00000000)", rsrc1));
     }
 }

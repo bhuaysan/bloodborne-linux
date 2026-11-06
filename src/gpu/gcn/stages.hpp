@@ -1,0 +1,71 @@
+// The graphics stages of the translator: their initial registers and exports
+// (docs/design/graphics.md, "Stage interfaces and ShaderKey"). So far the vertex stage. Internal to
+// the translator.
+#pragma once
+
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <string>
+#include <vector>
+
+#include "gpu/gcn/gcn.hpp"
+#include "gpu/gcn/spirv_builder.hpp"
+#include "gpu/gcn/translate.hpp"
+
+namespace bb::gcn::detail {
+
+// What the stage code needs from the translator: its registers and predication.
+class StageRegisters {
+public:
+    using Id = SpirvBuilder::Id;
+
+    virtual Id vgpr(unsigned n) = 0;  // the variable of v<n>, a u32
+    virtual Id active() = 0;          // this lane's EXEC bit, loaded
+    // Runs `body` in a selection on `cond`.
+    virtual void guarded(Id cond, const std::function<void()>& body) = 0;
+    [[noreturn]] virtual void fail(const std::string& message) const = 0;
+
+protected:
+    ~StageRegisters() = default;
+};
+
+class StageIo {
+public:
+    using Id = SpirvBuilder::Id;
+
+    StageIo(SpirvBuilder& b, const ShaderKey& key, StageRegisters& regs)
+        : b_(b), key_(key), regs_(regs) {}
+
+    // Throws GcnError for the graphics register values that aren't supported.
+    static void check_key(const ShaderKey& key);
+
+    spv::ExecutionModel model() const { return spv::ExecutionModel::Vertex; }
+
+    // The initial registers after the user data: the vertex and instance indices of a VS.
+    void prologue();
+
+    void exp(const Instruction& inst);
+
+    // The global variables the stage declared, for the entry point.
+    const std::vector<Id>& interface() const { return interface_; }
+
+private:
+    Id builtin(spv::BuiltIn which, spv::StorageClass storage, Id type);
+    Id output(std::uint32_t location, Id type);
+    void store_components(Id var, Id type, const Id (&values)[4]);
+    Id value(const Operand& o);  // a VGPR as a float
+    Id load(Id type, Id pointer) { return b_.op(spv::Op::OpLoad, type, {pointer}); }
+    void store(Id pointer, Id value) { b_.op_void(spv::Op::OpStore, {pointer, value}); }
+    Id f32() { return b_.type_float(32); }
+    Id u32() { return b_.type_int(32, false); }
+
+    SpirvBuilder& b_;
+    const ShaderKey& key_;
+    StageRegisters& regs_;
+    std::vector<Id> interface_;
+    std::map<std::uint32_t, Id> builtins_;  // by BuiltIn
+    std::map<std::uint32_t, Id> outputs_;   // by location
+};
+
+}  // namespace bb::gcn::detail
