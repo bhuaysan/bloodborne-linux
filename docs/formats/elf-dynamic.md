@@ -4,7 +4,7 @@ How a PS4 ELF describes its imports, exports and relocations, and how `tools/elf
 
 ## Sources and confidence
 
-Everything here was worked out from the 8 ELFs of the pinned build (the eboot and 7 bundled PRXs). No public documentation of the Sony dynamic tags was found in allowed sources. The tag names below are our own descriptive names. The standard ELF parts (tag numbers, `Elf64_Sym`, `Elf64_Rela`, the SysV hash table) follow the System V ABI (credited in `docs/references.md`).
+Everything here was worked out from the 8 ELFs of the pinned build (the eboot and 7 bundled PRXs). The tag names below follow the "PS4 ELF Specification" page of the OpenOrbis PS4 Toolchain wiki, which lists every `DT_SCE_*` tag used here with the same value (credited in `docs/references.md`). What each tag holds was worked out from the files, not taken from there. The standard ELF parts (tag numbers, `Elf64_Sym`, `Elf64_Rela`, the SysV hash table) follow the System V ABI (credited in `docs/references.md`).
 
 The main checks:
 - Every table found through a tag parses cleanly in all 8 files: string offsets stay inside the string table, the symbol table size is a multiple of 24, and relocation counts add up.

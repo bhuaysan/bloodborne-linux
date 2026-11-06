@@ -142,7 +142,7 @@ Program header types seen:
 | 0x6FFFFF00 | PT_SCE_COMMENT | Not loaded. eboot and libc only. |
 | 0x6FFFFF01 | PT_SCE_LIBVERSION | Not loaded. Stored as the file trailer. |
 
-The `PT_SCE_*` names are our own descriptive names. The wiki page lists only the standard types.
+The wiki page lists only the standard types. The `PT_SCE_*` names follow GhidraOrbis, whose ELF loader defines all five with these values (`PT_SCE_<name>_VALUE` in `orbis/elf/OrbisElfProgramBuilder.java`, credited in `docs/references.md`).
 
 ## Rebuild algorithm
 

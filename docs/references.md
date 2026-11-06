@@ -136,6 +136,7 @@ One row per source and use. A change that uses a source adds its own row (or row
 | [SPIR-V specification, unified](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html) (Khronos) | the structured control flow rules (selection and loop headers, merge and continue blocks, breaks and continues only to the innermost loop, `OpSwitch` with its default and case targets) for the structurizer (`src/gpu/gcn/structurize.cpp`), from knowledge of the specification and checked with `spirv-val` | 2026-11-05 |
 | [SPIR-V specification, unified](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html) (Khronos) | for the translator, `OpConvertUToPtr` to `PhysicalStorageBuffer` pointers with `Aligned` access, the `LocalInvocationId` built-in, the `LocalSize` execution mode and the entry point's interface list (`src/gpu/gcn/translate.cpp`, #125) | 2026-11-05 |
 | [SPIR-V specification, unified](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html) (Khronos) | for the translator, `OpSelectionMerge` directly before its branch and the `LocalInvocationIndex` built-in (`src/gpu/gcn/translate.cpp`, #125) | 2026-11-06 |
+| [PS4 ELF Specification, OpenOrbis PS4 Toolchain wiki](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/wiki/PS4-ELF-Specification) (revision of 2020-05-13; no license stated for the wiki, the repository is GPL-3.0; facts only) | the names of the `DT_SCE_*` dynamic tags, matched by value (`docs/formats/elf-dynamic.md`, #33) | 2026-11-06 |
 
 ## Code sources
 
@@ -143,3 +144,4 @@ Third-party source code and its documentation, consulted under the rules in [cle
 
 | Project | Release or commit | License of the files | Files or pages consulted | Taken (facts or code) | Used in | Date |
 |---|---|---|---|---|---|---|
+| [GhidraOrbis](https://github.com/astrelsky/GhidraOrbis) | d86d7311361c06dc3d5fd781a5d844ebcf2548e5 (last change of the file) | GPL-3.0 (repository `LICENSE`; the file has no header) | `src/main/java/orbis/elf/OrbisElfProgramBuilder.java` | facts: the names of the five `PT_SCE_*` program header types, matched by value | `docs/formats/self.md` (#33) | 2026-11-06 |
