@@ -235,7 +235,7 @@ TEST(GcnDecode, OperandErrors) {
 
     // 64-bit operands: the special registers that are 32-bit, odd halves of pairs, ranges past
     // s103, misaligned SGPR ranges.
-    for (unsigned c : {unsigned{code::m0}, code::vcc + 1u, 103u, 5u, 113u, 123u, 251u, 253u}) {
+    for (unsigned c : {unsigned{code::m0}, code::vcc + 1u, 103u, 5u, 113u, 123u}) {
         SCOPED_TRACE(c);
         EXPECT_EQ(error({sop1(4, 0, c)}).word(), sop1(4, 0, c));
     }
@@ -251,7 +251,12 @@ TEST(GcnDecode, ScalarRegisters) {
         SCOPED_TRACE(c);
         EXPECT_EQ(one({sop1(4, 0, c)}).src[0], reg(c, 2));
     }
-    EXPECT_EQ(one({sop1(3, 0, code::scc)}).src[0], reg(code::scc));
+    // The condition bits, as 32-bit and 64-bit sources.
+    for (unsigned c : {unsigned{code::vccz}, unsigned{code::execz}, unsigned{code::scc}}) {
+        SCOPED_TRACE(c);
+        EXPECT_EQ(one({sop1(3, 0, c)}).src[0], reg(c));
+        EXPECT_EQ(one({sop1(4, 0, c)}).src[0], reg(c, 2));
+    }
 
     // The next instruction starts behind the literal.
     auto insts = decode(std::vector<std::uint32_t>{sop1(3, 0, 255), 0x42, sopp(1)});

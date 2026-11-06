@@ -36,7 +36,8 @@ std::uint32_t bits(std::uint32_t word, unsigned low, unsigned count) {
 }
 
 // Whether operand code `c` names a register operand of `dwords` dwords. SGPR and trap temporary
-// ranges are aligned to 2 dwords for pairs and to 4 for larger ranges.
+// ranges are aligned to 2 dwords for pairs and to 4 for larger ranges. The condition bits vccz,
+// execz and scc are sources of either size (LLVM accepts them as 64-bit sources too).
 bool valid_register(unsigned c, unsigned dwords) {
     const bool aligned = dwords == 1 || c % (dwords == 2 ? 2 : 4) == 0;
     if (c < code::flat_scratch) {
@@ -45,8 +46,11 @@ bool valid_register(unsigned c, unsigned dwords) {
     if (c >= code::ttmp0 && c < code::m0) {
         return aligned && c + dwords <= code::m0;
     }
+    if (c >= code::vccz && c <= code::scc) {
+        return dwords <= 2;
+    }
     if (dwords == 1) {
-        return c < 128 ? c != 125 : c >= code::vccz && c <= code::scc;
+        return c < 128 && c != 125;
     }
     return dwords == 2 && (c == code::flat_scratch || c == code::vcc || c == code::tba ||
                            c == code::tma || c == code::exec);

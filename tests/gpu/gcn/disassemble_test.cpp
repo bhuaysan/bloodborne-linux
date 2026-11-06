@@ -55,6 +55,7 @@ const std::vector<Case> cases = {
     {{sop1(3, 0, code::scc)}, "s_mov_b32 s0, src_scc"},
     {{sop1(3, 0, code::vccz)}, "s_mov_b32 s0, src_vccz"},
     {{sop1(3, 0, code::execz)}, "s_mov_b32 s0, src_execz"},
+    {{sop1(4, 0, code::vccz)}, "s_mov_b64 s[0:1], src_vccz"},
     {{sop1(3, 0, 192)}, "s_mov_b32 s0, 64"},
     {{sop1(3, 0, 208)}, "s_mov_b32 s0, -16"},
     {{sop1(3, 0, 241)}, "s_mov_b32 s0, -0.5"},
