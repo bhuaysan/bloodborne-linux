@@ -5,5 +5,6 @@ target_include_directories(bbcomputerunner PUBLIC ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(bbcomputerunner PUBLIC Vulkan::Vulkan bbgcn PRIVATE bb_warnings)
 
 bb_add_test(compute_runner_test
-    SOURCES compute_runner_test.cpp translate_exec_test.cpp typed_buffer_exec_test.cpp
+    SOURCES compute_runner_test.cpp memory_mirror_test.cpp translate_exec_test.cpp
+            typed_buffer_exec_test.cpp
     LIBS bbcomputerunner bbgcn bbgcntest)
