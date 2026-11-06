@@ -28,8 +28,8 @@ struct VopInfo {
     Vop kind = Vop::plain;
 };
 
-// The opcode table of VOP1, indexed by opcode (empty for the other formats), written from the opcode lists of the
-// Sea Islands ISA manual.
+// The opcode table of VOP1, indexed by opcode (empty for the other formats), written from the
+// opcode lists of the Sea Islands ISA manual.
 const std::vector<VopInfo>& vop_opcodes(Format format);
 
 // Decodes the VOP1 instruction at code[index] (bit 31 clear; VOP2 and VOPC aren't decoded yet).
