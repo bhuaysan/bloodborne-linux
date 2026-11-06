@@ -1,6 +1,6 @@
-// libkernel and libScePosix mutexes, mutex attributes and rwlocks on glibc primitives
-// (docs/design/m3-core-os.md, "Sync"; values in docs/formats/kernel-abi.md, "Mutexes and
-// rwlocks"). The core functions return a host errno; the sce and POSIX entry points translate it
+// libkernel and libScePosix mutexes, mutex attributes, rwlocks and condition variables on glibc
+// primitives (docs/design/m3-core-os.md, "Sync"; values in docs/formats/kernel-abi.md, "Mutexes
+// and rwlocks" and "Condition variables"). The core functions return a host errno; the sce and POSIX entry points translate it
 // into their own error form.
 
 #include "hle/kernel/sync.hpp"
@@ -38,6 +38,17 @@ struct Rwlock {
     static constexpr std::uint64_t tag_value = 0x6b636f6c77725f62;  // "b_rwlock"
     std::uint64_t tag = tag_value;
     pthread_rwlock_t host;
+
+    static int create_default(Cell* cell);
+};
+
+// `waiters` counts the threads in a wait, so that destroy can refuse with EBUSY: glibc's
+// pthread_cond_destroy would block until they leave instead.
+struct Cond {
+    static constexpr std::uint64_t tag_value = 0x646e6f635f5f6262;  // "bb__cond"
+    std::uint64_t tag = tag_value;
+    pthread_cond_t host;
+    std::atomic<int> waiters{0};
 
     static int create_default(Cell* cell);
 };
@@ -130,7 +141,7 @@ T* lookup(Cell* cell, int* error) {
 }
 
 // Frees the object of `cell` and resets the cell to the static initialiser. A cell that holds the
-// static initialiser has nothing to free.
+// static initialiser has nothing to free. `host_destroy` takes the object.
 template <class T, class Destroy>
 int destroy(Cell* cell, Destroy host_destroy) {
     if (cell == nullptr) {
@@ -144,7 +155,7 @@ int destroy(Cell* cell, Destroy host_destroy) {
     if (object == nullptr) {
         return EINVAL;
     }
-    if (const int error = host_destroy(&object->host); error != 0) {
+    if (const int error = host_destroy(object); error != 0) {
         return error;
     }
     object->tag = 0;
@@ -236,7 +247,7 @@ int mutex_init(Cell* mutex, const std::uint64_t* attr) {
 }
 
 int mutex_destroy(Cell* mutex) {
-    return destroy<Mutex>(mutex, pthread_mutex_destroy);
+    return destroy<Mutex>(mutex, [](Mutex* m) { return pthread_mutex_destroy(&m->host); });
 }
 
 int mutex_lock(Cell* mutex) {
@@ -277,12 +288,12 @@ int rwlock_init(Cell* rwlock, const void* /*attr*/) {
 
 // glibc destroys a held rwlock without complaint, and the next unlock then hangs. The guest gets
 // EBUSY instead, as for a mutex.
-int destroy_host_rwlock(pthread_rwlock_t* host) {
-    if (pthread_rwlock_trywrlock(host) != 0) {
+int destroy_host_rwlock(Rwlock* r) {
+    if (pthread_rwlock_trywrlock(&r->host) != 0) {
         return EBUSY;
     }
-    pthread_rwlock_unlock(host);
-    return pthread_rwlock_destroy(host);
+    pthread_rwlock_unlock(&r->host);
+    return pthread_rwlock_destroy(&r->host);
 }
 
 int rwlock_destroy(Cell* rwlock) {
@@ -305,6 +316,87 @@ int rwlock_timed(Cell* rwlock, std::uint32_t usec) {
     }
     const timespec deadline = deadline_after(usec);
     return Op(&r->host, CLOCK_MONOTONIC, &deadline);
+}
+
+// ---- condition variables -------------------------------------------------------------------
+// The guest object is one 8-byte cell, like a mutex (docs/formats/kernel-abi.md, "Condition
+// variables"). The host condition variable waits on the host mutex behind the guest mutex.
+
+int create_cond(Cell* cell) {
+    auto* c = new Cond;
+    const int error = pthread_cond_init(&c->host, nullptr);
+    if (error != 0) {
+        delete c;
+        return error;
+    }
+    atomic(cell).store(reinterpret_cast<Cell>(c), std::memory_order_release);
+    return 0;
+}
+
+int Cond::create_default(Cell* cell) {
+    return create_cond(cell);
+}
+
+// No condition variable attribute function is imported, and every caller passes null (libc
+// 0x64bf, libSceFios2 0x2e0df, eboot 0x2083d64), so `attr` is ignored.
+int cond_init(Cell* cond, const void* /*attr*/) {
+    return cond == nullptr ? EINVAL : create_cond(cond);
+}
+
+int cond_destroy(Cell* cond) {
+    return destroy<Cond>(cond, [](Cond* c) {
+        return c->waiters.load() != 0 ? EBUSY : pthread_cond_destroy(&c->host);
+    });
+}
+
+// Calls `wait(host cond, host mutex)` with the waiter counted.
+template <class Wait>
+int cond_wait_with(Cell* cond, Cell* mutex, Wait wait) {
+    int error = 0;
+    Cond* c = lookup<Cond>(cond, &error);
+    if (c == nullptr) {
+        return error;
+    }
+    pthread_mutex_t* m = host_mutex(mutex, &error);
+    if (m == nullptr) {
+        return error;
+    }
+    ++c->waiters;
+    error = wait(&c->host, m);
+    --c->waiters;
+    return error;
+}
+
+int cond_wait(Cell* cond, Cell* mutex) {
+    return cond_wait_with(cond, mutex, pthread_cond_wait);
+}
+
+// The sce timeout is relative, in microseconds (libc 0x6e50 and libSceFios2 0x2e1e4 convert their
+// deadlines to it, docs/formats/kernel-abi.md, "Condition variables").
+int cond_timedwait_usec(Cell* cond, Cell* mutex, std::uint32_t usec) {
+    const timespec deadline = deadline_after(usec);
+    return cond_wait_with(cond, mutex, [&](pthread_cond_t* c, pthread_mutex_t* m) {
+        return pthread_cond_clockwait(c, m, CLOCK_MONOTONIC, &deadline);
+    });
+}
+
+// The POSIX timeout is an absolute time on the wall clock (the eboot adds it to gettimeofday,
+// 0x65c91).
+int cond_timedwait_abs(Cell* cond, Cell* mutex, const GuestTimespec* abstime) {
+    if (abstime == nullptr || abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000) {
+        return EINVAL;
+    }
+    const timespec deadline = host_timespec(*abstime);
+    return cond_wait_with(cond, mutex, [&](pthread_cond_t* c, pthread_mutex_t* m) {
+        return pthread_cond_clockwait(c, m, CLOCK_REALTIME, &deadline);
+    });
+}
+
+template <int (*Op)(pthread_cond_t*)>
+int cond_op(Cell* cond) {
+    int error = 0;
+    Cond* c = lookup<Cond>(cond, &error);
+    return c != nullptr ? Op(&c->host) : error;
 }
 
 // ---- entry points --------------------------------------------------------------------------
@@ -332,6 +424,12 @@ std::int32_t sce_mutex_init(Cell* mutex, const std::uint64_t* attr, const char* 
 // The name is not kept (the eboot passes null, 0x207f2d1).
 std::int32_t sce_rwlock_init(Cell* rwlock, const void* attr, const char* /*name*/) {
     return sce_fail(rwlock_init(rwlock, attr));
+}
+
+// The name is not kept (libc.prx passes a formatted buffer, 0x5f3e; libSceFios2 a constant or
+// null, 0x2e0e1 and 0x2e0fa).
+std::int32_t sce_cond_init(Cell* cond, const void* attr, const char* /*name*/) {
+    return sce_fail(cond_init(cond, attr));
 }
 
 }  // namespace
@@ -376,3 +474,17 @@ BB_HLE_FUNCTION("libkernel", "iPtZRWICjrM",
                 k::Sce<k::rwlock_timed<pthread_rwlock_clockrdlock>>::call);
 BB_HLE_FUNCTION("libkernel", "adh--6nIqTk",
                 k::Sce<k::rwlock_timed<pthread_rwlock_clockwrlock>>::call);
+
+BB_HLE_FUNCTION("libkernel", "2Tb92quprl0", k::sce_cond_init);
+BB_HLE_FUNCTION("libkernel", "g+PZd2hiacg", k::Sce<k::cond_destroy>::call);
+BB_HLE_FUNCTION("libkernel", "WKAXJ4XBPQ4", k::Sce<k::cond_wait>::call);
+BB_HLE_FUNCTION("libkernel", "BmMjYxmew1w", k::Sce<k::cond_timedwait_usec>::call);
+BB_HLE_FUNCTION("libkernel", "kDh-NfxgMtE", k::Sce<k::cond_op<pthread_cond_signal>>::call);
+BB_HLE_FUNCTION("libkernel", "JGgj7Uvrl+A", k::Sce<k::cond_op<pthread_cond_broadcast>>::call);
+
+BB_HLE_FUNCTION("libScePosix", "0TyVk4MSLt0", k::Posix<k::cond_init>::call);
+BB_HLE_FUNCTION("libScePosix", "RXXqi4CtF8w", k::Posix<k::cond_destroy>::call);
+BB_HLE_FUNCTION("libScePosix", "Op8TBGY5KHg", k::Posix<k::cond_wait>::call);
+BB_HLE_FUNCTION("libScePosix", "27bAgiJmOh0", k::Posix<k::cond_timedwait_abs>::call);
+BB_HLE_FUNCTION("libScePosix", "2MOy+rUfuhQ", k::Posix<k::cond_op<pthread_cond_signal>>::call);
+BB_HLE_FUNCTION("libScePosix", "mkx2fVhNMsg", k::Posix<k::cond_op<pthread_cond_broadcast>>::call);
