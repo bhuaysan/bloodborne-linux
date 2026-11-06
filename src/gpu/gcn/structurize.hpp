@@ -21,7 +21,8 @@ struct BlockEmitter {
 // Emits the graph as structured control flow into the current function. A block of the caller
 // (its prologue) must be open; the structurizer ends it with a branch and returns with no block
 // open. Acyclic regions and natural loops become selections and loops; a branch out of several
-// constructs goes through a function variable. Throws GcnError for an irreducible graph.
+// constructs goes through a function variable. An irreducible graph becomes a loop around a
+// switch on the index of the next block.
 void structurize(const Cfg& cfg, SpirvBuilder& builder, const BlockEmitter& emitter);
 
 }  // namespace bb::gcn

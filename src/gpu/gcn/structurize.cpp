@@ -1,5 +1,5 @@
-// Structured SPIR-V control flow from a reducible graph (SPIR-V specification, "Structured Control
-// Flow"; docs/design/graphics.md, "Control flow").
+// Structured SPIR-V control flow from a control flow graph (SPIR-V specification, "Structured
+// Control Flow"; docs/design/graphics.md, "Control flow").
 //
 // The nesting follows N. Ramsey, "Beyond Relooper" (ICFP 2022). Every block is emitted once:
 // where its only forward predecessor branches to it, or, when it has several (a merge node),
@@ -13,6 +13,9 @@
 // continue or a return. Breaks and continues may only go to the innermost loop, so a branch to an
 // outer construct stores the construct's depth in a function variable and breaks. The merge
 // block of each construct it leaves passes it on, until the target clears the variable.
+//
+// An irreducible graph has no such nesting. It becomes a single loop around a switch on the
+// index of the next block, a structured form of any graph that gives up the nesting.
 
 #include <algorithm>
 #include <stdexcept>
@@ -35,6 +38,10 @@ public:
 
     void run() {
         analyze();
+        if (!a_.reducible) {
+            dispatch();
+            return;
+        }
         const Id first = b_.id();
         b_.op_void(Op::OpBranch, {first});
         tree(0, first);
@@ -50,19 +57,61 @@ private:
 
     void analyze() {
         a_ = gcn::analyze(cfg_);
-        for (std::uint32_t node : a_.rpo) {
-            for (std::uint32_t s : successors(cfg_.blocks[node])) {
-                if (a_.order[s] <= a_.order[node] && !a_.dominates(s, node)) {
-                    throw GcnError("irreducible control flow", cfg_.blocks[node].offset, 0);
-                }
-            }
-        }
         merge_children_.assign(cfg_.blocks.size(), {});
         for (std::uint32_t node : a_.rpo) {  // in reverse postorder, so the children stay sorted
             if (a_.merge_node[node]) {
                 merge_children_[a_.idom[node]].push_back(node);
             }
         }
+    }
+
+    // An irreducible graph: a loop around a switch on the index of the next block, which a
+    // function variable holds. Each reachable block is a case that returns, or stores the index
+    // of its successor and continues the loop.
+    void dispatch() {
+        const Id u32 = b_.type_int(32, false);
+        const Id next = b_.local_variable(b_.type_pointer(spv::StorageClass::Function, u32),
+                                          b_.constant_u32(0));
+        const Id header = b_.id();
+        const Id body = b_.id();
+        const Id merge = b_.id();
+        const Id cont = b_.id();
+        const Id cases_merge = b_.id();
+        b_.op_void(Op::OpBranch, {header});
+        b_.begin_block(header);
+        b_.op_void(Op::OpLoopMerge, {merge, cont, spirv_word(spv::LoopControlMask::MaskNone)});
+        b_.op_void(Op::OpBranch, {body});
+        b_.begin_block(body);
+        SpirvBuilder::Words cases = {b_.op(Op::OpLoad, u32, {next}), cases_merge};
+        for (std::uint32_t node : a_.rpo) {
+            cases.insert(cases.end(), {node, b_.id()});
+        }
+        b_.op_void(Op::OpSelectionMerge, {cases_merge, no_control});
+        b_.op_void(Op::OpSwitch, cases);
+        for (std::size_t i = 0; i < a_.rpo.size(); ++i) {
+            const std::uint32_t node = a_.rpo[i];
+            const Block& block = cfg_.blocks[node];
+            b_.begin_block(cases[3 + 2 * i]);
+            emitter_.body(node);
+            if (block.exit == Exit::end) {
+                b_.op_void(Op::OpReturn);
+                continue;
+            }
+            Id target = b_.constant_u32(block.exit == Exit::jump ? block.taken : block.next);
+            if (block.exit == Exit::conditional) {
+                const Id condition = emitter_.condition(node);
+                target = b_.op(Op::OpSelect, u32,
+                               {condition, b_.constant_u32(block.taken), target});
+            }
+            b_.op_void(Op::OpStore, {next, target});
+            b_.op_void(Op::OpBranch, {cont});
+        }
+        b_.begin_block(cases_merge);  // the default: no other index is ever stored
+        b_.op_void(Op::OpUnreachable);
+        b_.begin_block(cont);
+        b_.op_void(Op::OpBranch, {header});
+        b_.begin_block(merge);
+        b_.op_void(Op::OpUnreachable);
     }
 
     // Emits `node` and the blocks it dominates, starting with the block `label`.
