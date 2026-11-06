@@ -5,6 +5,10 @@
 
 #include <sys/mman.h>
 
+#ifdef __SANITIZE_ADDRESS__
+#include <sanitizer/lsan_interface.h>
+#endif
+
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -56,6 +60,11 @@ void* Thread::operator new(std::size_t size) {
             throw std::bad_alloc();
         }
         p.base = static_cast<std::byte*>(base);
+#ifdef __SANITIZE_ADDRESS__
+        // LeakSanitizer doesn't scan mappings of our own. A live Thread owns heap memory (a
+        // long name, say) that nothing else points to, so the pool must count as a root.
+        __lsan_register_root_region(base, pool_size);
+#endif
     }
     if ((p.used + 1) * slot_size > pool_size) {
         throw std::bad_alloc();

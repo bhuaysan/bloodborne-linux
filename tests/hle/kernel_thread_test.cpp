@@ -335,6 +335,14 @@ TEST(Thread, EveryHandleFitsIn40Bits) {
     EXPECT_TRUE(survives_the_owner_mask(self()));
 }
 
+// A thread still alive at exit keeps its pooled object, and the object owns heap memory. Under
+// the debug preset LeakSanitizer fails this binary at exit unless it scans the pool.
+TEST(Thread, MemoryALiveThreadOwnsIsNoLeak) {
+    auto* alive = new bb::hle::kernel::Thread;
+    alive->name.assign(64, 'n');  // too long for the small-string buffer
+    EXPECT_EQ(alive->name.size(), 64U);
+}
+
 TEST(Thread, AThreadTheRuntimeDidntStartGetsAnObjectFreedAtItsExit) {
     Handle other = nullptr;
     std::atomic<bool> started{false};
