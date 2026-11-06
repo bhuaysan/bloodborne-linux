@@ -340,6 +340,33 @@ TEST(GcnTranslate, BufferMemoryErrors) {
     }
 }
 
+// Typed loads: stores, tfe and the formats that have no conversion yet are errors that name them.
+TEST(GcnTranslate, TypedMemoryErrors) {
+    const auto message = [](unsigned op, unsigned dfmt, unsigned nfmt, std::uint64_t flags = 0) {
+        auto code = mtbuf(op, 3, 1, 4, 128, 0, dfmt, nfmt, buf::offen | flags);
+        code.push_back(s_endpgm);
+        return error(code);
+    };
+    EXPECT_EQ(message(0, 4, 7), "no error");  // tbuffer_load_format_x, 32 bits, float
+    EXPECT_EQ(message(0, 4, 4), "no error");
+    EXPECT_TRUE(message(4, 4, 7).starts_with("unsupported instruction tbuffer_store_format_x at"));
+    EXPECT_TRUE(message(0, 4, 7, buf::tfe)
+                    .starts_with("tbuffer_load_format_x with tfe is not supported yet at"));
+    EXPECT_TRUE(message(0, 4, 7, buf::addr64)  // the helper adds offen
+                    .starts_with("tbuffer_load_format_x with addr64 and idxen or offen is not "
+                                 "allowed at"));
+    EXPECT_TRUE(
+        message(0, 8, 4).starts_with("tbuffer_load_format_x: data format 8 is not supported"));
+    EXPECT_TRUE(  // 10_11_11 waits for the small floats, whatever the number format
+        message(0, 6, 4).starts_with("tbuffer_load_format_x: data format 6 is not supported"));
+    EXPECT_TRUE(
+        message(0, 0, 7).starts_with("tbuffer_load_format_x: data format 0 is not supported"));
+    EXPECT_TRUE(
+        message(0, 1, 7).starts_with("tbuffer_load_format_x: number format 7 of data format 1 "));
+    EXPECT_TRUE(
+        message(0, 4, 0).starts_with("tbuffer_load_format_x: number format 0 of data format 4 "));
+}
+
 // The float instructions take neg, abs, omod and clamp where the source or result is a float,
 // and reject them elsewhere.
 TEST(GcnTranslate, FloatModifiers) {

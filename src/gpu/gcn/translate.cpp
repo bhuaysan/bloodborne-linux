@@ -21,6 +21,7 @@
 
 #include <spirv/unified1/GLSL.std.450.h>
 
+#include "gpu/gcn/buffer_format.hpp"
 #include "gpu/gcn/cfg.hpp"
 #include "gpu/gcn/descriptors.hpp"
 #include "gpu/gcn/gcn.hpp"
@@ -423,6 +424,9 @@ private:
                 break;
             case Format::mubuf:
                 buffer_memory(inst);
+                break;
+            case Format::mtbuf:
+                typed_memory(inst);
                 break;
             case Format::ds:
                 ds(inst);
@@ -1134,6 +1138,51 @@ private:
 
     void guarded(Id cond, const std::function<void()>& body) override { when(cond, body); }
 
+    // MTBUF loads of 1 to 4 components of a typed element, in active lanes (docs/design/
+    // graphics.md, "Typed buffer formats"). The address and the range check are those of
+    // buffer_memory, but the element is all-or-nothing: it is inside when its first byte is, and
+    // an element that starts outside reads 0 in every component. An element of 4 bytes or more is
+    // read as aligned dwords (the two low bits of its address are ignored); a narrower one byte by
+    // byte, from any address. The element is converted from its dwords. The V#'s dst_sel plays no
+    // part: the components are X, Y, Z, W of the format, and those the format doesn't have are 0.
+    void typed_memory(const Instruction& inst) {
+        const std::string_view name = inst.name;
+        if (!name.starts_with("tbuffer_load_format_")) {
+            unsupported();
+        }
+        if ((inst.flags & flag::tfe) != 0) {
+            fail(std::format("{} with tfe is not supported yet", name));
+        }
+        if (const std::string why = format_error(inst.dfmt, inst.nfmt); !why.empty()) {
+            fail(std::format("{}: {}", name, why));
+        }
+        const FormatLayout& layout = *format_layout(inst.dfmt);
+        const Operand& data = inst.dst[0];
+        const BufferAccess m = buffer_access(inst, &inst.src[0]);
+        const Id inside_buffer = inside(m, 0);
+        const Id cond = b_.op(Op::OpLogicalAnd, bool_, {active(), inside_buffer});
+        const auto where = [&](unsigned delta) { return add(add(m.guest, c64(delta)), bias_); };
+        const Id zero = b_.constant_u32(0);
+        FormatEmitter::Words raw;
+        raw.fill(zero);
+        if (layout.bytes < 4) {
+            for (unsigned j = 0; j < layout.bytes; ++j) {
+                const Id byte = guarded_byte(cond, where(j));
+                raw[0] = b_.op(Op::OpBitwiseOr, u32_,
+                               {raw[0], b_.op(Op::OpShiftLeftLogical, u32_,
+                                              {byte, b_.constant_u32(8 * j)})});
+            }
+        }
+        for (unsigned d = 0; d < layout.bytes / 4; ++d) {
+            raw[d] = guarded_load(cond, b_.op(Op::OpBitwiseAnd, u64_, {where(4 * d), c64(~3ull)}));
+        }
+        const auto value = FormatEmitter(b_, u32_).decode(inst.dfmt, inst.nfmt, raw);
+        for (unsigned c = 0; c < data.dwords; ++c) {
+            // Zero raw bits are not a zero component in every number format (SNORM_OGL).
+            write_vector(data, b_.op(Op::OpSelect, u32_, {inside_buffer, value[c], zero}), c);
+        }
+    }
+
     // Runs `body` in the lanes where `cond` holds, as a selection.
     template <class F>
     void when(Id cond, F&& body) {
@@ -1160,6 +1209,16 @@ private:
             b_.op_void(Op::OpStore, {device_pointer(address), value,
                                      spirv_word(spv::MemoryAccessMask::Aligned), 4});
         });
+    }
+    // The byte at a device address where `cond` holds, 0 elsewhere, read through its aligned
+    // dword.
+    Id guarded_byte(Id cond, Id address) {
+        const Id word = guarded_load(cond, b_.op(Op::OpBitwiseAnd, u64_, {address, c64(~3ull)}));
+        const Id low =
+            b_.op(Op::OpUConvert, u32_, {b_.op(Op::OpBitwiseAnd, u64_, {address, c64(3)})});
+        const Id shift = b_.op(Op::OpShiftLeftLogical, u32_, {low, b_.constant_u32(3)});
+        return b_.op(Op::OpBitwiseAnd, u32_,
+                     {b_.op(Op::OpShiftRightLogical, u32_, {word, shift}), b_.constant_u32(0xff)});
     }
     Id device_pointer(Id address) { return b_.op(Op::OpConvertUToPtr, global_pointer(u32_), {address}); }
     Id add(Id a, Id b) { return b_.op(Op::OpIAdd, u64_, {a, b}); }
