@@ -17,54 +17,47 @@ jobs:
   build:
     name: build (${{ matrix.preset }})
     runs-on: ubuntu-24.04
+    # Fedora 44, the reference machine's distribution: its Vulkan headers,
+    # lavapipe, SPIR-V tools, LLVM and SDL3 are what the code is written
+    # against. Ubuntu 24.04's are too old (no VK_KHR_shader_maximal_reconvergence
+    # in its Vulkan headers, no SDL3 package). Privileged, so that the step
+    # below can lower the host's mmap randomisation.
+    container:
+      image: fedora:44
+      options: --privileged
     strategy:
       fail-fast: false
       matrix:
         preset: [debug, relwithdebinfo, release]
     steps:
+      # git first, so that the checkout is a repository: the tests ask git for
+      # the main checkout (tests/CMakeLists.txt).
+      # spirv-headers is a build dependency of the shader translator. The
+      # Vulkan loader, lavapipe (mesa-vulkan-drivers), spirv-tools and llvm-mc
+      # run its execution, validation and corpus tests (docs/design/graphics.md).
+      # SDL3 is for the window and presentation code.
+      - name: Install build tools
+        run: |
+          dnf -y --setopt=install_weak_deps=False install git cmake ninja-build gcc-c++ \
+              libasan libubsan gtest-devel python3 spirv-headers-devel spirv-tools \
+              vulkan-headers vulkan-loader-devel mesa-vulkan-drivers llvm SDL3-devel
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
-      # spirv-headers is a build dependency of the shader translator. The
-      # Vulkan loader, lavapipe (mesa-vulkan-drivers) and spirv-tools run its
-      # execution and validation tests (docs/design/graphics.md).
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libgtest-dev \
-              spirv-headers spirv-tools libvulkan-dev mesa-vulkan-drivers
-
-      # The window and presentation code needs SDL3 (docs/design/graphics.md),
-      # which Ubuntu 24.04 doesn't package. Build the release the reference
-      # machine uses from its source archive; the checksum is the digest GitHub
-      # lists for that release asset. No tests or examples, shared library only.
-      # The runner has no X11 or Wayland headers, which SDL refuses without
-      # SDL_UNIX_CONSOLE_BUILD; CI only compiles and links against it.
-      - name: Build SDL3
-        env:
-          SDL_VERSION: 3.4.18
-          SDL_SHA256: 9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3
-        run: |
-          curl -fsSLo "$RUNNER_TEMP/sdl3.tar.gz" \
-              "https://github.com/libsdl-org/SDL/releases/download/release-${SDL_VERSION}/SDL3-${SDL_VERSION}.tar.gz"
-          echo "${SDL_SHA256}  $RUNNER_TEMP/sdl3.tar.gz" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/sdl3.tar.gz" -C "$RUNNER_TEMP"
-          cmake -S "$RUNNER_TEMP/SDL3-${SDL_VERSION}" -B "$RUNNER_TEMP/sdl3-build" -G Ninja \
-              -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_STATIC=OFF \
-              -DSDL_UNIX_CONSOLE_BUILD=ON
-          cmake --build "$RUNNER_TEMP/sdl3-build"
-          sudo cmake --install "$RUNNER_TEMP/sdl3-build"
-          sudo ldconfig
+      # The checkout belongs to another user than the container's root.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Check the graphics packages
         run: |
           test -f /usr/include/spirv/unified1/spirv.hpp11
           command -v spirv-val
+          command -v llvm-mc
           test -f /usr/include/vulkan/vulkan.h
           ls /usr/share/vulkan/icd.d/lvp_icd*.json
-          test -f /usr/local/include/SDL3/SDL.h
-          ls /usr/local/lib*/cmake/SDL3/SDL3Config.cmake
+          test -f /usr/include/SDL3/SDL.h
 
       - name: Configure
         run: cmake --preset "${{ matrix.preset }}" -DBB_WERROR=ON
@@ -72,13 +65,14 @@ jobs:
       - name: Build
         run: cmake --build --preset "${{ matrix.preset }}"
 
-      # The runner kernels use 32 bits of mmap randomisation. The
-      # AddressSanitizer of Ubuntu 24.04's GCC can't cope with that: its
-      # shadow memory collides with randomly placed mappings and the tests
-      # die at startup. 28 bits is the older kernel default.
+      # The runner kernels use 32 bits of mmap randomisation, with which
+      # AddressSanitizer's shadow memory can collide with randomly placed
+      # mappings, so the tests die at startup. 28 bits is the older kernel
+      # default. The setting belongs to the host kernel; the container is
+      # privileged to change it.
       - name: Lower mmap randomisation for AddressSanitizer
         if: matrix.preset == 'debug'
-        run: sudo sysctl -w vm.mmap_rnd_bits=28
+        run: sysctl -w vm.mmap_rnd_bits=28
 
       # run-tests.sh runs the Python tests too and builds the debug preset
       # itself (already built above, so that step is a no-op).
