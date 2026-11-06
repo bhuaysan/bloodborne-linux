@@ -106,7 +106,8 @@ int check_range(std::uintptr_t start, std::uint64_t length, std::uintptr_t& end)
 
 int map(const Mapping& m, std::uintptr_t& out) {
     if (m.length == 0 || m.length % page_size != 0 || m.length > max_length ||
-        (m.fixed && m.address % page_size != 0)) {
+        m.alignment < page_size || m.alignment > max_length ||
+        (m.alignment & (m.alignment - 1)) != 0 || (m.fixed && m.address % page_size != 0)) {
         return EINVAL;
     }
     const std::optional<int> prot = host_protection(m.prot);
@@ -125,7 +126,7 @@ int map(const Mapping& m, std::uintptr_t& out) {
     } else {
         // Reserve enough to find an aligned start, map over it, then return the rest.
         const auto host_page = static_cast<std::uint64_t>(::sysconf(_SC_PAGESIZE));
-        const std::uint64_t reserved = m.length + page_size - host_page;
+        const std::uint64_t reserved = m.length + m.alignment - host_page;
         void* const base =
             ::mmap(hint, reserved, PROT_NONE,
                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | (m.host_flags & MAP_32BIT), -1, 0);
@@ -133,7 +134,7 @@ int map(const Mapping& m, std::uintptr_t& out) {
             return errno;
         }
         const auto b = reinterpret_cast<std::uintptr_t>(base);
-        const std::uintptr_t aligned = round_up(b);
+        const std::uintptr_t aligned = (b + m.alignment - 1) & ~(m.alignment - 1);
         at = ::mmap(reinterpret_cast<void*>(aligned), m.length, *prot, m.host_flags | MAP_FIXED,
                     m.fd, m.fd_offset);
         const int error = errno;

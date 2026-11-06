@@ -87,6 +87,19 @@ TEST(KernelVmem, MapRefusesBadLengthsAndProtection) {
     EXPECT_EQ(out, 0U);
 }
 
+TEST(KernelVmem, MapAlignsToTheRequestedAlignment) {
+    vmem::Mapping m = anonymous(1);
+    std::uintptr_t out = 0;
+    for (const std::uint64_t bad : {std::uint64_t{0x1000}, std::uint64_t{0x6000}}) {
+        m.alignment = bad;  // below the guest page, not a power of two
+        EXPECT_EQ(vmem::map(m, out), EINVAL);
+    }
+    m.alignment = 0x200000;
+    ASSERT_EQ(vmem::map(m, out), 0);
+    EXPECT_EQ(out % 0x200000, 0U);
+    EXPECT_EQ(vmem::unmap(out, page_size), 0);
+}
+
 TEST(KernelVmem, FixedMapNeverReplacesAMapping) {
     const std::uintptr_t p = map_pages(1);
     vmem::Mapping m = anonymous(1);

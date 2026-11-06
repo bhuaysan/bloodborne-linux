@@ -1,6 +1,6 @@
 // Kernel virtual memory (docs/design/m3-core-os.md, "Memory"): the region table of guest
 // mappings and the guest entry points. Internal to src/hle/kernel/; direct memory (#97) adds its
-// mappings through map() with its own fd, flags and offsets.
+// mappings through map() with its own fd, flags, offsets and alignment (dmem.hpp).
 #pragma once
 
 #include <sys/types.h>
@@ -46,11 +46,13 @@ struct Mapping {
     off_t fd_offset = 0;
     std::uint32_t flags = region_anonymous;  // Region::flags
     std::uint64_t offset = 0;                // Region::offset
+    std::uint64_t alignment = page_size;     // of the address the host picks: a power of two
     std::string name;
 };
 
-// Maps at a page_size-aligned host address and records the region. Returns 0 and sets `out`, or
-// a host errno: EINVAL for a bad length, unaligned fixed address or unknown protection bits.
+// Maps at an `alignment`-aligned host address (or at the fixed one) and records the region.
+// Returns 0 and sets `out`, or a host errno: EINVAL for a bad length or alignment, unaligned
+// fixed address or unknown protection bits.
 int map(const Mapping& mapping, std::uintptr_t& out);
 
 // Unmaps [start, start + length rounded up to page_size). Returns 0 or a host errno: EINVAL if
