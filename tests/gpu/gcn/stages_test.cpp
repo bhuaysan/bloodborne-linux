@@ -223,6 +223,35 @@ TEST(GcnStages, PixelDepth) {
     }
 }
 
+// With VK_KHR_shader_quad_control, a pixel shader declares QuadDerivativesKHR (5088) and
+// RequireFullQuadsKHR (5089) with the QuadControlKHR capability (5087), spelled out as in the
+// translator, since Ubuntu 24.04's SPIR-V headers lack them. A vertex shader ignores the flag.
+TEST(GcnStages, QuadControl) {
+    ShaderKey key = pixel_key();
+    key.quad_control = true;
+    const auto ps = translate(program_words("ps_attrs"), {}, key).spirv;
+    EXPECT_EQ(count(ps, spv::Op::OpCapability, 1, 5087), 1);
+    EXPECT_EQ(count(ps, spv::Op::OpExecutionMode, 2, 5088), 1);
+    EXPECT_EQ(count(ps, spv::Op::OpExecutionMode, 2, 5089), 1);
+    EXPECT_EQ(count(ps, spv::Op::OpExtension), 1);  // SPV_KHR_quad_control
+    const auto without = translate(program_words("ps_attrs"), {}, pixel_key()).spirv;
+    EXPECT_EQ(count(without, spv::Op::OpCapability, 1, 5087), 0);
+    EXPECT_EQ(count(without, spv::Op::OpExtension), 0);
+    ShaderKey vs_key = vertex_key;
+    vs_key.quad_control = true;
+    const auto vs = translate(program_words("vs_attrs"), {}, vs_key).spirv;
+    EXPECT_EQ(count(vs, spv::Op::OpCapability, 1, 5087), 0);
+    if (!have_spirv_val()) {
+        GTEST_SKIP() << "spirv-val not found";
+    }
+    EXPECT_EQ(validate(vs), "");
+    const std::string message = validate(ps);
+    if (message.find("5087") != std::string::npos) {  // an older spirv-val
+        GTEST_SKIP() << "this spirv-val doesn't know SPV_KHR_quad_control: " << message;
+    }
+    EXPECT_EQ(message, "");
+}
+
 // s_wqm_b64 in a pixel shader is the same two quad swaps as in compute: a fragment shader's
 // quads are its 2x2 pixel quads, helper invocations included.
 TEST(GcnStages, PixelWholeQuadMode) {

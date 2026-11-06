@@ -17,6 +17,13 @@ using Id = SpirvBuilder::Id;
 using Op = spv::Op;
 using SC = spv::StorageClass;
 
+// SPV_KHR_quad_control is newer than the SPIR-V headers of some distributions (Ubuntu 24.04's),
+// so its values are spelled out (SPIR-V registry, checked against the installed headers): the
+// QuadControlKHR capability and the QuadDerivativesKHR and RequireFullQuadsKHR execution modes.
+constexpr auto capability_quad_control = static_cast<spv::Capability>(5087);
+constexpr auto mode_quad_derivatives = static_cast<spv::ExecutionMode>(5088);
+constexpr auto mode_require_full_quads = static_cast<spv::ExecutionMode>(5089);
+
 // SPI_SHADER_PGM_RSRC2_VS: SCRATCH_EN (bit 0), OC_LDS_EN (7) and SO_BASE0_EN to SO_EN (8-12)
 // add initial SGPRs.
 constexpr std::uint32_t vs_rsrc2_unsupported = 1u << 0 | 0x3fu << 7;
@@ -347,6 +354,13 @@ void StageIo::finish(Id main) {
     b_.execution_mode(main, spv::ExecutionMode::OriginUpperLeft);
     if (builtins_.contains(spirv_word(spv::BuiltIn::FragDepth))) {
         b_.execution_mode(main, spv::ExecutionMode::DepthReplacing);
+    }
+    // GCN runs every quad with a covered pixel whole and takes derivatives per quad.
+    if (key_.quad_control) {
+        b_.extension("SPV_KHR_quad_control");
+        b_.capability(capability_quad_control);
+        b_.execution_mode(main, mode_quad_derivatives);
+        b_.execution_mode(main, mode_require_full_quads);
     }
 }
 

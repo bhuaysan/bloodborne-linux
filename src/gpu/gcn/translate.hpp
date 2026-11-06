@@ -62,6 +62,9 @@ struct ShaderKey {
     // other fields are ignored.
     std::uint32_t z_format = 0;
     std::uint32_t db_shader_control = 0;
+    // The device has VK_KHR_shader_quad_control with shaderQuadControl enabled: pixel shaders
+    // declare QuadDerivativesKHR and RequireFullQuadsKHR (docs/design/graphics.md, "Quad control").
+    bool quad_control = false;
 };
 
 // What the run time must know about a translated shader.
