@@ -13,5 +13,5 @@ foreach(source IN LISTS kernel_tests)
 endforeach()
 # The TLS tests check the eboot's reservation too (docs/design/m3-core-os.md, "TLS").
 target_link_libraries(kernel_tls_test PRIVATE bbeboottls)
-# New threads run the eboot TLS check, and one test runs game-style code that uses fs.
+# New threads run the eboot TLS check.
 target_link_libraries(kernel_thread_test PRIVATE bbeboottls)
