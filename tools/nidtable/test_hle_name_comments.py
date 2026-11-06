@@ -23,6 +23,19 @@ UNKNOWN_BESIDE_NID = re.compile(
     NID_START + "(" + NID + ")" + NID_END + r"[^\n]{0,40}\bname unknown\b|\bName unknown \(NID (" + NID + r")\)")
 
 
+def unknown_name_nids(line: str) -> list[str]:
+    """NIDs that the line's comment calls unknown.
+
+    A registration line carries its NID in the call, so only its trailing comment is checked, however long
+    the function name is. Other lines are searched for a NID followed closely by "name unknown".
+    """
+    registration = REGISTRATION.match(line)
+    if registration:
+        nid, trailing = registration.groups()
+        return [nid] if trailing and re.match(r"name unknown\b", trailing.strip()) else []
+    return [m.group(1) or m.group(2) for m in UNKNOWN_BESIDE_NID.finditer(line)]
+
+
 def known_names() -> dict[str, str]:
     with (ROOT / "symbols" / "nids.csv").open(newline="") as f:
         return {row["nid"]: row["name"] for row in csv.DictReader(f)}
@@ -34,7 +47,13 @@ def sources() -> list[Path]:
 
 class UnknownNameCommentPatternTest(unittest.TestCase):
     def nids_in(self, line: str) -> list[str]:
-        return [m.group(1) or m.group(2) for m in UNKNOWN_BESIDE_NID.finditer(line)]
+        return unknown_name_nids(line)
+
+    def test_finds_registrations_with_long_function_names(self) -> None:
+        line = ('BB_HLE_FUNCTION("libkernel", "959qrazPIrg", bb::hle::kernel::process_parameters);'
+                '  // name unknown')
+        self.assertEqual(self.nids_in(line), ["959qrazPIrg"])
+        self.assertEqual(self.nids_in(line.replace("// name unknown", "// scePthreadCreate")), [])
 
     def test_finds_nids_that_start_or_end_with_punctuation(self) -> None:
         for nid in ("-2IRUCO--PM", "-+3hY+y8bNo", "2SKEx6bSq-4", "4J2sUJmuHZQ"):
@@ -52,8 +71,7 @@ class HleNameCommentsTest(unittest.TestCase):
         stale = []
         for path in sources():
             for number, line in enumerate(path.read_text().splitlines(), 1):
-                for match in UNKNOWN_BESIDE_NID.finditer(line):
-                    nid = match.group(1) or match.group(2)
+                for nid in unknown_name_nids(line):
                     if nid in names:
                         stale.append(f"{path.relative_to(ROOT)}:{number}: {nid} is {names[nid]}")
         self.assertEqual(stale, [], "comments say the name is unknown, but nids.csv has it")
