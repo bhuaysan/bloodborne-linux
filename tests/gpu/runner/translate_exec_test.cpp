@@ -364,11 +364,12 @@ protected:
 
 TEST_F(DsSwizzle, FullWorkgroup) { check(lanes); }
 
-// 42 lanes: the last subgroup is not full at subgroup sizes 4 and 8 (and larger ones). At sizes 4
-// and 8 the quad patterns 0x801b and 0x80aa send lanes 40 and 41 to the missing lanes 42 and 43
-// of their own subgroup, which is the case the source-exists check is for. A missing source in
-// another subgroup is already 0 through the subgroup test. At sizes 16 and 32 no pattern reaches
-// a missing lane of the same subgroup from lanes 40 and 41.
+// 42 lanes: the last subgroup is not full at any subgroup size from 4 to 64, since lanes 42 and 43
+// are missing and share a subgroup with lanes 40 and 41 at every size. The quad patterns 0x801b
+// and 0x80aa send lanes 40 and 41 to them at every size, which is the case the source-exists check
+// is for. At sizes 16, 32 and 64 the bit mask patterns reach missing lanes too (0x0103 sends lanes
+// 34, 35, 38 and 39 to 42 and 43). A missing source in another subgroup is already 0 through the
+// subgroup test.
 TEST_F(DsSwizzle, PartialSubgroup) { check(42); }
 
 // The user data of the memory programs: the output, the table through a pointer, the V# of a
