@@ -169,7 +169,8 @@ int create_thread(Thread** thread, const Cell* attr, ThreadEntry entry, void* ar
         *thread = previous;
         const std::lock_guard lock(table().mutex);
         table().threads.erase(t.get());
-        return error;
+        // glibc adds its guard page and refuses a size that then wraps around with EINVAL.
+        return error == EINVAL ? EAGAIN : error;
     }
     t.release();  // join_thread frees it
     return 0;
