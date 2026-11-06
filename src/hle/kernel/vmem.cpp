@@ -70,9 +70,9 @@ void erase_range(std::uintptr_t start, std::uintptr_t end) {
     table.erase(table.lower_bound(start), table.lower_bound(end));
 }
 
-// Whether guest mappings cover [start, end) without a hole; with `reservations`, reservations
-// only. Needs table_mutex.
-bool covered(std::uintptr_t start, std::uintptr_t end, bool reservations = false) {
+// Whether guest mappings cover [start, end) without a hole; with `reserved`, only regions whose
+// `reserved` equals it. Needs table_mutex.
+bool covered(std::uintptr_t start, std::uintptr_t end, std::optional<bool> reserved = {}) {
     auto it = table.upper_bound(start);
     if (it == table.begin()) {
         return false;
@@ -81,26 +81,12 @@ bool covered(std::uintptr_t start, std::uintptr_t end, bool reservations = false
     std::uintptr_t at = start;
     for (; it != table.end() && it->second.start <= at; ++it) {
         if (it->second.end > at) {
-            if (reservations && !it->second.reserved) {
+            if (reserved && it->second.reserved != *reserved) {
                 return false;
             }
             at = it->second.end;
         }
         if (at >= end) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Whether a reservation overlaps [start, end). Needs table_mutex.
-bool holds_reservation(std::uintptr_t start, std::uintptr_t end) {
-    auto it = table.upper_bound(start);
-    if (it != table.begin()) {
-        --it;
-    }
-    for (; it != table.end() && it->second.start < end; ++it) {
-        if (it->second.reserved && it->second.end > start) {
             return true;
         }
     }
@@ -267,7 +253,7 @@ int protect(std::uintptr_t start, std::uint64_t length, int prot) {
     if (const int error = check_range(start, length, end)) {
         return error;
     }
-    if (holds_reservation(start, end)) {
+    if (!covered(start, end, false)) {  // a reservation in the range
         return EINVAL;
     }
     if (::mprotect(reinterpret_cast<void*>(start), end - start, *host) != 0) {
