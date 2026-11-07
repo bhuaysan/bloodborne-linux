@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -20,6 +21,15 @@ struct ColorTarget {
     std::array<float, 4> clear{};
 };
 
+// A sampled image for the pixel shader: R32G32B32A32_SFLOAT, `levels` mip levels of `layers`
+// layers each, with a 2D or (`arrayed`) 2D array view. Its texels come from the guest memory at
+// byte `offset`: level after level, each layer after layer, 16 bytes per texel, row after row.
+struct Texture {
+    std::uint32_t width = 0, height = 0, layers = 1, levels = 1;
+    bool arrayed = false;
+    std::size_t offset = 0;
+};
+
 class GraphicsRunner : public ComputeRunner {
 public:
     // Nothing when there is no compute runner (ComputeRunner::create); `why` then says why.
@@ -29,15 +39,17 @@ public:
     // Draws `vertices` vertices as a triangle list without vertex buffers into `target`, with
     // dynamic rendering, no culling, no blending and no depth, and waits for it. `vs` and `ps` are
     // a vertex and a fragment entry point "main" that read one 8-byte push constant, the device
-    // address of the draw block: both stages read the same block. Throws std::logic_error before
+    // address of the draw block: both stages read the same block. The pixel shader's descriptor
+    // set 1 holds `textures` at bindings 0 and up, then `samplers` samplers (nearest filtering
+    // and mip level, clamp to edge), as the translator binds them. Throws std::logic_error before
     // the first guest_memory() or when the image doesn't fit into it, and std::runtime_error
     // when a Vulkan call fails.
     void render(std::span<const std::uint32_t> vs, std::span<const std::uint32_t> ps,
-                const DrawBlock& draw, std::uint32_t vertices, const ColorTarget& target);
+                const DrawBlock& draw, std::uint32_t vertices, const ColorTarget& target,
+                std::span<const Texture> textures = {}, std::uint32_t samplers = 0);
 
 private:
     explicit GraphicsRunner(ComputeRunner&& base);
-    VkPipelineLayout layout_ = VK_NULL_HANDLE;
 };
 
 }  // namespace bb::test::vk
