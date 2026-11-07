@@ -222,4 +222,89 @@ void tile(const Layout& l, std::span<const std::byte> linear, std::span<std::byt
     copy<false>(l, linear, tiled);
 }
 
+AddressTables address_tables(const Layout& l, std::uint32_t level) {
+    const Level& lv = l.levels.at(level);
+    const std::uint32_t layers = l.layers;
+    AddressTables t;
+    t.columns.resize(lv.pitch);
+    t.rows.resize(lv.height);
+    t.layers.resize(layers);
+    for (std::uint32_t z = 0; z < layers; ++z) {
+        t.layers[z] = {static_cast<std::uint32_t>(z * lv.layer_size), 0};
+    }
+    const bool linear =
+        l.mode.array == ArrayMode::linear_general || l.mode.array == ArrayMode::linear_aligned;
+    if (linear || !lv.macro) {
+        // Linear: x * bytes + y * row bytes. 1D: the micro tile's offset plus the element's,
+        // whose index has the x and the y bits in separate places, so the two parts add up.
+        for (std::uint32_t x = 0; x < lv.pitch; ++x) {
+            t.columns[x][0] = linear ? x * l.bytes
+                                     : (x / 8 * 64 + pixel_index(l.mode.micro, l.bytes, x, 0)) *
+                                           l.bytes;
+        }
+        for (std::uint32_t y = 0; y < lv.height; ++y) {
+            t.rows[y][0] = linear ? y * lv.pitch * l.bytes
+                                  : (y / 8 * (lv.pitch / 8) * 64 +
+                                     pixel_index(l.mode.micro, l.bytes, 0, y)) *
+                                        l.bytes;
+        }
+        return t;
+    }
+    // 2D: as tiled_offset, with each term split by what it depends on. The element offset, its
+    // split index and the pipe and bank bits of x and y are combined with + and ^ as above.
+    const std::uint32_t tile_bytes = std::min(64 * l.bytes, l.split);
+    const bool splitting = 64 * l.bytes > l.split;
+    const std::uint32_t macro_bytes = tile_bytes * l.bank_height;
+    const std::uint32_t per_row = lv.pitch / l.macro_width;
+    const std::uint32_t bank_bits = std::countr_zero(l.banks);
+    t.split_bytes = per_row * (lv.height / l.macro_height) * macro_bytes;
+    t.split_rotation = (l.banks / 2 + 1) << pipe_bits;
+    t.pipe_bank_bits = pipe_bits + bank_bits;
+    t.pipe_bank_mask = (1u << t.pipe_bank_bits) - 1;
+    const auto element = [&](std::uint32_t x, std::uint32_t y, std::uint32_t& entry_split) {
+        const std::uint32_t e = pixel_index(l.mode.micro, l.bytes, x, y) * l.bytes;
+        entry_split = splitting ? e / l.split : 0;
+        return splitting ? e % l.split : e;
+    };
+    for (std::uint32_t x = 0; x < lv.pitch; ++x) {
+        std::uint32_t split = 0;
+        const std::uint32_t offset = x / l.macro_width * macro_bytes + element(x, 0, split);
+        const std::uint32_t tx = x / 8;
+        const std::uint32_t pipe = (bit(tx, 0) ^ bit(tx, 1)) | bit(tx, 1) << 1 | bit(tx, 2) << 2;
+        const std::uint32_t bank = x / 8 / pipes & (l.banks - 1);
+        t.columns[x] = {offset, pipe | bank << pipe_bits | split << 16};
+    }
+    for (std::uint32_t y = 0; y < lv.height; ++y) {
+        std::uint32_t split = 0;
+        const std::uint32_t offset = y / l.macro_height * per_row * macro_bytes +
+                                     element(0, y, split) + y / 8 % l.bank_height * tile_bytes;
+        const std::uint32_t pipe = y / 8 & 7;
+        const std::uint32_t by = y / 8 / l.bank_height;
+        const std::uint32_t bank =
+            l.banks == 16 ? bit(by, 3) | (bit(by, 2) ^ bit(by, 3)) << 1 | bit(by, 1) << 2 |
+                                bit(by, 0) << 3
+                          : bit(by, 2) | (bit(by, 1) ^ bit(by, 2)) << 1 | bit(by, 0) << 2;
+        t.rows[y] = {offset, pipe | bank << pipe_bits | split << 16};
+    }
+    for (std::uint32_t z = 0; z < layers; ++z) {
+        const std::uint32_t splits = splitting ? 64 * l.bytes / l.split : 1;
+        const std::uint32_t bank = (l.bank_swizzle + (l.banks / 2 - 1) * z) & (l.banks - 1);
+        t.layers[z] = {z * splits * t.split_bytes, bank << pipe_bits};
+    }
+    return t;
+}
+
+std::uint64_t combine(const AddressTables& t, const Level& level, std::uint32_t x,
+                      std::uint32_t y, std::uint32_t layer) {
+    const auto& c = t.columns.at(x);
+    const auto& r = t.rows.at(y);
+    const auto& z = t.layers.at(layer);
+    const std::uint32_t split = (c[1] >> 16) + (r[1] >> 16);
+    const std::uint32_t total = c[0] + r[0] + z[0] + split * t.split_bytes;
+    const std::uint32_t pipe_bank =
+        (c[1] ^ r[1] ^ z[1] ^ split * t.split_rotation) & t.pipe_bank_mask;
+    return level.offset + (total & 255) + (std::uint64_t{pipe_bank} << interleave_bits) +
+           (std::uint64_t{total >> interleave_bits} << (interleave_bits + t.pipe_bank_bits));
+}
+
 }  // namespace bb::tile

@@ -8,6 +8,7 @@
 // level layouts, the tiled byte offset of an element, and detiling on the CPU.
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -99,5 +100,26 @@ std::uint64_t tiled_offset(const Layout& layout, std::uint32_t level, std::uint3
 // Copies between tiled guest memory and the linear copy, each layout.size bytes.
 void detile(const Layout& layout, std::span<const std::byte> tiled, std::span<std::byte> linear);
 void tile(const Layout& layout, std::span<const std::byte> linear, std::span<std::byte> tiled);
+
+// One level's offsets split into a part per column, row and layer, for the compute shader.
+// Each entry is {offset, pipe_bank | split << 16}. The offset is then
+//   split = col[1] >> 16 + row[1] >> 16
+//   total = col[0] + row[0] + layer[0] + split * split_bytes
+//   pipe_bank = (col[1] ^ row[1] ^ layer[1] ^ split * split_rotation) & pipe_bank_mask
+//   offset = level.offset + (total & 255 | pipe_bank << 8 | total >> 8 << (8 + pipe_bank_bits))
+// For linear and 1D-tiled levels pipe_bank_bits is 0 and the offset is level.offset + total.
+struct AddressTables {
+    std::vector<std::array<std::uint32_t, 2>> columns, rows, layers;
+    std::uint32_t split_bytes = 0;
+    std::uint32_t split_rotation = 0;
+    std::uint32_t pipe_bank_bits = 0;
+    std::uint32_t pipe_bank_mask = 0;
+};
+
+AddressTables address_tables(const Layout& layout, std::uint32_t level);
+
+// The offset as the shader computes it from the tables.
+std::uint64_t combine(const AddressTables& tables, const Level& level, std::uint32_t x,
+                      std::uint32_t y, std::uint32_t layer);
 
 }  // namespace bb::tile

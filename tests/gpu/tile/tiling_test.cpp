@@ -117,10 +117,12 @@ void check_surface(const Surface& s) {
     std::size_t count = 0;
     for (std::uint32_t i = 0; i < l.levels.size(); ++i) {
         const Level& lv = l.levels[i];
+        const AddressTables tables = address_tables(l, i);
         for (std::uint32_t z = 0; z < s.layers; ++z) {
             for (std::uint32_t y = 0; y < lv.height; ++y) {
                 for (std::uint32_t x = 0; x < lv.pitch; ++x, ++count) {
                     const std::uint64_t offset = tiled_offset(l, i, x, y, z);
+                    ASSERT_EQ(combine(tables, lv, x, y, z), offset) << i << ' ' << x << ' ' << y;
                     ASSERT_EQ(offset % l.bytes, 0u);
                     ASSERT_LT(offset, l.size);
                     ASSERT_FALSE(used[offset / l.bytes]) << i << ' ' << x << ' ' << y << ' ' << z;
