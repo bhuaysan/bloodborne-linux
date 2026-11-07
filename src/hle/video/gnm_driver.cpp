@@ -1,5 +1,7 @@
 // The GPU submit calls of libSceGnmDriver. The submits queue their draw command buffers on the
-// GPU thread (docs/design/graphics.md, "One GPU thread"); every other Gnm import stays a stub.
+// GPU thread (docs/design/graphics.md, "One GPU thread"). The stage registers are in
+// gnm_shader.cpp, the default state, markers and profiling queries in gnm_state.cpp; the other
+// imports stay stubs.
 #include <atomic>
 #include <cstdint>
 #include <span>
