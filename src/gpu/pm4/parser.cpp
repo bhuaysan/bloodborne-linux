@@ -27,6 +27,35 @@ constexpr auto game_opcodes = std::to_array<std::uint8_t>({
     IT_WAIT_ON_DE_COUNTER_DIFF,
 });
 
+// The constant engine runs WRITE_CONST_RAM, DUMP_CONST_RAM, INCREMENT_CE_COUNTER,
+// WAIT_ON_DE_COUNTER_DIFF and INDIRECT_BUFFER_CONST, and NOP and REWIND like the DE. The DE skips
+// the CE's packets and the CE skips the other packets of the game, as the two engines of the
+// hardware skip each other's packets. WRITE_DATA occurs in CCBs too and is skipped until #274.
+
+bool body_too_short(const Packet& packet, std::size_t dwords) {
+    if (packet.body.size() >= dwords) {
+        return false;
+    }
+    common::log(common::LogLevel::error, channel, "packet {:#010x}: body of {} dwords",
+                packet.header, packet.body.size());
+    return true;
+}
+
+// Whether `bytes` from byte offset `offset` lie in CE RAM. Logs if not.
+bool in_ce_ram(std::uint32_t offset, std::size_t bytes) {
+    if (offset + bytes <= Parser::ce_ram_bytes) {
+        return true;
+    }
+    common::log(common::LogLevel::error, channel, "CE RAM access at {:#x} of {} bytes", offset,
+                bytes);
+    return false;
+}
+
+// The signed distance from counter b to counter a.
+constexpr std::int32_t counter_diff(std::uint32_t a, std::uint32_t b) {
+    return static_cast<std::int32_t>(a - b);
+}
+
 constexpr std::string_view space_name(RegSpace space) {
     constexpr std::array<std::string_view, 4> names = {"config", "SH", "context", "uconfig"};
     return names[static_cast<unsigned>(space)];
@@ -34,7 +63,7 @@ constexpr std::string_view space_name(RegSpace space) {
 
 }  // namespace
 
-Stream::Stream(std::span<const std::uint32_t> buffer) {
+Stream::Stream(std::span<const std::uint32_t> buffer, Engine engine) : engine_(engine) {
     levels_[0] = {buffer.data(), buffer.data() + buffer.size()};
     depth_ = 1;
     pop_finished();
@@ -106,14 +135,14 @@ RunResult Parser::run(Stream& stream) {
 // Runs one type-3 packet. On `next` the stream has moved past it; otherwise it stays there.
 Parser::Step Parser::execute(Stream& stream, const Packet& packet) {
     const std::uint32_t* const next = packet.body.data() + packet.body.size();
-    const auto too_short = [&](std::size_t dwords) {
-        if (packet.body.size() >= dwords) {
-            return false;
+    const auto too_short = [&](std::size_t dwords) { return body_too_short(packet, dwords); };
+    if (stream.engine() == Engine::constant) {
+        bool handled = true;
+        const Step step = execute_constant(stream, packet, handled);
+        if (handled) {
+            return step;
         }
-        common::log(common::LogLevel::error, channel, "packet {:#010x}: body of {} dwords",
-                    packet.header, packet.body.size());
-        return true;
-    };
+    }
     switch (packet.opcode()) {
     case IT_SET_CONFIG_REG:
     case IT_SET_SH_REG:
@@ -151,6 +180,15 @@ Parser::Step Parser::execute(Stream& stream, const Packet& packet) {
     case IT_CLEAR_STATE:
         regs_.clear_context();
         break;
+    case IT_INCREMENT_DE_COUNTER:
+        ++de_counter_;
+        break;
+    case IT_WAIT_ON_CE_COUNTER:
+        // The DE waits until the CE counter is ahead of the DE counter.
+        if (counter_diff(ce_counter_, de_counter_) <= 0) {
+            return Step::wait;
+        }
+        break;
     default:
         if (!known_opcode(packet.opcode()) && !logged_opcodes_[packet.opcode()]) {
             logged_opcodes_[packet.opcode()] = true;
@@ -160,6 +198,99 @@ Parser::Step Parser::execute(Stream& stream, const Packet& packet) {
         break;
     }
     stream.levels_[stream.depth_ - 1].pos = next;
+    return Step::next;
+}
+
+// The CE side of a packet. On `next` the stream has moved past it; otherwise it stays there.
+Parser::Step Parser::execute_constant(Stream& stream, const Packet& packet, bool& handled) {
+    const std::uint32_t* const next = packet.body.data() + packet.body.size();
+    switch (packet.opcode()) {
+    case IT_NOP:
+    case IT_REWIND__CI__VI:
+    case IT_WRITE_DATA:
+        handled = false;
+        return Step::next;
+    case IT_WRITE_CONST_RAM: {
+        // The byte offset in bits 0-15 (bits 0-1 ignored), then the dwords to write.
+        if (body_too_short(packet, 1)) {
+            return Step::fail;
+        }
+        const std::uint32_t offset = packet.body[0] & 0xFFFC;
+        const auto data = packet.body.subspan(1);
+        if (!in_ce_ram(offset, data.size_bytes())) {
+            return Step::fail;
+        }
+        std::ranges::copy(data, ce_ram_.begin() + offset / 4);
+        break;
+    }
+    case IT_DUMP_CONST_RAM: {
+        const Step step = dump_const_ram(packet);
+        if (step != Step::next) {
+            return step;
+        }
+        break;
+    }
+    case IT_INCREMENT_CE_COUNTER:
+        // CNTRSEL in bits 0-1: bit 0 selects the CE counter, bit 1 the CS partition counter,
+        // which nothing waits on here.
+        if (body_too_short(packet, 1)) {
+            return Step::fail;
+        }
+        if ((packet.body[0] & 1) != 0) {
+            ++ce_counter_;
+        }
+        break;
+    case IT_WAIT_ON_DE_COUNTER_DIFF: {
+        // The CE waits while it is `diff` or more increments ahead of the DE.
+        if (body_too_short(packet, 1)) {
+            return Step::fail;
+        }
+        const std::int32_t ahead = counter_diff(ce_counter_, de_counter_);
+        if (ahead >= 0 && static_cast<std::uint32_t>(ahead) >= packet.body[0]) {
+            return Step::wait;
+        }
+        break;
+    }
+    case IT_INDIRECT_BUFFER_CNST:
+        // The same body as INDIRECT_BUFFER; the game's writer sets the chain bit like the DCB's.
+        return body_too_short(packet, 3) ? Step::fail : indirect_buffer(stream, packet);
+    default:
+        if (!known_opcode(packet.opcode())) {
+            handled = false;  // logged as unknown
+            return Step::next;
+        }
+        if (!logged_ce_opcodes_[packet.opcode()]) {
+            logged_ce_opcodes_[packet.opcode()] = true;
+            common::log(common::LogLevel::warn, channel,
+                        "constant engine skips opcode {:#04x} (header {:#010x})",
+                        packet.opcode(), packet.header);
+        }
+        break;
+    }
+    stream.levels_[stream.depth_ - 1].pos = next;
+    return Step::next;
+}
+
+// DUMP_CONST_RAM: the CE RAM byte offset in bits 0-15 (bits 0-1 ignored), the dword count in bits
+// 0-14, then the destination address low (bits 2-31) and high. The destination is checked with
+// `readable` (the guest mappings).
+Parser::Step Parser::dump_const_ram(const Packet& packet) {
+    if (body_too_short(packet, 4)) {
+        return Step::fail;
+    }
+    const std::uint32_t offset = packet.body[0] & 0xFFFC;
+    const std::size_t bytes = std::size_t{packet.body[1] & 0x7FFF} * 4;
+    auto* const dest = reinterpret_cast<std::uint32_t*>(std::uint64_t{packet.body[3]} << 32 |
+                                                        (packet.body[2] & ~3u));
+    if (!in_ce_ram(offset, bytes)) {
+        return Step::fail;
+    }
+    if (bytes != 0 && readable_ && !readable_(dest, bytes)) {
+        common::log(common::LogLevel::error, channel, "CE RAM dump to {} of {} bytes unmapped",
+                    static_cast<const void*>(dest), bytes);
+        return Step::fail;
+    }
+    std::copy_n(ce_ram_.begin() + offset / 4, bytes / 4, dest);
     return Step::next;
 }
 
