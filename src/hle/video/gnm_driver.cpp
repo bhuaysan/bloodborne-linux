@@ -1,5 +1,5 @@
-// The GPU submit calls of libSceGnmDriver. The submits queue their draw command buffers on the
-// GPU thread (docs/design/graphics.md, "One GPU thread"). The stage registers are in
+// The GPU submit calls of libSceGnmDriver. The submits queue their draw and constant command
+// buffers on the GPU thread (docs/design/graphics.md, "One GPU thread"). The stage registers are in
 // gnm_shader.cpp, the default state, markers and profiling queries in gnm_state.cpp; the other
 // imports stay stubs.
 #include <atomic>
@@ -22,7 +22,6 @@ constexpr std::uint64_t logged_submits = 3;
 
 std::atomic<std::uint64_t> submits{0};
 std::atomic<std::int32_t> compute_queues{0};
-std::atomic<bool> logged_ccb{false};
 
 bool guest_readable(const void* address, std::size_t bytes) {
     const auto start = reinterpret_cast<std::uintptr_t>(address);
@@ -37,9 +36,23 @@ void log_submit(std::string_view call, std::uint32_t count, const std::uint32_t*
                 count, count > 0 && draw_sizes != nullptr ? draw_sizes[0] : 0);
 }
 
-// Queues the draw command buffers on the graphics queue. A buffer outside the guest mappings or
-// with a size that isn't whole dwords is logged and left out. The constant command buffers wait
-// for the constant engine (#272).
+// Whether the buffer at `address` of `bytes` bytes can be queued: whole dwords in guest memory.
+// Logs if not.
+bool queueable(std::string_view call, std::string_view kind, std::uint32_t i,
+               std::uint64_t address, std::uint32_t bytes) {
+    if (bytes % 4 == 0 && guest_readable(reinterpret_cast<const void*>(address), bytes)) {
+        return true;
+    }
+    common::log(common::LogLevel::warn, channel,
+                "{}: {} {} at {:#x}, {:#x} bytes, is not readable guest memory", call, kind, i,
+                address, bytes);
+    return false;
+}
+
+// Queues the draw command buffers on the graphics queue and the constant command buffers on the
+// constant queue. A buffer outside the guest mappings or with a size that isn't whole dwords is
+// logged and left out together with the other buffer of its pair, whose counters would otherwise
+// wait for packets that never run.
 void queue_buffers(std::string_view call, std::uint32_t count, const std::uint64_t* draw,
                    const std::uint32_t* draw_sizes, const std::uint64_t* ccb,
                    const std::uint32_t* ccb_sizes) {
@@ -47,28 +60,30 @@ void queue_buffers(std::string_view call, std::uint32_t count, const std::uint64
     if (draw == nullptr || draw_sizes == nullptr) {
         count = 0;
     }
-    std::vector<std::span<const std::uint32_t>> buffers;
+    if (ccb == nullptr || ccb_sizes == nullptr) {
+        ccb = nullptr;
+    }
+    std::vector<std::span<const std::uint32_t>> draws;
+    std::vector<std::span<const std::uint32_t>> constants;
     for (std::uint32_t i = 0; i < count; ++i) {
-        const auto* start = reinterpret_cast<const std::uint32_t*>(draw[i]);
-        const std::uint32_t bytes = draw_sizes[i];
-        if (bytes == 0) {
+        const std::uint32_t draw_bytes = draw_sizes[i];
+        const std::uint32_t ccb_bytes = ccb != nullptr && ccb[i] != 0 ? ccb_sizes[i] : 0;
+        if ((draw_bytes != 0 && !queueable(call, "buffer", i, draw[i], draw_bytes)) ||
+            (ccb_bytes != 0 && !queueable(call, "constant buffer", i, ccb[i], ccb_bytes))) {
             continue;
         }
-        if (bytes % 4 != 0 || !guest_readable(start, bytes)) {
-            common::log(common::LogLevel::warn, channel,
-                        "{}: buffer {} at {:#x}, {:#x} bytes, is not readable guest memory", call,
-                        i, draw[i], bytes);
-            continue;
+        if (draw_bytes != 0) {
+            draws.emplace_back(reinterpret_cast<const std::uint32_t*>(draw[i]), draw_bytes / 4);
         }
-        buffers.emplace_back(start, bytes / 4);
-        if (ccb != nullptr && ccb_sizes != nullptr && ccb[i] != 0 && ccb_sizes[i] != 0 &&
-            !logged_ccb.exchange(true, std::memory_order_relaxed)) {
-            common::log(common::LogLevel::warn, channel,
-                        "{}: constant command buffers are not run yet", call);
+        if (ccb_bytes != 0) {
+            constants.emplace_back(reinterpret_cast<const std::uint32_t*>(ccb[i]), ccb_bytes / 4);
         }
     }
-    if (!buffers.empty()) {
-        gpu_thread().submit(pm4::Queue::graphics, buffers);
+    if (!constants.empty()) {
+        gpu_thread().submit(pm4::Queue::constant, constants);
+    }
+    if (!draws.empty()) {
+        gpu_thread().submit(pm4::Queue::graphics, draws);
     }
 }
 

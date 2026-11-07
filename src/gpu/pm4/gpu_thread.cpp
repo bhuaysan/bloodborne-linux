@@ -43,7 +43,8 @@ void GpuThread::submit(Queue queue, std::span<const std::span<const std::uint32_
     {
         const std::scoped_lock lock(mutex_);
         for (const auto buffer : buffers) {
-            queues_[static_cast<std::size_t>(queue)].emplace_back(buffer);
+            queues_[static_cast<std::size_t>(queue)].emplace_back(
+                buffer, queue == Queue::constant ? Engine::constant : Engine::draw);
         }
         stats_.submitted += buffers.size();
     }

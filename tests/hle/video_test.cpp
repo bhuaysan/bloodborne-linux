@@ -267,6 +267,45 @@ TEST(HleVideo, GnmSubmitsQueueGuestBuffersOnTheGpuThread) {
     EXPECT_EQ(vmem::unmap(base, vmem::page_size), 0);
 }
 
+// A CCB runs on the constant queue beside its DCB; a pair with an unreadable buffer is left out.
+TEST(HleVideo, GnmSubmitsRunConstantCommandBuffers) {
+    namespace vmem = bb::hle::kernel::vmem;
+    vmem::Mapping m;
+    m.length = vmem::page_size;
+    m.prot = PROT_READ | PROT_WRITE;
+    m.host_flags = MAP_PRIVATE | MAP_ANONYMOUS;
+    std::uintptr_t base = 0;
+    ASSERT_EQ(vmem::map(m, base), 0);
+    auto* dwords = reinterpret_cast<std::uint32_t*>(base);
+    const auto out = base + 0x100;  // where the CCB dumps CE RAM
+    // DCB (7 dwords): WAIT_ON_CE_COUNTER, SET_CONTEXT_REG 0xA302 = 4, INCREMENT_DE_COUNTER.
+    // CCB (10 dwords): WRITE_CONST_RAM, DUMP_CONST_RAM to `out`, INCREMENT_CE_COUNTER.
+    const std::array<std::uint32_t, 17> streams{
+        bb::pm4::type3_header(IT_WAIT_ON_CE_COUNTER, 1), 1,
+        bb::pm4::type3_header(IT_SET_CONTEXT_REG, 2), 0x302, 4,
+        bb::pm4::type3_header(IT_INCREMENT_DE_COUNTER, 1), 1,
+        bb::pm4::type3_header(IT_WRITE_CONST_RAM, 2), 0x20, 0x5A,
+        bb::pm4::type3_header(IT_DUMP_CONST_RAM, 4), 0x20, 1, static_cast<std::uint32_t>(out),
+        static_cast<std::uint32_t>(out >> 32),
+        bb::pm4::type3_header(IT_INCREMENT_CE_COUNTER, 1), 1};
+    std::memcpy(dwords, streams.data(), sizeof streams);
+    const std::array<std::uint64_t, 2> draw{base, base};
+    const std::array<std::uint32_t, 2> draw_sizes{28, 28};
+    const std::array<std::uint64_t, 2> ccb{base + 28, 0x10};  // the second is unmapped
+    const std::array<std::uint32_t, 2> ccb_sizes{40, 40};
+
+    ASSERT_TRUE(gpu_thread().wait_idle(5s));
+    const bb::pm4::GpuThread::Stats before = gpu_thread().stats();
+    EXPECT_EQ(gnm_submit(2, draw.data(), draw_sizes.data(), ccb.data(), ccb_sizes.data()), 0);
+    ASSERT_TRUE(gpu_thread().wait_idle(5s));
+    EXPECT_EQ(gpu_thread().registers().get(0xA302), 4u);
+    EXPECT_EQ(dwords[0x40], 0x5Au);
+    const bb::pm4::GpuThread::Stats after = gpu_thread().stats();
+    EXPECT_EQ(after.submitted - before.submitted, 2u);
+    EXPECT_EQ(after.errors, before.errors);
+    EXPECT_EQ(vmem::unmap(base, vmem::page_size), 0);
+}
+
 // Each map hands out a new, positive id: the game treats 0 as a failed map (0x108c7b0).
 TEST(HleVideo, MappingComputeQueuesHandsOutPositiveIds) {
     std::array<std::uint32_t, 0x400> ring{};

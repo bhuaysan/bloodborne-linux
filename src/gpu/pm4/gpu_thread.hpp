@@ -5,8 +5,9 @@
 // round, so a wait on one queue doesn't hold up the others. When every queue is empty or waiting,
 // the thread sleeps until a submission arrives, or polls the waits every 100 µs.
 //
-// The graphics queue is the only queue so far. The CCB stream (#272) and the compute rings
-// (#275) become further queues.
+// The graphics queue runs draw command buffers on the draw engine, the constant queue constant
+// command buffers on the constant engine; the counters in the parser order the two. The compute
+// rings (#275) become further queues.
 #pragma once
 
 #include <array>
@@ -24,8 +25,8 @@
 
 namespace bb::pm4 {
 
-enum class Queue : std::uint8_t { graphics };
-inline constexpr std::size_t queue_count = 1;
+enum class Queue : std::uint8_t { graphics, constant };
+inline constexpr std::size_t queue_count = 2;
 
 class GpuThread {
 public:
@@ -57,6 +58,8 @@ public:
 
     // The register mirror. Read it only after wait_idle returned true and before the next submit.
     const RegisterMirror& registers() const { return regs_; }
+    // The parser, with CE RAM and the counters. The same rule as for registers().
+    const Parser& parser() const { return parser_; }
 
 private:
     void loop();

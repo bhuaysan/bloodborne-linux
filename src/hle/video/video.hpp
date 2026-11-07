@@ -96,9 +96,9 @@ std::int32_t sceVideoOutGetFlipStatus(std::int32_t handle, void* status);
 inline constexpr std::size_t flip_count_offset = 0x18;
 
 // libSceGnmDriver. The submits queue each draw command buffer (DCB) that lies in guest memory and
-// is whole dwords long as one stream on the graphics queue of gpu_thread(); others are logged and
-// left out. Constant command buffers (CCB) are logged once and not run until the constant engine
-// (#272). The submits return before the GPU thread runs the buffers.
+// is whole dwords long as one stream on the graphics queue of gpu_thread(), and each constant
+// command buffer (CCB) as one stream on its constant queue; a pair with a buffer that doesn't
+// qualify is logged and left out. The submits return before the GPU thread runs the buffers.
 
 // The GPU thread, started on first use. INDIRECT_BUFFER targets are checked against the guest
 // mappings.
