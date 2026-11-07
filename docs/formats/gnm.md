@@ -147,7 +147,7 @@ The submit calls take a CCB beside each DCB (address NULL and size 0 when a chun
 | Import | Arguments | Use |
 |---|---|---|
 | `zwY0YV91TTI` | `(count, dcb addresses[], dcb sizes in bytes[], ccb addresses[], ccb sizes in bytes[])` | Submit. 12 call sites, for example 0x11faff0 and 0x11fb2c0 (which returns the result) and the replay at 0x26bb730 (which ignores it) |
-| `iCO804ZgzdA` | Same as above | A second submit with the same arguments. At renderer start-up (0x216b1a2 → 0x26bb8e0) the game submits a one-dword DCB (the type-2 filler) through it and enables an optional feature only if the result is not `0x80d13fff`. Other callers: 0x11fb340, 0x11fc290 and two in 0x1094ad0/0x1096470 |
+| `iCO804ZgzdA` | Same as above | `sceGnmValidateCommandBuffers` (`symbols/nids.csv`): validates the buffers instead of submitting them; its wrapper 0x11fb340 is the validate twin of the submit wrapper 0x11fb2c0. The HLE returns `0x80d13fff` (validation not enabled) and queues nothing ([graphics.md](../design/graphics.md), item 18). At renderer start-up (0x216b1a2 → 0x26bb8e0) the game submits a one-dword DCB (the type-2 filler) through it and enables an optional feature only if the result is not `0x80d13fff`. Other callers: 0x11fb340, 0x11fc290 and two in 0x1094ad0/0x1096470 |
 | `xbxNatawohc` | `(count, dcb addresses[], dcb sizes[], ccb addresses[], ccb sizes[], video-out handle, buffer index, flip mode, 64-bit flip argument)`, the last three on the stack | Submit and flip. 8 call sites; the frame end at 0x26b0ce0 and 0x26b0e30 passes NULL CCB arrays and 1 or 2 DCBs |
 | `yvZ73uQUqrk` | `()` | Called right after every submit-and-flip at 0x26b0e04 and 0x26b0ee7; result ignored |
 
@@ -259,7 +259,7 @@ What this means for the translator:
 | `jiItzS6+22g` | 0x1077470, 0x108ae10 | `(cursor, dwords, string)` → 0 on success | Single debug marker with a string, sized like `W1Etj-jlW7Y` |
 | `1qXLHIpROPE` | 0x1078440, called once by the replay 0x11fde00 | `(cursor, 7, u32, u32)`, result ignored | Writes 7 dwords from two integers. Not yet understood; 7 dwords is the size of a `WAIT_REG_MEM`, so it may be a wait on a video-out buffer |
 | `zwY0YV91TTI` | thunk 0x1089a10 | see [submission](#graphics) | Submit DCB/CCB pairs |
-| `iCO804ZgzdA` | thunk 0x1089a30 | see above | Second submit; `0x80d13fff` means unavailable to the start-up probe |
+| `iCO804ZgzdA` | thunk 0x1089a30 | see above | `sceGnmValidateCommandBuffers`; `0x80d13fff` (validation not enabled) keeps the start-up probe's feature off |
 | `xbxNatawohc` | thunk 0x1089a20 | see above | Submit and flip |
 | `yvZ73uQUqrk` | thunk 0x1089b50 | `()` | Called after each submit-and-flip; has a name in `symbols/nids.csv` |
 | `29oKvKXzEZo` | wrapper 0x1089a80 | see [compute queues](#compute-queues) | Map compute queue |
@@ -290,7 +290,7 @@ The HLE registers these as logging stubs.
 - ~~**Register blocks of the stage writers.**~~ Answered in #271: the layouts are in [graphics.md](../design/graphics.md#decisions) ("Stage register imports"), checked against the shader files, whose entry header holds the shader object from 0x34 ([shader-binary.md](shader-binary.md#entry-header)).
 - **Opcodes 0x8C, 0x8D.** AMD's opcode header does not name them, so they stay unnamed (likely Sony-specific). 0x8C/0x8D come in pairs with compute-side writers whose bodies differ from the graphics ones, and 0x8D sits where a draw sits; they may belong to a draw path that uses a compute command buffer. Next step: count them in captured streams once the game runs, and log each opcode once as the design says.
 - **Field layouts.** The packet names are checked (see the top of this note). The field layouts of the packets the SI guide doesn't describe (`RELEASE_MEM`, `DMA_DATA`, `ACQUIRE_MEM`, `REWIND`, `SET_QUEUE_REG`, `SET_UCONFIG_REG`, the two `*_MULTI` draws) still need a source; the opcode header has none. Uconfig register 0x200 is `GRBM_GFX_INDEX` (`si_ci_vi_merged_offset.h`). Event type 0x35 stays unnamed (the headers hold no event types).
-- **`iCO804ZgzdA`'s start-up probe.** Find what the renderer flag at +0x121 (set at 0x216b1b3) switches before choosing the HLE result. Returning `0x80d13fff` keeps the feature off, which is the safer first choice.
+- ~~**`iCO804ZgzdA`'s start-up probe.**~~ Answered in #273: the import is `sceGnmValidateCommandBuffers`, and the HLE returns `0x80d13fff` (validation not enabled, as on retail firmware) and queues nothing, so the feature behind the renderer flag at +0x121 (set at 0x216b1b3) stays off ([graphics.md](../design/graphics.md), item 18).
 - **`1qXLHIpROPE`, `TLV4mswiZ4A`, `ln33zjBrfjk`.** Roles above are partial. Each is called once or twice; a runtime log of their arguments once the renderer starts will settle them.
 - **Reading the driver HLE code of an emulator** would answer the dword layouts directly. Since 2026-11-06 the source policy allows it.
 
