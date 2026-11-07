@@ -27,6 +27,7 @@
 #include "gpu/gcn/descriptors.hpp"
 #include "gpu/gcn/fetch.hpp"
 #include "gpu/gcn/gcn.hpp"
+#include "gpu/gcn/image.hpp"
 #include "gpu/gcn/lds.hpp"
 #include "gpu/gcn/spirv_builder.hpp"
 #include "gpu/gcn/stages.hpp"
@@ -233,7 +234,8 @@ public:
           program_(decode(code)),
           fetch_(key.stage == Stage::vertex ? detail::inline_fetch(program_, fetch)
                                             : detail::FetchSite{}),
-          cfg_(build_cfg(program_)) {}
+          cfg_(build_cfg(program_)),
+          image_sources_(find_image_sources(program_, cfg_, user_sgprs())) {}
 
     Translation run() {
         check_key();
@@ -257,6 +259,8 @@ public:
                     {.body = [this](std::uint32_t block) { body(block); },
                      .condition = [this](std::uint32_t block) { return condition(block); }});
         b_.end_function();
+        interface_.insert(interface_.end(), images_.interface().begin(),
+                          images_.interface().end());
         if (graphics()) {
             interface_.insert(interface_.end(), stage_.interface().begin(),
                               stage_.interface().end());
@@ -278,6 +282,8 @@ public:
         float_modes(main);
         return {b_.words(),
                 {.buffers = find_buffer_sources(program_, cfg_, user_sgprs()),
+                 .images = image_sources_.images,
+                 .samplers = image_sources_.samplers,
                  .wave_size_dependent = wave_size_dependent_,
                  .mask_round_trip = round_trip()}};
     }
@@ -468,6 +474,9 @@ private:
                 break;
             case Format::ds:
                 ds(inst);
+                break;
+            case Format::mimg:
+                images_.translate(inst, i);
                 break;
             case Format::exp:
                 stage_.exp(inst);
@@ -2261,8 +2270,10 @@ private:
     std::vector<Instruction> program_;
     detail::FetchSite fetch_;
     Cfg cfg_;
+    ImageSources image_sources_;
     SpirvBuilder b_;
     detail::StageIo stage_{b_, key_, *this};
+    detail::ImageOps images_{b_, key_, *this, image_sources_};
     detail::Alu alu_{b_};
     Id bool_ = 0, u32_ = 0, u64_ = 0;
     Id lane_ = 0, bias_ = 0, lds_ = 0;
