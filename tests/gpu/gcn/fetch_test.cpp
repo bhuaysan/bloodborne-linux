@@ -106,6 +106,9 @@ TEST(GcnFetch, VertexShaderTranslates) {
     // The fetch subroutine's V# is found like the program's own: the pointer in s[2:3], dword 0.
     EXPECT_EQ(translation.interface.buffers,
               (std::vector<ResourceSource>{{.path = {2, 0}}}));
+    // The pipeline cache compares the fetch address only for a program with the call.
+    EXPECT_TRUE(translation.interface.calls_fetch);
+    EXPECT_FALSE(translate(Words{s_nop, s_endpgm}, fetch, vertex_key).interface.calls_fetch);
     // The fetch code may end anywhere after its return.
     const Words longer = cat({fetch, {s_endpgm, 0}});
     EXPECT_EQ(translate(vs, longer, vertex_key).spirv, translation.spirv);

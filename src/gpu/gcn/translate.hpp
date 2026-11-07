@@ -123,6 +123,8 @@ struct ShaderInterface {
     // VCC or an SGPR mask pair is written as a value and read back as a value (flow-insensitive).
     // The value survives only in 64-lane subgroups: smaller ones lose the other lanes' bits.
     bool mask_round_trip = false;
+    // The vertex stage's program calls the fetch subroutine (s_swappc_b64), which was inlined.
+    bool calls_fetch = false;
 };
 
 struct Translation {

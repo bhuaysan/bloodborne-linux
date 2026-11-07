@@ -286,7 +286,8 @@ public:
                  .images = image_sources_.images,
                  .samplers = image_sources_.samplers,
                  .wave_size_dependent = wave_size_dependent_,
-                 .mask_round_trip = round_trip()}};
+                 .mask_round_trip = round_trip(),
+                 .calls_fetch = fetch_.call != detail::FetchSite::none}};
     }
 
 private:
