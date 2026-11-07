@@ -116,6 +116,28 @@ TEST(KernelDmem, TwoMappingsOfOneRangeAlias) {
     EXPECT_EQ(release_direct(offset, 2 * page_size), 0);
 }
 
+// Mappings keep window offset ≡ direct memory offset (mod mirror_block), which the GPU memory
+// mirror binds by, also for a page in the middle of a block and when a hint asks elsewhere.
+TEST(KernelDmem, MappingsAreCongruentToTheirOffsetModTheMirrorBlock) {
+    const std::uint64_t offset = allocate(4 * page_size, dmem::mirror_block);
+    std::vector<void*> views;
+    for (std::uint64_t k = 0; k < 4; ++k) {
+        void* p = reinterpret_cast<void*>(vmem::window_start + 0x10'0000'0000 + page_size);
+        ASSERT_EQ(map_direct(&p, page_size, 3, 0, offset + k * page_size, 0), 0);
+        EXPECT_EQ((addr(p) - vmem::window_start) % dmem::mirror_block, k * page_size) << k;
+        views.push_back(p);
+    }
+    // An alignment above the page keeps it where it can: 32 KiB-aligned at offset 2 pages.
+    void* p = nullptr;
+    ASSERT_EQ(map_direct(&p, page_size, 3, 0, offset + 2 * page_size, 2 * page_size), 0);
+    EXPECT_EQ(addr(p) % dmem::mirror_block, 2 * page_size);
+    views.push_back(p);
+    for (void* const v : views) {
+        EXPECT_EQ(sceKernelMunmap(v, page_size), 0);
+    }
+    EXPECT_EQ(release_direct(offset, 4 * page_size), 0);
+}
+
 TEST(KernelDmem, MapRefusesBadArguments) {
     const std::uint64_t offset = allocate(page_size, 0);
     void* p = nullptr;

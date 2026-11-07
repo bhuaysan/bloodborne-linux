@@ -15,6 +15,11 @@ inline constexpr std::uint64_t total_size = std::uint64_t{8} << 30;
 // meaning is unknown; it is accepted and ignored.
 inline constexpr int map_flag_0x80 = 0x80;
 
+// The binding block of the GPU memory mirror (docs/design/graphics.md, "GPU memory mirror"): the
+// largest sparse buffer granularity of the drivers checked (RADV). map_direct places a mapping at
+// an address ≡ its offset (mod mirror_block), so that the mirror can bind the memfd's blocks.
+inline constexpr std::uint64_t mirror_block = 0x10000;
+
 // The operations of a BatchEntry.
 inline constexpr std::int32_t batch_map = 0;    // map the offset range into a reservation
 inline constexpr std::int32_t batch_unmap = 1;  // unmap the range back into a reservation

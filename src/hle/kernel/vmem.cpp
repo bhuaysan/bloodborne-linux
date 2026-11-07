@@ -206,17 +206,20 @@ bool free_range(std::uintptr_t start, std::uintptr_t end) {
     return !taken_until(start, end);
 }
 
-// The lowest `alignment`-aligned start of `length` free bytes (free_range) in the window at or
-// above `low`. Needs table_mutex.
+// The lowest start of `length` free bytes (free_range) in the window at or above `low` that is
+// `residue` modulo `alignment`. Needs table_mutex.
 std::optional<std::uintptr_t> find_free(std::uintptr_t low, std::uint64_t length,
-                                        std::uint64_t alignment) {
-    std::uintptr_t at = align_up(std::max(low, window_start), alignment);
+                                        std::uint64_t alignment, std::uint64_t residue = 0) {
+    const auto next = [&](std::uintptr_t from) {
+        return align_up(std::max(from, window_start) - residue, alignment) + residue;
+    };
+    std::uintptr_t at = next(low);
     while (at < window_end && window_end - at >= length) {
         const std::optional<std::uintptr_t> taken = taken_until(at, at + length);
         if (!taken) {
             return at;
         }
-        at = align_up(*taken, alignment);
+        at = next(*taken);
     }
     return std::nullopt;
 }
@@ -253,12 +256,20 @@ void* map_host_placed(const Mapping& m, int prot) {
 // Maps at the lowest free aligned address in the window, at or above the hint if it lies there.
 // Returns the address, or MAP_FAILED with errno set. Needs table_mutex.
 void* map_in_window(const Mapping& m, int prot) {
+    std::uint64_t alignment = m.alignment, residue = 0;
+    if (m.congruent != 0 && m.offset % std::min(m.congruent, alignment) != 0) {
+        log(LogLevel::warn, "map at offset {:#x} aligned to {:#x}: not congruent mod {:#x}",
+            m.offset, alignment, m.congruent);
+    } else if (m.congruent > alignment) {
+        residue = m.offset % m.congruent;
+        alignment = m.congruent;
+    }
     std::optional<std::uintptr_t> at;
     if (in_window(m.address, m.address + 1)) {
-        at = find_free(m.address, m.length, m.alignment);
+        at = find_free(m.address, m.length, alignment, residue);
     }
     if (!at) {
-        at = find_free(window_start, m.length, m.alignment);
+        at = find_free(window_start, m.length, alignment, residue);
     }
     if (!at) {
         log(LogLevel::warn, "guest window: no {:#x} bytes aligned to {:#x} free", m.length,

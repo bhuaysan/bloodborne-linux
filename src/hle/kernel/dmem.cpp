@@ -292,6 +292,7 @@ std::int32_t map_direct(void** address, std::uint64_t length, int prot, int flag
     vmem::Mapping m =
         direct_mapping(reinterpret_cast<std::uintptr_t>(*address), length, prot, offset);
     m.alignment = *align;
+    m.congruent = mirror_block;
     std::uintptr_t out = 0;
     if (const int error = vmem::map(m, out)) {
         return sce_fail(error);

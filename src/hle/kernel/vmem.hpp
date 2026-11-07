@@ -67,6 +67,9 @@ struct Mapping {
     std::uint32_t flags = region_anonymous;  // Region::flags
     std::uint64_t offset = 0;                // Region::offset
     std::uint64_t alignment = page_size;     // of the address the runtime picks: a power of two
+    // A power of two or 0. The address the runtime picks in the window is ≡ `offset` (mod
+    // congruent) where `alignment` allows it; where it doesn't, that is logged.
+    std::uint64_t congruent = 0;
     std::string name;
 };
 
