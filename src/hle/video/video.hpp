@@ -1,9 +1,8 @@
 // Video out and GPU submission (docs/design/m3-core-os.md, "Video out without a GPU").
 // Ports open and take buffers, and a submitted flip completes at the next 1/60 s tick: its flip
 // count goes up, the flip observer (if any) presents it, and every queue registered for the
-// port's flip event gets an event. The GPU
-// submit calls succeed at once and run nothing. M4 replaces the submit side with command buffer
-// translation and presents the registered buffers.
+// port's flip event gets an event. The GPU submit calls queue their draw command buffers on the
+// GPU thread (gpu_thread()), which parses them; nothing is drawn yet.
 //
 // Addresses in the comments are the eboot call sites whose use fixed each result. Two code paths
 // drive video out: 0x11e488e..0x11e4915 (open, flip event, two 1920x1080 buffers) with flips
@@ -15,6 +14,8 @@
 
 #include <chrono>
 #include <cstdint>
+
+#include "gpu/pm4/gpu_thread.hpp"
 
 namespace bb::hle::video {
 
@@ -94,29 +95,41 @@ void set_flip_observer(FlipObserver observer);
 std::int32_t sceVideoOutGetFlipStatus(std::int32_t handle, void* status);
 inline constexpr std::size_t flip_count_offset = 0x18;
 
-// libSceGnmDriver. Each call reports success and nothing runs: command buffers and rings are M4.
+// libSceGnmDriver. The submits queue each draw command buffer (DCB) that lies in guest memory and
+// is whole dwords long as one stream on the graphics queue of gpu_thread(); others are logged and
+// left out. Constant command buffers (CCB) are logged once and not run until the constant engine
+// (#272). The submits return before the GPU thread runs the buffers.
+
+// The GPU thread, started on first use. INDIRECT_BUFFER targets are checked against the guest
+// mappings.
+pm4::GpuThread& gpu_thread();
 
 // NID zwY0YV91TTI, sceGnmSubmitCommandBuffers. Submits `count` draw command buffers (addresses and
-// sizes in bytes) and as many optional second buffers (null at 0x26b0c23). Called from 12 sites,
-// e.g. 0x1094a02 and 0x26b0c23. Returns 0.
+// sizes in bytes) and as many optional constant command buffers (null at 0x26b0c23). Called from
+// 12 sites, e.g. 0x1094a02 and 0x26b0c23. Returns 0.
 std::int32_t gnm_submit(std::uint32_t count, const std::uint64_t* draw,
-                        const std::uint32_t* draw_sizes, const std::uint64_t* second,
-                        const std::uint32_t* second_sizes);
+                        const std::uint32_t* draw_sizes, const std::uint64_t* ccb,
+                        const std::uint32_t* ccb_sizes);
+
+// What sceGnmValidateCommandBuffers returns: validation is not enabled (as on retail firmware).
+inline constexpr std::int32_t validation_not_enabled = static_cast<std::int32_t>(0x80d13fffu);
 
 // NID iCO804ZgzdA, sceGnmValidateCommandBuffers. The same arguments as gnm_submit (0x1094c2f,
-// 0x26bb94b). 0x26bb950 treats every result but 0x80d13fff as success. Returns 0.
+// 0x26bb94b). Queues nothing and returns validation_not_enabled, which keeps the feature of the
+// start-up probe at 0x26bb950 off (docs/formats/gnm.md): its wrapper 0x11fb340 is the validate
+// twin of the submit wrapper 0x11fb2c0, so queueing here could run buffers twice.
 std::int32_t gnm_submit_other(std::uint32_t count, const std::uint64_t* draw,
-                              const std::uint32_t* draw_sizes, const std::uint64_t* second,
-                              const std::uint32_t* second_sizes);
+                              const std::uint32_t* draw_sizes, const std::uint64_t* ccb,
+                              const std::uint32_t* ccb_sizes);
 
 // NID xbxNatawohc, sceGnmSubmitAndFlipCommandBuffers. gnm_submit followed by
 // sceVideoOutSubmitFlip(handle, index, mode, arg). It has 8 call sites (0x1094f98, 0x10953a8,
 // 0x1096775, 0x109c300, 0x11fb4f8, 0x11fb644, 0x26b0dff, 0x26b0ee2); 0x26b0dd5..0x26b0dff,
 // 0x26b0eba..0x26b0ee2 and 0x1094f98 pass the port handle in r9 and the rest on the stack. Returns
-// the flip's result.
+// the flip's result. The flip doesn't wait for the GPU thread yet: nothing is presented.
 std::int32_t gnm_submit_and_flip(std::uint32_t count, const std::uint64_t* draw,
-                                 const std::uint32_t* draw_sizes, const std::uint64_t* second,
-                                 const std::uint32_t* second_sizes, std::int32_t handle,
+                                 const std::uint32_t* draw_sizes, const std::uint64_t* ccb,
+                                 const std::uint32_t* ccb_sizes, std::int32_t handle,
                                  std::int32_t index, std::int32_t mode, std::int64_t arg);
 
 // NID 29oKvKXzEZo, sceGnmMapComputeQueue. Maps a compute queue on the game's ring
@@ -128,7 +141,8 @@ std::int32_t gnm_submit_and_flip(std::uint32_t count, const std::uint64_t* draw,
 std::int32_t gnm_map_compute_queue(std::uint32_t, std::uint32_t, const void* ring,
                                    std::uint32_t ring_dwords, std::uint32_t* read_pointer);
 
-// Returns 0. Called through 0x1089b50 after the submit-and-flip at 0x26b0dff and 0x26b0ee2.
+// Returns 0 and does nothing else: the GPU thread needs no signal that a frame's submissions are
+// complete. Called through 0x1089b50 after the submit-and-flip at 0x26b0dff and 0x26b0ee2.
 std::int32_t sceGnmSubmitDone();
 
 }  // namespace bb::hle::video

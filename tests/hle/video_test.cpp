@@ -1,5 +1,7 @@
 #include "hle/video/video.hpp"
 
+#include <sys/mman.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -14,6 +16,7 @@
 
 #include "hle/hle.hpp"
 #include "hle/kernel/equeue.hpp"
+#include "hle/kernel/vmem.hpp"
 #include "hle/video/gnm_shader.hpp"
 #include "loader/image.hpp"
 #include "loader/relocate.hpp"
@@ -206,10 +209,11 @@ TEST(HleVideo, FlipReachesOnlyItsPortsQueues) {
 }
 
 TEST(HleVideo, GnmSubmitsSucceedAndSubmitAndFlipFlips) {
-    const std::array<std::uint64_t, 2> buffers{0x20000000, 0x20010000};
+    const std::array<std::uint64_t, 2> buffers{0x20000000, 0x20010000};  // unmapped: left out
     const std::array<std::uint32_t, 2> sizes{0x100, 0x40};
     EXPECT_EQ(gnm_submit(2, buffers.data(), sizes.data(), nullptr, nullptr), 0);
-    EXPECT_EQ(gnm_submit_other(1, buffers.data(), sizes.data(), nullptr, nullptr), 0);
+    EXPECT_EQ(gnm_submit_other(1, buffers.data(), sizes.data(), nullptr, nullptr),
+              validation_not_enabled);
 
     const Port port;
     EXPECT_EQ(gnm_submit_and_flip(1, buffers.data(), sizes.data(), nullptr, nullptr, port.handle,
@@ -220,6 +224,47 @@ TEST(HleVideo, GnmSubmitsSucceedAndSubmitAndFlipFlips) {
     EXPECT_EQ(w.event.detail, 1u);
     EXPECT_EQ(w.event.data, 5);
     EXPECT_EQ(flip_count(port.handle), 1u);
+}
+
+// Command buffers in guest memory run on the GPU thread; validation queues nothing.
+TEST(HleVideo, GnmSubmitsQueueGuestBuffersOnTheGpuThread) {
+    namespace vmem = bb::hle::kernel::vmem;
+    vmem::Mapping m;
+    m.length = vmem::page_size;
+    m.prot = PROT_READ | PROT_WRITE;
+    m.host_flags = MAP_PRIVATE | MAP_ANONYMOUS;
+    std::uintptr_t base = 0;
+    ASSERT_EQ(vmem::map(m, base), 0);
+    auto* dwords = reinterpret_cast<std::uint32_t*>(base);
+    // Three streams, each one SET_CONTEXT_REG of 0xA000 + offset (header, offset, value).
+    const std::array<std::array<std::uint32_t, 3>, 3> streams{{
+        {bb::pm4::type3_header(IT_SET_CONTEXT_REG, 2), 0x300, 1},
+        {bb::pm4::type3_header(IT_SET_CONTEXT_REG, 2), 0x301, 2},
+        {bb::pm4::type3_header(IT_SET_CONTEXT_REG, 2), 0x300, 3},
+    }};
+    std::memcpy(dwords, streams.data(), sizeof streams);
+    const std::array<std::uint64_t, 3> buffers{base, base + 12, base + 24};
+    const std::array<std::uint32_t, 3> sizes{12, 12, 12};
+
+    ASSERT_TRUE(gpu_thread().wait_idle(5s));
+    const bb::pm4::GpuThread::Stats before = gpu_thread().stats();
+    EXPECT_EQ(gnm_submit_other(1, &buffers[2], &sizes[2], nullptr, nullptr),
+              validation_not_enabled);
+    EXPECT_EQ(gnm_submit(2, buffers.data(), sizes.data(), nullptr, nullptr), 0);
+    ASSERT_TRUE(gpu_thread().wait_idle(5s));
+    EXPECT_EQ(gpu_thread().registers().get(0xA300), 1u);
+    EXPECT_EQ(gpu_thread().registers().get(0xA301), 2u);
+
+    const Port port;
+    EXPECT_EQ(gnm_submit_and_flip(1, &buffers[2], &sizes[2], nullptr, nullptr, port.handle, 0, 1,
+                                  0),
+              0);
+    ASSERT_TRUE(gpu_thread().wait_idle(5s));
+    EXPECT_EQ(gpu_thread().registers().get(0xA300), 3u);
+    const bb::pm4::GpuThread::Stats after = gpu_thread().stats();
+    EXPECT_EQ(after.submitted - before.submitted, 3u);
+    EXPECT_EQ(after.errors, before.errors);
+    EXPECT_EQ(vmem::unmap(base, vmem::page_size), 0);
 }
 
 // Each map hands out a new, positive id: the game treats 0 as a failed map (0x108c7b0).
