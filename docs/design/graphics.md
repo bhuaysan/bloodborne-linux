@@ -693,7 +693,7 @@ Part 1 of #278: `src/gpu/tile/tiling.*` (`bbtile`, namespace `bb::tile`, only `b
 **Part 2 (next branch): the compute detiler and tiler on `bbvk`.** No GLSL compiler is a build dependency (glslang isn't installed), so instead of porting `tiling.comp` instruction by instruction through the SPIR-V builder, the CPU splits one level's offsets into tables per column, row and layer, and a small shader recombines them; this deviates from "Images" above, which planned the shader as an adaptation of `tiling.comp`. In every supported mode the micro tile index has the x and the y bits in separate places, so the element offset, its tile split index and the macro and micro tile offsets each split into an x part plus a y part, the pipe and bank bits into an x part XOR a y part, and the slice rotation and swizzle into a per-layer part. Each table entry is {offset, pipe_bank | split << 16}; with per-level constants `split_bytes` (the bytes of one split slice), `split_rotation` ((banks / 2 + 1) << 3), `pipe_bank_bits` (3 + log2 banks, 0 for linear and 1D levels) and its mask:
 
 ```
-split     = col[1] >> 16 + row[1] >> 16
+split     = (col[1] >> 16) + (row[1] >> 16)
 total     = col[0] + row[0] + layer[0] + split * split_bytes
 pipe_bank = (col[1] ^ row[1] ^ layer[1] ^ split * split_rotation) & pipe_bank_mask
 offset    = level.offset + (total & 255 | pipe_bank << 8 | total >> 8 << (8 + pipe_bank_bits))
