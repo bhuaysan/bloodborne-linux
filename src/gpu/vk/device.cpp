@@ -141,7 +141,7 @@ bool imports_dma_buf(VkPhysicalDevice device) {
 }
 
 // What `device` lacks of the requirements of Device::create, or nothing.
-std::optional<std::string> missing(VkPhysicalDevice device) {
+std::optional<std::string> missing(VkPhysicalDevice device, VkSurfaceKHR surface) {
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(device, &props);  // the 1.2 structures need a 1.2 device
     if (props.apiVersion < VK_API_VERSION_1_3) {
@@ -153,7 +153,11 @@ std::optional<std::string> missing(VkPhysicalDevice device) {
     std::vector<VkExtensionProperties> extensions(count);
     check(vkEnumerateDeviceExtensionProperties(device, nullptr, &count, extensions.data()),
           "vkEnumerateDeviceExtensionProperties");
-    for (const char* name : required_extensions) {
+    std::vector<const char*> names(std::begin(required_extensions), std::end(required_extensions));
+    if (surface != VK_NULL_HANDLE) {
+        names.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    }
+    for (const char* name : names) {
         if (std::none_of(extensions.begin(), extensions.end(), [&](const auto& e) {
                 return std::strcmp(e.extensionName, name) == 0;
             })) {
@@ -173,6 +177,13 @@ std::optional<std::string> missing(VkPhysicalDevice device) {
     if (!families.sparse && !families.graphics_has_sparse) {
         return "a queue family with sparse binding";
     }
+    VkBool32 presents = VK_FALSE;
+    if (surface != VK_NULL_HANDLE &&
+        (vkGetPhysicalDeviceSurfaceSupportKHR(device, *families.graphics, surface, &presents) !=
+             VK_SUCCESS ||
+         !presents)) {
+        return "presentation to the window from the graphics queue family";
+    }
     return std::nullopt;
 }
 
@@ -185,12 +196,15 @@ void check(VkResult result, const char* call) {
     }
 }
 
-std::unique_ptr<Instance> Instance::create(std::string& why) {
+std::unique_ptr<Instance> Instance::create(std::string& why,
+                                           std::span<const char* const> extensions) {
     auto app = make<VkApplicationInfo>(VK_STRUCTURE_TYPE_APPLICATION_INFO);
     app.pApplicationName = "bloodborne-linux";
     app.apiVersion = VK_API_VERSION_1_3;
     auto info = make<VkInstanceCreateInfo>(VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO);
     info.pApplicationInfo = &app;
+    info.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
+    info.ppEnabledExtensionNames = extensions.data();
     VkInstance instance = VK_NULL_HANDLE;
     if (VkResult r = vkCreateInstance(&info, nullptr, &instance); r != VK_SUCCESS) {
         why = "vkCreateInstance gave " + std::to_string(static_cast<int>(r));
@@ -243,7 +257,7 @@ std::unique_ptr<Device> Device::create(const Instance& instance, const DeviceOpt
     for (VkPhysicalDevice p : physicals) {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(p, &props);
-        candidates.push_back({props.deviceName, props.deviceType, missing(p)});
+        candidates.push_back({props.deviceName, props.deviceType, missing(p, options.surface)});
     }
     const auto chosen = choose_device(candidates, options.device, why);
     if (!chosen) {
@@ -271,8 +285,13 @@ std::unique_ptr<Device> Device::create(const Instance& instance, const DeviceOpt
     auto info = make<VkDeviceCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, &enable.features);
     info.queueCreateInfoCount = families.sparse ? 2 : 1;
     info.pQueueCreateInfos = queues;
-    info.enabledExtensionCount = std::size(required_extensions);
-    info.ppEnabledExtensionNames = required_extensions;
+    std::vector<const char*> extensions(std::begin(required_extensions),
+                                        std::end(required_extensions));
+    if (options.surface != VK_NULL_HANDLE) {
+        extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    }
+    info.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
+    info.ppEnabledExtensionNames = extensions.data();
     check(vkCreateDevice(device->physical_, &info, nullptr, &device->device_), "vkCreateDevice");
 
     device->graphics_.family = *families.graphics;

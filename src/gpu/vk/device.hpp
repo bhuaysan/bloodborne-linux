@@ -30,9 +30,10 @@ void check(VkResult result, const char* call);
 
 class Instance {
 public:
-    // A Vulkan 1.3 instance. Nothing when the loader makes none; `why` then gives the VkResult
-    // of vkCreateInstance.
-    static std::unique_ptr<Instance> create(std::string& why);
+    // A Vulkan 1.3 instance with `extensions` enabled (the surface extensions for presentation).
+    // Nothing when the loader makes none; `why` then gives the VkResult of vkCreateInstance.
+    static std::unique_ptr<Instance> create(std::string& why,
+                                            std::span<const char* const> extensions = {});
     ~Instance();
     Instance(const Instance&) = delete;
     Instance& operator=(const Instance&) = delete;
@@ -62,6 +63,9 @@ struct DeviceOptions {
     // The device selector of choose_device; empty for the automatic choice. Tests pass
     // "llvmpipe" for lavapipe.
     std::string device;
+    // A surface to present to, or none. With one, a suitable device also has VK_KHR_swapchain
+    // (enabled) and its graphics queue can present to the surface.
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
 };
 
 // What the backend reads about the chosen device. The pNext members are null.
