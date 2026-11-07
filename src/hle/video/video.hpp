@@ -126,7 +126,7 @@ std::int32_t gnm_submit_other(std::uint32_t count, const std::uint64_t* draw,
 // sceVideoOutSubmitFlip(handle, index, mode, arg). It has 8 call sites (0x1094f98, 0x10953a8,
 // 0x1096775, 0x109c300, 0x11fb4f8, 0x11fb644, 0x26b0dff, 0x26b0ee2); 0x26b0dd5..0x26b0dff,
 // 0x26b0eba..0x26b0ee2 and 0x1094f98 pass the port handle in r9 and the rest on the stack. Returns
-// the flip's result. The flip doesn't wait for the GPU thread yet: nothing is presented.
+// the flip's result. The flip doesn't wait for the GPU thread yet: the presenter shows test images.
 std::int32_t gnm_submit_and_flip(std::uint32_t count, const std::uint64_t* draw,
                                  const std::uint32_t* draw_sizes, const std::uint64_t* ccb,
                                  const std::uint32_t* ccb_sizes, std::int32_t handle,
