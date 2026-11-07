@@ -26,6 +26,25 @@ TEST(VkPresenter, TestColorsDifferPerBuffer) {
     EXPECT_EQ(std::memcmp(x.float32, y.float32, sizeof x.float32), 0);
 }
 
+bool same(VkSurfaceFormatKHR a, VkSurfaceFormatKHR b) {
+    return a.format == b.format && a.colorSpace == b.colorSpace;
+}
+
+TEST(VkPresenter, ChoosesAReportedFormatPair) {
+    constexpr auto srgb = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    constexpr auto p3 = VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT;
+    // UNORM in SRGB_NONLINEAR wins over an earlier UNORM entry in another colour space.
+    const VkSurfaceFormatKHR p3_unorm{VK_FORMAT_B8G8R8A8_UNORM, p3};
+    const VkSurfaceFormatKHR srgb_unorm{VK_FORMAT_R8G8B8A8_UNORM, srgb};
+    EXPECT_TRUE(same(choose_surface_format({{VK_FORMAT_B8G8R8A8_SRGB, srgb}, p3_unorm, srgb_unorm}),
+                     srgb_unorm));
+    // Without one, a UNORM entry keeps its own colour space.
+    EXPECT_TRUE(same(choose_surface_format({{VK_FORMAT_B8G8R8A8_SRGB, srgb}, p3_unorm}), p3_unorm));
+    // Without any UNORM entry, the first pair is taken whole.
+    const VkSurfaceFormatKHR first{VK_FORMAT_A2B10G10R10_UNORM_PACK32, p3};
+    EXPECT_TRUE(same(choose_surface_format({first, {VK_FORMAT_B8G8R8A8_SRGB, srgb}}), first));
+}
+
 TEST(VkPresenter, PresentsToAHeadlessSurface) {
     ::setenv("VK_LOADER_DRIVERS_SELECT", "*lvp*", 0);
     std::string why;

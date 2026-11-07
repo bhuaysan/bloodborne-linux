@@ -17,6 +17,11 @@ namespace bb::vk {
 // The colour of the test image of display buffer `index`: four distinct colours, repeating.
 VkClearColorValue test_color(std::uint32_t index);
 
+// Picks the swapchain's (format, colour space) pair from the surface's list, which must not be
+// empty: an 8-bit UNORM format in SRGB_NONLINEAR first, then any 8-bit UNORM entry, then the
+// first entry. The pair is always one the surface reported.
+VkSurfaceFormatKHR choose_surface_format(const std::vector<VkSurfaceFormatKHR>& formats);
+
 class Presenter {
 public:
     // Takes over `surface`, which `device` was chosen for (DeviceOptions::surface), and destroys
@@ -59,7 +64,7 @@ private:
     std::atomic<std::uint64_t> requested_;  // width << 32 | height
     std::atomic<bool> stale_{true};
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
-    VkFormat format_ = VK_FORMAT_UNDEFINED;
+    VkSurfaceFormatKHR format_{VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
     VkExtent2D extent_{};
     std::vector<VkImage> images_;
     std::vector<VkSemaphore> ready_;  // per image: the clear is done, waited on by the present

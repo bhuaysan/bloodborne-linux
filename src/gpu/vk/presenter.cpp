@@ -32,7 +32,24 @@ void transition(VkCommandBuffer commands, VkImage image, VkImageLayout from, VkI
     vkCmdPipelineBarrier2(commands, &dependency);
 }
 
+bool is_unorm(VkFormat f) {
+    return f == VK_FORMAT_B8G8R8A8_UNORM || f == VK_FORMAT_R8G8B8A8_UNORM;
+}
+
 }  // namespace
+
+VkSurfaceFormatKHR choose_surface_format(const std::vector<VkSurfaceFormatKHR>& formats) {
+    // The display buffers are 8-bit sRGB-encoded colour; a UNORM format keeps the values.
+    const auto srgb = std::ranges::find_if(formats, [](const VkSurfaceFormatKHR& f) {
+        return is_unorm(f.format) && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    });
+    if (srgb != formats.end()) {
+        return *srgb;
+    }
+    const auto unorm =
+        std::ranges::find_if(formats, [](const VkSurfaceFormatKHR& f) { return is_unorm(f.format); });
+    return unorm != formats.end() ? *unorm : formats.at(0);
+}
 
 VkClearColorValue test_color(std::uint32_t index) {
     static constexpr VkClearColorValue colors[] = {
@@ -119,7 +136,7 @@ bool Presenter::recreate() {
     if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
         throw std::runtime_error("the surface's images can't be transfer destinations");
     }
-    if (format_ == VK_FORMAT_UNDEFINED) {
+    if (format_.format == VK_FORMAT_UNDEFINED) {
         std::uint32_t count = 0;
         check(vkGetPhysicalDeviceSurfaceFormatsKHR(p, surface_, &count, nullptr),
               "vkGetPhysicalDeviceSurfaceFormatsKHR");
@@ -129,11 +146,7 @@ bool Presenter::recreate() {
         if (formats.empty()) {
             throw std::runtime_error("the surface has no formats");
         }
-        // The display buffers are 8-bit sRGB-encoded colour; a UNORM format keeps the values.
-        const auto unorm = std::ranges::find_if(formats, [](const VkSurfaceFormatKHR& f) {
-            return f.format == VK_FORMAT_B8G8R8A8_UNORM || f.format == VK_FORMAT_R8G8B8A8_UNORM;
-        });
-        format_ = (unorm != formats.end() ? *unorm : formats[0]).format;
+        format_ = choose_surface_format(formats);
     }
     {
         const std::lock_guard lock(device_.graphics().lock);
@@ -144,8 +157,8 @@ bool Presenter::recreate() {
     info.minImageCount = caps.maxImageCount == 0
                              ? caps.minImageCount + 1
                              : std::min(caps.minImageCount + 1, caps.maxImageCount);
-    info.imageFormat = format_;
-    info.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    info.imageFormat = format_.format;
+    info.imageColorSpace = format_.colorSpace;
     info.imageExtent = extent;
     info.imageArrayLayers = 1;
     info.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
