@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "common/log.hpp"
+#include "gpu/pm4/default_state.hpp"
 
 namespace bb::pm4 {
 
@@ -18,6 +19,8 @@ constexpr auto poll_interval = std::chrono::microseconds(100);
 }  // namespace
 
 GpuThread::GpuThread(Parser::Readable readable) {
+    regs_.set_context_defaults(context_defaults());
+    regs_.clear_context();
     parser_.set_readable(std::move(readable));
     parser_.set_trace([this](const Packet& packet) {
         packets_.fetch_add(1, std::memory_order_relaxed);

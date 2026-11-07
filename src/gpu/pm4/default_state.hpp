@@ -1,6 +1,6 @@
 // The default hardware state (docs/design/graphics.md, item 18): the packets that
-// sceGnmDrawInitDefaultHardwareState200 and sceGnmDispatchInitDefaultHardwareState write. Base PS4
-// (not Neo) sequences only.
+// sceGnmDrawInitDefaultHardwareState200 and sceGnmDispatchInitDefaultHardwareState write, and the
+// context register values CLEAR_STATE restores. Base PS4 (not Neo) sequences only.
 #pragma once
 
 #include <cstdint>
@@ -25,5 +25,9 @@ std::span<const std::uint32_t> dispatch_default_state();
 // when `cmd` is null or `dwords` is smaller.
 std::uint32_t write_default_state(std::uint32_t* cmd, std::uint32_t dwords,
                                   std::span<const std::uint32_t> state);
+
+// What CLEAR_STATE writes, one value per context register from 0xA000 (RegisterMirror::
+// set_context_defaults). Adapted from fpPS4 in clear_state.cpp (LGPL-2.1-only).
+std::span<const std::uint32_t> context_defaults();
 
 }  // namespace bb::pm4

@@ -52,8 +52,8 @@ public:
 
     // CLEAR_STATE: every context register back to its default.
     void clear_context();
-    // The values clear_context writes, one per context register (missing ones are 0). The default
-    // hardware state comes with the GPU thread (item 18).
+    // The values clear_context writes, one per context register (missing ones are 0). The GPU
+    // thread installs context_defaults() (default_state.hpp).
     void set_context_defaults(std::span<const std::uint32_t> defaults);
 
     // SPI_SHADER_PGM_{LO,HI}_<stage> or COMPUTE_PGM_{LO,HI}: the program's byte address.

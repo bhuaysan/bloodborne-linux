@@ -42,6 +42,17 @@ void submit(GpuThread& gpu, std::initializer_list<std::span<const std::uint32_t>
     gpu.submit(Queue::graphics, std::span(buffers.begin(), buffers.size()));
 }
 
+TEST(GpuThread, StartsWithTheClearStateDefaults) {
+    GpuThread gpu;
+    EXPECT_EQ(gpu.registers().get(0xA0D4), 0x2a00161au);
+    EXPECT_EQ(gpu.registers().get(0xA317), 0x10u);
+    std::vector<std::uint32_t> clear = set_context(0x317, 3);
+    packet(clear, IT_CLEAR_STATE, {0});
+    submit(gpu, {clear});
+    ASSERT_TRUE(gpu.wait_idle(5s));
+    EXPECT_EQ(gpu.registers().get(0xA317), 0x10u);
+}
+
 TEST(GpuThread, RunsStreamsInSubmissionOrder) {
     GpuThread gpu;
     const auto first = set_context(0x202, 1);

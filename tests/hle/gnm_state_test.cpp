@@ -29,8 +29,9 @@ struct Parsed {
     bb::pm4::Packet last;
 };
 
-// Runs `words` on `regs`.
+// Runs `words` on `regs` with the CLEAR_STATE defaults installed.
 Parsed parse(std::span<const std::uint32_t> words, bb::pm4::RegisterMirror& regs) {
+    regs.set_context_defaults(bb::pm4::context_defaults());
     bb::pm4::Parser parser(regs);
     Parsed parsed{};
     parser.set_trace([&](const bb::pm4::Packet& packet) {
@@ -68,12 +69,27 @@ TEST(GnmState, DrawDefaultStateFillsItsBlockAndParses) {
     EXPECT_EQ(parsed.last.body[0], 0u);
 
     EXPECT_EQ(regs.get(0xA300), 0u);
+    EXPECT_EQ(regs.get(0xA0D4), 0x2a00161au);  // a CLEAR_STATE default
     EXPECT_EQ(regs.get(0xA202), 0xcc0010u);    // CB_COLOR_CONTROL
     EXPECT_EQ(regs.get(0xA295), 0x100u);
     EXPECT_EQ(regs.get(0xA297), 4u);
     EXPECT_EQ(regs.get(0x2E16), 0xffffffffu);  // COMPUTE_STATIC_THREAD_MGMT_SE0
     EXPECT_EQ(regs.get(0x2C47), 0x1cu);
     EXPECT_EQ(regs.get(0xC200), 0xe0000000u);  // GRBM_GFX_INDEX
+}
+
+// Values fpPS4's clear_state writes, and registers it leaves alone, which are 0 in ours.
+TEST(GnmState, ClearStateDefaultsFollowFpPS4) {
+    const auto defaults = bb::pm4::context_defaults();
+    ASSERT_EQ(defaults.size(), 0x400u);
+    EXPECT_EQ(defaults[0x00d], 0x40004000u);
+    EXPECT_EQ(defaults[0x08c], 0xaa99aaaau);
+    EXPECT_EQ(defaults[0x0d4], 0x2a00161au);
+    EXPECT_EQ(defaults[0x2aa], 0xffu);  // IA_MULTI_VGT_PARAM
+    EXPECT_EQ(defaults[0x317], 0x10u);
+    for (const std::uint32_t unwritten : {0x083u, 0x08eu, 0x08fu, 0x300u}) {
+        EXPECT_EQ(defaults[unwritten], 0u) << std::hex << unwritten;
+    }
 }
 
 TEST(GnmState, DispatchDefaultStateFillsItsBlockAndParses) {

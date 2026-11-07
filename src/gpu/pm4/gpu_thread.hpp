@@ -36,7 +36,9 @@ public:
         std::uint64_t packets = 0;    // type-3 packets that ran
     };
 
-    // Starts the thread. `readable` checks INDIRECT_BUFFER targets (Parser::set_readable).
+    // Installs the CLEAR_STATE defaults (context_defaults()) and starts with them in the context
+    // registers, then starts the thread. `readable` checks INDIRECT_BUFFER targets
+    // (Parser::set_readable).
     explicit GpuThread(Parser::Readable readable = {});
     // Stops the thread, also while a stream waits. Queued streams are dropped.
     ~GpuThread();
