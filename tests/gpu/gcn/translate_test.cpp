@@ -342,6 +342,10 @@ TEST(GcnTranslate, BufferMemoryErrors) {
                     .starts_with("buffer_load_sbyte with tfe or lds is not supported yet at"));
     EXPECT_TRUE(message(mubuf(12, 3, 1, 4, 128, 0, buf::offen | buf::tfe))
                     .starts_with("buffer_load_dword with tfe or lds is not supported yet at"));
+    EXPECT_EQ(message(mubuf(3, 3, 1, 4, 128, 0, buf::offen | buf::tfe)), "no error");
+    EXPECT_EQ(message(mubuf(7, 3, 1, 4, 128, 0, buf::idxen)), "no error");  // _store_format_xyzw
+    EXPECT_TRUE(message(mubuf(0, 3, 1, 4, 128, 0, buf::offen | buf::lds))
+                    .starts_with("buffer_load_format_x with lds is not supported yet at"));
     // addr64 takes no index or offset VGPR (Table 8.2); the decoder only sees the two address
     // VGPRs, so the flags are what tells.
     for (const auto flags : {buf::addr64 | buf::idxen, buf::addr64 | buf::offen}) {
@@ -368,8 +372,7 @@ TEST(GcnTranslate, TypedMemoryErrors) {
             << nf;
         EXPECT_EQ(message(0, 1, nf), "no error") << nf;  // but read
     }
-    EXPECT_TRUE(message(0, 4, 7, buf::tfe)
-                    .starts_with("tbuffer_load_format_x with tfe is not supported yet at"));
+    EXPECT_EQ(message(0, 4, 7, buf::tfe), "no error");
     EXPECT_TRUE(message(0, 4, 7, buf::addr64)  // the helper adds offen
                     .starts_with("tbuffer_load_format_x with addr64 and idxen or offen is not "
                                  "allowed at"));
@@ -459,6 +462,14 @@ TEST(GcnTranslate, FloatModes) {
     EXPECT_EQ(typed(1, 1, 4), float_modes);  // 8, SNORM
     EXPECT_EQ(typed(10, 0, 4), float_modes);  // 8_8_8_8, UNORM
     EXPECT_EQ(typed(10, 4, 4), std::vector<std::uint32_t>{});  // 8_8_8_8, UINT
+    EXPECT_EQ(typed(6, 7, 4), std::vector<std::uint32_t>{});  // 10_11_11 FLOAT store
+    // The format of a formatted MUBUF access is only known at run time: a load may convert a
+    // FLOAT pair, a store of formatted_pairs converts nothing.
+    for (const unsigned op : {0u, 4u}) {  // buffer_load_format_x, buffer_store_format_x
+        auto code = mubuf(op, 3, 1, 4, 128, 0, buf::idxen);
+        code.push_back(s_endpgm);
+        EXPECT_EQ(build(0, code), op == 0 ? float_modes : std::vector<std::uint32_t>{});
+    }
     for (const std::uint32_t rsrc1 : {1u << 12, 2u << 12, 1u << 16, 2u << 16}) {
         EXPECT_EQ(error(add, {.pgm_rsrc1 = rsrc1, .pgm_rsrc2 = 5u << 1}),
                   std::format("PGM_RSRC1 {:#x}: this float mode is not supported at "

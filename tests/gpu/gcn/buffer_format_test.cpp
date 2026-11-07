@@ -84,6 +84,9 @@ TEST(GcnBufferFormat, StoredNumberFormats) {
         EXPECT_FALSE(format_error(10, nf, true).empty()) << nf;
     }
     EXPECT_FALSE(format_error(1, nfmt::float_, true).empty());  // the width rules still apply
+    for (const auto [dfmt, nf] : formatted_pairs) {  // formatted MUBUF converts both ways
+        EXPECT_TRUE(format_error(dfmt, nf, true).empty()) << dfmt << " " << nf;
+    }
 }
 
 }  // namespace

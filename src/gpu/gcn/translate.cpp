@@ -1250,6 +1250,10 @@ private:
     // loads read 0 and out-of-range stores are dropped.
     void buffer_memory(const Instruction& inst) {
         const std::string_view name = inst.name;
+        if (name.starts_with("buffer_load_format_") || name.starts_with("buffer_store_format_")) {
+            typed_memory(inst);
+            return;
+        }
         const bool load = name.starts_with("buffer_load_");
         const unsigned narrow = name.ends_with("byte") ? 1 : name.ends_with("short") ? 2 : 0;
         if (narrow == 0 && !name.starts_with("buffer_load_dword") &&
@@ -1453,50 +1457,80 @@ private:
     }
     Id exec_var() override { return mask_exec(); }
 
-    // MTBUF loads and stores of 1 to 4 components of a typed element, in active lanes (docs/
+    // Typed loads and stores of 1 to 4 components of an element, in active lanes (docs/
     // design/graphics.md, "Typed buffer formats"). The address and the range check are those of
     // buffer_memory, but the element is all-or-nothing (8.1.5.3): it is inside when its first byte
     // is, an element that starts outside reads 0 in every component, and one that starts inside is
     // written whole. An element of 4 bytes or more is accessed as aligned dwords (the two low bits
-    // of its address are ignored); a narrower one byte by byte, from any address. The V#'s dst_sel
+    // of its address are ignored); a narrower one byte by byte, from any address. In MTBUF dst_sel
     // plays no part: the components are X, Y, Z, W of the format, those the format doesn't have
-    // read 0, and a store gives 0 to those the instruction doesn't have.
+    // read 0, and a store gives 0 to those the instruction doesn't have. The formatted MUBUF forms
+    // take the format and dst_sel from the V# at run time (formatted). Under tfe a load also
+    // writes 0 to the VGPR after its data: no fetch fails.
     void typed_memory(const Instruction& inst) {
         const std::string_view name = inst.name;
-        const bool load = name.starts_with("tbuffer_load_format_");
-        if (!load && !name.starts_with("tbuffer_store_format_")) {
+        const bool mubuf = inst.format == Format::mubuf;
+        const bool load = name.starts_with(mubuf ? "buffer_load_format_" : "tbuffer_load_format_");
+        if (!load && !name.starts_with(mubuf ? "buffer_store_format_" : "tbuffer_store_format_")) {
             unsupported();
         }
-        if ((inst.flags & flag::tfe) != 0) {
-            fail(std::format("{} with tfe is not supported yet", name));
+        if ((inst.flags & flag::lds) != 0) {
+            fail(std::format("{} with lds is not supported yet", name));
         }
-        if (const std::string why = format_error(inst.dfmt, inst.nfmt, !load); !why.empty()) {
-            fail(std::format("{}: {}", name, why));
+        if (!mubuf) {
+            if (const std::string why = format_error(inst.dfmt, inst.nfmt, !load); !why.empty()) {
+                fail(std::format("{}: {}", name, why));
+            }
         }
-        if (inst.nfmt != nfmt::uint_ && inst.nfmt != nfmt::sint &&
-            (load || inst.nfmt != nfmt::float_)) {
+        const auto converts = [&](unsigned nf) {
+            return nf != nfmt::uint_ && nf != nfmt::sint && (load || nf != nfmt::float_);
+        };
+        if (mubuf ? std::ranges::any_of(formatted_pairs, [&](auto p) { return converts(p[1]); })
+                  : converts(inst.nfmt)) {
             // The other loads convert through f32 (or unpack a half float), and the UNORM and
             // SNORM stores clamp, scale and round in f32. The float modes keep a half float's
             // infinities, NaNs and -0 on the way; no conversion makes an f32 denormal, and the
             // 16-bit integers convert exactly. The rounding mode does reach the divisions and
             // products of the normalized formats (a known difference, see the design note). A
-            // FLOAT store has no float operation: it copies 32 bits or rounds to a half float
-            // in integer operations.
+            // FLOAT store has no float operation: it copies 32 bits or rounds to a small float
+            // in integer operations. A formatted MUBUF access may have any of its pairs.
             note_float();
         }
-        const FormatLayout& layout = *format_layout(inst.dfmt);
+        const bool tfe = load && (inst.flags & flag::tfe) != 0;
         const Operand& data = load ? inst.dst[0] : inst.src[0];
-        const BufferAccess m = buffer_access(inst, &inst.src[load ? 0 : 1]);
+        const unsigned count = data.dwords - (tfe ? 1 : 0);
+        const Operand* a = &inst.src[load ? 0 : 1];
+        const BufferAccess m = buffer_access(inst, a);
         const Id inside_buffer = inside(m, 0);
+        const Id zero = b_.constant_u32(0);
+        FormatEmitter::Words value;
+        for (unsigned c = 0; c < 4; ++c) {
+            value[c] = !load && c < count ? read(data, c) : zero;
+        }
+        const auto element = [&](unsigned dfmt, unsigned nf, const FormatEmitter::Words& in) {
+            return typed_element(load, m, inside_buffer, dfmt, nf, in);
+        };
+        value = mubuf ? formatted(read(a[1], 3), load, value, element)
+                      : element(inst.dfmt, inst.nfmt, value);
+        for (unsigned c = 0; load && c < count; ++c) {
+            write_vector(data, value[c], c);
+        }
+        if (tfe) {
+            write_vector(data, zero, count);
+        }
+    }
+
+    // The element of a typed access in the format (dfmt, nf): written from `value`, or read and
+    // converted, with 0 in every component when it starts outside the buffer.
+    FormatEmitter::Words typed_element(bool load, const BufferAccess& m, Id inside_buffer,
+                                       unsigned dfmt, unsigned nf,
+                                       const FormatEmitter::Words& value) {
+        const FormatLayout& layout = *format_layout(dfmt);
         const Id cond = b_.op(Op::OpLogicalAnd, bool_, {active(), inside_buffer});
         const auto where = [&](unsigned delta) { return add(address(m, delta), bias_); };
         const Id zero = b_.constant_u32(0);
         if (!load) {
-            FormatEmitter::Words value;
-            for (unsigned c = 0; c < 4; ++c) {
-                value[c] = c < data.dwords ? read(data, c) : zero;
-            }
-            const auto raw = FormatEmitter(b_, u32_).encode(inst.dfmt, inst.nfmt, value);
+            const auto raw = FormatEmitter(b_, u32_).encode(dfmt, nf, value);
             if (layout.bytes < 4) {  // contiguous bytes, also in a swizzled buffer
                 when(cond, [&] { store_bytes(where(0), raw[0], layout.bytes); });
             }
@@ -1504,7 +1538,7 @@ private:
                 guarded_store(cond, b_.op(Op::OpBitwiseAnd, u64_, {where(4 * d), c64(~3ull)}),
                               raw[d]);
             }
-            return;
+            return raw;
         }
         FormatEmitter::Words raw;
         raw.fill(zero);
@@ -1519,11 +1553,74 @@ private:
         for (unsigned d = 0; d < layout.bytes / 4; ++d) {
             raw[d] = guarded_load(cond, b_.op(Op::OpBitwiseAnd, u64_, {where(4 * d), c64(~3ull)}));
         }
-        const auto value = FormatEmitter(b_, u32_).decode(inst.dfmt, inst.nfmt, raw);
-        for (unsigned c = 0; c < data.dwords; ++c) {
+        auto decoded = FormatEmitter(b_, u32_).decode(dfmt, nf, raw);
+        for (Id& c : decoded) {
             // Zero raw bits are not a zero component in every number format (SNORM_OGL).
-            write_vector(data, b_.op(Op::OpSelect, u32_, {inside_buffer, value[c], zero}), c);
+            c = b_.op(Op::OpSelect, u32_, {inside_buffer, c, zero});
         }
+        return decoded;
+    }
+
+    // A formatted MUBUF access: the V#'s dword 3 `dword3` has dst_sel_x to dst_sel_w in bits 0-11
+    // (0 is 0, 1 is 1, 4 to 7 are X to W), num_format in bits 12-14 and data_format in bits 15-18
+    // (Table 8.5). A switch runs `element` on the pair: each of formatted_pairs has a case, and
+    // any other pair reads 0 in all four components, dst_sel ignored, and writes nothing, as an
+    // unbound V# (Table 8.5, note 1). A load returns the components through dst_sel, with 1 as
+    // 1.0, or the integer 1 in UINT and SINT; a store gives memory component k the first VGPR
+    // component whose dst_sel is 4 + k, and 0 when there is none (shadPS4's inverse mapping).
+    template <class F>
+    FormatEmitter::Words formatted(Id dword3, bool is_load, const FormatEmitter::Words& vgprs,
+                                   F&& element) {
+        const auto field = [&](unsigned low, unsigned count) {
+            return b_.op(Op::OpBitFieldUExtract, u32_,
+                         {dword3, b_.constant_u32(low), b_.constant_u32(count)});
+        };
+        const auto is = [&](Id x, std::uint32_t v) {
+            return b_.op(Op::OpIEqual, bool_, {x, b_.constant_u32(v)});
+        };
+        const auto pick = [&](Id c, Id x, Id y) { return b_.op(Op::OpSelect, u32_, {c, x, y}); };
+        const Id zero = b_.constant_u32(0);
+        FormatEmitter::Words sel, in = vgprs;
+        for (unsigned c = 0; c < 4; ++c) {
+            sel[c] = field(3 * c, 3);
+        }
+        for (unsigned k = 0; k < 4 && !is_load; ++k) {
+            in[k] = zero;
+            for (unsigned c = 4; c-- > 0;) {
+                in[k] = pick(is(sel[c], 4 + k), vgprs[c], in[k]);
+            }
+        }
+        std::array<Id, 5> result;  // X to W, then the constant 1 of the number format
+        for (Id& v : result) {
+            v = b_.local_variable(b_.type_pointer(SC::Function, u32_), zero);
+        }
+        SpirvBuilder::Words words = {field(12, 7), b_.id()};  // nfmt | dfmt << 3, the merge
+        for (const auto [dfmt, nf] : formatted_pairs) {
+            words.insert(words.end(), {nf | dfmt << 3, b_.id()});
+        }
+        b_.op_void(Op::OpSelectionMerge,
+                   {words[1], spirv_word(spv::SelectionControlMask::MaskNone)});
+        b_.op_void(Op::OpSwitch, words);
+        for (std::size_t i = 2; i < words.size(); i += 2) {
+            b_.begin_block(words[i + 1]);
+            const unsigned nf = words[i] & 7;
+            const auto out = element(words[i] >> 3, nf, in);
+            for (unsigned c = 0; c < 4 && is_load; ++c) {
+                store(result[c], out[c]);
+            }
+            const bool integer = nf == nfmt::uint_ || nf == nfmt::sint;
+            store(result[4], b_.constant_u32(integer ? 1 : 0x3f800000));
+            b_.op_void(Op::OpBranch, {words[1]});
+        }
+        b_.begin_block(words[1]);  // without a case, all five stay 0
+        FormatEmitter::Words out;
+        for (unsigned c = 0; c < 4; ++c) {
+            out[c] = pick(is(sel[c], 1), load(u32_, result[4]), zero);
+            for (unsigned k = 0; k < 4; ++k) {
+                out[c] = pick(is(sel[c], 4 + k), load(u32_, result[k]), out[c]);
+            }
+        }
+        return out;
     }
 
     // Writes the low `bytes` (1 or 2) bytes of `value` at the device address `address`, which

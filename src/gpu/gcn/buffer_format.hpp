@@ -37,6 +37,14 @@ const FormatLayout* format_layout(unsigned dfmt);
 // SNORM_OGL, Sea Islands ISA Table 8.13).
 std::string format_error(unsigned dfmt, unsigned nfmt, bool store = false);
 
+// The pairs (data format, number format) that a formatted MUBUF access converts, from the V# at
+// run time; any other reads 0 and writes nothing. Measured on the corpus, see docs/design/
+// graphics.md, "Typed buffer formats". Each converts both ways.
+inline constexpr std::array<std::array<unsigned, 2>, 6> formatted_pairs = {{
+    {4, nfmt::float_}, {11, nfmt::float_}, {13, nfmt::float_}, {14, nfmt::float_},
+    {4, nfmt::uint_}, {4, nfmt::sint},
+}};
+
 // Emits the conversions. Values are u32 ids whatever their type: floats as their bit patterns.
 class FormatEmitter {
 public:

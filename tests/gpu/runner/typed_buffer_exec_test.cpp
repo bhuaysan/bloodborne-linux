@@ -1,8 +1,8 @@
 // Execution tests of the typed buffer loads and stores (MTBUF) on lavapipe: the program mem_typed
-// loads 16 formats from a table, and each result is worked out here from the element's bytes with
-// the usual conversions of normalized, scaled and integer formats; mem_tstore stores 13 formats,
+// loads 17 formats from a table, and each result is worked out here from the element's bytes with
+// the usual conversions of normalized, scaled and integer formats; mem_tstore stores 14 formats,
 // and the output is worked out from the conversions back (docs/design/graphics.md, "Typed buffer
-// formats").
+// formats"). FormattedBuffer runs mem_fmt, the formatted MUBUF forms, for each V# format pair.
 
 #include <algorithm>
 #include <array>
@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "gpu/gcn/buffer_format.hpp"
 #include "gpu/gcn/gcn.hpp"
 #include "gpu/gcn/programs.hpp"
 #include "gpu/gcn/translate.hpp"
@@ -371,6 +372,119 @@ TEST_F(TypedStore, Formats) {
 // and is written whole, the next lanes and the later blocks are not written.
 TEST_F(TypedStore, Range) {
     check(1024 * 4 + 42);
+}
+
+// mem_fmt: the formatted MUBUF loads and stores take the format and dst_sel from the V#'s dword 3,
+// at run time. The loads read TypedStore's floats, and the stores write its inputs.
+class FormattedBuffer : public TypedStore {
+protected:
+    void SetUp() override {
+        TypedStore::SetUp();
+        program_ = bb::test::gcn::program_words("mem_fmt");
+        for (const auto& inst : bb::gcn::decode(program_)) {  // the tfe bit of the MTBUF load
+            if (inst.format == bb::gcn::Format::mtbuf) {
+                program_[inst.offset / 4 + 1] |= 1u << 23;
+            }
+        }
+        spirv_ = bb::gcn::translate(
+                     program_, {}, {.pgm_rsrc2 = bb::test::gcn::program_pgm_rsrc2("mem_fmt")})
+                     .spirv;
+    }
+
+    // Runs mem_fmt with the V# format (dfmt, nfmt), dst_sel `sel` and size `size`, and checks the
+    // loads, the tfe VGPRs and every byte of the store region. A pair that is not one of
+    // formatted_pairs reads 0 whatever dst_sel says and writes nothing. A load returns the
+    // components through dst_sel (1 as 1.0, or 1 in UINT and SINT); a store gives memory
+    // component k the first input component whose dst_sel is 4 + k, or 0.
+    void check(unsigned dfmt, unsigned nfmt, std::uint32_t sel, std::uint32_t size) {
+        SCOPED_TRACE(testing::Message() << "dfmt " << dfmt << " nfmt " << nfmt);
+        const bool reads = std::ranges::count(bb::gcn::formatted_pairs,
+                                              std::array<unsigned, 2>{dfmt, nfmt}) != 0;
+        // The pairs' components have 32 bits and convert as they are: the element is n dwords.
+        const unsigned n = reads ? static_cast<unsigned>(fields(dfmt).size()) : 4;
+        const unsigned shift = std::bit_width(4 * n - 1);  // the lane stride: 2^shift >= 4n bytes
+        const bool integer = nfmt == nf::uint_ || nfmt == nf::sint;
+        auto memory = runner_->guest_memory(base, 0x10000);
+        std::memset(memory.data(), 0xa5, 0x800);
+        const auto* table = reinterpret_cast<const std::uint8_t*>(input_.data());
+        std::memcpy(memory.data() + table_offset, table, 0x400);
+        std::memset(memory.data() + table_offset + 0xc00, 0xa5, 0x400);
+        std::memcpy(memory.data() + table_offset + 0x800, input_.data() + (integer ? 256 : 0),
+                    0x400);
+        std::vector<std::uint8_t> region(0x1000);
+        std::memcpy(region.data(), memory.data() + table_offset, region.size());
+        const auto lo = [](std::uint64_t v) { return static_cast<std::uint32_t>(v); };
+        DrawBlock draw;  // s[4:7] the formatted V#, s[8:11] the output's, s12 the stride's log2
+        draw.user_data = {0, 0, 0, 0, lo(base + table_offset), lo(base >> 32), size,
+                          sel | nfmt << 12 | dfmt << 15, lo(base), lo(base >> 32), 0x800,
+                          identity, shift};
+        runner_->run(spirv_, draw, {1, 1, 1});
+        const auto word = [&](const void* p) {
+            std::uint32_t v;
+            std::memcpy(&v, p, 4);
+            return v;
+        };
+        for (std::uint32_t lane = 0; lane < lanes; ++lane) {
+            SCOPED_TRACE(testing::Message() << "lane " << lane);
+            const bool inside = 16 * lane < size;
+            std::array<std::uint32_t, 6> value = {0, integer ? 1u : 0x3f800000u};
+            for (unsigned c = 0; c < n && inside; ++c) {
+                value[2 + c] = word(table + 16 * lane + 4 * c);
+            }
+            for (unsigned c = 0; c < 4; ++c) {
+                const unsigned s = sel >> (3 * c) & 7;
+                const std::uint32_t want = reads ? value[s >= 4 ? s - 2 : s == 1] : 0;
+                ASSERT_EQ(word(&memory[16 * lane + 4 * c]), want) << "component " << c;
+            }
+            EXPECT_EQ(word(&memory[0x400 + 4 * lane]), 0u);  // tfe: no fetch fails
+            EXPECT_EQ(word(&memory[0x600 + 8 * lane]), inside ? word(table + 16 * lane) : 0);
+            EXPECT_EQ(word(&memory[0x604 + 8 * lane]), 0u);
+            const std::uint32_t at = 0xc00 + (lane << shift);
+            if (!reads || at >= size) {
+                continue;
+            }
+            std::array<std::uint32_t, 4> element = {};
+            for (unsigned k = 0; k < n; ++k) {
+                for (unsigned c = 4; c-- > 0;) {  // the first component that selects k
+                    const std::uint32_t d = 0x800 + 16 * lane + 4 * c;
+                    const std::uint32_t v = d < size ? word(&region[d]) : 0;
+                    element[k] = (sel >> (3 * c) & 7) == 4 + k ? v : element[k];
+                }
+            }
+            std::memcpy(region.data() + at, element.data(), 4 * n);
+        }
+        for (std::uint32_t i = 0xc00; i < 0x1000; ++i) {
+            ASSERT_EQ(static_cast<unsigned>(memory[table_offset + i]), region[i]) << "byte " << i;
+        }
+    }
+
+    std::vector<std::uint32_t> program_, spirv_;
+};
+
+// Every pair of the 16 data and 8 number formats, with the identity dst_sel: those of
+// formatted_pairs convert, the others read 0 and write nothing.
+TEST_F(FormattedBuffer, AllPairs) {
+    for (unsigned key = 0; key < 128; ++key) {
+        check(key >> 3, key & 7, identity, 0x1000);
+    }
+}
+
+// The V#'s dst_sel (W, 1, X, 0) reorders a load's components and, inverted, a store's; a pair
+// without a case reads 0 whatever dst_sel says.
+TEST_F(FormattedBuffer, DstSel) {
+    for (const auto [dfmt, nfmt] : {std::pair{14u, 7u}, {4u, nf::uint_}, {11u, 7u}, {13u, 7u},
+                                    {10u, nf::unorm}, {0u, nf::uint_}}) {
+        check(dfmt, nfmt, 7 | 1 << 3 | 4 << 6, 0x1000);
+    }
+}
+
+// A V# of 648 bytes: lane 40's element is read whole, the lanes above load 0, and no store is
+// inside. One that ends 1 byte into lane 20's stored element: that element is written whole, the
+// later ones not at all.
+TEST_F(FormattedBuffer, Range) {
+    check(14, 7, identity, 16 * 40 + 8);
+    check(4, nf::sint, identity, 0xc00 + 20 * 4 + 1);
+    check(13, 7, identity, 0xc00 + 20 * 16 + 1);
 }
 
 }  // namespace
