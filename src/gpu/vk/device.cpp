@@ -17,6 +17,7 @@ constexpr const char* required_extensions[] = {
     VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
     VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
     VK_KHR_SHADER_MAXIMAL_RECONVERGENCE_EXTENSION_NAME,
+    VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME,
 };
 
 // Discrete first, then integrated, virtual, CPU and other (VkPhysicalDeviceType 0 to 4).
@@ -68,8 +69,11 @@ struct Query {
     VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR reconvergence =
         make<VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR>(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MAXIMAL_RECONVERGENCE_FEATURES_KHR);
+    VkPhysicalDeviceDepthClipControlFeaturesEXT clip_control =
+        make<VkPhysicalDeviceDepthClipControlFeaturesEXT>(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT, &reconvergence);
     VkPhysicalDeviceVulkan13Features f13 = make<VkPhysicalDeviceVulkan13Features>(
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, &reconvergence);
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, &clip_control);
     VkPhysicalDeviceVulkan12Features f12 = make<VkPhysicalDeviceVulkan12Features>(
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, &f13);
     VkPhysicalDeviceVulkan11Features f11 = make<VkPhysicalDeviceVulkan11Features>(
@@ -96,6 +100,9 @@ struct Query {
             {&features.features.shaderInt64, "shaderInt64"},
             {&features.features.sparseBinding, "sparseBinding"},
             {&features.features.sparseResidencyBuffer, "sparseResidencyBuffer"},
+            // The draw snapshot's clip space: no depth clipping, and z from -w to w.
+            {&features.features.depthClamp, "depthClamp"},
+            {&clip_control.depthClipControl, "depthClipControl"},
             // The tiler copies 8- and 16-bit elements through device addresses.
             {&f11.storageBuffer16BitAccess, "storageBuffer16BitAccess"},
             {&f12.storageBuffer8BitAccess, "storageBuffer8BitAccess"},
