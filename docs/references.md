@@ -25,6 +25,7 @@ One row per source and use. A change that uses a source adds its own row (or row
 | GCC 16.2 (installed) | GPL-3.0+ with runtime exception | Compiler |
 | GCC 16.2 (installed) | GPL-3.0+ with runtime exception | `-fsanitize=address,undefined` in the `debug` preset (`CMakeLists.txt`) |
 | GCC 16.2 (installed) | GPL-3.0+ with runtime exception | its LeakSanitizer's leak reports, `__lsan_default_suppressions()` and the `leak:` suppression lines, checked with the runtime's "Suppressions used" summary (`tests/gpu/runner/compute_runner.cpp`) |
+| GCC 16.2 (installed) | GPL-3.0+ with runtime exception | its LeakSanitizer's leak reports, `__lsan_default_suppressions()` and the `leak:` suppression lines, checked with the runtime's "Suppressions used" summary, moved into the `bbvktest` object library that `vk_test` and `compute_runner_test` link (`tests/gpu/lsan_vulkan.cpp`, issue #269) |
 | GNU coreutils 9.10 `sha256sum` (installed) | GPL-3.0+ | Expected digests for the SHA-256 unit tests (`tests/common/sha256_test.cpp`) |
 | [zlib](https://zlib.net/) through Python's `zlib` module (installed Python 3) | Zlib | Inflating the DCX streams of the shader archives (`tools/shaderbnd`, `docs/formats/dcx.md`) |
 | GNU coreutils `od` (installed) | GPL-3.0+ | Hex dumps of the shader archives while working out DCX, BND4 and the shader entries (`docs/formats/dcx.md`, `bnd4.md`, `shader-binary.md`) |
