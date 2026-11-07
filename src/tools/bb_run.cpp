@@ -2,12 +2,13 @@
 // docs/design/m3-core-os.md, "Entry").
 //
 // The initial thread sets up the runtime, maps and links the load set, applies the registered
-// hooks and starts the game's main thread. That thread runs the PRX initialisers and then the
-// eboot's entry. The initial thread only waits for it, or for --timeout. The main-loop probe logs
-// when the game reaches its main loop and, with --stop-at-main-loop, ends the run there, on the
-// game's main thread. Every way out after the
-// load goes through end_run, never std::exit: game threads may still run, and host atexit
-// handlers, static destructors and LeakSanitizer must not run under them.
+// hooks, opens the window (unless --headless) and starts the game's main thread. That thread runs
+// the PRX initialisers and then the eboot's entry. The initial thread waits for it, or for
+// --timeout, and handles the window's events; closing the window ends the run with status 0.
+// The main-loop probe logs when the game reaches its main loop and, with --stop-at-main-loop,
+// ends the run there, on the game's main thread. Every way out after the load goes through
+// end_run, never std::exit: game threads may still run, and host atexit handlers, static
+// destructors and LeakSanitizer must not run under them.
 
 #include <pthread.h>
 #include <unistd.h>
@@ -21,6 +22,7 @@
 #include <filesystem>
 #include <format>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -42,6 +44,12 @@
 #include "loader/load_set.hpp"
 #include "tools/main_loop_probe.hpp"
 #include "tools/run_options.hpp"
+#ifdef BB_HAVE_WINDOW
+#include "gpu/vk/device.hpp"
+#include "gpu/vk/presenter.hpp"
+#include "gpu/window/window.hpp"
+#include "hle/video/video.hpp"
+#endif
 
 // The guest window lies in AddressSanitizer's shadow gap, which ASan keeps PROT_NONE without this
 // option (docs/design/m3-core-os.md, Memory, "Guest window"). Unused without ASan.
@@ -123,7 +131,73 @@ void* game_main(void* p) {
     end_run(0);
 }
 
-// Starts game_main on a thread of its own and waits for it, at most `timeout_seconds`.
+#ifdef BB_HAVE_WINDOW
+// The window and what presents to it (docs/design/graphics.md, item 22). Never destroyed: the
+// flip thread presents until the process ends.
+struct Display {
+    std::unique_ptr<bb::window::Window> window;
+    std::unique_ptr<bb::vk::Instance> instance;
+    std::unique_ptr<bb::vk::Device> device;
+    std::unique_ptr<bb::vk::Presenter> presenter;
+};
+Display* display = nullptr;
+
+// The flip observer: presents the test image of the flipped buffer. A failure is logged and ends
+// presentation; the flips go on completing.
+void present_flip(std::int32_t handle, std::int32_t index, std::uint64_t address,
+                  const bb::hle::video::BufferAttribute& attribute) {
+    try {
+        display->presenter->present_test_image(static_cast<std::uint32_t>(index));
+        if (display->presenter->presented() == 1) {
+            bb::common::log(LogLevel::info, channel,
+                            "first present: port {} buffer {} at {:#x}, {}x{}", handle, index,
+                            address, attribute.width, attribute.height);
+        }
+    } catch (const std::exception& e) {
+        bb::common::log(LogLevel::error, channel, "presentation stopped: {}", e.what());
+        bb::hle::video::set_flip_observer(nullptr);
+    }
+}
+
+// Opens the window and the Vulkan device for it, or logs why not and leaves `display` null: the
+// run then goes on headless.
+void open_display(const std::string& device_selector) {
+    auto d = std::make_unique<Display>();
+    std::string why;
+    d->window = bb::window::Window::create("Bloodborne", 1280, 720, why);
+    if (d->window) {
+        d->instance = bb::vk::Instance::create(why, d->window->instance_extensions());
+    }
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    if (d->instance) {
+        surface = d->window->create_surface(d->instance->handle());
+        d->device = bb::vk::Device::create(*d->instance, {device_selector, surface}, why);
+    }
+    if (!d->device) {
+        if (surface != VK_NULL_HANDLE) {
+            vkDestroySurfaceKHR(d->instance->handle(), surface, nullptr);
+        }
+        bb::common::log(LogLevel::warn, channel, "no window, running headless: {}", why);
+        return;
+    }
+    d->presenter = std::make_unique<bb::vk::Presenter>(*d->instance, *d->device, surface,
+                                                       d->window->pixel_size());
+    display = d.release();
+    bb::hle::video::set_flip_observer(&present_flip);
+}
+
+// Handles the window's events for up to `timeout_ms`; ends the run once it is closed.
+void pump_display(std::int32_t timeout_ms) {
+    if (!display->window->pump(timeout_ms,
+                               [](VkExtent2D size) { display->presenter->resize(size); })) {
+        bb::common::log(LogLevel::info, channel, "window closed");
+        end_run(0);
+    }
+}
+#endif
+
+// Starts game_main on a thread of its own and waits for it, at most `timeout_seconds`, handling
+// the window's events meanwhile.
 [[noreturn]] void run_game(Game& game, std::optional<unsigned> timeout_seconds) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -135,21 +209,40 @@ void* game_main(void* p) {
         end_run(1);
     }
     pthread_attr_destroy(&attr);
-    if (!timeout_seconds) {
+#ifdef BB_HAVE_WINDOW
+    const bool windowed = display != nullptr;
+#else
+    const bool windowed = false;
+#endif
+    if (!timeout_seconds && !windowed) {
         pthread_join(thread, nullptr);
         end_run(0);  // not reached: game_main ends the process
     }
     timespec deadline{};
     clock_gettime(CLOCK_MONOTONIC, &deadline);
-    deadline.tv_sec += *timeout_seconds;
+    deadline.tv_sec += timeout_seconds.value_or(0);
     while (true) {
-        const int err = pthread_clockjoin_np(thread, nullptr, CLOCK_MONOTONIC, &deadline);
-        if (err == ETIMEDOUT) {
+        timespec until = deadline;
+#ifdef BB_HAVE_WINDOW
+        if (windowed) {
+            pump_display(16);  // waits for events up to 16 ms, then checks the game
+            clock_gettime(CLOCK_MONOTONIC, &until);
+        }
+#endif
+        const bool past_deadline = timeout_seconds && (until.tv_sec > deadline.tv_sec ||
+                                                       (until.tv_sec == deadline.tv_sec &&
+                                                        until.tv_nsec >= deadline.tv_nsec));
+        if (past_deadline) {
+            until = deadline;
+        }
+        const int err = pthread_clockjoin_np(thread, nullptr, CLOCK_MONOTONIC, &until);
+        if (err == ETIMEDOUT && (!windowed || past_deadline)) {
             break;
         }
-        if (err != EINTR) {
-            end_run(0);  // not reached: game_main ends the process
+        if (err == ETIMEDOUT || err == EINTR) {
+            continue;
         }
+        end_run(0);  // not reached: game_main ends the process
     }
     bb::common::log(LogLevel::error, channel, "timeout: the game still runs after {} s",
                     *timeout_seconds);
@@ -202,6 +295,11 @@ int start(const bb::tools::RunOptions& options) {
             game->eboot->runtime(bb::tools::frame_pacer + bb::tools::frame_pacer_size)),
         options.stop_at_main_loop, start_time};
     bb::hle::kernel::set_gettimeofday_observer(&observe_gettimeofday);
+#ifdef BB_HAVE_WINDOW
+    if (!options.headless) {
+        open_display(options.device);
+    }
+#endif
     run_game(*game, options.timeout_seconds);
 }
 

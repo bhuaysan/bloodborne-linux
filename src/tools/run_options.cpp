@@ -63,6 +63,10 @@ RunOptions parse_run_options(std::span<const std::string_view> args) {
             options.log_spec = spec;
         } else if (arg == "--no-log-file") {
             options.log_file = false;
+        } else if (arg == "--headless") {
+            options.headless = true;
+        } else if (arg == "--device") {
+            options.device = value();
         } else {
             throw std::invalid_argument(std::format("unknown argument \"{}\"", arg));
         }

@@ -13,3 +13,8 @@ target_link_libraries(bbrunoptions PUBLIC bbcommon PRIVATE bb_warnings)
 add_executable(bb-run bb_run.cpp)
 target_link_libraries(bb-run PRIVATE bbrunoptions bbhle bbhlenet bbhlesystem bbhlevideo bbeboottls
     bbgame bbhook bbloader bbcommon bb_warnings)
+# The window and presentation, when SDL3 and Vulkan are there; otherwise bb-run is headless only.
+if(TARGET bbwindow)
+    target_link_libraries(bb-run PRIVATE bbwindow bbvk)
+    target_compile_definitions(bb-run PRIVATE BB_HAVE_WINDOW)
+endif()

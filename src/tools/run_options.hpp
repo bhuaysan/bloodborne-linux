@@ -16,7 +16,7 @@ namespace bb::tools {
 
 inline constexpr std::string_view run_usage =
     "usage: bb-run [--game-dir DIR] [--profile NAME] [--timeout SECONDS] [--stop-at-main-loop]\n"
-    "              [--log SPEC] [--no-log-file]\n"
+    "              [--log SPEC] [--no-log-file] [--headless] [--device NAME]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
@@ -25,7 +25,10 @@ inline constexpr std::string_view run_usage =
     "  --stop-at-main-loop  exit with status 0 once the game reaches its main loop\n"
     "  --log SPEC           log filter, as BB_LOG: <channel>=<level> or <level>, comma-separated\n"
     "                       (replaces BB_LOG)\n"
-    "  --no-log-file        log to stderr only, not to a file in the logs directory\n";
+    "  --no-log-file        log to stderr only, not to a file in the logs directory\n"
+    "  --headless           open no window; flips complete without being presented\n"
+    "  --device NAME        the Vulkan device whose name contains NAME, ignoring case\n"
+    "                       (default: a discrete GPU first)\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
@@ -37,6 +40,8 @@ struct RunOptions {
     bool stop_at_main_loop = false;
     std::optional<std::string> log_spec;  // --log, checked with LogFilter::parse
     bool log_file = true;
+    bool headless = false;  // --headless: no window and no presentation
+    std::string device;     // --device: the selector of bb::vk::choose_device, empty for any
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 

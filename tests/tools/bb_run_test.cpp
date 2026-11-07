@@ -53,19 +53,23 @@ TEST(RunOptions, Defaults) {
     EXPECT_FALSE(o.stop_at_main_loop);
     EXPECT_FALSE(o.log_spec);
     EXPECT_TRUE(o.log_file);
+    EXPECT_FALSE(o.headless);
+    EXPECT_EQ(o.device, "");
     EXPECT_FALSE(o.help);
 }
 
 TEST(RunOptions, ParsesEveryOption) {
     const RunOptions o = parse({"--game-dir", "/games/bb", "--profile", "test_1-a", "--timeout",
                                 "10", "--stop-at-main-loop", "--log", "hle=trace,warn",
-                                "--no-log-file"});
+                                "--no-log-file", "--headless", "--device", "RADV"});
     EXPECT_EQ(o.game_dir, std::filesystem::path("/games/bb"));
     EXPECT_EQ(o.profile, "test_1-a");
     EXPECT_EQ(o.timeout_seconds, 10U);
     EXPECT_TRUE(o.stop_at_main_loop);
     EXPECT_EQ(o.log_spec, "hle=trace,warn");
     EXPECT_FALSE(o.log_file);
+    EXPECT_TRUE(o.headless);
+    EXPECT_EQ(o.device, "RADV");
     EXPECT_TRUE(parse({"-h"}).help);
     EXPECT_TRUE(parse({"--help"}).help);
     // A later value replaces an earlier one.
@@ -79,6 +83,7 @@ TEST(RunOptions, RefusesBadArguments) {
     EXPECT_EQ(parse_error({"--game-dir"}), "--game-dir needs a value");
     EXPECT_EQ(parse_error({"--log"}), "--log needs a value");
     EXPECT_EQ(parse_error({"--timeout"}), "--timeout needs a value");
+    EXPECT_EQ(parse_error({"--device"}), "--device needs a value");
     for (std::string_view name :
          {"", "a/b", "../x", "with space", "abcdefghijklmnopqrstuvwxyz0123456"}) {
         EXPECT_TRUE(parse_error({"--profile", name}).starts_with("--profile: ")) << name;
@@ -243,7 +248,7 @@ std::string read_log_file(const TempDir& dir) {
 TEST(BbRunGame, RunsTheEntry) {
     BB_REQUIRE_GAME(game);
     const TempDir dir;
-    const Result r = run_bb_run(dir, "--timeout 10 --profile test --game-dir " +
+    const Result r = run_bb_run(dir, "--headless --timeout 10 --profile test --game-dir " +
                                          quote(game.string()));
     ASSERT_NE(r.status, -1) << r.output;
     EXPECT_NE(r.status, 1) << r.output;
@@ -271,8 +276,9 @@ TEST(BbRunGame, RunsTheEntry) {
 TEST(BbRunGame, ReachesTheMainLoop) {
     BB_REQUIRE_GAME(game);
     const TempDir dir;
-    const Result r = run_bb_run(
-        dir, "--stop-at-main-loop --timeout 120 --profile test --game-dir " + quote(game.string()));
+    const Result r = run_bb_run(dir, "--headless --stop-at-main-loop --timeout 120 --profile test "
+                                     "--game-dir " +
+                                         quote(game.string()));
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_NE(r.output.find("run: main loop reached after "), std::string::npos) << r.output;
     EXPECT_NE(read_log_file(dir).find("run: main loop reached after "), std::string::npos);
