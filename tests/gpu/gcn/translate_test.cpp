@@ -211,8 +211,9 @@ TEST(GcnTranslate, SubDwordWritesAreOneCompareSwapLoop) {
     EXPECT_EQ(count(spv::Op::OpAtomicOr), 0u);
 }
 
-// The atomics that update their dword in a compare-and-swap loop (inc, dec, rsub, mskor) start
-// from an atomic load: a plain one would race with the other lanes' atomics.
+// The atomics that update their dword in a compare-and-swap loop (inc, dec, rsub, mskor, and the
+// float ones of MUBUF) start from an atomic load: a plain one would race with the other lanes'
+// atomics.
 TEST(GcnTranslate, CompareSwapLoopsStartWithAnAtomicLoad) {
     const auto atomic_loads = [](std::string_view name) {
         return count_ops(translate(program_words(name), {}, key5).spirv, spv::Op::OpAtomicLoad);
@@ -336,8 +337,8 @@ TEST(GcnTranslate, BufferMemoryErrors) {
         code.push_back(s_endpgm);
         return error(code);
     };
-    EXPECT_TRUE(message(mubuf(50, 3, 1, 4, 128, 0, buf::offen))  // buffer_atomic_add
-                    .starts_with("unsupported instruction buffer_atomic_add at offset"));
+    EXPECT_TRUE(message(mubuf(50, 3, 1, 4, 128, 0, buf::offen | buf::tfe))  // buffer_atomic_add
+                    .starts_with("buffer_atomic_add with tfe is not supported yet at offset"));
     EXPECT_TRUE(message(mubuf(9, 3, 1, 4, 128, 0, buf::offen | buf::tfe))
                     .starts_with("buffer_load_sbyte with tfe or lds is not supported yet at"));
     EXPECT_TRUE(message(mubuf(12, 3, 1, 4, 128, 0, buf::offen | buf::tfe))

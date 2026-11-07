@@ -15,9 +15,11 @@ enum class DsKind : std::uint8_t {
     atomic,  // read-modify-write of one dword at the address
 };
 
+// The read-modify-write operations, also those of the MUBUF atomics. The float ones (a compare and
+// swap, min and max) come only from MUBUF so far.
 enum class DsAtomic : std::uint8_t {
     add, sub, rsub, inc, dec, smin, smax, umin, umax, bit_and, bit_or, bit_xor, mskor, exchange,
-    cmpst,
+    cmpst, fcmpst, fmin, fmax,
 };
 
 struct DsOperation {

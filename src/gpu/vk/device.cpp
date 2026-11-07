@@ -101,6 +101,8 @@ struct Query {
             {&f12.storageBuffer8BitAccess, "storageBuffer8BitAccess"},
             {&f12.bufferDeviceAddress, "bufferDeviceAddress"},
             {&f12.timelineSemaphore, "timelineSemaphore"},
+            // The MUBUF _x2 atomics are 64-bit atomics on buffer device addresses.
+            {&f12.shaderBufferInt64Atomics, "shaderBufferInt64Atomics"},
             // v_readfirstlane_b32 and v_readlane_b32 broadcast from a lane computed at run time.
             {&f12.subgroupBroadcastDynamicId, "subgroupBroadcastDynamicId"},
             // A translated pixel shader discards with OpDemoteToHelperInvocation.

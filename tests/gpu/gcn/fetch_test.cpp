@@ -224,10 +224,10 @@ TEST(GcnFetch, ErrorsAreAtTheCall) {
     EXPECT_EQ(failure(call, {sop1(3, 1, constant_0), s_setpc}),  // s_mov_b32 s1, 0
               at_call("fetch subroutine: s_mov_b32 at offset 0x0 writes the return address"));
     // An inlined instruction the translator doesn't support: at the call, with its fetch offset.
-    const Words atomic = cat({{s_nop, s_nop}, mubuf(50, 4, 0, 8, constant_0, 0, buf::idxen),
+    const Words atomic = cat({{s_nop, s_nop}, mubuf(50, 4, 0, 8, constant_0, 0, buf::tfe),
                               {s_setpc}});  // buffer_atomic_add
     EXPECT_EQ(failure(call, atomic),
-              at_call("fetch subroutine: unsupported instruction buffer_atomic_add at "
+              at_call("fetch subroutine: buffer_atomic_add with tfe is not supported yet at "
                       "offset 0x8"));
     // Only the vertex stage inlines it.
     EXPECT_EQ(failure(call, {s_setpc}, {}), at_call("unsupported instruction s_swappc_b64"));

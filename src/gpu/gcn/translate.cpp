@@ -17,6 +17,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <spirv/unified1/GLSL.std.450.h>
@@ -1263,6 +1264,10 @@ private:
             typed_memory(inst);
             return;
         }
+        if (name.starts_with("buffer_atomic_")) {
+            buffer_atomic(inst);
+            return;
+        }
         const bool load = name.starts_with("buffer_load_");
         const unsigned narrow = name.ends_with("byte") ? 1 : name.ends_with("short") ? 2 : 0;
         if (narrow == 0 && !name.starts_with("buffer_load_dword") &&
@@ -1303,6 +1308,53 @@ private:
             } else {
                 guarded_store(cond, address, read(data, d));
             }
+        }
+    }
+
+    // MUBUF atomics on a dword, or under _x2 a qword (Sea Islands ISA Table 12.8), in active
+    // lanes. The address is buffer_memory's. The range check is all or nothing (8.1.5.3), taken
+    // at the first byte as for a format access: an access outside is dropped and returns 0. With
+    // glc the old value returns into the first dword or two of vdata (Table 8.2). The compare
+    // and swaps take src from the first data VGPRs and cmp from the next.
+    void buffer_atomic(const Instruction& inst) {
+        using A = detail::DsAtomic;
+        static constexpr std::pair<std::string_view, A> ops[] = {
+            {"swap", A::exchange}, {"cmpswap", A::cmpst},   {"add", A::add},     {"sub", A::sub},
+            {"smin", A::smin},     {"umin", A::umin},       {"smax", A::smax},   {"umax", A::umax},
+            {"and", A::bit_and},   {"or", A::bit_or},       {"xor", A::bit_xor}, {"inc", A::inc},
+            {"dec", A::dec},       {"fcmpswap", A::fcmpst}, {"fmin", A::fmin},   {"fmax", A::fmax}};
+        std::string_view stem = inst.name;
+        stem.remove_prefix(std::string_view("buffer_atomic_").size());
+        const bool wide = stem.ends_with("_x2");
+        stem.remove_suffix(wide ? 3 : 0);
+        const auto* found = std::ranges::find(ops, stem, &std::pair<std::string_view, A>::first);
+        if (found == std::end(ops)) {
+            unsupported();
+        }
+        if ((inst.flags & flag::tfe) != 0) {
+            fail(std::format("{} with tfe is not supported yet", inst.name));
+        }
+        const A op = found->second;
+        const Id type = wide ? u64_ : u32_;
+        if (wide) {
+            b_.capability(spv::Capability::Int64Atomics);
+        }
+        const Operand& data = inst.src[0];
+        const auto value = [&](unsigned k) {  // the k-th value of vdata
+            const auto code = static_cast<std::uint16_t>(data.code + 2 * k);
+            return wide ? read64({OperandKind::vector, 2, code, 0}) : read(data, k);
+        };
+        const bool compare = op == A::cmpst || op == A::fcmpst;
+        const Id src = value(0), cmp = compare ? value(1) : 0;
+        const BufferAccess m = buffer_access(inst, &inst.src[1]);
+        const Id pointer = b_.op(Op::OpConvertUToPtr, global_pointer(type),
+                                 {add(address(m, 0), bias_)});
+        const Id old = atomic(op, type, pointer, spv::Scope::Device,
+                              b_.op(Op::OpLogicalAnd, bool_, {active(), inside(m, 0)}),
+                              compare ? cmp : src, compare ? src : 0);
+        for (unsigned d = 0; (inst.flags & flag::glc) != 0 && d < (wide ? 2u : 1u); ++d) {
+            const Id half = d == 0 ? old : b_.op(Op::OpShiftRightLogical, u64_, {old, c64(32)});
+            write_vector(data, wide ? b_.op(Op::OpUConvert, u32_, {half}) : old, d);
         }
     }
 
@@ -1894,22 +1946,33 @@ private:
     }
 
     // The 32-bit LDS atomics: add, sub, rsub, inc, dec, min, max, and, or, xor, mskor, wrxchg and
-    // cmpst. With a return value, VDST gets the dword from before the operation. The ones that
-    // have no SPIR-V atomic update the dword in a compare-and-swap loop.
+    // cmpst. With a return value, VDST gets the dword from before the operation.
     void ds_atomic(const Instruction& inst, const detail::DsOperation& d, Id address) {
-        using A = detail::DsAtomic;
         const Id at = b_.op(Op::OpIAdd, u32_, {address, b_.constant_u32(inst.mem_offset)});
         const auto [pointer, in_range] = lds_ref(at, 0);
         const Id data = read(inst.src[1]);  // data0
         const Id data1 = inst.num_src > 2 ? read(inst.src[2]) : 0;
-        const Id scope = b_.constant_u32(spirv_word(spv::Scope::Workgroup));
+        const Id old = atomic(d.op, u32_, pointer, spv::Scope::Workgroup,
+                              b_.op(Op::OpLogicalAnd, bool_, {active(), in_range}), data, data1);
+        if (d.returns) {
+            write_vector(inst.dst[0], old);
+        }
+    }
+
+    // Applies `op` to the dword or qword (`type`) at `pointer` at scope `s` where `cond` holds,
+    // and returns the old value, 0 elsewhere. `data1` is the second operand of mskor, cmpst and
+    // fcmpst (MEM = MEM == data ? data1 : MEM). The operations that have no SPIR-V atomic update
+    // the memory in a compare-and-swap loop.
+    Id atomic(detail::DsAtomic op, Id type, Id pointer, spv::Scope s, Id cond, Id data, Id data1) {
+        using A = detail::DsAtomic;
+        const Id scope = b_.constant_u32(spirv_word(s));
         const Id none = b_.constant_u32(0);
-        const auto direct = [&](Op op) { return b_.op(op, u32_, {pointer, scope, none, data}); };
-        const Id result = b_.local_variable(b_.type_pointer(SC::Function, u32_));
-        store(result, b_.constant_u32(0));
-        when(b_.op(Op::OpLogicalAnd, bool_, {active(), in_range}), [&] {
+        const auto direct = [&](Op o) { return b_.op(o, type, {pointer, scope, none, data}); };
+        const Id result = b_.local_variable(b_.type_pointer(SC::Function, type));
+        store(result, type == u64_ ? c64(0) : b_.constant_u32(0));
+        when(cond, [&] {
             Id old = 0;
-            switch (d.op) {
+            switch (op) {
             case A::add: old = direct(Op::OpAtomicIAdd); break;
             case A::sub: old = direct(Op::OpAtomicISub); break;
             case A::smin: old = direct(Op::OpAtomicSMin); break;
@@ -1921,61 +1984,91 @@ private:
             case A::bit_xor: old = direct(Op::OpAtomicXor); break;
             case A::exchange: old = direct(Op::OpAtomicExchange); break;
             case A::cmpst:  // MEM = MEM == data0 ? data1 : MEM
-                old = b_.op(Op::OpAtomicCompareExchange, u32_,
+                old = b_.op(Op::OpAtomicCompareExchange, type,
                             {pointer, scope, none, none, data1, data});
                 break;
             default:
-                old = atomic_update(pointer, spv::Scope::Workgroup,
-                                    [&](Id v) { return updated(d.op, v, data, data1); });
+                old = atomic_update(
+                    pointer, s, [&](Id v) { return updated(op, type, v, data, data1); }, type);
             }
             store(result, old);
         });
-        if (d.returns) {
-            write_vector(inst.dst[0], load(u32_, result));
-        }
+        return load(type, result);
     }
 
-    // The new value of the dword `v` for the operations that need a compare-and-swap loop.
-    Id updated(detail::DsAtomic op, Id v, Id data, Id data1) {
-        const auto u = [&](Op o, Id x, Id y) { return b_.op(o, u32_, {x, y}); };
+    // The new value of the dword or qword `v` (`type`) for the operations that need a
+    // compare-and-swap loop. The float ones compare the bits as IEEE values, so denormals are
+    // kept whatever the float mode (the manual: "handles NaN/INF/denorm"). Our reading,
+    // unverified: fmin and fmax give the other operand when one is NaN and order -0 below +0, and
+    // fcmpst takes +0 and -0 as equal and a NaN as equal to nothing.
+    Id updated(detail::DsAtomic op, Id type, Id v, Id data, Id data1) {
+        using A = detail::DsAtomic;
+        const bool wide = type == u64_;
+        const auto k = [&](std::uint64_t x) {
+            return wide ? c64(x) : b_.constant_u32(static_cast<std::uint32_t>(x));
+        };
+        const auto u = [&](Op o, Id x, Id y) { return b_.op(o, type, {x, y}); };
         const auto test = [&](Op o, Id x, Id y) { return b_.op(o, bool_, {x, y}); };
-        const Id zero = b_.constant_u32(0);
+        const auto pick = [&](Id c, Id x, Id y) { return b_.op(Op::OpSelect, type, {c, x, y}); };
+        const Id sign = k(wide ? 1ull << 63 : 1ull << 31);
+        const Id magnitude = b_.op(Op::OpNot, type, {sign});
+        const auto nan = [&](Id x) {
+            return test(Op::OpUGreaterThan, u(Op::OpBitwiseAnd, x, magnitude),
+                        k(wide ? 0x7ff0'0000'0000'0000ull : 0x7f80'0000u));
+        };
+        const auto key = [&](Id x) {  // ordered as unsigned like the floats, -0 below +0
+            return pick(test(Op::OpINotEqual, u(Op::OpBitwiseAnd, x, sign), k(0)),
+                        b_.op(Op::OpNot, type, {x}), u(Op::OpBitwiseOr, x, sign));
+        };
         switch (op) {
         case detail::DsAtomic::rsub:
             return u(Op::OpISub, data, v);
-        case detail::DsAtomic::inc:  // wraps to 0 after data
-            return b_.op(Op::OpSelect, u32_,
-                         {test(Op::OpUGreaterThanEqual, v, data), zero,
-                          u(Op::OpIAdd, v, b_.constant_u32(1))});
-        case detail::DsAtomic::dec:  // wraps to data after 0 and above data
-            return b_.op(Op::OpSelect, u32_,
-                         {b_.op(Op::OpLogicalOr, bool_, {test(Op::OpIEqual, v, zero),
-                                                         test(Op::OpUGreaterThan, v, data)}),
-                          data, u(Op::OpISub, v, b_.constant_u32(1))});
+        case A::inc:  // wraps to 0 after data
+            return pick(test(Op::OpUGreaterThanEqual, v, data), k(0), u(Op::OpIAdd, v, k(1)));
+        case A::dec:  // wraps to data after 0 and above data
+            return pick(b_.op(Op::OpLogicalOr, bool_, {test(Op::OpIEqual, v, k(0)),
+                                                       test(Op::OpUGreaterThan, v, data)}),
+                        data, u(Op::OpISub, v, k(1)));
+        case A::fmin:
+        case A::fmax: {
+            const Id better = op == A::fmin ? test(Op::OpULessThan, key(data), key(v))
+                                            : test(Op::OpUGreaterThan, key(data), key(v));
+            return pick(nan(data), v, pick(nan(v), data, pick(better, data, v)));
+        }
+        case A::fcmpst: {
+            const Id zeros = test(Op::OpIEqual, u(Op::OpBitwiseAnd, u(Op::OpBitwiseOr, v, data),
+                                                  magnitude), k(0));
+            const Id equal = b_.op(Op::OpLogicalOr, bool_, {test(Op::OpIEqual, v, data), zeros});
+            const Id numbers = b_.op(Op::OpLogicalNot, bool_,
+                                     {b_.op(Op::OpLogicalOr, bool_, {nan(v), nan(data)})});
+            return pick(b_.op(Op::OpLogicalAnd, bool_, {equal, numbers}), data1, v);
+        }
         default:  // mskor: (MEM & ~data0) | data1
-            return u(Op::OpBitwiseOr, u(Op::OpBitwiseAnd, v, b_.op(Op::OpNot, u32_, {data})),
+            return u(Op::OpBitwiseOr, u(Op::OpBitwiseAnd, v, b_.op(Op::OpNot, type, {data})),
                      data1);
         }
     }
 
-    // Replaces the dword at `pointer` by f(old) atomically, as a loop on a compare-and-swap at
-    // scope `s` (the LDS's workgroup, or the device for buffers), and returns the old value.
+    // Replaces the dword (or the value of `type`) at `pointer` by f(old) atomically, as a loop on
+    // a compare-and-swap at scope `s` (the LDS's workgroup, or the device for buffers), and
+    // returns the old value.
     template <typename F>
-    Id atomic_update(Id pointer, spv::Scope s, F f) {
+    Id atomic_update(Id pointer, spv::Scope s, F f, Id type = 0) {
+        type = type != 0 ? type : u32_;
         const Id scope = b_.constant_u32(spirv_word(s));
         const Id none = b_.constant_u32(0);
         // The other lanes update the dword atomically at the same time, so the first read is an
         // atomic one too, or it would race with them. A stale value is fixed by the loop.
-        const Id current = b_.local_variable(b_.type_pointer(SC::Function, u32_));
-        store(current, b_.op(Op::OpAtomicLoad, u32_, {pointer, scope, none}));
+        const Id current = b_.local_variable(b_.type_pointer(SC::Function, type));
+        store(current, b_.op(Op::OpAtomicLoad, type, {pointer, scope, none}));
         const Id header = b_.id(), body = b_.id(), cont = b_.id(), merge = b_.id();
         b_.op_void(Op::OpBranch, {header});
         b_.begin_block(header);
         b_.op_void(Op::OpLoopMerge, {merge, cont, spirv_word(spv::LoopControlMask::MaskNone)});
         b_.op_void(Op::OpBranch, {body});
         b_.begin_block(body);
-        const Id old = load(u32_, current);
-        const Id seen = b_.op(Op::OpAtomicCompareExchange, u32_,
+        const Id old = load(type, current);
+        const Id seen = b_.op(Op::OpAtomicCompareExchange, type,
                               {pointer, scope, none, none, f(old), old});
         store(current, seen);
         b_.op_void(Op::OpBranchConditional,
