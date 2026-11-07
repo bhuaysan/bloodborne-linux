@@ -142,7 +142,9 @@ Parser::Step Parser::write_data(Engine engine, const Packet& packet) {
         if (first_time(std::uint32_t{IT_WRITE_DATA} << 8 | (control >> 24 & 0xC0) | dst_sel)) {
             common::log(common::LogLevel::warn, channel,
                         "WRITE_DATA with control {:#010x} skipped on the {} engine", control,
-                        engine == Engine::constant ? "constant" : "draw");
+                        engine == Engine::constant  ? "constant"
+                        : engine == Engine::compute ? "compute"
+                                                    : "draw");
         }
         return Step::next;
     }
@@ -220,7 +222,7 @@ Parser::Step Parser::release(std::uint64_t at, std::uint32_t data_sel, std::uint
         store(at, data_sel >= 3 ? gpu_clock() : data, bytes);
     }
     if (int_sel != 0 && interrupt_) {
-        interrupt_(gfx_eop_interrupt);
+        interrupt_(interrupt_source_);
     }
     return Step::next;
 }

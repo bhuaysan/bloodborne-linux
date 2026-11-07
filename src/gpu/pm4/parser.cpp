@@ -64,7 +64,9 @@ constexpr std::string_view space_name(RegSpace space) {
 
 }  // namespace
 
-Stream::Stream(std::span<const std::uint32_t> buffer, Engine engine) : engine_(engine) {
+Stream::Stream(std::span<const std::uint32_t> buffer, Engine engine,
+               std::uint32_t interrupt_source)
+    : engine_(engine), interrupt_source_(interrupt_source) {
     levels_[0] = {buffer.data(), buffer.data() + buffer.size()};
     depth_ = 1;
     pop_finished();
@@ -85,6 +87,7 @@ bool Parser::known_opcode(std::uint8_t opcode) {
 }
 
 RunResult Parser::run(Stream& stream) {
+    interrupt_source_ = stream.interrupt_source();
     while (!stream.done()) {
         Stream::Level& level = stream.levels_[stream.depth_ - 1];
         const std::uint32_t header = *level.pos;
@@ -193,11 +196,13 @@ Parser::Step Parser::execute(Stream& stream, const Packet& packet) {
         break;
     }
     case IT_INCREMENT_DE_COUNTER:
-        ++de_counter_;
+        if (stream.engine() == Engine::draw) {
+            ++de_counter_;
+        }
         break;
     case IT_WAIT_ON_CE_COUNTER:
         // The DE waits until the CE counter is ahead of the DE counter.
-        if (counter_diff(ce_counter_, de_counter_) <= 0) {
+        if (stream.engine() == Engine::draw && counter_diff(ce_counter_, de_counter_) <= 0) {
             return Step::wait;
         }
         break;
@@ -311,7 +316,7 @@ Parser::Step Parser::dump_const_ram(const Packet& packet) {
 
 // INDIRECT_BUFFER: base address low (bits 2-31) and high (bits 0-15), then the size in dwords
 // (bits 0-19) and the chain bit (20). A chained buffer replaces the current one, as in shadPS4;
-// the others nest.
+// the others nest, and so does every one in a compute ring (shadPS4 chains only below the ring).
 Parser::Step Parser::indirect_buffer(Stream& stream, const Packet& packet) {
     const auto* buffer = reinterpret_cast<const std::uint32_t*>(
         std::uint64_t{packet.body[1] & 0xFFFF} << 32 | (packet.body[0] & ~3u));
@@ -323,7 +328,7 @@ Parser::Step Parser::indirect_buffer(Stream& stream, const Packet& packet) {
         return Step::fail;
     }
     Stream::Level& level = stream.levels_[stream.depth_ - 1];
-    if (chain) {
+    if (chain && !(stream.engine() == Engine::compute && stream.depth_ == 1)) {
         level = {buffer, buffer + size};
         return Step::next;
     }

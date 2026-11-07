@@ -27,8 +27,10 @@ namespace bb::pm4 {
 
 enum class RunResult : std::uint8_t { done, waiting, error };
 
-// The engine that runs a stream: draw (DCB) or constant (CCB).
-enum class Engine : std::uint8_t { draw, constant };
+// The engine that runs a stream: draw (DCB), constant (CCB) or compute (a compute ring). The
+// compute engine runs what the draw engine runs except the CE/DE counter packets, and an
+// INDIRECT_BUFFER in the ring itself always nests, so the stream's position stays in the ring.
+enum class Engine : std::uint8_t { draw, constant, compute };
 
 // Where the parser hands over to the backend: before a memory packet writes (the backend waits
 // for the Vulkan work recorded so far) and before a stream waits on memory (it submits that work).
@@ -42,12 +44,18 @@ public:
     // The submitted buffer plus three nested INDIRECT_BUFFERs.
     static constexpr unsigned max_depth = 4;
 
-    explicit Stream(std::span<const std::uint32_t> buffer, Engine engine = Engine::draw);
+    // `interrupt_source` is what the stream's EVENT_WRITE_EOP and RELEASE_MEM interrupts report.
+    explicit Stream(std::span<const std::uint32_t> buffer, Engine engine = Engine::draw,
+                    std::uint32_t interrupt_source = gfx_eop_interrupt);
 
     Engine engine() const { return engine_; }
+    std::uint32_t interrupt_source() const { return interrupt_source_; }
     bool done() const { return depth_ == 0; }
     // The next dword to run, or null when done.
     const std::uint32_t* position() const;
+    // The position in the submitted buffer: past an INDIRECT_BUFFER that is still running, at the
+    // buffer's end when done. A chained buffer at the top level moves it out of the buffer.
+    const std::uint32_t* top_position() const { return levels_[0].pos; }
 
 private:
     friend class Parser;
@@ -62,6 +70,7 @@ private:
     std::array<Level, max_depth> levels_{};
     unsigned depth_ = 0;
     Engine engine_;
+    std::uint32_t interrupt_source_;
 };
 
 class Parser {
@@ -127,6 +136,7 @@ private:
     Readable readable_;
     Sync sync_;
     Interrupt interrupt_;
+    std::uint32_t interrupt_source_ = gfx_eop_interrupt;  // of the running stream
     std::unordered_set<std::uint32_t> logged_variants_;
     std::array<std::uint32_t, 2> context_control_{};
     std::array<std::uint32_t, ce_ram_bytes / 4> ce_ram_{};

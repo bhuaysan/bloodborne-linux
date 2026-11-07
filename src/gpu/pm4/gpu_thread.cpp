@@ -1,6 +1,8 @@
 #include "gpu/pm4/gpu_thread.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <bit>
 
 #include "common/log.hpp"
 #include "gpu/pm4/default_state.hpp"
@@ -52,6 +54,69 @@ void GpuThread::submit(Queue queue, std::span<const std::span<const std::uint32_
     work_.notify_all();
 }
 
+int GpuThread::map_ring(std::span<const std::uint32_t> ring, std::uint32_t* read_pointer,
+                        std::uint32_t interrupt_source) {
+    if (!std::has_single_bit(ring.size()) || read_pointer == nullptr) {
+        return -1;
+    }
+    const std::scoped_lock lock(mutex_);
+    for (std::size_t i = 0; i < ring_count; ++i) {
+        // A ring whose streams an unmap left queued is free once the thread dropped them.
+        if (rings_[i].mapped || !queues_[queue_count + i].empty()) {
+            continue;
+        }
+        rings_[i] = {ring, read_pointer, 0, interrupt_source, true};
+        std::atomic_ref(*read_pointer).store(0, std::memory_order_release);
+        common::log(common::LogLevel::info, channel, "compute ring {}: {} dwords at {}", i,
+                    ring.size(), static_cast<const void*>(ring.data()));
+        return static_cast<int>(i);
+    }
+    return -1;
+}
+
+bool GpuThread::unmap_ring(int ring) {
+    {
+        const std::scoped_lock lock(mutex_);
+        if (ring < 0 || static_cast<std::size_t>(ring) >= ring_count || !rings_[ring].mapped) {
+            return false;
+        }
+        rings_[ring].mapped = false;
+        common::log(common::LogLevel::info, channel, "compute ring {} unmapped", ring);
+    }
+    work_.notify_all();  // the thread drops the ring's streams
+    return true;
+}
+
+bool GpuThread::ring_doorbell(int ring, std::uint32_t write_offset) {
+    {
+        const std::scoped_lock lock(mutex_);
+        if (ring < 0 || static_cast<std::size_t>(ring) >= ring_count || !rings_[ring].mapped ||
+            write_offset > rings_[ring].dwords.size()) {
+            return false;
+        }
+        Ring& r = rings_[ring];
+        const auto size = static_cast<std::uint32_t>(r.dwords.size());
+        write_offset &= size - 1;
+        std::deque<Stream>& queue = queues_[queue_count + ring];
+        const auto queue_range = [&](std::uint32_t from, std::uint32_t to) {
+            queue.emplace_back(r.dwords.subspan(from, to - from), Engine::compute,
+                               r.interrupt_source);
+            ++stats_.submitted;
+        };
+        if (write_offset > r.written) {
+            queue_range(r.written, write_offset);
+        } else if (write_offset < r.written) {  // wrapped
+            queue_range(r.written, size);
+            if (write_offset != 0) {
+                queue_range(0, write_offset);
+            }
+        }
+        r.written = write_offset;
+    }
+    work_.notify_all();
+    return true;
+}
+
 bool GpuThread::wait_idle(std::chrono::milliseconds timeout) {
     std::unique_lock lock(mutex_);
     return idle_.wait_for(lock, timeout, [this] {
@@ -71,8 +136,8 @@ void GpuThread::loop() {
     for (;;) {
         bool progress = false;
         bool waiting = false;
-        for (auto& queue : queues_) {
-            progress = run_front(queue, waiting) || progress;
+        for (std::size_t i = 0; i < queues_.size(); ++i) {
+            progress = run_front(i, waiting) || progress;
         }
         std::unique_lock lock(mutex_);
         if (stop_) {
@@ -92,23 +157,44 @@ void GpuThread::loop() {
     }
 }
 
-bool GpuThread::run_front(std::deque<Stream>& queue, bool& waiting) {
+void GpuThread::drop_streams(std::deque<Stream>& queue) {
+    common::log(common::LogLevel::info, channel, "{} stream(s) of an unmapped ring dropped",
+                queue.size());
+    stats_.finished += queue.size();
+    queue.clear();
+}
+
+bool GpuThread::run_front(std::size_t index, bool& waiting) {
+    std::deque<Stream>& queue = queues_[index];
+    Ring* const ring = index >= queue_count ? &rings_[index - queue_count] : nullptr;
     Stream* stream = nullptr;
     {
         const std::scoped_lock lock(mutex_);
         if (stop_ || queue.empty()) {
             return false;
         }
+        if (ring != nullptr && !ring->mapped) {
+            drop_streams(queue);
+            idle_.notify_all();
+            return true;
+        }
         stream = &queue.front();
     }
     const std::uint64_t packets = packets_.load(std::memory_order_relaxed);
     const RunResult result = parser_.run(*stream);
-    if (result == RunResult::waiting) {
-        waiting = true;
-        return packets_.load(std::memory_order_relaxed) != packets;
-    }
     {
         const std::scoped_lock lock(mutex_);
+        if (ring != nullptr && ring->mapped) {
+            // The read offset: the stream's position in the ring, wrapped at its end.
+            const auto offset = static_cast<std::uint32_t>(stream->top_position() -
+                                                           ring->dwords.data()) &
+                                static_cast<std::uint32_t>(ring->dwords.size() - 1);
+            std::atomic_ref(*ring->read_pointer).store(offset, std::memory_order_release);
+        }
+        if (result == RunResult::waiting) {
+            waiting = true;
+            return packets_.load(std::memory_order_relaxed) != packets;
+        }
         queue.pop_front();
         ++stats_.finished;
         if (result == RunResult::error) {

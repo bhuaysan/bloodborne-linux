@@ -6,8 +6,10 @@
 // the thread sleeps until a submission arrives, or polls the waits every 100 µs.
 //
 // The graphics queue runs draw command buffers on the draw engine, the constant queue constant
-// command buffers on the constant engine; the counters in the parser order the two. The compute
-// rings (#275) become further queues.
+// command buffers on the constant engine; the counters in the parser order the two. Each mapped
+// compute ring is a further queue on the compute engine: a doorbell queues the ring from the last
+// written offset to the new one (two streams when it wraps), and the thread writes the read
+// offset back to the game after each run (docs/design/graphics.md, "Compute queues").
 #pragma once
 
 #include <array>
@@ -27,6 +29,8 @@ namespace bb::pm4 {
 
 enum class Queue : std::uint8_t { graphics, constant };
 inline constexpr std::size_t queue_count = 2;
+// Compute rings: 7 pipes of 8 queues (shadPS4's limit; pipe 7 belongs to the system).
+inline constexpr std::size_t ring_count = 56;
 
 class GpuThread {
 public:
@@ -55,6 +59,19 @@ public:
     // Waits until every queue is empty. False if `timeout` passed first.
     bool wait_idle(std::chrono::milliseconds timeout);
 
+    // Maps a compute ring: `ring` is the game's ring, its size a power of two; the read offset in
+    // dwords is written to `read_pointer` (here 0 at once, then after each run of the ring); its
+    // interrupts report `interrupt_source`. Both must stay mapped until unmap_ring. Returns the
+    // ring's index, or -1 when all are in use or the size isn't a power of two.
+    int map_ring(std::span<const std::uint32_t> ring, std::uint32_t* read_pointer,
+                 std::uint32_t interrupt_source);
+    // Unmaps a ring: its queued streams are dropped and its read pointer no longer written. A run
+    // under way finishes. False if `ring` isn't mapped.
+    bool unmap_ring(int ring);
+    // The game wrote the ring up to `write_offset` dwords (modulo its size): queues the dwords
+    // from the previous write offset on. False if `ring` isn't mapped or the offset is past it.
+    bool ring_doorbell(int ring, std::uint32_t write_offset);
+
     Stats stats() const;
 
     // The register mirror. Read it only after wait_idle returned true and before the next submit.
@@ -64,9 +81,19 @@ public:
 
 private:
     void loop();
-    // Runs the front stream of one queue. Sets `waiting` if it waits. Returns whether any packet
-    // ran or the stream finished.
-    bool run_front(std::deque<Stream>& queue, bool& waiting);
+    struct Ring {
+        std::span<const std::uint32_t> dwords;
+        std::uint32_t* read_pointer = nullptr;
+        std::uint32_t written = 0;  // the last write offset
+        std::uint32_t interrupt_source = 0;
+        bool mapped = false;
+    };
+
+    // Runs the front stream of queue `index` (the rings follow the two fixed queues). Sets
+    // `waiting` if it waits. Returns whether any packet ran or the stream finished.
+    bool run_front(std::size_t index, bool& waiting);
+    // Drops the streams of an unmapped ring's queue. Call with the lock held.
+    void drop_streams(std::deque<Stream>& queue);
 
     RegisterMirror regs_;
     Parser parser_{regs_};
@@ -76,7 +103,8 @@ private:
     std::condition_variable idle_;  // a stream finished
     // Submissions only append, so the front stream stays in place while the thread runs it
     // outside the lock (a deque keeps references on push_back).
-    std::array<std::deque<Stream>, queue_count> queues_;
+    std::array<std::deque<Stream>, queue_count + ring_count> queues_;
+    std::array<Ring, ring_count> rings_;
     Stats stats_;
     std::atomic<std::uint64_t> packets_{0};
     bool stop_ = false;
