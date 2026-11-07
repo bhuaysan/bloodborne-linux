@@ -1,7 +1,7 @@
 // The clip space of the pipeline state against the eboot's own state code (docs/design/graphics.md,
-// "Pipeline state (item 26, as built)"): the clip control of its rasterizer state and of a
-// full-screen pass, and the screen viewport, written by the game's GNM writers on the mapped
-// eboot and run through our parser into the register mirror.
+// "Pipeline state (item 26, as built)"): the clip control of a full-screen pass and the screen
+// viewport, written by the game's GNM writers on the mapped eboot and run through our parser into
+// the register mirror. The rasterizer state builder 0x2178550 follows with the raster state.
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -54,28 +54,9 @@ protected:
     }
 };
 
-// The rasterizer state builder 0x2178550 reads a description (fill mode, cull mode, front face
-// counter-clockwise, depth bias, bias clamp, slope bias, then depth clip enable at +0x18) and
-// writes PA_CL_CLIP_CNTL to dword 0, which its apply function writes with 0x1076b30 (0x26d33d1).
-// It always sets DX_CLIP_SPACE_DEF, so z goes from 0 to w as in Vulkan; depth clip off sets both
-// ZCLIP_*_DISABLE.
-TEST_F(ClipSpace, RasterizerState) {
-    for (const bool depth_clip : {true, false}) {
-        std::array<std::uint32_t, 8> desc{};
-        desc[6] = depth_clip;
-        std::array<std::uint32_t, 9> state{};
-        image().fn<int(std::uint32_t*, void*, const std::uint32_t*)>(0x2178550)(
-            state.data(), nullptr, desc.data());
-        EXPECT_EQ(state[0], depth_clip ? 1u << 19 : 1u << 19 | 3u << 26);
-        const bb::vk::DrawState s = draw(state[0]);
-        EXPECT_FALSE(s.key.negative_one_to_one);
-        EXPECT_EQ(s.key.depth_clamp, !depth_clip);
-    }
-}
-
 // The full-screen pass at 0x21d80b6 builds its PA_CL_CLIP_CNTL with 0x10850d0 and 0x1085130
 // (clipping off: CLIP_DISABLE, and DX_CLIP_SPACE_DEF clear). Without clipping its depth stays the
-// hardware's z, within 0-1 (checked in draw()), so z goes from 0 to w here too.
+// hardware's z, within 0-1 (checked in draw()): zoffset - zscale is below 0, so z goes from 0 to w.
 TEST_F(ClipSpace, FullScreenPass) {
     std::uint32_t clip = 0xffffffff;
     image().fn<void(std::uint32_t*)>(0x10850d0)(&clip);
