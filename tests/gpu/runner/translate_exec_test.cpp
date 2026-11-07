@@ -617,6 +617,35 @@ TEST_F(TranslateExec, ScalarMemory) {
     }
 }
 
+// Each access takes its bias from entry (address >> 31) & 15 of the table, entry 13 here: the
+// base's bits 31-34 are 13, bits 32-35 are 6, bits 31-33 are 5 and bits 31-36 are 45. The other
+// entries move an access 0x2000 bytes up, where a decoy input lies, so the scalar load and the
+// flat store of mem_mirror only find their data through the right entry.
+TEST_F(TranslateExec, BiasTableEntryOfTheAddress) {
+    constexpr std::uint64_t at = 0x16'8000'0000, decoy = 0x2000, in = 0x100, out = 0x1000;
+    static_assert(((at >> bb::gcn::bias_shift) & (bb::gcn::bias_entries - 1)) == 13);
+    const auto translation = bb::gcn::translate(
+        bb::test::gcn::program_words("mem_mirror"), {},
+        {.pgm_rsrc2 = bb::test::gcn::program_pgm_rsrc2("mem_mirror"),
+         .num_threads = {lanes, 1, 1}});
+    auto memory = runner_->guest_memory(at, 2 * decoy);
+    constexpr std::uint32_t value = 0x1234'0000, decoy_value = 0xdead'0000;
+    std::memcpy(memory.data() + in, &value, 4);
+    std::memcpy(memory.data() + decoy + in, &decoy_value, 4);
+    DrawBlock draw;
+    draw.user_data = {static_cast<std::uint32_t>(at + out), static_cast<std::uint32_t>(at >> 32),
+                      static_cast<std::uint32_t>(at + in), static_cast<std::uint32_t>(at >> 32)};
+    draw.other_entries_offset = decoy;
+    runner_->run(translation.spirv, draw, {1, 1, 1});
+    for (std::uint32_t i = 0; i < lanes; ++i) {
+        std::uint32_t word = 0, other = 0;
+        std::memcpy(&word, memory.data() + out + 4 * i, 4);
+        std::memcpy(&other, memory.data() + decoy + out + 4 * i, 4);
+        EXPECT_EQ(word, value + i) << "lane " << i;
+        EXPECT_EQ(other, 0u) << "lane " << i;
+    }
+}
+
 // Untyped MUBUF dword loads and stores: offen, idxen, both, a dword pair, addr64, soffset, and
 // lanes that are inactive or out of range. The range rule is Sea Islands ISA 8.1.5.3, checked per
 // dword. With a stride of 0, offset + soffset >= num_records (bytes) is out of range, whatever the

@@ -50,6 +50,9 @@ struct DrawBlock {
     // address_bias points to a bias table whose entries all hold the guest memory's device
     // address minus its guest address, or to this table instead (the memory mirror's).
     std::optional<std::uint64_t> bias_table;
+    // In the runner's table, the entries other than the one the guest memory's base selects hold
+    // the bias plus this, so that an access through a wrong entry lands elsewhere.
+    std::uint64_t other_entries_offset = 0;
 };
 
 class ComputeRunner {

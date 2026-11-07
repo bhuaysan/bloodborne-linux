@@ -239,11 +239,13 @@ VkDeviceAddress ComputeRunner::draw_block(const DrawBlock& draw) {
         throw std::logic_error("run needs guest memory first");
     }
     // Device address = guest address + bias, modulo 2^64, with the same bias in every entry of
-    // the table, which follows the block.
-    const std::uint64_t bias = s.guest.address - s.guest_base;
+    // the table (but other_entries_offset), which follows the block.
+    const std::uint64_t own = (s.guest_base >> bb::gcn::bias_shift) & (bb::gcn::bias_entries - 1);
     const std::uint64_t table = draw.bias_table.value_or(s.draw.address + draw_block_size);
     auto* block = static_cast<std::byte*>(s.draw.map);
     for (std::uint32_t k = 0; k < bb::gcn::bias_entries; ++k) {
+        const std::uint64_t bias =
+            s.guest.address - s.guest_base + (k == own ? 0 : draw.other_entries_offset);
         std::memcpy(block + draw_block_size + 8 * k, &bias, sizeof bias);
     }
     std::memcpy(block + draw_user_data_offset, draw.user_data.data(), sizeof draw.user_data);
