@@ -20,11 +20,13 @@ How the game's GPU work reaches Vulkan: the shader translator (GCN → SPIR-V), 
 src/gpu/
   gcn/     bbgcn    decoder, disassembler, analysis, translator, SPIR-V builder (no Vulkan, no loader)
   pm4/     bbpm4    PM4 packets, parser and GPU register mirror (second wave)
+  tile/    bbtile   tile modes, tiled surface layouts and addresses (no Vulkan)
   vk/      bbvk     Vulkan backend: device core and scheduler (#269), swapchain presenter (#277); memory and pipelines later
 src/tools/bb-gcn    command line: disassemble or translate one shader binary
 tools/shaderbnd/    Python: extracts the shaders from the game's archives into analysis/
 tests/gpu/gcn/      bbgcn unit, corpus and execution tests (one directory per target, as in runtime.md)
 tests/gpu/pm4/      bbpm4 tests on synthetic streams
+tests/gpu/tile/     bbtile tests
 tests/gpu/runner/   bbcomputerunner: the test-only Vulkan compute runner on lavapipe, and the translator's execution tests (built only with Vulkan)
 tests/gpu/programs/ our GCN test programs: assembly source plus assembled words as hex text
 tests/gpu/vk/       bbvk tests: device choice, and the device core and scheduler on lavapipe (built only with Vulkan)
@@ -35,7 +37,7 @@ Dependencies:
 - `bbvk` depends on `bbgcn` and `bbpm4`. So far (the device core, #269) it needs only `bbcommon` and Vulkan, and `src/gpu/CMakeLists.txt` builds it only when `find_package(Vulkan)` finds Vulkan.
 - The HLE modules for `libSceGnmDriver` and `libSceVideoOut` (later wave) get their own `OBJECT` library on top of `bbvk`, so the harness test binaries that link `bbhle` don't pull in Vulkan.
 
-Namespaces: `bb::gcn`, `bb::pm4`, `bb::vk`.
+Namespaces: `bb::gcn`, `bb::pm4`, `bb::tile`, `bb::vk`.
 
 Build and test requirements:
 
@@ -672,6 +674,32 @@ Part 2 of #277 (a follow-up branch): `src/gpu/window/` (`bbwindow`, built only w
 - Video out: `set_flip_observer` gives the flip thread a function that it calls for each completed flip with the port, the buffer index, the buffer's registered address and the port's attribute, outside the lock and before the flip's events go out. The flip count is already up when it runs. Flip and vblank behaviour is otherwise unchanged.
 - `bb-run` opens the window (1280x720, "Bloodborne") after the load, chooses the device for its surface (`--device NAME` is the selector of `choose_device`) and sets the flip observer to present the test image of each flipped buffer. Without a window, a Vulkan instance, a surface (`create_surface` throws) or a suitable device it logs `no window, running headless: <why>` and goes on as with `--headless`. A failed present logs `presentation stopped: <why>` and removes the observer. The initial thread handles the window's events in slices of 16 ms between checks of the game thread and of `--timeout`; closing the window ends the run with status 0. `--headless` opens nothing, as before; the game tests pass it. Without SDL3 at build time `bb-run` is headless only.
 - Tests stay headless: the presenter test (part 1) presents to a `VK_EXT_headless_surface` on lavapipe, and the window test uses SDL's offscreen video driver (`SDL_VIDEO_DRIVER=offscreen`), whose Vulkan surfaces are headless surfaces too. A manual run of `bb-run` with part 2 and `SDL_VIDEO_DRIVER=offscreen` on lavapipe presented the game's first flip about 0.6 s after the main loop was reached.
+
+### Tiling (item 23, as built)
+
+Part 1 of #278: `src/gpu/tile/tiling.*` (`bbtile`, namespace `bb::tile`, only `bbcommon`, so it builds and tests without Vulkan), tests in `tests/gpu/tile/tiling_test.cpp`. Adapted with notices from shadPS4 (ff1b7a2e) `amdgpu/tiling.*` (the tile mode tables), `texture_cache/tile.h` (the level sizes) and `host_shaders/tiling.comp` (the address computation), on the CPU.
+
+- **Supported tile modes** (`mode_info`): the thin non-PRT ones with eight pipes (P8_32x32_16x16) and the linear ones: 0-4 (`Depth2DThin64` to `1K`, split 64 to 1024 bytes), 5 (`Depth1DThin`), 8 (`DisplayLinearAligned`), 9 (`Display1DThin`), 10 (`Display2DThin`), 13 (`Thin1DThin`), 14 (`Thin2DThin`) and 31 (`DisplayLinearGeneral`). PRT, thick and 3D modes (6, 7, 11, 12, 15-30) give nothing; the game's display buffers and textures don't use them (below), and render and depth targets with other modes are found by the targets item at run time.
+- **One fragment only.** With one fragment the bank width is always 1, a colour tile is never split (the colour tile split is at least the tile's own bytes, so it is taken as 1024 and shadPS4's sample split drops out), and the macro tile mode is log2(min(split, 64 × bytes) / 64), one of 0-4 (`1x4_16`, `1x2_16`, `1x1_16`, `1x1_16_Dup`, `1x1_8`). The macro tile is 64 × aspect by 8 × bank height × banks / aspect elements, which reproduces shadPS4's `macro_tile_extents_x1` rows for these modes (checked once against the table; the table itself is not copied).
+- **Layouts** (`layout`): level i starts from max(pitch >> i, 1) by max(height >> i, 1) pixels (the T#'s or the target's pitch, as shadPS4), divided into 4x4 blocks for BC formats (`blocks`), then padded: linear aligned to a pitch multiple of max(8, 64 / bytes) and a layer of a multiple of max(64, 256 / bytes) elements; 1D to 8x8 and a layer of a multiple of 256 bytes; 2D to whole macro tiles, except levels after the first that are smaller than one macro tile, which fall back to 1D (`Level::macro`); linear general not at all. Levels follow each other, each layer after layer. Pow2 padding and the depth of volume textures are left to the textures item. A surface of 4 GiB or more gives nothing (the shader will use 32-bit offsets).
+- **Addresses** (`tiled_offset`): linear row-major; 1D the micro tile in rows of pitch / 8, then the element's index in the 8x8 micro tile (display order by element size, thin and depth x0 y0 x1 y1 x2 y2); 2D as `ComputeSurfaceAddrFromCoordMacroTiled` with the tile split, the P8_32x32_16x16 pipe bits, the 16- or 8-bank bits, the 2D slice rotation, the split rotation and the T#'s `BANK_SWIZZLE`. The linear copy (`detile`, `tile`) keeps the padded rows, so it has the same size and level offsets as the tiled surface.
+- **Tests:** every supported mode at 8 to 128 bits with three levels and two layers maps every element to its own element of the surface (a bijection onto the whole size), offsets worked out by hand for `Display2DThin` and `Thin1DThin`, the display buffer layout, three game texture sizes from the TPF headers (below), padding rules, unsupported input, and a CPU round trip.
+
+**Tile modes the game uses** (read statically, objdump and the game's archives):
+- **Display buffers: `Display2DThin` (10), 32 bits.** The first video-out path calls `sceVideoOutSetBufferAttribute` at 0x11e48f8 with format 0x80000000 (A8R8G8B8 sRGB), tiling 0 (tiled), 1920x1080, pitch 1920; the buffer addresses are render target bases (the getter 0x1086ca0 returns dword 0 of the render target object, shifted left by 8). The second path (0x26d6261) passes tiling = (tile mode == 8) for a tile mode chosen at 0x26d5f3d by the GNM tile mode chooser 0x109cb30 for surface type 1 and one fragment; for type 1 the chooser asks its helper 0x109c850 for array mode 2D thin and display micro tiling, which it maps to 10. shadPS4 also takes `Display2DThin` for tiled video-out buffers. With 32 bits the macro tile is `1x1_16`, 128x64, so 1920x1080 is padded to 1920x1088.
+- **Textures: `Thin1DThin` (13).** Each texture entry of a PS4 TPF (0x24 bytes from 0x10: data offset, size, format bytes, width, height, a dword 1, then a dword we read as the tile mode index) holds 13 in every entry scanned: the 1,120 standalone `*.tpf.dcx` the shaderbnd DCX reader opens (2,186 entries), the 14 `*envmap.tpf.dcx` (63 cube maps; most use a DCX variant that reader rejects, a few are also in the first count), every `*.chrbnd.dcx` (3,202) and the five `m25` `.tpfbdt` archives (4,515). By their DXGI codes the formats are BC1, BC3, BC4, BC6H, BC7, R8G8B8A8 and R16G16B16A16 float. The stored sizes match the 1D layout exactly (BC1 1024x1024 with 11 levels is 0xab400 bytes, with the small levels each taking a whole micro tile), which also confirms the reading of the field. The object, parts and other map archives were not scanned.
+- **Other render targets and depth targets** were not traced: the chooser has six more callers (0x3a1ec9 and 0x3a2935 with surface types 1 and 4, 0x2171150, 0x21712bb and 0x21713f2 with types from a table, 0x24c3a63). The targets item reads their modes from `CB_COLOR<n>_ATTRIB` and `DB_Z_INFO` and logs unsupported ones.
+
+**Part 2 (next branch): the compute detiler and tiler on `bbvk`.** No GLSL compiler is a build dependency (glslang isn't installed), so instead of porting `tiling.comp` instruction by instruction through the SPIR-V builder, the CPU splits one level's offsets into tables per column, row and layer, and a small shader recombines them; this deviates from "Images" above, which planned the shader as an adaptation of `tiling.comp`. In every supported mode the micro tile index has the x and the y bits in separate places, so the element offset, its tile split index and the macro and micro tile offsets each split into an x part plus a y part, the pipe and bank bits into an x part XOR a y part, and the slice rotation and swizzle into a per-layer part. Each table entry is {offset, pipe_bank | split << 16}; with per-level constants `split_bytes` (the bytes of one split slice), `split_rotation` ((banks / 2 + 1) << 3), `pipe_bank_bits` (3 + log2 banks, 0 for linear and 1D levels) and its mask:
+
+```
+split     = col[1] >> 16 + row[1] >> 16
+total     = col[0] + row[0] + layer[0] + split * split_bytes
+pipe_bank = (col[1] ^ row[1] ^ layer[1] ^ split * split_rotation) & pipe_bank_mask
+offset    = level.offset + (total & 255 | pipe_bank << 8 | total >> 8 << (8 + pipe_bank_bits))
+```
+
+The column part of a 2D level is (x / macro width) × macro bytes + the x bits' element offset (mod the split), pipe (tx0 ^ tx1, tx1, tx2) and bank x / 64; the row part (y / macro height) × macro tiles per row × macro bytes + the y bits' element offset + (y / 8 mod bank height) × tile bytes, pipe y / 8 & 7 and the bank bits of y / 8 / bank height; the layer part layer × splits × `split_bytes` with bank (swizzle + (banks / 2 - 1) × layer). A test compares this recombination with `tiled_offset` for every element of every mode before the shader is built on it. The shader takes one invocation per element of a level: it loads the three entries, recombines, and copies one element between the tiled and the linear storage buffer (8- and 16-bit elements need `storageBuffer8BitAccess` and `storageBuffer16BitAccess`, two device features `bbvk` doesn't require yet). Its test on lavapipe tiles our own data with `tile` on the CPU, detiles it on the GPU, tiles it back on the GPU and compares both with the CPU copies.
 
 ### Items
 

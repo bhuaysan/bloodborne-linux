@@ -1,5 +1,6 @@
 add_subdirectory(gcn)
 add_subdirectory(pm4)
+add_subdirectory(tile)
 
 # The Vulkan tests need the Vulkan headers and loader. Without them they are not built.
 find_package(Vulkan)
