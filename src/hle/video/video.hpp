@@ -132,14 +132,35 @@ std::int32_t gnm_submit_and_flip(std::uint32_t count, const std::uint64_t* draw,
                                  const std::uint32_t* ccb_sizes, std::int32_t handle,
                                  std::int32_t index, std::int32_t mode, std::int64_t arg);
 
+// The errors of sceGnmMapComputeQueue (values from shadPS4's gnm_error.h).
+inline constexpr std::int32_t compute_queue_invalid_pipe = static_cast<std::int32_t>(0x80d17000u);
+inline constexpr std::int32_t compute_queue_invalid_queue = static_cast<std::int32_t>(0x80d17001u);
+inline constexpr std::int32_t compute_queue_invalid_size = static_cast<std::int32_t>(0x80d17002u);
+inline constexpr std::int32_t compute_queue_invalid_ring = static_cast<std::int32_t>(0x80d17003u);
+inline constexpr std::int32_t compute_queue_invalid_read_pointer =
+    static_cast<std::int32_t>(0x80d17004u);
+inline constexpr std::int32_t compute_queue_internal = static_cast<std::int32_t>(0x80d170ffu);
+
 // NID 29oKvKXzEZo, sceGnmMapComputeQueue. Maps a compute queue on the game's ring
-// (docs/formats/gnm.md, "Compute queues"): `(int, int, ring address, ring size in dwords,
+// (docs/formats/gnm.md, "Compute queues"): `(pipe, queue, ring address, ring size in dwords,
 // read-pointer address)`. Its wrapper 0x1089a80 stores a non-negative result as the queue id and
 // clears the read pointer; 0x108c7b0 then treats id 0 as a failed map, and the render thread's
-// device creation gives up (0x26b1216). Returns the next id, from 1. Nothing reads the ring yet
-// (M4).
-std::int32_t gnm_map_compute_queue(std::uint32_t, std::uint32_t, const void* ring,
+// device creation gives up (0x26b1216). Checks as shadPS4 does: pipe below 7, queue below 8, the
+// ring 256-byte aligned with a power-of-two size, the read pointer dword aligned; both must lie in
+// guest memory. Maps a ring of gpu_thread() (its interrupts report the pipe) and returns its
+// index + 1, or one of the errors above.
+std::int32_t gnm_map_compute_queue(std::uint32_t pipe, std::uint32_t queue, const void* ring,
                                    std::uint32_t ring_dwords, std::uint32_t* read_pointer);
+
+// NID ArSg-TGinhk, sceGnmUnmapComputeQueue (thunk 0x1089b10, from 0x108c810). Unmaps the queue;
+// its queued ring streams are dropped. Returns 0, also for an unknown id (logged).
+std::int32_t gnm_unmap_compute_queue(std::uint32_t id);
+
+// NID bX5IbRvECXk, sceGnmDingDong (thunk 0x1089b20, from 0x108c830). The ring of queue `id` is
+// written up to `write_offset` dwords (0 after the writer wrapped at the ring's end): the GPU
+// thread runs it from the previous offset on and writes the read offset back. An unknown id or an
+// offset past the ring is logged and ignored.
+void gnm_ding_dong(std::uint32_t id, std::uint32_t write_offset);
 
 // Returns 0 and does nothing else: the GPU thread needs no signal that a frame's submissions are
 // complete. Called through 0x1089b50 after the submit-and-flip at 0x26b0dff and 0x26b0ee2.

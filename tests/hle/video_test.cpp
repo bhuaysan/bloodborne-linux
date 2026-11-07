@@ -306,15 +306,44 @@ TEST(HleVideo, GnmSubmitsRunConstantCommandBuffers) {
     EXPECT_EQ(vmem::unmap(base, vmem::page_size), 0);
 }
 
-// Each map hands out a new, positive id: the game treats 0 as a failed map (0x108c7b0).
-TEST(HleVideo, MappingComputeQueuesHandsOutPositiveIds) {
-    std::array<std::uint32_t, 0x400> ring{};
-    std::uint32_t read_pointer = 7;
-    const std::int32_t first = gnm_map_compute_queue(0, 0, ring.data(), 0x400, &read_pointer);
-    const std::int32_t second = gnm_map_compute_queue(1, 0, ring.data(), 0x400, &read_pointer);
+// A map checks its arguments as shadPS4 does and hands out positive ids (the game treats 0 as a
+// failed map, 0x108c7b0); a doorbell runs the ring and the read offset comes back.
+TEST(HleVideo, ComputeQueuesRunTheirRing) {
+    namespace vmem = bb::hle::kernel::vmem;
+    vmem::Mapping m;
+    m.length = vmem::page_size;
+    m.prot = PROT_READ | PROT_WRITE;
+    m.host_flags = MAP_PRIVATE | MAP_ANONYMOUS;
+    std::uintptr_t base = 0;
+    ASSERT_EQ(vmem::map(m, base), 0);
+    auto* ring = reinterpret_cast<std::uint32_t*>(base);
+    auto* read_pointer = ring + 0x100;
+    *read_pointer = 7;
+    EXPECT_EQ(gnm_map_compute_queue(7, 0, ring, 0x40, read_pointer), compute_queue_invalid_pipe);
+    EXPECT_EQ(gnm_map_compute_queue(0, 8, ring, 0x40, read_pointer), compute_queue_invalid_queue);
+    EXPECT_EQ(gnm_map_compute_queue(0, 0, ring, 0x30, read_pointer), compute_queue_invalid_size);
+    EXPECT_EQ(gnm_map_compute_queue(0, 0, ring + 1, 0x40, read_pointer),
+              compute_queue_invalid_ring);
+    EXPECT_EQ(gnm_map_compute_queue(0, 0, ring, 0x40, reinterpret_cast<std::uint32_t*>(0x10)),
+              compute_queue_invalid_read_pointer);
+    const std::int32_t first = gnm_map_compute_queue(0, 0, ring, 0x40, read_pointer);
+    const std::int32_t second = gnm_map_compute_queue(1, 0, ring, 0x40, read_pointer);
     EXPECT_GT(first, 0);
     EXPECT_GT(second, first);
-    EXPECT_EQ(read_pointer, 7u);  // the game's wrapper clears it
+    EXPECT_EQ(*read_pointer, 0u);
+
+    const std::array<std::uint32_t, 4> set{bb::pm4::type3_header(IT_SET_CONTEXT_REG, 3), 0x306,
+                                           6, 0};
+    std::memcpy(ring, set.data(), sizeof set);
+    gnm_ding_dong(first, 4);
+    gnm_ding_dong(0, 4);  // logged and ignored
+    ASSERT_TRUE(gpu_thread().wait_idle(5s));
+    EXPECT_EQ(gpu_thread().registers().get(0xA306), 6u);
+    EXPECT_EQ(std::atomic_ref(*read_pointer).load(), 4u);
+    EXPECT_EQ(gnm_unmap_compute_queue(first), 0);
+    EXPECT_EQ(gnm_unmap_compute_queue(second), 0);
+    EXPECT_EQ(gnm_unmap_compute_queue(first), 0);  // unknown: logged
+    EXPECT_EQ(vmem::unmap(base, vmem::page_size), 0);
 }
 
 // The eboot imports each of them under the library it is registered for, so relocating it puts
@@ -328,9 +357,11 @@ TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
         std::string_view library, nid;
         void* impl;
     };
-    const std::array<Expected, 18> expected{{
+    const std::array<Expected, 20> expected{{
         {"libSceVideoOut", "Up36PTk687E", reinterpret_cast<void*>(&sceVideoOutOpen)},
         {"libSceGnmDriver", "29oKvKXzEZo", reinterpret_cast<void*>(&gnm_map_compute_queue)},
+        {"libSceGnmDriver", "ArSg-TGinhk", reinterpret_cast<void*>(&gnm_unmap_compute_queue)},
+        {"libSceGnmDriver", "bX5IbRvECXk", reinterpret_cast<void*>(&gnm_ding_dong)},
         {"libSceVideoOut", "uquVH4-Du78", reinterpret_cast<void*>(&sceVideoOutClose)},
         {"libSceVideoOut", "CBiu4mCE1DA", reinterpret_cast<void*>(&video_out_configure)},
         {"libSceVideoOut", "HXzjK9yI30k", reinterpret_cast<void*>(&sceVideoOutAddFlipEvent)},

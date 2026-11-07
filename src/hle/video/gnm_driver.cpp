@@ -1,5 +1,6 @@
 // The GPU submit calls of libSceGnmDriver. The submits queue their draw and constant command
-// buffers on the GPU thread (docs/design/graphics.md, "One GPU thread"). The stage registers are in
+// buffers on the GPU thread (docs/design/graphics.md, "One GPU thread"), the compute queue calls map
+// the game's rings there and report how far they are written. The stage registers are in
 // gnm_shader.cpp, the default state, markers and profiling queries in gnm_state.cpp; the other
 // imports stay stubs.
 #include <atomic>
@@ -21,7 +22,9 @@ constexpr std::string_view channel = "hle.libSceGnmDriver";
 constexpr std::uint64_t logged_submits = 3;
 
 std::atomic<std::uint64_t> submits{0};
-std::atomic<std::int32_t> compute_queues{0};
+// Compute pipes and queues per pipe the map accepts (shadPS4: pipe 7 belongs to the system).
+constexpr std::uint32_t compute_pipes = 7;
+constexpr std::uint32_t queues_per_pipe = 8;
 
 bool guest_readable(const void* address, std::size_t bytes) {
     const auto start = reinterpret_cast<std::uintptr_t>(address);
@@ -116,12 +119,47 @@ std::int32_t gnm_submit_and_flip(std::uint32_t count, const std::uint64_t* draw,
     return sceVideoOutSubmitFlip(handle, index, mode, arg);
 }
 
-std::int32_t gnm_map_compute_queue(std::uint32_t, std::uint32_t, const void* ring,
-                                   std::uint32_t ring_dwords, std::uint32_t*) {
-    const std::int32_t id = compute_queues.fetch_add(1, std::memory_order_relaxed) + 1;
-    common::log(common::LogLevel::info, channel, "compute queue {}: ring {}, {:#x} dwords", id,
-                ring, ring_dwords);
-    return id;
+std::int32_t gnm_map_compute_queue(std::uint32_t pipe, std::uint32_t queue, const void* ring,
+                                   std::uint32_t ring_dwords, std::uint32_t* read_pointer) {
+    const auto ring_address = reinterpret_cast<std::uintptr_t>(ring);
+    std::int32_t result = 0;
+    if (pipe >= compute_pipes) {
+        result = compute_queue_invalid_pipe;
+    } else if (queue >= queues_per_pipe) {
+        result = compute_queue_invalid_queue;
+    } else if (ring_dwords == 0 || (ring_dwords & (ring_dwords - 1)) != 0) {
+        result = compute_queue_invalid_size;
+    } else if (ring_address % 256 != 0 || !guest_readable(ring, std::size_t{ring_dwords} * 4)) {
+        result = compute_queue_invalid_ring;
+    } else if (reinterpret_cast<std::uintptr_t>(read_pointer) % 4 != 0 ||
+               !guest_readable(read_pointer, 4)) {
+        result = compute_queue_invalid_read_pointer;
+    } else {
+        const int index = gpu_thread().map_ring(
+            std::span(static_cast<const std::uint32_t*>(ring), ring_dwords), read_pointer, pipe);
+        result = index < 0 ? compute_queue_internal : index + 1;
+    }
+    common::log(result > 0 ? common::LogLevel::info : common::LogLevel::warn, channel,
+                "map compute queue (pipe {}, queue {}): ring {}, {:#x} dwords -> {:#x}", pipe,
+                queue, ring, ring_dwords, static_cast<std::uint32_t>(result));
+    return result;
+}
+
+std::int32_t gnm_unmap_compute_queue(std::uint32_t id) {
+    if (id == 0 || !gpu_thread().unmap_ring(static_cast<int>(id) - 1)) {
+        common::log(common::LogLevel::warn, channel, "unmap of unknown compute queue {}", id);
+    }
+    return 0;
+}
+
+void gnm_ding_dong(std::uint32_t id, std::uint32_t write_offset) {
+    if (id == 0 || !gpu_thread().ring_doorbell(static_cast<int>(id) - 1, write_offset)) {
+        common::log(common::LogLevel::warn, channel,
+                    "doorbell of compute queue {} at {:#x} dwords ignored", id, write_offset);
+        return;
+    }
+    common::log(common::LogLevel::trace, channel, "doorbell of compute queue {} at {:#x} dwords",
+                id, write_offset);
 }
 
 std::int32_t sceGnmSubmitDone() {
@@ -136,6 +174,9 @@ BB_HLE_FUNCTION("libSceGnmDriver", "iCO804ZgzdA", gnm_submit_other);
 // sceGnmSubmitAndFlipCommandBuffers
 BB_HLE_FUNCTION("libSceGnmDriver", "xbxNatawohc", gnm_submit_and_flip);
 BB_HLE_FUNCTION("libSceGnmDriver", "29oKvKXzEZo", gnm_map_compute_queue);  // sceGnmMapComputeQueue
+// sceGnmUnmapComputeQueue
+BB_HLE_FUNCTION("libSceGnmDriver", "ArSg-TGinhk", gnm_unmap_compute_queue);
+BB_HLE_FUNCTION("libSceGnmDriver", "bX5IbRvECXk", gnm_ding_dong);  // sceGnmDingDong
 BB_HLE_FUNCTION("libSceGnmDriver", "yvZ73uQUqrk", sceGnmSubmitDone);
 
 }  // namespace bb::hle::video
