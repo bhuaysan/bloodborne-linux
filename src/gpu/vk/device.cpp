@@ -72,8 +72,10 @@ struct Query {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, &reconvergence);
     VkPhysicalDeviceVulkan12Features f12 = make<VkPhysicalDeviceVulkan12Features>(
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, &f13);
+    VkPhysicalDeviceVulkan11Features f11 = make<VkPhysicalDeviceVulkan11Features>(
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, &f12);
     VkPhysicalDeviceFeatures2 features = make<VkPhysicalDeviceFeatures2>(
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &f12);
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &f11);
 
     // Queries the device, or with `enable`, sets the required features for vkCreateDevice.
     explicit Query(VkPhysicalDevice device, bool enable = false) {
@@ -94,6 +96,9 @@ struct Query {
             {&features.features.shaderInt64, "shaderInt64"},
             {&features.features.sparseBinding, "sparseBinding"},
             {&features.features.sparseResidencyBuffer, "sparseResidencyBuffer"},
+            // The tiler copies 8- and 16-bit elements through device addresses.
+            {&f11.storageBuffer16BitAccess, "storageBuffer16BitAccess"},
+            {&f12.storageBuffer8BitAccess, "storageBuffer8BitAccess"},
             {&f12.bufferDeviceAddress, "bufferDeviceAddress"},
             {&f12.timelineSemaphore, "timelineSemaphore"},
             // v_readfirstlane_b32 and v_readlane_b32 broadcast from a lane computed at run time.
