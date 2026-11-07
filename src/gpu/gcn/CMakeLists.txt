@@ -5,6 +5,7 @@ find_path(BB_SPIRV_INCLUDE_DIR spirv/unified1/spirv.hpp11 REQUIRED)
 add_library(bbgcn STATIC
     buffer_format.cpp
     cfg.cpp
+    image.cpp
     alu.cpp
     descriptors.cpp
     decode.cpp

@@ -19,6 +19,23 @@ inline constexpr std::uint32_t draw_address_bias_offset = 64;
 inline constexpr std::uint32_t draw_code_address_offset = 72;
 inline constexpr std::uint32_t draw_block_size = 80;
 
+// The image type class of a T# (docs/design/graphics.md, "Image sampling"): what the SPIR-V
+// image type of its binding depends on. The run time reads it from each T# at draw time with
+// image_class() and translates again when it differs from the key.
+struct ImageClass {
+    enum class Number : std::uint8_t { float_, sint, uint };
+    // The T#'s type field (dword 3 bits 28-31): 9 2D, 11 cube, 13 2D array; the translator
+    // rejects the others so far (1D, 3D and MSAA).
+    std::uint8_t type = 9;
+    Number number = Number::float_;  // the sampled type, from the number format
+
+    bool operator==(const ImageClass&) const = default;
+};
+
+// The class of a T# from its first four dwords (the type in dword 3, the number format in bits
+// 26-29 of dword 1: UINT and SINT sample integers, every other format floats).
+ImageClass image_class(std::span<const std::uint32_t, 4> tsharp);
+
 // Everything the generated SPIR-V depends on besides the code (docs/design/graphics.md, "Stage
 // interfaces and ShaderKey"): the stage's register values, raw, as the PM4 side copies them.
 struct ShaderKey {
@@ -65,12 +82,23 @@ struct ShaderKey {
     // The device has VK_KHR_shader_quad_control with shaderQuadControl enabled: pixel shaders
     // declare QuadDerivativesKHR and RequireFullQuadsKHR (docs/design/graphics.md, "Quad control").
     bool quad_control = false;
+
+    // The class of each image, by its position in ShaderInterface::images. An image without an
+    // entry is a 2D float image.
+    std::vector<ImageClass> images{};
 };
+
+// Where a stage's images and samplers are bound: descriptor set 1 in the pixel stage, 0 in the
+// others. Image i of ShaderInterface::images is binding i (a sampled image, arrayed for a cube),
+// sampler j of ShaderInterface::samplers is binding images.size() + j.
+constexpr std::uint32_t descriptor_set(Stage stage) { return stage == Stage::pixel ? 1 : 0; }
 
 // What the run time must know about a translated shader.
 struct ShaderInterface {
     // The sources of the buffer descriptors the program uses (see ResourceSource).
     std::vector<ResourceSource> buffers;
+    // The T# and S# sources of the MIMG instructions, in order of first use (bindings above).
+    std::vector<ResourceSource> images{}, samplers{};
     bool wave_size_dependent = false;  // the result can differ in lane-local mode (also: LDS)
     // VCC or an SGPR mask pair is written as a value and read back as a value (flow-insensitive).
     // The value survives only in 64-lane subgroups: smaller ones lose the other lanes' bits.
