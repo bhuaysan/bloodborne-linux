@@ -69,4 +69,7 @@ v_cvt_f32_f16_e32 v7, v10           ; 17
 put v7
 v_cvt_f32_f16_e64 v7, -|v10|        ; 18
 put v7
+v_mul_f32_e32 v12, 0x41800000, v5   ; 16 * x, past the overflow and underflow of exp
+v_exp_f32_e32 v7, v12               ; 19
+put v7
 s_endpgm

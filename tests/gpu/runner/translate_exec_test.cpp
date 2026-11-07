@@ -280,11 +280,14 @@ float half_to_float(std::uint32_t h) {
 
 // The transcendentals against double precision on the host, within the precision Vulkan requires
 // of the GLSL.std.450 instruction each one uses (so a conformant driver passes, not only
-// lavapipe): 2.5 ULP for the division of rcp, 2 for rsq, 3 for sqrt, 3 + 2|x| for exp, 3 for log
-// (or 2^-21 absolute in [0.5, 2]) and 2^-11 absolute for sin and cos. Zeros, infinities and the
-// rcp and log of 1 are exact, a NaN is any NaN. The half float conversions are exact.
+// lavapipe): 2.5 ULP for the division of rcp, 2 for rsq, 3 + 2|x| for exp, 3 for log (or 2^-21
+// absolute in [0.5, 2]) and 2^-11 absolute for sin and cos. Sqrt inherits its precision from
+// 1.0 / InverseSqrt(): 2 ULP of the inverse root, then 2.5 of the division, at most 4.5 * 2^-23
+// relative. Zeros, infinities, the rcp and log of 1 and the results exp selects past its overflow
+// and underflow are exact; Vulkan may flush a denormal result of exp to 0. A NaN is any NaN. The
+// half float conversions are exact.
 TEST_F(TranslateExec, Transcendentals) {
-    constexpr std::uint32_t stages = 19;
+    constexpr std::uint32_t stages = 20;
     const float inf = std::numeric_limits<float>::infinity(), nan = std::nanf("");
     const float max = std::numeric_limits<float>::max();
     const float specials[] = {-0.0f, inf, -inf, nan, 1e20f, -256.0f, 256.5f, 1e-30f};
@@ -315,6 +318,7 @@ TEST_F(TranslateExec, Transcendentals) {
         const double exp_ulps = std::isinf(x) ? 0 : 3 + 2 * ax;
         const auto log_abs = [&](double v) { return v >= 0.5 && v <= 2 && v != 1 ? 0x1p-21 : 0.0; };
         const double rcp_ulps = x == 1 ? 0 : 2.5;
+        const auto sqrt_abs = [](double r) { return 4.5 * 0x1p-23 * (1 + 0x1p-20) * r; };
         const auto turns = [&](bool sin) {
             if (std::fabs(x) > 256) {
                 return sin ? 0.0 : 1.0;
@@ -328,7 +332,8 @@ TEST_F(TranslateExec, Transcendentals) {
         check(3, x == 0 ? 0.0 : rcp, rcp_ulps);
         check(4, rsq, 2);
         check(5, clamp_inf(rsq), 2);
-        check(6, x < 0 ? nan : std::sqrt(double{x}), 3);
+        const double sqrt_x = x < 0 ? nan : std::sqrt(double{x});
+        check(6, sqrt_x, 0, std::isfinite(sqrt_x) ? sqrt_abs(sqrt_x) : 0);
         check(7, x == 0 ? 1.0 : std::exp2(double{x}), exp_ulps);
         check(8, x < 0 ? nan : std::log2(double{x}), 3, log_abs(x));
         check(9, turns(true), 0, 0x1p-11);
@@ -336,11 +341,17 @@ TEST_F(TranslateExec, Transcendentals) {
         check(11, -1.0 / ax, 2.5);
         check(12, std::isnan(x) ? x : std::clamp(std::exp2(-double{x}), 0.0, 1.0), exp_ulps);
         check(13, 2 * std::log2(ax), 3, 2 * log_abs(ax));
-        check(14, std::sqrt(ax) / 2, 3);
+        check(14, std::sqrt(ax) / 2, 0, std::isnan(x) ? 0 : sqrt_abs(std::sqrt(ax) / 2));
         EXPECT_EQ(at(15), half_rtz(z) | half_rtz(y) << 16) << "y " << y << ", z " << z;
         EXPECT_EQ(at(16), half_rtz(-y) | half_rtz(std::fabs(x)) << 16);
         check(17, half_to_float(h), 0);
         check(18, -std::fabs(half_to_float(h)), 0);
+        const float x16 = 16 * x;  // from 128 up exp overflows, from -150 down it underflows
+        const double exp16 = x16 == 0 ? 1.0 : std::exp2(double{x16});
+        if (exp16 != 0 && exp16 < 0x1p-126 && at(19) == 0) {
+            continue;  // a denormal result, flushed
+        }
+        check(19, exp16, std::isinf(x16) ? 0 : 3 + 2 * std::fabs(double{x16}));
     }
 }
 

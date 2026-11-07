@@ -145,13 +145,18 @@ SpirvBuilder::Id Alu::float_math(const FloatMathOp& op, Id x) {
         const Id above_zero = test(Op::OpFOrdGreaterThan, x, c(0.0f));
         return b_.op(Op::OpLogicalAnd, bool_t, {above_zero, test(Op::OpFOrdLessThan, x, c(inf))});
     };
-    const auto recip = [&] { return b_.op(Op::OpFDiv, f32, {c(1.0f), x}); };
+    // Vulkan bounds OpFDiv only for a divisor of magnitude in [2^-126, 2^126], so +-0 (+-inf)
+    // and +-inf (+-0) are selected.
+    const auto recip = [&] {
+        return select(zero(), with_sign(x, 0x7f80'0000),
+                      select(is_inf(x), with_sign(x, 0), b_.op(Op::OpFDiv, f32, {c(1.0f), x})));
+    };
     Id r = 0;
     switch (op.fn) {
     case FloatMath::rcp:  // exactly 1 for 1, which OpFDiv need not give (V_RCP_LEGACY_F32's code)
         r = select(test(Op::OpFOrdEqual, x, c(1.0f)), c(1.0f), recip());
         break;
-    case FloatMath::rsq:  // +-0 gives +-infinity, +infinity 0 and a NaN itself, as 1 / x does
+    case FloatMath::rsq:  // +-0 gives +-infinity, +infinity 0 and a NaN itself, as recip does
         r = select(finite_positive(), glsl(GLSLstd450InverseSqrt, x),
                    select(negative(), nan, recip()));
         break;
@@ -164,10 +169,13 @@ SpirvBuilder::Id Alu::float_math(const FloatMathOp& op, Id x) {
         // exactly 0 for 1, which Log2 need not give (the code of V_LOG_CLAMP_F32)
         r = select(test(Op::OpFOrdEqual, x, c(1.0f)), c(0.0f), r);
         break;
-    case FloatMath::exp: {  // exactly 1 for +-0 (the manual's pseudo code); 0 for -infinity
-        const Id finite = test(Op::OpFOrdLessThan, glsl(GLSLstd450FAbs, x), c(inf));
-        r = select(finite, glsl(GLSLstd450Exp2, x),
-                   select(test(Op::OpFOrdEqual, x, c(-inf)), c(0.0f), x));
+    case FloatMath::exp: {  // exactly 1 for +-0 (the manual's pseudo code)
+        // Vulkan's 3 + 2|x| ULP bound of Exp2 says nothing about a result that overflows or
+        // underflows, so those are selected: +inf from 128 up (and for +inf), 0 from -150 down,
+        // where IEEE rounds to 0 (and for -inf). A NaN stays a NaN.
+        r = select(test(Op::OpFOrdGreaterThanEqual, x, c(128.0f)), c(inf),
+                   select(test(Op::OpFOrdLessThanEqual, x, c(-150.0f)), c(0.0f),
+                          select(b_.op(Op::OpIsNan, bool_t, {x}), x, glsl(GLSLstd450Exp2, x))));
         r = select(zero(), c(1.0f), r);
         break;
     }
