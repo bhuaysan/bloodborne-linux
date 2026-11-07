@@ -88,9 +88,10 @@ struct ShaderKey {
     std::vector<ImageClass> images{};
 };
 
-// Where a stage's images and samplers are bound: descriptor set 1 in the pixel stage, 0 in the
-// others. Image i of ShaderInterface::images is binding i (a sampled image, arrayed for a cube),
-// sampler j of ShaderInterface::samplers is binding images.size() + j.
+// Where a stage's images and samplers are bound: one descriptor set per hardware stage, 0 for VS
+// and CS, 1 for PS (ES/LS 2 and GS/HS 3 later; docs/design/graphics.md, "Image sampling"). Image i
+// of ShaderInterface::images is binding i (a sampled image, arrayed for a cube), sampler j of
+// ShaderInterface::samplers is binding images.size() + j.
 constexpr std::uint32_t descriptor_set(Stage stage) { return stage == Stage::pixel ? 1 : 0; }
 
 // What the run time must know about a translated shader.
