@@ -87,8 +87,13 @@ const Operand* buffer_descriptor(const Instruction& inst) {
     return nullptr;
 }
 
-std::vector<ResourceSource> find_buffer_sources(std::span<const Instruction> program,
-                                                const Cfg& cfg, unsigned user_sgprs) {
+namespace {
+
+// Runs the dataflow to its fixed point, then calls `visit(state, index)` for each instruction of
+// the blocks that a path reaches, with the state before it, in block order.
+template <class Visit>
+void walk(std::span<const Instruction> program, const Cfg& cfg, unsigned user_sgprs,
+          Visit&& visit) {
     State entry;
     for (unsigned k = 0; k < user_sgprs; ++k) {
         entry[k] = {k};
@@ -96,11 +101,11 @@ std::vector<ResourceSource> find_buffer_sources(std::span<const Instruction> pro
     // The state at the start of each block. A block that no path has reached yet has none.
     std::vector<std::optional<State>> in(cfg.blocks.size());
     in[0] = entry;
-    const auto run_block = [&](std::uint32_t b, auto&& visit) {
+    const auto run_block = [&](std::uint32_t b, auto&& each) {
         State state = *in[b];
         const Block& block = cfg.blocks[b];
         for (std::uint32_t i = block.first; i < block.first + block.count; ++i) {
-            visit(state, program[i]);
+            each(state, i);
             state = transfer(std::move(state), program[i]);
         }
         return state;
@@ -111,7 +116,7 @@ std::vector<ResourceSource> find_buffer_sources(std::span<const Instruction> pro
             if (!in[b]) {
                 continue;
             }
-            const State out = run_block(b, [](const State&, const Instruction&) {});
+            const State out = run_block(b, [](const State&, std::uint32_t) {});
             for (std::uint32_t s : successors(cfg.blocks[b])) {
                 if (!in[s]) {
                     in[s] = out;
@@ -122,37 +127,80 @@ std::vector<ResourceSource> find_buffer_sources(std::span<const Instruction> pro
             }
         }
     }
-    std::vector<ResourceSource> sources;
     for (std::uint32_t b = 0; b < cfg.blocks.size(); ++b) {
-        if (!in[b]) {
-            continue;
+        if (in[b]) {
+            run_block(b, visit);
         }
-        run_block(b, [&](const State& state, const Instruction& inst) {
-            const Operand* d = buffer_descriptor(inst);
-            if (d == nullptr) {
-                return;
-            }
-            // Four consecutive dwords of one source: the first dword's path names the V#.
-            const auto first = state.find(d->code);
-            const bool whole = first != state.end();
-            ResourceSource source{whole ? first->second : Path{}};
-            for (unsigned k = 1; whole && k < 4; ++k) {
-                const auto next = state.find(d->code + k);
-                const bool same = next != state.end() &&
-                                  next->second.size() == source.path.size() &&
-                                  std::equal(source.path.begin(), source.path.end() - 1,
-                                             next->second.begin()) &&
-                                  next->second.back() == source.path.back() + k;
-                if (!same) {
-                    return;
-                }
-            }
-            if (whole && std::ranges::find(sources, source) == sources.end()) {
-                sources.push_back(std::move(source));
-            }
-        });
     }
+}
+
+// The source of the descriptor in the `dwords` SGPRs from `sgpr`: consecutive dwords of one
+// source, named by the first dword's path.
+std::optional<ResourceSource> source_of(const State& state, unsigned sgpr, unsigned dwords) {
+    const auto first = state.find(sgpr);
+    if (first == state.end()) {
+        return std::nullopt;
+    }
+    const Path& path = first->second;
+    for (unsigned k = 1; k < dwords; ++k) {
+        const auto next = state.find(sgpr + k);
+        if (next == state.end() || next->second.size() != path.size() ||
+            !std::equal(path.begin(), path.end() - 1, next->second.begin()) ||
+            next->second.back() != path.back() + k) {
+            return std::nullopt;
+        }
+    }
+    return ResourceSource{path};
+}
+
+// The position of `source` in `list`, added at the end when it is new.
+std::uint32_t position(std::vector<ResourceSource>& list, const ResourceSource& source) {
+    const auto at = static_cast<std::uint32_t>(std::ranges::find(list, source) - list.begin());
+    if (at == list.size()) {
+        list.push_back(source);
+    }
+    return at;
+}
+
+}  // namespace
+
+std::vector<ResourceSource> find_buffer_sources(std::span<const Instruction> program,
+                                                const Cfg& cfg, unsigned user_sgprs) {
+    std::vector<ResourceSource> sources;
+    walk(program, cfg, user_sgprs, [&](const State& state, std::uint32_t i) {
+        if (const Operand* d = buffer_descriptor(program[i])) {
+            if (const auto source = source_of(state, d->code, 4)) {
+                position(sources, *source);
+            }
+        }
+    });
     return sources;
+}
+
+ImageSources find_image_sources(std::span<const Instruction> program, const Cfg& cfg,
+                                unsigned user_sgprs) {
+    ImageSources result;
+    walk(program, cfg, user_sgprs, [&](const State& state, std::uint32_t i) {
+        const Instruction& inst = program[i];
+        if (inst.format != Format::mimg) {
+            return;
+        }
+        // The T# is the first 8-SGPR operand (r128 uses its first 4), the S# the one after it.
+        const auto* t = std::ranges::find_if(inst.src.begin(), inst.src.begin() + inst.num_src,
+                                             [](const Operand& o) { return o.dwords == 8; });
+        const auto image = source_of(state, t->code, inst.flags & flag::r128 ? 4 : 8);
+        const bool sampled = t + 1 < inst.src.begin() + inst.num_src;
+        const auto sampler = sampled ? source_of(state, t[1].code, 4) : std::nullopt;
+        if (!image || (sampled && !sampler)) {
+            return;
+        }
+        ImageSources::Use use{.image = position(result.images, *image)};
+        if (sampler) {
+            use.sampler = position(result.samplers, *sampler);
+        }
+        result.uses[i] = use;
+    });
+    return result;
 }
 
 }  // namespace bb::gcn
