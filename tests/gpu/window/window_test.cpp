@@ -3,8 +3,8 @@
 
 #include <csignal>
 #include <cstdlib>
-#include <stdexcept>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -46,18 +46,38 @@ TEST(Window, PresentsOnTheOffscreenDriver) {
     EXPECT_TRUE(window->pump(0, [&](VkExtent2D e) { presenter.resize(e); }));
 }
 
-// SDL's own SIGINT and SIGTERM handlers would turn Ctrl-C into a window close.
+// SDL's own SIGINT and SIGTERM handlers would turn Ctrl-C into a window close. SDL installs them
+// only over SIG_DFL, so the test sets SIG_DFL first (the process may inherit SIG_IGN, e.g. under
+// nohup) and then checks that Window::create left each disposition as it was.
 TEST(Window, LeavesTheSignalsAlone) {
     ::setenv("SDL_VIDEO_DRIVER", "offscreen", 1);
-    std::string why;
-    const auto window = bb::window::Window::create("window test", 64, 64, why);
-    if (!window) {
-        GTEST_SKIP() << "no offscreen window: " << why;
+    constexpr int signals[] = {SIGINT, SIGTERM};
+    struct sigaction inherited[2] {};
+    struct sigaction before[2] {};
+    for (int i = 0; i < 2; ++i) {
+        struct sigaction dfl {};
+        dfl.sa_handler = SIG_DFL;
+        ASSERT_EQ(::sigaction(signals[i], &dfl, &inherited[i]), 0);
+        ASSERT_EQ(::sigaction(signals[i], nullptr, &before[i]), 0);
     }
-    for (const int signal : {SIGINT, SIGTERM}) {
-        struct sigaction action {};
-        ASSERT_EQ(::sigaction(signal, nullptr, &action), 0);
-        EXPECT_EQ(action.sa_handler, SIG_DFL) << "signal " << signal;
+    std::string why;
+    auto window = bb::window::Window::create("window test", 64, 64, why);
+    std::string skip;
+    if (!window) {
+        skip = "no offscreen window: " + why;
+    } else {
+        for (int i = 0; i < 2; ++i) {
+            struct sigaction after {};
+            EXPECT_EQ(::sigaction(signals[i], nullptr, &after), 0);
+            EXPECT_EQ(after.sa_handler, before[i].sa_handler) << "signal " << signals[i];
+        }
+    }
+    window.reset();
+    for (int i = 0; i < 2; ++i) {
+        ::sigaction(signals[i], &inherited[i], nullptr);
+    }
+    if (!skip.empty()) {
+        GTEST_SKIP() << skip;
     }
 }
 
