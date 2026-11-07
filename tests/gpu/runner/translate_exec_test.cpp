@@ -575,6 +575,120 @@ TEST_F(TranslateExec, BufferMemory) {
     }
 }
 
+// The V# modes of Sea Islands ISA 8.1.5 and Table 8.5, as the test works them out: index = the
+// VGPR under idxen plus the lane under add_tid_enable, buffer_offset linear or swizzled, the range
+// check (with add_tid_enable the offset is checked against the stride as with idxen), and heap
+// (out of range at offset 0 or from num_records). `address` is soffset + buffer_offset.
+struct VMode {
+    std::uint32_t stride, records, soffset;
+    bool swizzle = false, add_tid = false, heap = false;
+    std::uint32_t element = 0, index_stride = 0;  // the 2-bit fields: 2 << e bytes, 8 << i indices
+
+    struct Access {
+        std::uint64_t address;
+        bool inside;
+    };
+    Access at(std::uint32_t lane, bool idxen, std::uint32_t vindex, std::uint64_t offset,
+              std::uint32_t soff) const {
+        const std::uint64_t index = (idxen ? vindex : 0) + (add_tid ? lane : 0);
+        const std::uint64_t es = 2u << element, is = 8u << index_stride;
+        const std::uint64_t bo = swizzle ? ((index / is) * stride + offset / es * es) * is +
+                                               index % is * es + offset % es
+                                         : index * stride + offset;
+        bool inside = stride == 0 ? bo + soff < records
+                                  : index < records && (!(idxen || add_tid) || offset < stride);
+        inside = inside && (!heap || (offset != 0 && offset < records));
+        return {soff + bo, inside};
+    }
+    // The four V# dwords at `address`.
+    std::vector<std::uint32_t> vsharp(std::uint64_t address) const {
+        return {static_cast<std::uint32_t>(address),
+                static_cast<std::uint32_t>(address >> 32) | stride << 16 |
+                    std::uint32_t{swizzle} << 31,
+                records,
+                element << 19 | index_stride << 21 | std::uint32_t{add_tid} << 23 |
+                    std::uint32_t{heap} << 26};
+    }
+};
+
+// MUBUF and MTBUF under the V# modes: swizzled addressing (a pair and a 32_32 element have one
+// address per dword), add_tid_enable, heap, and both of the first two as a scratch descriptor has
+// them; with the narrow loads (sign- and zero-extended, at odd offsets across dwords) and the byte
+// and short stores, whose lanes share dwords. Every store goes to bytes no other lane writes.
+TEST_F(TranslateExec, BufferModes) {
+    const VMode modes[] = {
+        {.stride = 0, .records = 0x2b0, .soffset = 0x200},
+        {.stride = 8, .records = 64, .soffset = 0x200, .swizzle = true, .element = 1},
+        {.stride = 16, .records = 100, .soffset = 0x40, .add_tid = true},
+        {.stride = 16, .records = 20, .soffset = 0x40, .heap = true},
+        {.stride = 8, .records = 128, .soffset = 0x100, .swizzle = true, .add_tid = true,
+         .element = 1, .index_stride = 3},
+    };
+    static constexpr std::uint32_t table_bytes = 0x800, store_bytes = 0x1400;
+    for (const VMode& c : modes) {
+        SCOPED_TRACE(testing::Message() << "stride " << c.stride << " swizzle " << c.swizzle
+                                        << " add_tid " << c.add_tid << " heap " << c.heap);
+        const auto byte = [](std::uint64_t a) -> std::uint32_t {
+            EXPECT_LT(a, table_bytes);
+            const auto word = data_word(static_cast<std::uint32_t>(a / 4));
+            return a < table_bytes ? word >> (8 * (a % 4)) & 0xff : 0;
+        };
+        const auto bytes = [&](VMode::Access a, unsigned n) {  // n bytes from a, 0 outside
+            std::uint32_t v = 0;
+            for (unsigned j = 0; a.inside && j < n; ++j) {
+                v |= byte(a.address + j) << (8 * j);
+            }
+            return v;
+        };
+        auto inputs = c.vsharp(base + data_offset);
+        const auto store = c.vsharp(base + store_offset);
+        inputs.insert(inputs.begin(), 2, 0);
+        inputs.insert(inputs.end(), store.begin(), store.end());
+        inputs.push_back(c.soffset);
+        const auto out = run("mem_vmodes", inputs, 0xc00);
+        std::vector<std::uint8_t> expected(store_bytes);
+        std::vector<int> writer(store_bytes, -1);
+        const auto write = [&](std::uint32_t lane, VMode::Access a, std::uint32_t v, unsigned n) {
+            for (unsigned j = 0; a.inside && j < n; ++j) {
+                ASSERT_LT(a.address + j, store_bytes);
+                ASSERT_EQ(writer[a.address + j], -1) << "two lanes store to " << a.address + j;
+                writer[a.address + j] = static_cast<int>(lane);
+                expected[a.address + j] = static_cast<std::uint8_t>(v >> (8 * j));
+            }
+        };
+        for (std::uint32_t i = 0; i < lanes; ++i) {
+            SCOPED_TRACE(testing::Message() << "lane " << i);
+            const auto slot = [&](std::uint32_t k) { return out[k * lanes + i]; };
+            EXPECT_EQ(slot(0), bytes(c.at(i, true, i, 4, 0), 4));
+            EXPECT_EQ(slot(1), bytes(c.at(i, false, 0, 4 * i, 0), 4));
+            EXPECT_EQ(slot(2), bytes(c.at(i, true, i, 4, 0), 4));
+            EXPECT_EQ(slot(3), bytes(c.at(i, true, i, 8, 0), 4));
+            const auto narrow = c.at(i, false, 0, 3 * i, c.soffset);
+            EXPECT_EQ(slot(4), bytes(narrow, 1));
+            const auto sext = [](std::uint32_t v, unsigned bits) {
+                return static_cast<std::uint32_t>(static_cast<std::int32_t>(v << (32 - bits)) >>
+                                                  (32 - bits));
+            };
+            EXPECT_EQ(slot(5), sext(bytes(narrow, 1), 8));
+            EXPECT_EQ(slot(6), bytes(narrow, 2));
+            EXPECT_EQ(slot(7), sext(bytes(narrow, 2), 16));
+            // the 32_32 element is in or out as a whole, by its first byte
+            const bool first = c.at(i, true, i, 4, 0).inside;
+            EXPECT_EQ(slot(8), first ? bytes(c.at(i, true, i, 4, 0), 4) : 0u);
+            auto second = c.at(i, true, i, 8, 0);
+            second.inside = first;
+            EXPECT_EQ(slot(9), bytes(second, 4));
+            write(i, c.at(i, true, i, 0, 0x800), 0xa000 | i, 4);
+            write(i, c.at(i, false, 0, i, 0), 0xa000 | i, 1);
+            write(i, c.at(i, false, 0, 2 * i, 0x400), 0xa000 | i, 2);
+        }
+        for (std::uint32_t a = 0; a < store_bytes; ++a) {
+            const std::uint32_t word = out[(store_offset + a) / 4];
+            ASSERT_EQ(word >> (8 * (a % 4)) & 0xff, expected[a]) << "stored byte " << a;
+        }
+    }
+}
+
 // SALU lane masks: s_and_saveexec_b64 with v_cmpx (nested predication), the eight bitwise
 // operations on two masks with every combination of bits in lanes 0 to 3, and the same
 // operations under a partial EXEC (lanes 0-31), whose results have bits in every lane. The

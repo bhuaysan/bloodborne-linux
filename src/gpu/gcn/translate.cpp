@@ -1226,16 +1226,18 @@ private:
         }
     }
 
-    // MUBUF loads and stores of dwords, untyped, in active lanes (docs/design/graphics.md,
-    // "Resources and memory"). The address is base + soffset + index * stride + offset (8.1.5.1),
-    // with the instruction's 12-bit offset plus the VGPR under `offen`, and the VGPR index under
-    // `idxen`. Each dword is checked on its own by `buffer_in_range`. `addr64` adds a 64-bit VGPR
-    // address (and soffset) and is not range-checked (Table 8.2). Out-of-range loads read 0 and
-    // out-of-range stores are dropped.
+    // MUBUF loads and stores of dwords, bytes and shorts, untyped, in active lanes (docs/design/
+    // graphics.md, "Resources and memory"). The address is base + soffset + buffer_offset
+    // (8.1.5), see buffer_access. Each dword is checked on its own by `inside`; a byte or
+    // short is checked at its first byte and read or written whole, from any address. `addr64`
+    // adds a 64-bit VGPR address (and soffset) and is not range-checked (Table 8.2). Out-of-range
+    // loads read 0 and out-of-range stores are dropped.
     void buffer_memory(const Instruction& inst) {
         const std::string_view name = inst.name;
-        const bool load = name.starts_with("buffer_load_dword");
-        if (!load && !name.starts_with("buffer_store_dword")) {
+        const bool load = name.starts_with("buffer_load_");
+        const unsigned narrow = name.ends_with("byte") ? 1 : name.ends_with("short") ? 2 : 0;
+        if (narrow == 0 && !name.starts_with("buffer_load_dword") &&
+            !name.starts_with("buffer_store_dword")) {
             unsupported();
         }
         if ((inst.flags & (flag::tfe | flag::lds)) != 0) {
@@ -1243,8 +1245,29 @@ private:
         }
         const Operand& data = load ? inst.dst[0] : inst.src[0];
         const BufferAccess m = buffer_access(inst, &inst.src[load ? 0 : 1]);
+        if (narrow != 0) {
+            const Id cond = b_.op(Op::OpLogicalAnd, bool_, {active(), inside(m, 0)});
+            const Id at = add(address(m, 0), bias_);
+            if (!load) {
+                when(cond, [&] { store_bytes(at, read(data), narrow); });
+                return;
+            }
+            Id value = b_.constant_u32(0);
+            for (unsigned j = 0; j < narrow; ++j) {
+                value = b_.op(Op::OpBitwiseOr, u32_,
+                              {value, b_.op(Op::OpShiftLeftLogical, u32_,
+                                            {guarded_byte(cond, add(at, c64(j))),
+                                             b_.constant_u32(8 * j)})});
+            }
+            if (name[12] == 's') {  // buffer_load_sbyte, buffer_load_sshort
+                value = b_.op(Op::OpBitFieldSExtract, u32_,
+                              {value, b_.constant_u32(0), b_.constant_u32(8 * narrow)});
+            }
+            write_vector(data, value);
+            return;
+        }
         for (unsigned d = 0; d < data.dwords; ++d) {
-            const Id address = add(add(m.guest, c64(4 * d)), bias_);
+            const Id address = add(this->address(m, 4 * d), bias_);
             const Id cond = b_.op(Op::OpLogicalAnd, bool_, {active(), inside(m, d)});
             if (load) {
                 write_vector(data, guarded_load(cond, address), d);
@@ -1273,42 +1296,26 @@ private:
         return v;
     }
 
-    // The MUBUF range check of dword `d` of an access (Sea Islands ISA 8.1.5.3, p. 8-8). `offset`
-    // is the byte offset (the instruction's plus the VGPR) and `index` the index (0 without
-    // `idxen`), both without 4 * d. A stride of 0 makes `num_records` a byte size, and the access
-    // is out of range when offset + soffset >= num_records. The manual writes the left side as
-    // `offset >= num_records - soffset`; the sum in 64 bits is the same without the wrap of the
-    // subtraction, so a soffset beyond the size is always out of range. Otherwise the access is
-    // out of range when index >= num_records, or, with `idxen`, when the offset is not below the
-    // stride (`add_tid_enable` is rejected by check_buffer_descriptor). Without `idxen` the
-    // index is 0 and the offset is not checked at all, even with a stride. soffset is not part of
-    // the check with a stride. "x2" and "x4" are checked per component, so the offset of dword
-    // `d` includes 4 * d.
-    Id buffer_in_range(const Vsharp& v, Id soffset, Id index, Id offset, bool idxen,
-                       unsigned d) {
-        const Id at = add(offset, c64(4 * d));
-        const Id raw = b_.op(Op::OpULessThan, bool_, {add(at, soffset), v.records});
-        Id structured = b_.op(Op::OpULessThan, bool_, {index, v.records});
-        if (idxen) {
-            structured = b_.op(Op::OpLogicalAnd, bool_,
-                               {structured, b_.op(Op::OpULessThan, bool_, {at, v.stride})});
-        }
-        return b_.op(Op::OpSelect, bool_,
-                     {b_.op(Op::OpINotEqual, bool_, {v.stride, c64(0)}), structured, raw});
-    }
-
-    // An MUBUF or MTBUF access: the address of its element and what its range check needs.
+    // An MUBUF or MTBUF access: what its address and range check need (Sea Islands ISA 8.1.5 and
+    // Table 8.5). The modes of the V# are run-time values: `swizzle_enable` (dword 1 bit 31),
+    // `element_size` and `index_stride` (dword 3 bits 19-20 and 21-22, as shifts), `add_tid_enable`
+    // (dword 3 bit 23) and `heap` (dword 3 bit 26).
     struct BufferAccess {
         Vsharp v;
-        Id guest = 0;    // u64: the address without the bias
+        Id base = 0;     // u64: base + soffset (+ the VGPR address of addr64), without the bias
         Id soffset = 0;  // u64
         Id offset = 0;   // u64: the instruction's offset plus the VGPR's under `offen`
-        Id index = 0;    // u64: the VGPR index under `idxen`, else 0
+        Id index = 0;    // u64: the VGPR index under `idxen`, plus the lane under add_tid_enable
+        Id swizzle = 0, add_tid = 0, heap = 0;  // bool
+        Id element_shift = 0, index_shift = 0;  // u64: log2 of element_size and index_stride
         bool addr64 = false, idxen = false;
     };
 
     // The address and range check of an instruction whose vaddr, V# and soffset operands are
-    // a[0] to a[2]: base + soffset + index * stride + offset (see buffer_memory).
+    // a[0] to a[2]. base = V# base + soffset; index = the VGPR under `idxen` (else 0) plus the lane
+    // (thread_id[5:0]) under `add_tid_enable`; offset = the instruction's offset plus the VGPR
+    // under `offen` (8.1.5). `addr64` ignores the stride and the modes (Table 8.2: illegal with
+    // `add_tid_enable`).
     BufferAccess buffer_access(const Instruction& inst, const Operand* a) {
         BufferAccess m;
         m.addr64 = (inst.flags & flag::addr64) != 0;
@@ -1317,13 +1324,31 @@ private:
             fail(std::format("{} with addr64 and idxen or offen is not allowed", inst.name));
         }
         m.v = vsharp(a[1]);
+        const auto bit = [&](unsigned dword, unsigned n) {
+            const Id masked =
+                b_.op(Op::OpBitwiseAnd, u32_, {read(a[1], dword), b_.constant_u32(1u << n)});
+            return b_.op(Op::OpINotEqual, bool_, {masked, b_.constant_u32(0)});
+        };
+        const auto field = [&](unsigned low, unsigned plus) {  // a 2-bit field of dword 3, + plus
+            return b_.op(Op::OpUConvert, u64_,
+                         {b_.op(Op::OpIAdd, u32_,
+                                {b_.op(Op::OpBitFieldUExtract, u32_,
+                                       {read(a[1], 3), b_.constant_u32(low), b_.constant_u32(2)}),
+                                 b_.constant_u32(plus)})});
+        };
+        m.swizzle = bit(1, 31);
+        m.add_tid = bit(3, 23);
+        m.heap = bit(3, 26);
+        m.element_shift = field(19, 1);  // 2, 4, 8, 16 bytes
+        m.index_shift = field(21, 3);    // 8, 16, 32, 64 indices
         m.soffset = b_.op(Op::OpUConvert, u64_, {read(a[2])});
-        m.guest = add(m.v.base, m.soffset);
+        m.base = add(m.v.base, m.soffset);
         m.offset = c64(inst.mem_offset);
         m.index = c64(0);
         unsigned next = 0;
         if (m.addr64) {
-            m.guest = add(m.guest, read64(a[0]));
+            m.base = add(m.base, read64(a[0]));
+            return m;
         }
         if (m.idxen) {
             m.index = b_.op(Op::OpUConvert, u64_, {read(a[0], next++)});
@@ -1331,14 +1356,67 @@ private:
         if ((inst.flags & flag::offen) != 0) {
             m.offset = add(m.offset, b_.op(Op::OpUConvert, u64_, {read(a[0], next++)}));
         }
-        m.guest = add(m.guest, add(m.offset, b_.op(Op::OpIMul, u64_, {m.index, m.v.stride})));
+        m.index = add(m.index, b_.op(Op::OpSelect, u64_,
+                                     {m.add_tid, b_.op(Op::OpUConvert, u64_, {lane_}), c64(0)}));
         return m;
     }
 
-    // Whether dword `d` of the access is inside the buffer; `addr64` is not range-checked.
+    // The buffer_offset of the byte at offset + delta (8.1.5.1 and 8.1.5.2): index * stride +
+    // offset, or swizzled under `swizzle_enable`: ((index / index_stride) * stride + (offset /
+    // element_size) * element_size) * index_stride + (index % index_stride) * element_size +
+    // offset % element_size. Each dword of a wider access has its own: with an element_size of
+    // 4, the dwords of a pair are index_stride elements apart.
+    Id buffer_offset(const BufferAccess& m, std::uint64_t delta) {
+        const Id at = add(m.offset, c64(delta));
+        const Id linear = add(b_.op(Op::OpIMul, u64_, {m.index, m.v.stride}), at);
+        const auto shr = [&](Id x, Id n) { return b_.op(Op::OpShiftRightLogical, u64_, {x, n}); };
+        const auto shl = [&](Id x, Id n) { return b_.op(Op::OpShiftLeftLogical, u64_, {x, n}); };
+        const auto low = [&](Id x, Id n) {  // x % 2^n
+            return b_.op(Op::OpBitwiseAnd, u64_,
+                         {x, b_.op(Op::OpISub, u64_, {shl(c64(1), n), c64(1)})});
+        };
+        const Id high = add(b_.op(Op::OpIMul, u64_, {shr(m.index, m.index_shift), m.v.stride}),
+                            shl(shr(at, m.element_shift), m.element_shift));
+        const Id swizzled = add(add(shl(high, m.index_shift),
+                                    shl(low(m.index, m.index_shift), m.element_shift)),
+                                low(at, m.element_shift));
+        return b_.op(Op::OpSelect, u64_, {m.swizzle, swizzled, linear});
+    }
+
+    // The guest address of the byte at offset + delta, without the bias.
+    Id address(const BufferAccess& m, std::uint64_t delta) {
+        return add(m.base, m.addr64 ? add(m.offset, c64(delta)) : buffer_offset(m, delta));
+    }
+
+    // Whether dword `d` of the access is inside the buffer (Sea Islands ISA 8.1.5.3, p. 8-8);
+    // `addr64` is not range-checked. The offset of dword `d` includes 4 * d: "x2" and "x4" are
+    // checked per component. A stride of 0 makes `num_records` a byte size, and the access is out
+    // of range when buffer_offset + soffset >= num_records. The manual writes the left side as
+    // `buffer_offset >= num_records - soffset`; the sum in 64 bits is the same without the wrap of
+    // the subtraction, so a soffset beyond the size is always out of range. Otherwise the access
+    // is out of range when index >= num_records, or, with `idxen` or `add_tid_enable`, when the
+    // offset is not below the stride. Without either the offset is not checked at all, even with
+    // a stride, and soffset is never part of the check with a stride. `heap` adds (Table 8.5): out
+    // of range when the offset is 0 or not below num_records (our reading: the per-dword offset,
+    // unverified).
     Id inside(const BufferAccess& m, unsigned d) {
-        return m.addr64 ? b_.constant_bool(true)
-                        : buffer_in_range(m.v, m.soffset, m.index, m.offset, m.idxen, d);
+        if (m.addr64) {
+            return b_.constant_bool(true);
+        }
+        const auto less = [&](Id x, Id y) { return b_.op(Op::OpULessThan, bool_, {x, y}); };
+        const auto both = [&](Id x, Id y) { return b_.op(Op::OpLogicalAnd, bool_, {x, y}); };
+        const Id at = add(m.offset, c64(4 * d));
+        const Id raw = less(add(buffer_offset(m, 4 * d), m.soffset), m.v.records);
+        const Id check_offset = m.idxen ? b_.constant_bool(true) : m.add_tid;
+        const Id structured = both(less(m.index, m.v.records),
+                                   b_.op(Op::OpLogicalOr, bool_,
+                                         {b_.op(Op::OpLogicalNot, bool_, {check_offset}),
+                                          less(at, m.v.stride)}));
+        const Id in = b_.op(Op::OpSelect, bool_,
+                            {b_.op(Op::OpINotEqual, bool_, {m.v.stride, c64(0)}), structured, raw});
+        const Id heap_ok = both(b_.op(Op::OpINotEqual, bool_, {at, c64(0)}), less(at, m.v.records));
+        return both(in, b_.op(Op::OpLogicalOr, bool_,
+                              {b_.op(Op::OpLogicalNot, bool_, {m.heap}), heap_ok}));
     }
 
     // The clamp of s_buffer_load_dword* (7.2.2, p. 7-2): dword `d` of an access at byte `offset`
@@ -1395,7 +1473,7 @@ private:
         const BufferAccess m = buffer_access(inst, &inst.src[load ? 0 : 1]);
         const Id inside_buffer = inside(m, 0);
         const Id cond = b_.op(Op::OpLogicalAnd, bool_, {active(), inside_buffer});
-        const auto where = [&](unsigned delta) { return add(add(m.guest, c64(delta)), bias_); };
+        const auto where = [&](unsigned delta) { return add(address(m, delta), bias_); };
         const Id zero = b_.constant_u32(0);
         if (!load) {
             FormatEmitter::Words value;
@@ -1403,7 +1481,7 @@ private:
                 value[c] = c < data.dwords ? read(data, c) : zero;
             }
             const auto raw = FormatEmitter(b_, u32_).encode(inst.dfmt, inst.nfmt, value);
-            if (layout.bytes < 4) {
+            if (layout.bytes < 4) {  // contiguous bytes, also in a swizzled buffer
                 when(cond, [&] { store_bytes(where(0), raw[0], layout.bytes); });
             }
             for (unsigned d = 0; d < layout.bytes / 4; ++d) {
@@ -1416,7 +1494,7 @@ private:
         raw.fill(zero);
         if (layout.bytes < 4) {
             for (unsigned j = 0; j < layout.bytes; ++j) {
-                const Id byte = guarded_byte(cond, where(j));
+                const Id byte = guarded_byte(cond, add(where(0), c64(j)));
                 raw[0] = b_.op(Op::OpBitwiseOr, u32_,
                                {raw[0], b_.op(Op::OpShiftLeftLogical, u32_,
                                               {byte, b_.constant_u32(8 * j)})});
