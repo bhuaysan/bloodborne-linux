@@ -26,6 +26,12 @@ inline constexpr std::uint32_t bias_entries = 16;
 inline constexpr std::uint32_t bias_shift = 31;
 inline constexpr std::uint32_t bias_table_size = 8 * bias_entries;
 
+// Where a stage reads its draw block's address in the push constants (ShaderKey::push_offset):
+// the VS and the PS of a pipeline each read their own block from one 16-byte range.
+inline constexpr std::uint32_t vertex_push_offset = 0;
+inline constexpr std::uint32_t pixel_push_offset = 8;
+inline constexpr std::uint32_t graphics_push_size = 16;
+
 // The image type class of a T# (docs/design/graphics.md, "Image sampling"): what the SPIR-V
 // image type of its binding depends on. The run time reads it from each T# at draw time with
 // image_class() and translates again when it differs from the key.
@@ -93,6 +99,12 @@ struct ShaderKey {
     // The class of each image, by its position in ShaderInterface::images. An image without an
     // entry is a 2D float image.
     std::vector<ImageClass> images{};
+
+    // The byte offset of the draw block's address in the push constants, a multiple of 8 below
+    // 128: vertex_push_offset or pixel_push_offset in a graphics pipeline, 0 in compute.
+    std::uint32_t push_offset = 0;
+
+    bool operator==(const ShaderKey&) const = default;
 };
 
 // Where a stage's images and samplers are bound: one descriptor set per hardware stage, 0 for VS

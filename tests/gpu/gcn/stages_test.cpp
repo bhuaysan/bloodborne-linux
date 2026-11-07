@@ -420,4 +420,21 @@ TEST(GcnStages, PixelErrorsNameWhatIsUnsupported) {
     EXPECT_EQ(error({}, cntl), "SPI_PS_INPUT_CNTL_5 0x2001 is not supported yet");
 }
 
+// Each stage reads its draw block's address at its own push constant offset: the only member
+// decorated with Offset 8 is the push constant's (the draw block's are 0, 64 and 72).
+TEST(GcnStages, PushOffset) {
+    ShaderKey key = pixel_key();
+    const auto offset_8 = [&] {
+        return count(translate(program_words("ps_attrs"), {}, key).spirv,
+                     spv::Op::OpMemberDecorate, 4, 8);
+    };
+    EXPECT_EQ(offset_8(), 0);
+    key.push_offset = bb::gcn::pixel_push_offset;
+    EXPECT_EQ(offset_8(), 1);
+    const auto ps = translate(program_words("ps_attrs"), {}, key);
+    EXPECT_EQ(have_spirv_val() ? validate(ps.spirv) : "", "");
+    key.push_offset = 4;
+    EXPECT_EQ(error({}, key), "push constant offset 4");
+}
+
 }  // namespace

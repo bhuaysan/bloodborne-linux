@@ -305,6 +305,9 @@ private:
         if (!graphics() && std::ranges::find(key_.num_threads, 0u) != key_.num_threads.end()) {
             throw GcnError("a workgroup size of 0", 0, 0);
         }
+        if (key_.push_offset % 8 != 0 || key_.push_offset >= 128) {
+            throw GcnError(std::format("push constant offset {}", key_.push_offset), 0, 0);
+        }
     }
 
     // The mask type pass: the SGPR pairs that hold lane masks are the mask operands of the
@@ -389,7 +392,7 @@ private:
         b_.member_decorate(draw_t, 2, spv::Decoration::Offset, {draw_code_address_offset});
         const Id push_t = b_.type_struct({u64_});
         b_.decorate(push_t, spv::Decoration::Block);
-        b_.member_decorate(push_t, 0, spv::Decoration::Offset, {0});
+        b_.member_decorate(push_t, 0, spv::Decoration::Offset, {key_.push_offset});
         const Id push = b_.variable(b_.type_pointer(SC::PushConstant, push_t), SC::PushConstant);
         interface_.push_back(push);
 
