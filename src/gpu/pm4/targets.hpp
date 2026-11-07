@@ -48,8 +48,10 @@ struct ColorTarget {
     std::uint32_t pitch = 0;    // in pixels, (PITCH.TILE_MAX + 1) * 8
     std::uint32_t height = 0;   // in pixels, (SLICE.TILE_MAX + 1) * 64 / pitch
     Extent extent;              // the hint, or pitch x height without one
-    std::uint32_t base_slice = 0;  // VIEW.SLICE_START
-    std::uint32_t slices = 1;      // VIEW.SLICE_MAX + 1
+    std::uint32_t base_slice = 0;  // VIEW.SLICE_START, the view's first slice
+    // VIEW.SLICE_MAX + 1. SLICE_MAX is the absolute index of the view's last slice, so this is
+    // the image's layer count up to the end of the view; the view has slices - base_slice layers.
+    std::uint32_t slices = 1;
     std::uint32_t format = 0;      // INFO.FORMAT (COLOR_*)
     std::uint32_t number_type = 0;  // INFO.NUMBER_TYPE (NUMBER_*; 6 is SRGB)
     std::uint32_t comp_swap = 0;    // INFO.COMP_SWAP
@@ -76,8 +78,10 @@ struct DepthTarget {
     std::uint32_t pitch = 0;   // in pixels, (DB_DEPTH_SIZE.PITCH_TILE_MAX + 1) * 8
     std::uint32_t height = 0;  // in pixels, (DB_DEPTH_SIZE.HEIGHT_TILE_MAX + 1) * 8
     Extent extent;             // the hint, or pitch x height without one
-    std::uint32_t base_slice = 0;  // DB_DEPTH_VIEW.SLICE_START
-    std::uint32_t slices = 1;      // DB_DEPTH_VIEW.SLICE_MAX + 1
+    std::uint32_t base_slice = 0;  // DB_DEPTH_VIEW.SLICE_START, the view's first slice
+    // DB_DEPTH_VIEW.SLICE_MAX + 1, absolute like ColorTarget::slices: the image's layer count up
+    // to the end of the view; the view has slices - base_slice layers.
+    std::uint32_t slices = 1;
     std::uint32_t tile_mode = 0;   // DB_Z_INFO.TILE_MODE_INDEX
     std::uint32_t samples = 1;     // 1 << DB_Z_INFO.NUM_SAMPLES
     std::uint64_t htile_address = 0;  // DB_HTILE_DATA_BASE << 8 with TILE_SURFACE_ENABLE, else 0

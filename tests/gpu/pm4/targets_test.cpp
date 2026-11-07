@@ -116,7 +116,7 @@ TEST(Targets, DepthTargetWithTheGamesHint) {
     EXPECT_EQ(t->height, 720u);
     EXPECT_EQ(t->extent, (Extent{1278, 718}));
     EXPECT_EQ(t->base_slice, 5u);
-    EXPECT_EQ(t->slices, 8u);
+    EXPECT_EQ(t->slices, 8u);  // absolute: the view is slices 5-7, three layers
     EXPECT_EQ(t->tile_mode, 6u);
     EXPECT_EQ(t->samples, 2u);
     EXPECT_EQ(t->htile_address, 0x77700u);
