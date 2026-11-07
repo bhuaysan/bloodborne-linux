@@ -1,1 +1,4 @@
-bb_add_test(vk_test SOURCES device_test.cpp formats_test.cpp image_cache_test.cpp presenter_test.cpp scheduler_test.cpp LIBS bbvk bbvktest)
+bb_add_test(vk_test
+    SOURCES device_test.cpp formats_test.cpp image_cache_test.cpp presenter_test.cpp scheduler_test.cpp
+        tiler_test.cpp
+    LIBS bbvk bbgcntest bbvktest)
