@@ -19,4 +19,11 @@ VkFormat color_format(std::uint32_t format, std::uint32_t number_type, std::uint
 // without an 8-bit stencil. VK_FORMAT_UNDEFINED for other depth formats or neither part.
 VkFormat depth_format(std::uint32_t z_format, bool stencil);
 
+// The clear value with which Vulkan stores `clear_word` (CB_COLOR<n>_CLEAR_WORD1:WORD0, one
+// pixel as stored in memory) in an image of `format`, a format color_format returns: each
+// component is read from the bits the Vulkan format gives it. SRGB colour components become
+// linear, as the clear encodes them again. The 128-bit formats take R, G and B from word 0 and
+// A from word 1 (shadPS4's reading). Zero for other formats.
+VkClearColorValue color_clear_value(VkFormat format, std::uint64_t clear_word);
+
 }  // namespace bb::vk
