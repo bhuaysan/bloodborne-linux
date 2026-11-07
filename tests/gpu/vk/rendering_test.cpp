@@ -1,6 +1,8 @@
-// Dynamic rendering into the colour targets of the register mirror, and the fast clears of
-// register state, on lavapipe: a clear through register state lands in the cached image.
+// Dynamic rendering into the targets of the register mirror, and the clears of register state,
+// on lavapipe: a clear through register state lands in the cached image.
 
+#include <array>
+#include <bit>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -59,6 +61,16 @@ protected:
     }
     Image* color_image() {
         return cache_->get(*color_image_key(*bb::pm4::color_target(regs_, hints_, 0)));
+    }
+
+    // Depth target: 16 x 8 Z32_FLOAT with stencil, depth and stencil tests and depth writes on.
+    void depth_target() {
+        set(amd::mmDB_Z_INFO, 3);
+        set(amd::mmDB_STENCIL_INFO, 1);
+        set(amd::mmDB_Z_READ_BASE, 0x3000);
+        set(amd::mmDB_STENCIL_READ_BASE, 0x3800);
+        set(amd::mmDB_DEPTH_SIZE, 1);  // pitch 16, height 8
+        set(amd::mmDB_DEPTH_CONTROL, 0x7);
     }
 
     // Begins and ends the rendering of the registers' targets, then waits.
@@ -157,6 +169,8 @@ TEST_F(VkRendering, ColorFastClearLandsInTheCachedImage) {
     ASSERT_TRUE(info);
     EXPECT_EQ(info->color[0], VK_FORMAT_R8G8B8A8_UNORM);
     EXPECT_EQ(info->color_count, 1u);
+    EXPECT_EQ(info->depth, VK_FORMAT_UNDEFINED);
+    EXPECT_EQ(info->stencil, VK_FORMAT_UNDEFINED);
     EXPECT_EQ(info->extent.width, 16u);
     EXPECT_EQ(info->extent.height, 8u);
     EXPECT_EQ(info->layers, 2u);
@@ -200,6 +214,105 @@ TEST_F(VkRendering, TargetMaskAndModeChooseTheTargets) {
     EXPECT_EQ(info->color[0], VK_FORMAT_UNDEFINED);
     EXPECT_EQ(info->color[2], VK_FORMAT_R8G8B8A8_UNORM);
     EXPECT_EQ(info->layers, 1u);
+}
+
+TEST_F(VkRendering, FastClearCoversTheWholeView) {
+    // Target 0 (16 x 8, slices 0-2) marked, next to target 1 (8 x 8, one slice): the rendering
+    // covers 8 x 8 and one layer, the clear all of target 0's view.
+    color_target(0, 0x80FF4020);
+    renderer_->mark_cleared(0x200000);
+    const std::uint32_t stride = amd::mmCB_COLOR1_BASE - amd::mmCB_COLOR0_BASE;
+    set(amd::mmCB_COLOR0_BASE + stride, 0x5000);
+    set(amd::mmCB_COLOR0_PITCH + stride, 0);  // 8
+    set(amd::mmCB_COLOR0_SLICE + stride, 0);  // 8
+    set(amd::mmCB_COLOR0_INFO + stride, 10u << 2);
+    set(amd::mmCB_TARGET_MASK, 0xFF);
+    const auto info = render();
+    ASSERT_TRUE(info);
+    EXPECT_EQ(info->extent.width, 8u);
+    EXPECT_EQ(info->layers, 1u);
+    Image* image = color_image();
+    ASSERT_NE(image, nullptr);
+    const std::uint8_t color[] = {0x20, 0x40, 0xFF, 0x80};
+    EXPECT_TRUE(layers_hold(read(*image, VK_IMAGE_ASPECT_COLOR_BIT, 4), layer_bytes, 0, 2, color));
+}
+
+TEST_F(VkRendering, DepthAndStencilClearsFromRenderControl) {
+    depth_target();
+    set(amd::mmDB_RENDER_CONTROL, 3);  // DEPTH_CLEAR_ENABLE, STENCIL_CLEAR_ENABLE
+    set(amd::mmDB_DEPTH_CLEAR, std::bit_cast<std::uint32_t>(0.25f));
+    set(amd::mmDB_STENCIL_CLEAR, 0x5A);
+    const auto info = render();
+    ASSERT_TRUE(info);
+    EXPECT_EQ(info->color_count, 0u);
+    EXPECT_EQ(info->depth, VK_FORMAT_D32_SFLOAT_S8_UINT);
+    EXPECT_EQ(info->stencil, VK_FORMAT_D32_SFLOAT_S8_UINT);
+    Image* image = cache_->get(*depth_image_key(*bb::pm4::depth_target(regs_, hints_)));
+    ASSERT_NE(image, nullptr);
+    const auto quarter = std::bit_cast<std::array<std::uint8_t, 4>>(0.25f);
+    const std::uint8_t stencil[] = {0x5A};
+    EXPECT_TRUE(layers_hold(read(*image, VK_IMAGE_ASPECT_DEPTH_BIT, 4), layer_bytes, 0, 0,
+                            quarter));
+    EXPECT_TRUE(layers_hold(read(*image, VK_IMAGE_ASPECT_STENCIL_BIT, 1), 16 * 8, 0, 0,
+                            stencil));
+
+    // Without depth writes the depth clear doesn't happen; a marked HTILE clears anyway, and
+    // DB_DEPTH_CLEAR above 1 is clamped.
+    set(amd::mmDB_DEPTH_CONTROL, 0x3);
+    set(amd::mmDB_RENDER_CONTROL, 1);
+    set(amd::mmDB_DEPTH_CLEAR, std::bit_cast<std::uint32_t>(2.0f));
+    ASSERT_TRUE(render());
+    EXPECT_TRUE(layers_hold(read(*image, VK_IMAGE_ASPECT_DEPTH_BIT, 4), layer_bytes, 0, 0,
+                            quarter));
+    set(amd::mmDB_Z_INFO, 3u | 1u << 29);  // TILE_SURFACE_ENABLE
+    set(amd::mmDB_HTILE_DATA_BASE, 0x4000);
+    renderer_->mark_cleared(0x400000);
+    ASSERT_TRUE(render());
+    EXPECT_FALSE(renderer_->cleared(0x400000));
+    EXPECT_TRUE(layers_hold(read(*image, VK_IMAGE_ASPECT_DEPTH_BIT, 4), layer_bytes, 0, 0,
+                            std::bit_cast<std::array<std::uint8_t, 4>>(1.0f)));
+    EXPECT_TRUE(layers_hold(read(*image, VK_IMAGE_ASPECT_STENCIL_BIT, 1), 16 * 8, 0, 0,
+                            stencil));
+
+    // Stencil test alone with stencil only: a stencil attachment and no depth attachment.
+    set(amd::mmDB_Z_INFO, 0);
+    set(amd::mmDB_DEPTH_CONTROL, 0x1);
+    const auto stencil_only = render();
+    ASSERT_TRUE(stencil_only);
+    EXPECT_EQ(stencil_only->depth, VK_FORMAT_UNDEFINED);
+    EXPECT_EQ(stencil_only->stencil, VK_FORMAT_D32_SFLOAT_S8_UINT);
+
+    // Neither test enabled: the depth target isn't bound.
+    set(amd::mmDB_DEPTH_CONTROL, 0);
+    EXPECT_FALSE(render());
+}
+
+TEST_F(VkRendering, EliminatePassClearsTarget0OncePerMark) {
+    color_target(0, 0x11223344);
+    set(amd::mmCB_COLOR_CONTROL, 2u << 4);  // CB_ELIMINATE_FAST_CLEAR
+    const VkCommandBuffer commands = scheduler_->commands();
+    EXPECT_FALSE(renderer_->eliminate_fast_clear(commands, regs_, hints_));  // CMASK not marked
+    renderer_->mark_cleared(0x200000);
+    EXPECT_TRUE(renderer_->eliminate_fast_clear(commands, regs_, hints_));
+    EXPECT_FALSE(renderer_->eliminate_fast_clear(commands, regs_, hints_));  // mark taken
+    EXPECT_FALSE(render());  // MODE 2 binds no colour target
+    Image* image = color_image();
+    ASSERT_NE(image, nullptr);
+    const std::uint8_t color[] = {0x44, 0x33, 0x22, 0x11};
+    EXPECT_TRUE(layers_hold(read(*image, VK_IMAGE_ASPECT_COLOR_BIT, 4), layer_bytes, 0, 2, color));
+
+    // Other modes don't eliminate; a normal rendering takes the mark instead.
+    renderer_->mark_cleared(0x200000);
+    set(amd::mmCB_COLOR_CONTROL, 1u << 4);
+    EXPECT_FALSE(renderer_->eliminate_fast_clear(scheduler_->commands(), regs_, hints_));
+    ASSERT_TRUE(render());
+    EXPECT_FALSE(renderer_->cleared(0x200000));
+    // Without FAST_CLEAR the eliminate pass leaves a mark alone.
+    renderer_->mark_cleared(0x200000);
+    set(amd::mmCB_COLOR0_INFO, 10u << 2);
+    set(amd::mmCB_COLOR_CONTROL, 2u << 4);
+    EXPECT_FALSE(renderer_->eliminate_fast_clear(scheduler_->commands(), regs_, hints_));
+    EXPECT_TRUE(renderer_->cleared(0x200000));
 }
 
 }  // namespace
