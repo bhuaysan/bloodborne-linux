@@ -24,6 +24,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -170,8 +171,12 @@ void open_display(const std::string& device_selector) {
     }
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     if (d->instance) {
-        surface = d->window->create_surface(d->instance->handle());
-        d->device = bb::vk::Device::create(*d->instance, {device_selector, surface}, why);
+        try {
+            surface = d->window->create_surface(d->instance->handle());
+            d->device = bb::vk::Device::create(*d->instance, {device_selector, surface}, why);
+        } catch (const std::runtime_error& e) {
+            why = e.what();
+        }
     }
     if (!d->device) {
         if (surface != VK_NULL_HANDLE) {

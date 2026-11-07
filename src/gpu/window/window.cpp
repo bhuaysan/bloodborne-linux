@@ -9,6 +9,9 @@ namespace bb::window {
 
 std::unique_ptr<Window> Window::create(const char* title, std::uint32_t width,
                                        std::uint32_t height, std::string& why) {
+    // SDL would otherwise turn SIGINT and SIGTERM into SDL_EVENT_QUIT, so Ctrl-C would end the
+    // run like a closed window, with status 0. They keep their default action instead.
+    SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         why = SDL_GetError();
         return nullptr;
