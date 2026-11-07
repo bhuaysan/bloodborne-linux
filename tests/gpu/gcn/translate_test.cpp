@@ -425,8 +425,9 @@ TEST(GcnTranslate, FloatModes) {
     EXPECT_EQ(build(0, add), (std::vector<std::uint32_t>{nan, rte, flush}));
     EXPECT_EQ(build(3u << 16 | 3u << 12, add), (std::vector<std::uint32_t>{nan, rtz, preserve}));
     EXPECT_EQ(build(0, {s_endpgm}), std::vector<std::uint32_t>{});  // no float instruction
-    // A typed load or store converts through f32 in every number format but UINT and SINT: a
-    // half float's infinities, NaNs and -0 need the modes, an integer load or store needs none.
+    // A typed load converts through f32 in every number format but UINT and SINT, and a typed
+    // store in UNORM and SNORM: a half float's infinities, NaNs and -0 need the modes, an integer
+    // load or store needs none.
     const auto typed = [&](unsigned dfmt, unsigned nfmt, unsigned op = 0) {
         auto code = mtbuf(op, 3, 1, 4, 128, 0, dfmt, nfmt, buf::offen);
         code.push_back(s_endpgm);
@@ -439,8 +440,17 @@ TEST(GcnTranslate, FloatModes) {
     EXPECT_EQ(typed(10, 3), float_modes);  // 8_8_8_8, SSCALED
     EXPECT_EQ(typed(5, 4), std::vector<std::uint32_t>{});  // 16_16, UINT
     EXPECT_EQ(typed(5, 5), std::vector<std::uint32_t>{});  // 16_16, SINT
-    EXPECT_EQ(typed(2, 7, 4), float_modes);  // tbuffer_store_format_x, 16, FLOAT
+    // A FLOAT store has no float operation: 32 bits are copied, and the half float is rounded
+    // in integer operations. So it needs no mode and translates under any of them.
+    EXPECT_EQ(typed(2, 7, 4), std::vector<std::uint32_t>{});  // tbuffer_store_format_x, 16, FLOAT
+    EXPECT_EQ(typed(4, 7, 4), std::vector<std::uint32_t>{});  // 32, FLOAT
+    {
+        auto code = mtbuf(4, 3, 1, 4, 128, 0, 2, 7, buf::offen);
+        code.push_back(s_endpgm);
+        EXPECT_EQ(build(1u << 12 | 2u << 16, code), std::vector<std::uint32_t>{});
+    }
     EXPECT_EQ(typed(1, 1, 4), float_modes);  // 8, SNORM
+    EXPECT_EQ(typed(10, 0, 4), float_modes);  // 8_8_8_8, UNORM
     EXPECT_EQ(typed(10, 4, 4), std::vector<std::uint32_t>{});  // 8_8_8_8, UINT
     for (const std::uint32_t rsrc1 : {1u << 12, 2u << 12, 1u << 16, 2u << 16}) {
         EXPECT_EQ(error(add, {.pgm_rsrc1 = rsrc1, .pgm_rsrc2 = 5u << 1}),

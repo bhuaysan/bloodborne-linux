@@ -1379,12 +1379,15 @@ private:
         if (const std::string why = format_error(inst.dfmt, inst.nfmt, !load); !why.empty()) {
             fail(std::format("{}: {}", name, why));
         }
-        if (inst.nfmt != nfmt::uint_ && inst.nfmt != nfmt::sint) {
-            // The other number formats convert through f32 (or a half float). The float modes
-            // keep a half float's infinities, NaNs and -0 on the way; no conversion makes an f32
-            // denormal, and the 16-bit integers convert exactly. The rounding mode does reach
-            // the divisions and products of the normalized formats (a known difference, see the
-            // design note).
+        if (inst.nfmt != nfmt::uint_ && inst.nfmt != nfmt::sint &&
+            (load || inst.nfmt != nfmt::float_)) {
+            // The other loads convert through f32 (or unpack a half float), and the UNORM and
+            // SNORM stores clamp, scale and round in f32. The float modes keep a half float's
+            // infinities, NaNs and -0 on the way; no conversion makes an f32 denormal, and the
+            // 16-bit integers convert exactly. The rounding mode does reach the divisions and
+            // products of the normalized formats (a known difference, see the design note). A
+            // FLOAT store has no float operation: it copies 32 bits or rounds to a half float
+            // in integer operations.
             note_float();
         }
         const FormatLayout& layout = *format_layout(inst.dfmt);
