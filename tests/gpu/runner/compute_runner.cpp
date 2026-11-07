@@ -6,105 +6,39 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
-#include <vector>
+#include <utility>
 
 #include <vulkan/vulkan.h>
+
+#include "gpu/vk/device.hpp"
+#include "gpu/vk/scheduler.hpp"
 
 namespace bb::test::vk {
 
 namespace {
 
+using bb::vk::check;
+using bb::vk::make;
+
 // The loader's driver filter that selects only lavapipe's manifest (lvp_icd.*.json).
 constexpr const char* kLavapipeOnly = "*lvp*";
 
-// A Vulkan structure with its type and next pointer set and everything else zero.
-template <typename T>
-T make(VkStructureType type, void* next = nullptr) {
-    T value{};
-    value.sType = type;
-    value.pNext = next;
-    return value;
+DeviceInfo device_info(const bb::vk::DeviceProperties& p) {
+    DeviceInfo info;
+    info.name = p.core.deviceName;
+    info.driver = std::string(p.v12.driverName) + " " + p.v12.driverInfo;
+    info.subgroup_size = p.v11.subgroupSize;
+    info.subgroup_quad = (p.v11.subgroupSupportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+                         (p.v11.subgroupSupportedOperations & VK_SUBGROUP_FEATURE_QUAD_BIT) != 0;
+    info.min_subgroup_size = p.v13.minSubgroupSize;
+    info.max_subgroup_size = p.v13.maxSubgroupSize;
+    info.denorm_preserve_f32 = p.v12.shaderDenormPreserveFloat32;
+    info.denorm_flush_f32 = p.v12.shaderDenormFlushToZeroFloat32;
+    info.round_rte_f32 = p.v12.shaderRoundingModeRTEFloat32;
+    info.round_rtz_f32 = p.v12.shaderRoundingModeRTZFloat32;
+    info.signed_zero_inf_nan_f32 = p.v12.shaderSignedZeroInfNanPreserveFloat32;
+    return info;
 }
-
-void check(VkResult result, const char* call) {
-    if (result != VK_SUCCESS) {
-        throw std::runtime_error(std::string(call) + " failed with VkResult " +
-                                 std::to_string(static_cast<int>(result)));
-    }
-}
-
-// What the device offers, read through the property and feature chains of Vulkan 1.3.
-struct Query {
-    VkPhysicalDeviceVulkan13Properties p13 = make<VkPhysicalDeviceVulkan13Properties>(
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES);
-    VkPhysicalDeviceVulkan12Properties p12 = make<VkPhysicalDeviceVulkan12Properties>(
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES, &p13);
-    VkPhysicalDeviceVulkan11Properties p11 = make<VkPhysicalDeviceVulkan11Properties>(
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES, &p12);
-    VkPhysicalDeviceProperties2 props = make<VkPhysicalDeviceProperties2>(
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &p11);
-    VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR reconvergence =
-        make<VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR>(
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MAXIMAL_RECONVERGENCE_FEATURES_KHR);
-    VkPhysicalDeviceVulkan13Features f13 = make<VkPhysicalDeviceVulkan13Features>(
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, &reconvergence);
-    VkPhysicalDeviceVulkan12Features f12 = make<VkPhysicalDeviceVulkan12Features>(
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, &f13);
-    VkPhysicalDeviceFeatures2 features = make<VkPhysicalDeviceFeatures2>(
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &f12);
-
-    explicit Query(VkPhysicalDevice device) {
-        vkGetPhysicalDeviceProperties2(device, &props);
-        vkGetPhysicalDeviceFeatures2(device, &features);
-    }
-    Query(const Query&) = delete;  // the chains point into the object
-
-    // What the translator needs and the device lacks, or nothing.
-    std::optional<std::string> missing() const {
-        constexpr VkSubgroupFeatureFlags ops =
-            VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_VOTE_BIT |
-            VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
-        if (!features.features.shaderInt64) {
-            return "shaderInt64";
-        }
-        if (!f12.bufferDeviceAddress) {
-            return "bufferDeviceAddress";
-        }
-        // v_readfirstlane_b32 and v_readlane_b32 broadcast from a lane computed at run time.
-        if (!f12.subgroupBroadcastDynamicId) {
-            return "subgroupBroadcastDynamicId";
-        }
-        if (!f13.subgroupSizeControl || !f13.computeFullSubgroups) {
-            return "subgroup size control";
-        }
-        // The translator declares MaximallyReconvergesKHR in a module with subgroup operations.
-        if (!reconvergence.shaderMaximalReconvergence) {
-            return "VK_KHR_shader_maximal_reconvergence";
-        }
-        if (!(p11.subgroupSupportedStages & VK_SHADER_STAGE_COMPUTE_BIT) ||
-            (p11.subgroupSupportedOperations & ops) != ops) {
-            return "basic, vote, ballot and shuffle subgroup operations in compute";
-        }
-        return std::nullopt;
-    }
-
-    DeviceInfo info() const {
-        DeviceInfo info;
-        info.name = props.properties.deviceName;
-        info.driver = std::string(p12.driverName) + " " + p12.driverInfo;
-        info.subgroup_size = p11.subgroupSize;
-        info.subgroup_quad = (p11.subgroupSupportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-                             (p11.subgroupSupportedOperations & VK_SUBGROUP_FEATURE_QUAD_BIT) != 0;
-        info.min_subgroup_size = p13.minSubgroupSize;
-        info.max_subgroup_size = p13.maxSubgroupSize;
-        info.denorm_preserve_f32 = p12.shaderDenormPreserveFloat32;
-        info.denorm_flush_f32 = p12.shaderDenormFlushToZeroFloat32;
-        info.round_rte_f32 = p12.shaderRoundingModeRTEFloat32;
-        info.round_rtz_f32 = p12.shaderRoundingModeRTZFloat32;
-        info.signed_zero_inf_nan_f32 = p12.shaderSignedZeroInfNanPreserveFloat32;
-        return info;
-    }
-};
 
 struct Buffer {
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -130,15 +64,11 @@ std::string DeviceInfo::describe() const {
 }
 
 struct ComputeRunner::State {
-    VkInstance instance = VK_NULL_HANDLE;
-    VkPhysicalDevice physical = VK_NULL_HANDLE;
+    std::unique_ptr<bb::vk::Instance> instance;
+    std::unique_ptr<bb::vk::Device> vk;
+    std::unique_ptr<bb::vk::Scheduler> scheduler;
     VkDevice device = VK_NULL_HANDLE;
-    VkQueue queue = VK_NULL_HANDLE;
-    std::uint32_t queue_family = 0;
     std::uint32_t memory_type = 0;  // host visible and coherent
-    VkCommandPool pool = VK_NULL_HANDLE;
-    VkCommandBuffer commands = VK_NULL_HANDLE;
-    VkFence fence = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
     Buffer draw;   // the draw block
     Buffer guest;  // guest memory
@@ -147,16 +77,10 @@ struct ComputeRunner::State {
 
     ~State() {
         if (device != VK_NULL_HANDLE) {
-            vkDeviceWaitIdle(device);
+            scheduler.reset();  // waits for the work and runs the deferred functions
             destroy(guest);
             destroy(draw);
             vkDestroyPipelineLayout(device, layout, nullptr);
-            vkDestroyFence(device, fence, nullptr);
-            vkDestroyCommandPool(device, pool, nullptr);
-            vkDestroyDevice(device, nullptr);
-        }
-        if (instance != VK_NULL_HANDLE) {
-            vkDestroyInstance(instance, nullptr);
         }
     }
 
@@ -202,110 +126,34 @@ struct ComputeRunner::State {
         b = Buffer{};
     }
 
-    // Picks lavapipe and creates the device. Returns what is missing, or nothing. With
+    // Creates bbvk's device on lavapipe. Returns what is missing, or nothing. With
     // `lavapipe_only`, the loader loads no driver but lavapipe, so a failed instance means that
     // lavapipe is missing.
     std::optional<std::string> init(bool lavapipe_only) {
-        auto app = make<VkApplicationInfo>(VK_STRUCTURE_TYPE_APPLICATION_INFO);
-        app.pApplicationName = "bloodborne-linux compute runner";
-        app.apiVersion = VK_API_VERSION_1_3;
-        auto instance_info = make<VkInstanceCreateInfo>(VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO);
-        instance_info.pApplicationInfo = &app;
-        if (VkResult r = vkCreateInstance(&instance_info, nullptr, &instance); r != VK_SUCCESS) {
-            instance = VK_NULL_HANDLE;
-            const std::string result =
-                "vkCreateInstance gave " + std::to_string(static_cast<int>(r));
+        std::string why;
+        instance = bb::vk::Instance::create(why);
+        if (!instance) {
             if (lavapipe_only) {
                 return "lavapipe driver (Mesa's Vulkan drivers; the loader, limited to "
                        "VK_LOADER_DRIVERS_SELECT=" +
-                       std::string(kLavapipeOnly) + ", made no instance: " + result + ")";
+                       std::string(kLavapipeOnly) + ", made no instance: " + why + ")";
             }
-            return "Vulkan instance (" + result + ")";
+            return "Vulkan instance (" + why + ")";
         }
-        std::uint32_t count = 0;
-        check(vkEnumeratePhysicalDevices(instance, &count, nullptr), "vkEnumeratePhysicalDevices");
-        std::vector<VkPhysicalDevice> devices(count);
-        check(vkEnumeratePhysicalDevices(instance, &count, devices.data()),
-              "vkEnumeratePhysicalDevices");
-        for (VkPhysicalDevice d : devices) {
-            VkPhysicalDeviceProperties props;
-            vkGetPhysicalDeviceProperties(d, &props);  // the 1.2 properties need a 1.2 device
-            if (props.apiVersion >= VK_API_VERSION_1_3 &&
-                Query(d).p12.driverID == VK_DRIVER_ID_MESA_LLVMPIPE) {
-                physical = d;
-                break;
-            }
+        vk = bb::vk::Device::create(*instance, {.device = "llvmpipe"}, why);
+        if (!vk) {
+            return "lavapipe device for bbvk (Mesa's Vulkan drivers: " + why + ")";
         }
-        if (physical == VK_NULL_HANDLE) {
-            return "lavapipe device with Vulkan 1.3 (Mesa's Vulkan drivers)";
-        }
-        const Query query(physical);
-        if (auto what = query.missing()) {
-            return "lavapipe support for " + *what;
-        }
-        info = query.info();
-
-        std::uint32_t families = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(physical, &families, nullptr);
-        std::vector<VkQueueFamilyProperties> family_props(families);
-        vkGetPhysicalDeviceQueueFamilyProperties(physical, &families, family_props.data());
-        while (queue_family < families &&
-               !(family_props[queue_family].queueFlags & VK_QUEUE_COMPUTE_BIT)) {
-            ++queue_family;
-        }
-        VkPhysicalDeviceMemoryProperties memory;
-        vkGetPhysicalDeviceMemoryProperties(physical, &memory);
+        info = device_info(vk->properties());
+        device = vk->handle();
         constexpr VkMemoryPropertyFlags host =
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-        while (memory_type < memory.memoryTypeCount &&
-               (memory.memoryTypes[memory_type].propertyFlags & host) != host) {
-            ++memory_type;
+        const auto type = vk->memory_type(~0u, host);
+        if (!type) {
+            return "lavapipe host-coherent memory";
         }
-        if (queue_family == families || memory_type == memory.memoryTypeCount) {
-            return "lavapipe compute queue or host-coherent memory";
-        }
-
-        auto reconvergence = make<VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR>(
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MAXIMAL_RECONVERGENCE_FEATURES_KHR);
-        reconvergence.shaderMaximalReconvergence = VK_TRUE;
-        auto f13 = make<VkPhysicalDeviceVulkan13Features>(
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, &reconvergence);
-        f13.subgroupSizeControl = VK_TRUE;
-        f13.computeFullSubgroups = VK_TRUE;
-        auto f12 = make<VkPhysicalDeviceVulkan12Features>(
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, &f13);
-        f12.bufferDeviceAddress = VK_TRUE;
-        f12.subgroupBroadcastDynamicId = VK_TRUE;
-        auto features = make<VkPhysicalDeviceFeatures2>(
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &f12);
-        features.features.shaderInt64 = VK_TRUE;
-        const float priority = 1.0f;
-        auto queue_info = make<VkDeviceQueueCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO);
-        queue_info.queueFamilyIndex = queue_family;
-        queue_info.queueCount = 1;
-        queue_info.pQueuePriorities = &priority;
-        auto device_info = make<VkDeviceCreateInfo>(
-            VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, &features);
-        device_info.queueCreateInfoCount = 1;
-        device_info.pQueueCreateInfos = &queue_info;
-        const char* extensions[] = {VK_KHR_SHADER_MAXIMAL_RECONVERGENCE_EXTENSION_NAME};
-        device_info.enabledExtensionCount = 1;
-        device_info.ppEnabledExtensionNames = extensions;
-        check(vkCreateDevice(physical, &device_info, nullptr, &device), "vkCreateDevice");
-        vkGetDeviceQueue(device, queue_family, 0, &queue);
-
-        auto pool_info = make<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
-        pool_info.queueFamilyIndex = queue_family;
-        check(vkCreateCommandPool(device, &pool_info, nullptr, &pool), "vkCreateCommandPool");
-        auto commands_info = make<VkCommandBufferAllocateInfo>(
-            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
-        commands_info.commandPool = pool;
-        commands_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        commands_info.commandBufferCount = 1;
-        check(vkAllocateCommandBuffers(device, &commands_info, &commands),
-              "vkAllocateCommandBuffers");
-        auto fence_info = make<VkFenceCreateInfo>(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
-        check(vkCreateFence(device, &fence_info, nullptr, &fence), "vkCreateFence");
+        memory_type = *type;
+        scheduler = std::make_unique<bb::vk::Scheduler>(*vk);
 
         VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(VkDeviceAddress)};
         auto layout_info = make<VkPipelineLayoutCreateInfo>(
@@ -319,7 +167,8 @@ struct ComputeRunner::State {
     }
 };
 
-// The shader module and pipeline of one run.
+// The shader module and pipeline of one run. The scheduler destroys them once the run's work
+// has completed (release()); until then they are destroyed with the object.
 struct Pipeline {
     VkDevice device;
     VkShaderModule module = VK_NULL_HANDLE;
@@ -328,6 +177,14 @@ struct Pipeline {
     ~Pipeline() {
         vkDestroyPipeline(device, pipeline, nullptr);
         vkDestroyShaderModule(device, module, nullptr);
+    }
+
+    void release(bb::vk::Scheduler& scheduler) {
+        scheduler.defer([d = device, m = std::exchange(module, VK_NULL_HANDLE),
+                         p = std::exchange(pipeline, VK_NULL_HANDLE)] {
+            vkDestroyPipeline(d, p, nullptr);
+            vkDestroyShaderModule(d, m, nullptr);
+        });
     }
 };
 
@@ -359,8 +216,9 @@ std::span<std::byte> ComputeRunner::guest_memory(std::uint64_t base, std::size_t
         throw std::invalid_argument("guest memory needs at least one byte");
     }
     State& s = *state_;
-    s.destroy(s.guest);
-    s.guest = s.create_buffer(size);
+    Buffer fresh = s.create_buffer(size);
+    // The old buffer goes once the work that may use it has completed.
+    s.scheduler->defer([&s, old = std::exchange(s.guest, fresh)]() mutable { s.destroy(old); });
     s.guest_base = base;
     return {static_cast<std::byte*>(s.guest.map), size};
 }
@@ -394,40 +252,18 @@ void ComputeRunner::run(std::span<const std::uint32_t> spirv, const DrawBlock& d
                                    &p.pipeline),
           "vkCreateComputePipelines");
 
-    check(vkResetCommandPool(s.device, s.pool, 0), "vkResetCommandPool");
-    auto begin = make<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
-    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    check(vkBeginCommandBuffer(s.commands, &begin), "vkBeginCommandBuffer");
-    vkCmdBindPipeline(s.commands, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
-    vkCmdPushConstants(s.commands, s.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                       sizeof s.draw.address, &s.draw.address);
-    vkCmdDispatch(s.commands, groups[0], groups[1], groups[2]);
-    // The shader's writes become visible to the host once the fence signals.
-    auto barrier = make<VkMemoryBarrier>(VK_STRUCTURE_TYPE_MEMORY_BARRIER);
-    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-    vkCmdPipelineBarrier(s.commands, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
-    check(vkEndCommandBuffer(s.commands), "vkEndCommandBuffer");
-
-    auto submit = make<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &s.commands;
-    check(vkQueueSubmit(s.queue, 1, &submit, s.fence), "vkQueueSubmit");
+    // The scheduler's submission ends with a barrier from all writes to host reads.
+    const VkCommandBuffer commands = s.scheduler->commands();
+    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
+    vkCmdPushConstants(commands, s.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof s.draw.address,
+                       &s.draw.address);
+    vkCmdDispatch(commands, groups[0], groups[1], groups[2]);
+    p.release(*s.scheduler);
     constexpr std::uint64_t timeout_ns = 30'000'000'000;
-    const VkResult waited = vkWaitForFences(s.device, 1, &s.fence, VK_TRUE, timeout_ns);
-    if (waited != VK_SUCCESS) {
-        vkDeviceWaitIdle(s.device);  // the pipeline must outlive the dispatch
+    if (!s.scheduler->wait(s.scheduler->flush(), timeout_ns)) {
+        throw std::runtime_error("the dispatch did not complete within 30 s");
     }
-    check(vkResetFences(s.device, 1, &s.fence), "vkResetFences");
-    check(waited, "vkWaitForFences");
 }
 
 }  // namespace bb::test::vk
 
-// LeakSanitizer's suppressions for the test binaries that link the runner. Mesa allocates its
-// one-time state under pthread_once and never frees it. The loader has unloaded the driver by
-// the time the leak check runs, so its frames have no module name to match.
-extern "C" const char* __lsan_default_suppressions() {
-    return "leak:pthread_once\n";
-}

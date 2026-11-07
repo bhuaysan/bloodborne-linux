@@ -29,6 +29,7 @@
 
 #include "gpu/gcn/programs.hpp"
 #include "gpu/gcn/translate.hpp"
+#include "gpu/vk/device.hpp"
 
 namespace {
 
@@ -37,20 +38,8 @@ constexpr std::size_t guest_page = 16 * kib;  // the alignment of guest mappings
 constexpr auto host_pointer = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
 constexpr auto dma_buf = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
 
-template <typename T>
-T make(VkStructureType type, void* next = nullptr) {
-    T value{};
-    value.sType = type;
-    value.pNext = next;
-    return value;
-}
-
-void check(VkResult result, const char* call) {
-    if (result != VK_SUCCESS) {
-        throw std::runtime_error(std::string(call) + " failed with VkResult " +
-                                 std::to_string(static_cast<int>(result)));
-    }
-}
+using bb::vk::check;
+using bb::vk::make;
 
 std::uint64_t at(const void* p) { return reinterpret_cast<std::uintptr_t>(p); }
 

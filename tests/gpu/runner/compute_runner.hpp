@@ -1,5 +1,5 @@
-// A test-only Vulkan 1.3 compute runner on lavapipe, for the translator's execution tests
-// (docs/design/graphics.md, "Per-draw data" and "Offline test strategy", level 3).
+// A test-only compute runner on bbvk's device and scheduler on lavapipe, for the translator's
+// execution tests (docs/design/graphics.md, "Per-draw data" and "Offline test strategy", level 3).
 #pragma once
 
 #include <array>
@@ -43,8 +43,8 @@ struct DrawBlock {
 
 class ComputeRunner {
 public:
-    // The runner on lavapipe. Nothing when there is no Vulkan 1.3 instance, no lavapipe driver
-    // or device, or the device lacks a feature the translator needs; `why` then says which.
+    // The runner on bbvk's device on lavapipe. Nothing when there is no Vulkan 1.3 instance, no
+    // lavapipe driver or device, or lavapipe lacks a feature bbvk needs; `why` then says which.
     static std::unique_ptr<ComputeRunner> create(std::string& why);
     ~ComputeRunner();
     ComputeRunner(const ComputeRunner&) = delete;

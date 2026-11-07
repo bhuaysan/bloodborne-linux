@@ -90,7 +90,3 @@ TEST(VkDevice, CreatesLavapipe) {
 
 }  // namespace
 
-// Mesa's one-time state, as in the compute runner (tests/gpu/runner/compute_runner.cpp).
-extern "C" const char* __lsan_default_suppressions() {
-    return "leak:pthread_once\n";
-}
