@@ -98,6 +98,8 @@ struct Query {
             {&f12.timelineSemaphore, "timelineSemaphore"},
             // v_readfirstlane_b32 and v_readlane_b32 broadcast from a lane computed at run time.
             {&f12.subgroupBroadcastDynamicId, "subgroupBroadcastDynamicId"},
+            // A translated pixel shader discards with OpDemoteToHelperInvocation.
+            {&f13.shaderDemoteToHelperInvocation, "shaderDemoteToHelperInvocation"},
             {&f13.synchronization2, "synchronization2"},
             {&f13.dynamicRendering, "dynamicRendering"},
             {&f13.subgroupSizeControl, "subgroupSizeControl"},
