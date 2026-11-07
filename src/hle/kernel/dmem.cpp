@@ -130,8 +130,11 @@ bool valid_range(std::uint64_t offset, std::uint64_t length) {
 
 int fd() {
     static const int memfd = [] {
-        const int created = ::memfd_create("bb-direct-memory", MFD_CLOEXEC);
-        if (created < 0 || ::ftruncate(created, static_cast<off_t>(total_size)) != 0) {
+        // Sealed against shrinking, as udmabuf needs to import ranges of it for the GPU memory
+        // mirror (docs/design/graphics.md, "GPU memory mirror").
+        const int created = ::memfd_create("bb-direct-memory", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+        if (created < 0 || ::ftruncate(created, static_cast<off_t>(total_size)) != 0 ||
+            ::fcntl(created, F_ADD_SEALS, F_SEAL_SHRINK) != 0) {
             const int error = errno;
             common::log(LogLevel::error, channel, "direct memory: no memfd of {:#x} bytes: {}",
                         total_size, std::strerror(error));

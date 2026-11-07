@@ -1,5 +1,7 @@
 #include "hle/kernel/dmem.hpp"
 
+#include <fcntl.h>
+
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -38,6 +40,12 @@ void* map(std::uint64_t offset, std::uint64_t length, std::uint64_t alignment = 
 }
 
 // Each test releases what it allocates, so every test starts with all of direct memory free.
+
+// udmabuf imports only from a memfd sealed against shrinking (the GPU memory mirror).
+TEST(KernelDmem, MemfdIsSealedAgainstShrinking) {
+    ASSERT_GE(dmem::fd(), 0);
+    EXPECT_NE(::fcntl(dmem::fd(), F_GET_SEALS) & F_SEAL_SHRINK, 0);
+}
 
 TEST(KernelDmem, AllocationRespectsAlignmentAndRange) {
     const std::uint64_t first = allocate(page_size, 0);  // 0: the guest page
