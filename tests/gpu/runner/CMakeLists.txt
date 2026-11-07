@@ -7,5 +7,5 @@ target_link_libraries(bbcomputerunner PUBLIC Vulkan::Vulkan bbgcn PRIVATE bbvk b
 
 bb_add_test(compute_runner_test
     SOURCES compute_runner_test.cpp memory_mirror_test.cpp render_test.cpp translate_exec_test.cpp
-            typed_buffer_exec_test.cpp
+            typed_buffer_exec_test.cpp buffer_atomic_exec_test.cpp
     LIBS bbcomputerunner bbvk bbgcn bbgcntest bbvktest)

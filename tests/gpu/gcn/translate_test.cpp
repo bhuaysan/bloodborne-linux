@@ -221,6 +221,8 @@ TEST(GcnTranslate, CompareSwapLoopsStartWithAnAtomicLoad) {
     // inc, dec, rsub (twice: the second runs in lane 0 alone) and mskor
     EXPECT_EQ(atomic_loads("lds_atomic"), 5u);
     EXPECT_EQ(atomic_loads("lds_rw"), 0u);
+    // inc (twice), dec, fcmpswap, fmin, fmax, dec_x2, fmin_x2 and fcmpswap_x2
+    EXPECT_EQ(atomic_loads("mem_atomic"), 9u);
 }
 
 // Scalar ALU, a loop on SCC, and the vector ALU in VOP1, VOP2 and VOP3 encodings.
