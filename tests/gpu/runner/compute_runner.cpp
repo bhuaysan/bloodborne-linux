@@ -8,6 +8,7 @@
 #include <string_view>
 #include <utility>
 
+#include <dlfcn.h>
 #include <vulkan/vulkan.h>
 
 #include "gpu/vk/device.hpp"
@@ -90,7 +91,8 @@ struct ComputeRunner::State {
         b.size = size;
         auto info = make<VkBufferCreateInfo>(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
         info.size = size;
-        info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                     VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         check(vkCreateBuffer(device, &info, nullptr, &b.buffer), "vkCreateBuffer");
         try {
@@ -144,6 +146,10 @@ struct ComputeRunner::State {
         if (!vk) {
             return "lavapipe device for bbvk (Mesa's Vulkan drivers: " + why + ")";
         }
+        // Lavapipe stays loaded until the process exits: Mesa keeps state that a graphics
+        // pipeline's threads allocate reachable from the driver's globals only, which
+        // LeakSanitizer reports as leaked once the loader has unloaded the driver.
+        ::dlopen("libvulkan_lvp.so", RTLD_LAZY | RTLD_NOLOAD | RTLD_NODELETE);
         info = device_info(vk->properties());
         device = vk->handle();
         constexpr VkMemoryPropertyFlags host =
@@ -190,6 +196,8 @@ struct Pipeline {
 
 ComputeRunner::ComputeRunner(std::unique_ptr<State> state) : state_(std::move(state)) {}
 
+ComputeRunner::ComputeRunner(ComputeRunner&& other) noexcept = default;
+
 ComputeRunner::~ComputeRunner() = default;
 
 std::unique_ptr<ComputeRunner> ComputeRunner::create(std::string& why) {
@@ -223,8 +231,7 @@ std::span<std::byte> ComputeRunner::guest_memory(std::uint64_t base, std::size_t
     return {static_cast<std::byte*>(s.guest.map), size};
 }
 
-void ComputeRunner::run(std::span<const std::uint32_t> spirv, const DrawBlock& draw,
-                        std::array<std::uint32_t, 3> groups) {
+VkDeviceAddress ComputeRunner::draw_block(const DrawBlock& draw) {
     State& s = *state_;
     if (s.guest.buffer == VK_NULL_HANDLE) {
         throw std::logic_error("run needs guest memory first");
@@ -235,6 +242,13 @@ void ComputeRunner::run(std::span<const std::uint32_t> spirv, const DrawBlock& d
     std::memcpy(block + draw_user_data_offset, draw.user_data.data(), sizeof draw.user_data);
     std::memcpy(block + draw_address_bias_offset, &bias, sizeof bias);
     std::memcpy(block + draw_code_address_offset, &draw.code_address, sizeof draw.code_address);
+    return s.draw.address;
+}
+
+void ComputeRunner::run(std::span<const std::uint32_t> spirv, const DrawBlock& draw,
+                        std::array<std::uint32_t, 3> groups) {
+    State& s = *state_;
+    const VkDeviceAddress block = draw_block(draw);
 
     Pipeline p{s.device};
     auto module_info = make<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
@@ -255,14 +269,29 @@ void ComputeRunner::run(std::span<const std::uint32_t> spirv, const DrawBlock& d
     // The scheduler's submission ends with a barrier from all writes to host reads.
     const VkCommandBuffer commands = s.scheduler->commands();
     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
-    vkCmdPushConstants(commands, s.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof s.draw.address,
-                       &s.draw.address);
+    vkCmdPushConstants(commands, s.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof block, &block);
     vkCmdDispatch(commands, groups[0], groups[1], groups[2]);
     p.release(*s.scheduler);
     constexpr std::uint64_t timeout_ns = 30'000'000'000;
     if (!s.scheduler->wait(s.scheduler->flush(), timeout_ns)) {
         throw std::runtime_error("the dispatch did not complete within 30 s");
     }
+}
+
+bb::vk::Device& ComputeRunner::device() {
+    return *state_->vk;
+}
+
+bb::vk::Scheduler& ComputeRunner::scheduler() {
+    return *state_->scheduler;
+}
+
+VkBuffer ComputeRunner::guest_buffer() const {
+    return state_->guest.buffer;
+}
+
+std::size_t ComputeRunner::guest_size() const {
+    return state_->guest.size;
 }
 
 }  // namespace bb::test::vk

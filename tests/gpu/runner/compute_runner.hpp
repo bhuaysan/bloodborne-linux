@@ -9,7 +9,14 @@
 #include <span>
 #include <string>
 
+#include <vulkan/vulkan.h>
+
 #include "gpu/gcn/translate.hpp"
+
+namespace bb::vk {
+class Device;
+class Scheduler;
+}  // namespace bb::vk
 
 namespace bb::test::vk {
 
@@ -46,15 +53,15 @@ public:
     // The runner on bbvk's device on lavapipe. Nothing when there is no Vulkan 1.3 instance, no
     // lavapipe driver or device, or lavapipe lacks a feature bbvk needs; `why` then says which.
     static std::unique_ptr<ComputeRunner> create(std::string& why);
-    ~ComputeRunner();
+    virtual ~ComputeRunner();
     ComputeRunner(const ComputeRunner&) = delete;
     ComputeRunner& operator=(const ComputeRunner&) = delete;
 
     const DeviceInfo& info() const;
 
     // The guest's GPU-visible memory: one host-visible buffer of `size` bytes at guest address
-    // `base`, zeroed. It replaces the previous one. The span stays valid until then. Throws
-    // std::invalid_argument when `size` is 0.
+    // `base`, zeroed, also a transfer destination. It replaces the previous one. The span stays
+    // valid until then. Throws std::invalid_argument when `size` is 0.
     std::span<std::byte> guest_memory(std::uint64_t base, std::size_t size);
 
     // Runs `spirv` (a GLCompute entry point "main" with one 8-byte push constant, the device
@@ -63,6 +70,18 @@ public:
     // call fails.
     void run(std::span<const std::uint32_t> spirv, const DrawBlock& draw,
              std::array<std::uint32_t, 3> groups);
+
+protected:
+    // The setup the graphics runner shares (graphics_runner.hpp).
+    ComputeRunner(ComputeRunner&& other) noexcept;
+    bb::vk::Device& device();
+    bb::vk::Scheduler& scheduler();
+    // The guest memory's buffer and size, VK_NULL_HANDLE and 0 before the first guest_memory().
+    VkBuffer guest_buffer() const;
+    std::size_t guest_size() const;
+    // Writes `draw` into the draw block, with the guest memory's address_bias, and returns the
+    // block's device address. Throws std::logic_error before the first guest_memory().
+    VkDeviceAddress draw_block(const DrawBlock& draw);
 
 private:
     struct State;
