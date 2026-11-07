@@ -22,6 +22,18 @@ struct IntMul {
 };
 std::optional<IntMul> classify_int_mul(std::string_view name);
 
+// The f32 transcendentals and reciprocals of one source: v_rcp_f32 (and v_rcp_iflag_f32, which
+// differs only in the exception it raises), v_rsq_f32, v_sqrt_f32, v_exp_f32 (2^x), v_log_f32
+// (log2), v_sin_f32 and v_cos_f32 (of an angle in turns), with the _clamp forms of rcp and rsq
+// (an infinite result becomes the largest float of its sign) and v_rcp_legacy_f32.
+enum class FloatMath { rcp, rsq, sqrt, exp, log, sin, cos };
+struct FloatMathOp {
+    FloatMath fn;
+    bool clamp = false;
+    bool legacy = false;
+};
+std::optional<FloatMathOp> classify_float_math(std::string_view name);
+
 class Alu {
 public:
     using Id = SpirvBuilder::Id;
@@ -36,6 +48,17 @@ public:
     // from its top bit, and a field that reaches past bit 31 takes the sign of the value (the
     // manual's V_BFE_I32 and S_BFE_I32 text).
     Id bit_field(Id value, Id offset, Id width, bool is_signed);
+
+    // The operation `op` on the f32 `x`. GLSL.std.450 gives the finite positive (or finite)
+    // inputs; the zeros, infinities, NaNs and negative inputs take the IEEE results by selects,
+    // because the extended instructions leave them undefined.
+    Id float_math(const FloatMathOp& op, Id x);
+
+    // v_cvt_pkrtz_f16_f32: two f32 as half floats rounded toward zero, `low` in bits 0-15.
+    Id pack_half_rtz(Id low, Id high);
+
+    // v_cvt_f32_f16: the half float in the low 16 bits of the u32 `bits`, as an f32.
+    Id half_to_float(Id bits);
 
     // `bit` (a bool per lane) or'ed over the four lanes of its quad: whole quad mode.
     Id quad_any(Id bit);

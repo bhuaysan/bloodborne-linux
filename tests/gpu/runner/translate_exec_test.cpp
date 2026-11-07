@@ -7,9 +7,11 @@
 #include <bit>
 #include <cstdint>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <numbers>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -237,6 +239,108 @@ TEST_F(TranslateExec, FloatEdgeCases) {
             EXPECT_EQ(at(11), zero ? 0x3f80'0000u : 0x3f80'0001u);
             EXPECT_EQ(at(12), zero ? 0x4c00'0000u : 0x4c00'0001u);
         }
+    }
+}
+
+// How many floats apart `a` and `b` are (0 for the same float, also for +0 and -0).
+std::int64_t ulp_distance(float a, float b) {
+    const auto key = [](float f) {
+        const auto bits = std::bit_cast<std::int32_t>(f);
+        return bits < 0 ? -std::int64_t{bits & 0x7fff'ffff} : std::int64_t{bits};
+    };
+    return std::abs(key(a) - key(b));
+}
+
+// The half float of `f` rounded toward zero: a finite value beyond the largest half gives it.
+std::uint32_t half_rtz(float f) {
+    const std::uint32_t sign = std::bit_cast<std::uint32_t>(f) >> 16 & 0x8000;
+    const float a = std::fabs(f);
+    if (std::isnan(a) || std::isinf(a)) {
+        return sign | (std::isnan(a) ? 0x7e00 : 0x7c00);
+    }
+    if (a < 0x1p-14f) {  // subnormal, in units of 2^-24
+        return sign | static_cast<std::uint32_t>(std::ldexp(a, 24));
+    }
+    if (a >= 65536.0f) {
+        return sign | 0x7bff;
+    }
+    const int e = std::ilogb(a);
+    const auto mantissa = static_cast<std::uint32_t>(std::ldexp(a, 10 - e));
+    return sign | (e + 15) << 10 | (mantissa - 1024);
+}
+
+float half_to_float(std::uint32_t h) {
+    const std::uint32_t e = h >> 10 & 31, m = h & 1023;
+    const float a = e == 31 ? (m != 0 ? std::numeric_limits<float>::quiet_NaN()
+                                      : std::numeric_limits<float>::infinity())
+                            : std::ldexp(static_cast<float>(e == 0 ? m : m + 1024),
+                                         static_cast<int>(e == 0 ? 1 : e) - 25);
+    return (h & 0x8000) != 0 ? -a : a;
+}
+
+// The transcendentals against double precision on the host, within the precision Vulkan requires
+// of the GLSL.std.450 instruction each one uses (so a conformant driver passes, not only
+// lavapipe): 2.5 ULP for the division of rcp, 2 for rsq, 3 for sqrt, 3 + 2|x| for exp, 3 for log
+// (or 2^-21 absolute in [0.5, 2]) and 2^-11 absolute for sin and cos. Zeros, infinities and the
+// rcp and log of 1 are exact, a NaN is any NaN. The half float conversions are exact.
+TEST_F(TranslateExec, Transcendentals) {
+    constexpr std::uint32_t stages = 19;
+    const float inf = std::numeric_limits<float>::infinity(), nan = std::nanf("");
+    const float max = std::numeric_limits<float>::max();
+    const float specials[] = {-0.0f, inf, -inf, nan, 1e20f, -256.0f, 256.5f, 1e-30f};
+    const auto out = run("float_trans", {}, stages * lanes);
+    const auto f32 = [](std::uint32_t bits) { return std::bit_cast<float>(bits); };
+    const auto u32 = [](float f) { return std::bit_cast<std::uint32_t>(f); };
+    for (std::uint32_t i = 0; i < lanes; ++i) {
+        SCOPED_TRACE(testing::Message() << "lane " << i);
+        const float x = i >= 56 ? specials[i - 56]
+                                : (i == 0 ? 1.0f : (static_cast<float>(i) - 32) * 0.375f);
+        const float y = 7777.75f * x, z = 3.0e-6f * x;
+        const std::uint32_t h = i * 0x405;  // the low half of the program's h
+        const auto at = [&](std::uint32_t stage) { return out[stage * lanes + i]; };
+        const auto check = [&](std::uint32_t stage, double expected, double ulps, double abs = 0) {
+            const float want = static_cast<float>(expected), got = f32(at(stage));
+            if (std::isnan(want)) {
+                EXPECT_TRUE(std::isnan(got)) << "stage " << stage << ": " << got;
+            } else if (std::isinf(want) || (want == 0 && abs == 0)) {
+                EXPECT_EQ(at(stage), u32(want)) << "stage " << stage << ": " << got;
+            } else {
+                EXPECT_TRUE(ulp_distance(got, want) <= ulps || std::fabs(got - expected) <= abs)
+                    << "stage " << stage << ": " << got << ", expected " << expected;
+            }
+        };
+        const auto clamp_inf = [&](double r) { return std::isinf(r) ? std::copysign(max, r) : r; };
+        const double rcp = 1.0 / x, ax = std::fabs(x);
+        const double rsq = x < 0 ? nan : (x == 0 ? 1.0 / x : 1.0 / std::sqrt(double{x}));
+        const double exp_ulps = std::isinf(x) ? 0 : 3 + 2 * ax;
+        const auto log_abs = [&](double v) { return v >= 0.5 && v <= 2 && v != 1 ? 0x1p-21 : 0.0; };
+        const double rcp_ulps = x == 1 ? 0 : 2.5;
+        const auto turns = [&](bool sin) {
+            if (std::fabs(x) > 256) {
+                return sin ? 0.0 : 1.0;
+            }
+            const double angle = 2 * std::numbers::pi * (x - std::nearbyint(x));
+            return std::isnan(x) ? x : (sin ? std::sin(angle) : std::cos(angle));
+        };
+        check(0, rcp, rcp_ulps);
+        check(1, rcp, rcp_ulps);
+        check(2, clamp_inf(rcp), rcp_ulps);
+        check(3, x == 0 ? 0.0 : rcp, rcp_ulps);
+        check(4, rsq, 2);
+        check(5, clamp_inf(rsq), 2);
+        check(6, x < 0 ? nan : std::sqrt(double{x}), 3);
+        check(7, x == 0 ? 1.0 : std::exp2(double{x}), exp_ulps);
+        check(8, x < 0 ? nan : std::log2(double{x}), 3, log_abs(x));
+        check(9, turns(true), 0, 0x1p-11);
+        check(10, turns(false), 0, 0x1p-11);
+        check(11, -1.0 / ax, 2.5);
+        check(12, std::isnan(x) ? x : std::clamp(std::exp2(-double{x}), 0.0, 1.0), exp_ulps);
+        check(13, 2 * std::log2(ax), 3, 2 * log_abs(ax));
+        check(14, std::sqrt(ax) / 2, 3);
+        EXPECT_EQ(at(15), half_rtz(z) | half_rtz(y) << 16) << "y " << y << ", z " << z;
+        EXPECT_EQ(at(16), half_rtz(-y) | half_rtz(std::fabs(x)) << 16);
+        check(17, half_to_float(h), 0);
+        check(18, -std::fabs(half_to_float(h)), 0);
     }
 }
 

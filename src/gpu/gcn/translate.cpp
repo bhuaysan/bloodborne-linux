@@ -1011,6 +1011,17 @@ private:
             const Id first = b_.op(min ? Op::OpFOrdLessThan : Op::OpFOrdGreaterThanEqual, bool_,
                                    {a, b});
             r = b_.op(Op::OpSelect, f32, {first, a, b});
+        } else if (const auto math = detail::classify_float_math(name)) {
+            r = alu_.float_math(*math, src(0));
+        } else if (name == "v_cvt_f32_f16") {  // abs and neg of the half are those of its f32
+            const Operand& s = inst.src[0];
+            if (s.kind == OperandKind::constant && s.code >= 240 && s.code <= 247) {
+                // CI has no f16 inline constants; which half the hardware reads is unknown.
+                fail(std::format("a float constant as the half source of {}", inst.name));
+            }
+            r = source_modifiers(inst, 0, alu_.half_to_float(read(s)));
+        } else if (name == "v_cvt_pkrtz_f16_f32") {  // toward zero, whatever the float mode
+            bits = alu_.pack_half_rtz(src(0), src(1));
         } else if (name == "v_cvt_f32_i32" || name == "v_cvt_f32_u32") {
             no_source_modifiers(inst);
             r = b_.op(name == "v_cvt_f32_i32" ? Op::OpConvertSToF : Op::OpConvertUToF, f32,
@@ -1069,8 +1080,13 @@ private:
 
     // Source `i` as an f32, with its abs and neg modifiers.
     Id float_source(const Instruction& inst, unsigned i) {
+        return source_modifiers(inst, i, b_.op(Op::OpBitcast, b_.type_float(32),
+                                               {read(inst.src[i])}));
+    }
+
+    // The f32 `x` with the abs and neg modifiers of source `i`, abs first.
+    Id source_modifiers(const Instruction& inst, unsigned i, Id x) {
         const Id f32 = b_.type_float(32);
-        Id x = b_.op(Op::OpBitcast, f32, {read(inst.src[i])});
         if ((inst.abs >> i & 1) != 0) {
             x = b_.op(Op::OpExtInst, f32, {b_.import_extended("GLSL.std.450"), GLSLstd450FAbs, x});
         }

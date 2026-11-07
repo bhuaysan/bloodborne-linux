@@ -256,8 +256,11 @@ std::string error(const std::vector<std::uint32_t>& code, const ShaderKey& key =
 TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
     EXPECT_EQ(error({vopc(0x21, 256, 1), s_endpgm}),  // v_cmp_lt_f64_e32 vcc, v[0:1], v[1:2]
               "unsupported instruction v_cmp_lt_f64_e32 at offset 0x0 (word 0x7c420300)");
-    EXPECT_EQ(error({vop1(42, 1, 256), s_endpgm}),  // v_rcp_f32_e32 v1, v0
-              "unsupported instruction v_rcp_f32_e32 at offset 0x0 (word 0x7e025500)");
+    EXPECT_EQ(error({vop1(45, 1, 256), s_endpgm}),  // v_rsq_legacy_f32_e32 v1, v0
+              "unsupported instruction v_rsq_legacy_f32_e32 at offset 0x0 (word 0x7e025b00)");
+    EXPECT_EQ(error({vop1(11, 1, 242), s_endpgm}),  // v_cvt_f32_f16_e32 v1, 1.0
+              "a float constant as the half source of v_cvt_f32_f16_e32 at offset 0x0 (word "
+              "0x7e0216f2)");
     EXPECT_EQ(error({sop1(3, 0, 108), s_endpgm}),  // s_mov_b32 s0, tba_lo
               "unsupported register operand 108 of s_mov_b32 at offset 0x0 (word 0xbe80036c)");
     EXPECT_EQ(error({sop1(4, 126, 108), s_endpgm}),  // s_mov_b64 exec, tba
