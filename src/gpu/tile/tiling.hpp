@@ -103,7 +103,7 @@ void tile(const Layout& layout, std::span<const std::byte> linear, std::span<std
 
 // One level's offsets split into a part per column, row and layer, for the compute shader.
 // Each entry is {offset, pipe_bank | split << 16}. The offset is then
-//   split = col[1] >> 16 + row[1] >> 16
+//   split = (col[1] >> 16) + (row[1] >> 16)
 //   total = col[0] + row[0] + layer[0] + split * split_bytes
 //   pipe_bank = (col[1] ^ row[1] ^ layer[1] ^ split * split_rotation) & pipe_bank_mask
 //   offset = level.offset + (total & 255 | pipe_bank << 8 | total >> 8 << (8 + pipe_bank_bits))
