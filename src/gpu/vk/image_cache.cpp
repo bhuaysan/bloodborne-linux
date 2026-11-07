@@ -80,6 +80,11 @@ std::unique_ptr<Image> ImageCache::create(const ImageKey& key) const {
         (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) |
         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
         VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    // Attachment usage also bounds the extent by the framebuffer limits
+    // (VUID-VkImageCreateInfo-usage-00964/00965), which maxExtent need not include.
+    const VkPhysicalDeviceLimits& limits = device_.properties().core.limits;
+    const bool fits_framebuffer = key.extent.width <= limits.maxFramebufferWidth &&
+                                  key.extent.height <= limits.maxFramebufferHeight;
     const auto supports = [&](VkFormat format) {
         VkImageFormatProperties p{};
         return vkGetPhysicalDeviceImageFormatProperties(device_.physical(), format,
@@ -92,7 +97,8 @@ std::unique_ptr<Image> ImageCache::create(const ImageKey& key) const {
     if (format == VK_FORMAT_D16_UNORM_S8_UINT && !supports(format)) {
         format = VK_FORMAT_D32_SFLOAT_S8_UINT;
     }
-    if (key.extent.width == 0 || key.extent.height == 0 || key.slices == 0 || !supports(format)) {
+    if (key.extent.width == 0 || key.extent.height == 0 || key.slices == 0 || !fits_framebuffer ||
+        !supports(format)) {
         return nullptr;
     }
 

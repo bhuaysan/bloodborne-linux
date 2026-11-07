@@ -113,4 +113,16 @@ TEST_F(VkImageCache, DepthFormatsAndSupport) {
     EXPECT_EQ(cache_->get({0x40000, VK_FORMAT_R8G8B8A8_UNORM, {0, 64}, 1, 1, 0}), nullptr);
 }
 
+TEST_F(VkImageCache, ExtentWithinFramebufferLimits) {
+    // Attachment usage bounds the extent by the framebuffer limits: up to them an image, past
+    // them none.
+    const auto& limits = device_->properties().core.limits;
+    const std::uint32_t w = limits.maxFramebufferWidth;
+    const std::uint32_t h = limits.maxFramebufferHeight;
+    EXPECT_NE(cache_->get({0x50000, VK_FORMAT_R8G8B8A8_UNORM, {w, 1}, 1, 1, 0}), nullptr);
+    EXPECT_NE(cache_->get({0x50000, VK_FORMAT_R8G8B8A8_UNORM, {1, h}, 1, 1, 0}), nullptr);
+    EXPECT_EQ(cache_->get({0x50000, VK_FORMAT_R8G8B8A8_UNORM, {w + 1, 1}, 1, 1, 0}), nullptr);
+    EXPECT_EQ(cache_->get({0x50000, VK_FORMAT_R8G8B8A8_UNORM, {1, h + 1}, 1, 1, 0}), nullptr);
+}
+
 }  // namespace
