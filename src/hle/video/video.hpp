@@ -1,6 +1,7 @@
-// Headless video out and GPU submission (docs/design/m3-core-os.md, "Video out without a GPU").
+// Video out and GPU submission (docs/design/m3-core-os.md, "Video out without a GPU").
 // Ports open and take buffers, and a submitted flip completes at the next 1/60 s tick: its flip
-// count goes up and every queue registered for the port's flip event gets an event. The GPU
+// count goes up, the flip observer (if any) presents it, and every queue registered for the
+// port's flip event gets an event. The GPU
 // submit calls succeed at once and run nothing. M4 replaces the submit side with command buffer
 // translation and presents the registered buffers.
 //
@@ -79,6 +80,14 @@ inline constexpr std::int32_t max_buffers = 16;
 // logged; the argument goes into the event. Returns 0.
 std::int32_t sceVideoOutSubmitFlip(std::int32_t handle, std::int32_t index, std::int32_t mode,
                                    std::int64_t arg);
+
+// What the flip thread reports of each completed flip, before the flip's events go out: the
+// port, the buffer index, the buffer's registered address (0 for an index without one) and the
+// port's buffer attribute. bb-run presents the flip through it.
+using FlipObserver = void (*)(std::int32_t handle, std::int32_t index, std::uint64_t address,
+                              const BufferAttribute& attribute);
+// Sets the observer, or none with nullptr. Set it before the first flip.
+void set_flip_observer(FlipObserver observer);
 
 // Writes the number of completed flips of the port, a uint64, to `status` + 0x18 and returns 0.
 // 0x26d6f06 reads only that field; the rest of the block is left alone.

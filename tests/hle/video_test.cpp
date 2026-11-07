@@ -1,6 +1,7 @@
 #include "hle/video/video.hpp"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -152,6 +153,30 @@ TEST(HleVideo, FlipWakesAWaiterWithTheFlipEvent) {
                                          flip_event_kind, 0, 1, 77, 0x1234}));
     EXPECT_EQ(flip_count(port.handle), 1u);
     EXPECT_LE(elapsed, Tick(1) + 200ms);  // the next tick, with room for a loaded machine
+}
+
+// The observer sees each flip with its buffer, before the flip's event goes out.
+std::atomic<int> observed_flips{0};
+std::atomic<std::uint64_t> observed_address{0};
+std::atomic<std::uint32_t> observed_width{0};
+void observe_flip(std::int32_t, std::int32_t index, std::uint64_t address,
+                  const BufferAttribute& attribute) {
+    observed_address = index == 1 ? address : 0;
+    observed_width = attribute.width;
+    ++observed_flips;
+}
+
+TEST(HleVideo, FlipObserverSeesTheBufferBeforeTheEvent) {
+    const Port port;
+    set_flip_observer(&observe_flip);
+    EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 1, 1, 5), 0);
+    const std::uint32_t timeout_us = 1'000'000;
+    const WaitOutcome outcome = wait_for(port.queue, &timeout_us);
+    set_flip_observer(nullptr);
+    EXPECT_EQ(outcome.result, 0);
+    EXPECT_EQ(observed_flips, 1);
+    EXPECT_EQ(observed_address, 0x10800000u);
+    EXPECT_EQ(observed_width, 1920u);
 }
 
 TEST(HleVideo, FlipsCompleteOnePerTick) {

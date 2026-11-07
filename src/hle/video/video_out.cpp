@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -42,6 +43,15 @@ struct Port {
     std::vector<Registration> registrations;
     std::uint64_t buffers[max_buffers] = {};
     BufferAttribute attribute{};
+};
+
+std::atomic<FlipObserver> flip_observer{nullptr};
+
+// A completed flip for the observer.
+struct Completed {
+    std::int32_t handle, index;
+    std::uint64_t address;
+    BufferAttribute attribute;
 };
 
 // The first tick strictly after `t`. A tick is no whole number of clock units, so it is rounded
@@ -140,6 +150,7 @@ private:
     [[noreturn]] void run() {
         common::set_thread_name("video-flip");
         std::vector<std::pair<std::uint64_t, GuestEvent>> events;
+        std::vector<Completed> flips;
         std::unique_lock lock(mutex_);
         for (;;) {
             std::optional<Clock::time_point> wake;
@@ -151,6 +162,9 @@ private:
                 const Flip& flip = port.pending.front();
                 if (flip.due <= now) {
                     ++port.completed;
+                    const bool buffer = flip.index >= 0 && flip.index < max_buffers;
+                    flips.push_back({handle, flip.index, buffer ? port.buffers[flip.index] : 0,
+                                     port.attribute});
                     for (const Registration& r : port.registrations) {
                         events.emplace_back(r.equeue,
                                             GuestEvent{static_cast<std::uint64_t>(handle),
@@ -165,8 +179,14 @@ private:
                     wake = wake ? std::min(*wake, due) : due;
                 }
             }
-            if (!events.empty()) {
+            if (!flips.empty()) {
                 lock.unlock();
+                if (const FlipObserver observer = flip_observer) {
+                    for (const Completed& f : flips) {
+                        observer(f.handle, f.index, f.address, f.attribute);
+                    }
+                }
+                flips.clear();
                 for (const auto& [equeue, event] : events) {
                     EventQueue::trigger(equeue, event);
                 }
@@ -195,6 +215,10 @@ VideoOut& video_out() {
 }
 
 }  // namespace
+
+void set_flip_observer(FlipObserver observer) {
+    flip_observer = observer;
+}
 
 std::int32_t sceVideoOutOpen(std::int32_t user_id, std::int32_t type, std::int32_t index,
                              const void* param) {
