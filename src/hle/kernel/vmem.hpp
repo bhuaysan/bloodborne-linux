@@ -2,7 +2,8 @@
 // mappings and the guest entry points. Internal to src/hle/kernel/; direct memory (#97) adds its
 // mappings through map() with its own fd, flags, offsets and alignment, and maps into the
 // reservations of reserve() (dmem.hpp).
-// Exception: mapped() is also the GNM submits' check (src/hle/video/gnm_driver.cpp, PM4 readable).
+// Exceptions: mapped() is also the GNM submits' check (src/hle/video/gnm_driver.cpp, PM4 readable),
+// and DirectObserver is how the GPU memory mirror follows direct memory.
 #pragma once
 
 #include <sys/types.h>
@@ -72,6 +73,28 @@ struct Mapping {
     std::uint64_t congruent = 0;
     std::string name;
 };
+
+// Follows the views of direct memory for the GPU memory mirror (docs/design/graphics.md, "GPU
+// memory mirror"). Called under the region table's lock, so that no other map or unmap of the
+// range comes between the host's change and the call; it must not call into vmem.
+class DirectObserver {
+public:
+    virtual ~DirectObserver() = default;
+    // A direct region [address, address + length) that views direct memory at `offset` was
+    // mapped; once per map.
+    virtual void mapped(std::uintptr_t address, std::uint64_t length, std::uint64_t offset) = 0;
+    // The part [address, address + length) of a direct region that views `offset` is about to be
+    // unmapped or reserved again.
+    virtual void unmapped(std::uintptr_t address, std::uint64_t length, std::uint64_t offset) = 0;
+    // Direct memory [offset, offset + length) is about to be released (dmem.hpp), possibly still
+    // mapped. Called under the allocation table's lock.
+    virtual void released(std::uint64_t offset, std::uint64_t length) = 0;
+};
+
+// Sets the observer (null for none), before the first guest mapping. It must outlive the run.
+void set_direct_observer(DirectObserver* observer);
+// The observer, or null.
+DirectObserver* direct_observer();
 
 // Maps at the lowest free `alignment`-aligned address of the guest window, at or above the hint
 // if it lies in the window (host MAP_32BIT: where the host picks), or at the fixed address, and

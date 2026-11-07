@@ -307,6 +307,62 @@ TEST(KernelDmem, BatchMapsIntoAReservationAndUndoes) {
     EXPECT_EQ(release_direct(offset, 2 * page_size), 0);
 }
 
+// Records the calls of the GPU memory mirror's observer as {kind, address, length, offset}.
+struct Recorder : vmem::DirectObserver {
+    struct Call {
+        char kind;  // 'm'apped, 'u'nmapped, 'r'eleased (address 0)
+        std::uint64_t address, length, offset;
+        bool operator==(const Call&) const = default;
+    };
+    std::vector<Call> calls;
+    void mapped(std::uintptr_t a, std::uint64_t l, std::uint64_t o) override {
+        calls.push_back({'m', a, l, o});
+    }
+    void unmapped(std::uintptr_t a, std::uint64_t l, std::uint64_t o) override {
+        calls.push_back({'u', a, l, o});
+    }
+    void released(std::uint64_t o, std::uint64_t l) override { calls.push_back({'r', 0, l, o}); }
+};
+
+// The observer sees every map and unmap of direct memory, in parts with their own offsets, and
+// releases, also of a range still mapped; anonymous memory and reservations it doesn't see.
+TEST(KernelDmem, TheObserverFollowsDirectMemory) {
+    Recorder recorder;
+    vmem::set_direct_observer(&recorder);
+    const std::uint64_t offset = allocate(3 * page_size, 0);
+    const std::uintptr_t a = addr(map(offset, 3 * page_size));
+    void* anonymous = nullptr;
+    ASSERT_EQ(map_anonymous(&anonymous, page_size, 3, 0), 0);
+    void* range = nullptr;
+    ASSERT_EQ(reserve_range(&range, 2 * page_size, 0, 0), 0);
+    const std::uintptr_t r = addr(range);
+    BatchEntry entry{r + page_size, offset + 2 * page_size, page_size, 3, {}, dmem::batch_map};
+    ASSERT_EQ(map_direct_batch(&entry, 1, nullptr), 0);
+    // Unmapping the middle page splits the view; the whole range then goes in two parts.
+    EXPECT_EQ(sceKernelMunmap(reinterpret_cast<void*>(a + page_size), page_size), 0);
+    EXPECT_EQ(sceKernelMunmap(reinterpret_cast<void*>(a), 3 * page_size), sce_einval);
+    EXPECT_EQ(sceKernelMunmap(reinterpret_cast<void*>(a), page_size), 0);
+    EXPECT_EQ(release_direct(offset, 2 * page_size), 0);
+    entry.operation = dmem::batch_unmap;
+    ASSERT_EQ(map_direct_batch(&entry, 1, nullptr), 0);
+    EXPECT_EQ(sceKernelMunmap(reinterpret_cast<void*>(a + 2 * page_size), page_size), 0);
+    EXPECT_EQ(sceKernelMunmap(range, 2 * page_size), 0);
+    EXPECT_EQ(sceKernelMunmap(anonymous, page_size), 0);
+    EXPECT_EQ(release_direct(offset + 2 * page_size, page_size), 0);
+    vmem::set_direct_observer(nullptr);
+    const std::vector<Recorder::Call> expected{
+        {'m', a, 3 * page_size, offset},
+        {'m', r + page_size, page_size, offset + 2 * page_size},
+        {'u', a + page_size, page_size, offset + page_size},
+        {'u', a, page_size, offset},
+        {'r', 0, 2 * page_size, offset},
+        {'u', r + page_size, page_size, offset + 2 * page_size},
+        {'u', a + 2 * page_size, page_size, offset + 2 * page_size},
+        {'r', 0, page_size, offset + 2 * page_size},
+    };
+    EXPECT_EQ(recorder.calls, expected);
+}
+
 TEST(KernelDmem, BatchStopsAtTheFirstFailure) {
     const std::uint64_t offset = allocate(2 * page_size, 0);
     void* range = nullptr;

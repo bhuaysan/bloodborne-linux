@@ -317,6 +317,10 @@ std::int32_t release_direct(std::uint64_t offset, std::uint64_t length) {
     split_at(offset);
     split_at(end);
     table.erase(table.lower_bound(offset), table.lower_bound(end));
+    // The mirror's imports pin the pages: they go before the hole is punched.
+    if (vmem::DirectObserver* const observer = vmem::direct_observer()) {
+        observer->released(offset, length);
+    }
     if (::fallocate(fd(), FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, static_cast<off_t>(offset),
                     static_cast<off_t>(length)) != 0) {
         common::log(LogLevel::warn, channel, "direct memory: no hole punched at {:#x}-{:#x}: {}",

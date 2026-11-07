@@ -58,6 +58,28 @@ void* ptr(std::uintptr_t address) {
 constinit std::mutex table_mutex;
 std::map<std::uintptr_t, Region>& table = *new std::map<std::uintptr_t, Region>;
 
+constinit std::atomic<DirectObserver*> observer{nullptr};
+
+// Tells the observer which parts of direct regions in [start, end) are about to go. Needs
+// table_mutex.
+void notify_unmapped(std::uintptr_t start, std::uintptr_t end) {
+    DirectObserver* const o = observer.load(std::memory_order_acquire);
+    if (o == nullptr) {
+        return;
+    }
+    auto it = table.upper_bound(start);
+    if (it != table.begin()) {
+        --it;
+    }
+    for (; it != table.end() && it->first < end; ++it) {
+        const Region& r = it->second;
+        const std::uintptr_t low = std::max(start, r.start), high = std::min(end, r.end);
+        if ((r.flags & region_direct) != 0 && low < high) {
+            o->unmapped(low, high - low, r.offset + (low - r.start));
+        }
+    }
+}
+
 // The ranges of the window that reserve_again dropped, start to end. The host may still hold the
 // guest mapping there or may have reused the range, so placement in the window skips them for
 // good. They are no regions, so unmap, protect and the queries refuse them. Needs table_mutex.
@@ -138,6 +160,7 @@ int reserve_again(std::uintptr_t start, std::uintptr_t end) {
 // the window as soon as it is unmapped, so a failure on a later part leaves no region over memory
 // the host may reuse. Returns 0 or errno. Needs table_mutex.
 int release(std::uintptr_t start, std::uintptr_t end) {
+    notify_unmapped(start, end);
     const std::uintptr_t low = std::clamp(start, window_start, window_end);
     const std::uintptr_t high = std::clamp(end, window_start, window_end);
     const auto unmap_outside = [](std::uintptr_t from, std::uintptr_t to) {
@@ -362,6 +385,10 @@ int map_locked(const Mapping& m, int prot, bool reserved, std::uintptr_t& out) {
     out = reinterpret_cast<std::uintptr_t>(at);
     table.insert_or_assign(out,
                            Region{out, out + m.length, m.prot, m.flags, m.offset, m.name, reserved});
+    DirectObserver* const o = observer.load(std::memory_order_acquire);
+    if (o != nullptr && (m.flags & region_direct) != 0) {
+        o->mapped(out, m.length, m.offset);
+    }
     return 0;
 }
 
@@ -391,6 +418,14 @@ int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
 
 }  // namespace
 
+void set_direct_observer(DirectObserver* o) {
+    observer.store(o, std::memory_order_release);
+}
+
+DirectObserver* direct_observer() {
+    return observer.load(std::memory_order_acquire);
+}
+
 int map(const Mapping& m, std::uintptr_t& out) {
     return map_region(m, false, out);
 }
@@ -414,6 +449,7 @@ int restore_reservation(std::uintptr_t start, std::uint64_t length) {
         if (const int error = check_range(start, length, end)) {
             return error;
         }
+        notify_unmapped(start, end);
         if (const int error = reserve_again(start, end)) {
             return error;
         }
