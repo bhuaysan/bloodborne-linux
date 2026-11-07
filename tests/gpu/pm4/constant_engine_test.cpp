@@ -124,7 +124,7 @@ TEST(ConstantEngine, EnginesSkipEachOthersPackets) {
     packet(ib, IT_WRITE_CONST_RAM, {0x8, 3});
     packet(ib, IT_SET_CONFIG_REG, {0x1, 1});  // a DE packet
     packet(ib, IT_INCREMENT_DE_COUNTER, {1});
-    packet(ib, IT_WRITE_DATA, {0x84000000, 0, 0, 0});  // CE WRITE_DATA, until #274
+    packet(ib, IT_WRITE_DATA, {0x84000000, 0, 0, 0});  // CE WRITE_DATA to no register
     packet(ib, IT_REWIND__CI__VI, {0x80000000});
     packet(ib, 0x8C, {0});  // unknown
     std::vector<std::uint32_t> ccb;

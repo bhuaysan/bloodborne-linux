@@ -30,7 +30,8 @@ constexpr auto game_opcodes = std::to_array<std::uint8_t>({
 // The constant engine runs WRITE_CONST_RAM, DUMP_CONST_RAM, INCREMENT_CE_COUNTER,
 // WAIT_ON_DE_COUNTER_DIFF and INDIRECT_BUFFER_CONST, and NOP and REWIND like the DE. The DE skips
 // the CE's packets and the CE skips the other packets of the game, as the two engines of the
-// hardware skip each other's packets. WRITE_DATA occurs in CCBs too and is skipped until #274.
+// hardware skip each other's packets. WRITE_DATA occurs in CCBs too; each engine runs those whose
+// engine select names it (memory_packets.cpp).
 
 bool body_too_short(const Packet& packet, std::size_t dwords) {
     if (packet.body.size() >= dwords) {
@@ -180,6 +181,17 @@ Parser::Step Parser::execute(Stream& stream, const Packet& packet) {
     case IT_CLEAR_STATE:
         regs_.clear_context();
         break;
+    case IT_WRITE_DATA:
+    case IT_WAIT_REG_MEM:
+    case IT_EVENT_WRITE_EOP:
+    case IT_EVENT_WRITE_EOS:
+    case IT_RELEASE_MEM__CI__VI: {
+        const Step step = memory_packet(stream.engine(), packet);
+        if (step != Step::next) {
+            return step;
+        }
+        break;
+    }
     case IT_INCREMENT_DE_COUNTER:
         ++de_counter_;
         break;
@@ -273,7 +285,7 @@ Parser::Step Parser::execute_constant(Stream& stream, const Packet& packet, bool
 
 // DUMP_CONST_RAM: the CE RAM byte offset in bits 0-15 (bits 0-1 ignored), the dword count in bits
 // 0-14, then the destination address low (bits 2-31) and high. The destination is checked with
-// `readable` (the guest mappings).
+// `readable` (the guest mappings); the write waits for the recorded work like the memory packets.
 Parser::Step Parser::dump_const_ram(const Packet& packet) {
     if (body_too_short(packet, 4)) {
         return Step::fail;
@@ -289,6 +301,9 @@ Parser::Step Parser::dump_const_ram(const Packet& packet) {
         common::log(common::LogLevel::error, channel, "CE RAM dump to {} of {} bytes unmapped",
                     static_cast<const void*>(dest), bytes);
         return Step::fail;
+    }
+    if (bytes != 0) {
+        sync(SyncPoint::before_write);
     }
     std::copy_n(ce_ram_.begin() + offset / 4, bytes / 4, dest);
     return Step::next;

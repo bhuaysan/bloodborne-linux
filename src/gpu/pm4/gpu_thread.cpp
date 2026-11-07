@@ -18,10 +18,11 @@ constexpr auto poll_interval = std::chrono::microseconds(100);
 
 }  // namespace
 
-GpuThread::GpuThread(Parser::Readable readable) {
+GpuThread::GpuThread(Parser::Readable readable, Parser::Interrupt interrupt) {
     regs_.set_context_defaults(context_defaults());
     regs_.clear_context();
     parser_.set_readable(std::move(readable));
+    parser_.set_interrupt(std::move(interrupt));
     parser_.set_trace([this](const Packet& packet) {
         packets_.fetch_add(1, std::memory_order_relaxed);
         common::log(common::LogLevel::trace, channel, "packet {:#04x}, {} dwords",

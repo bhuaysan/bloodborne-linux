@@ -38,9 +38,10 @@ public:
     };
 
     // Installs the CLEAR_STATE defaults (context_defaults()) and starts with them in the context
-    // registers, then starts the thread. `readable` checks INDIRECT_BUFFER targets
-    // (Parser::set_readable).
-    explicit GpuThread(Parser::Readable readable = {});
+    // registers, then starts the thread. `readable` checks INDIRECT_BUFFER targets and the memory
+    // packets' addresses (Parser::set_readable); `interrupt` receives the end-of-pipe interrupts
+    // (Parser::set_interrupt) on the GPU thread.
+    explicit GpuThread(Parser::Readable readable = {}, Parser::Interrupt interrupt = {});
     // Stops the thread, also while a stream waits. Queued streams are dropped.
     ~GpuThread();
 
