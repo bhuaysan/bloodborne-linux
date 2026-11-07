@@ -402,7 +402,7 @@ private:
                                {draw_, c0, b_.constant_u32(k)});
             store(sgpr(k), load_global(u32_, p, 4));
         }
-        bias_ = load_global(
+        bias_table_ = load_global(
             u64_, b_.op(Op::OpAccessChain, global_pointer(u64_), {draw_, b_.constant_u32(1)}), 8);
 
         if (graphics()) {
@@ -1214,7 +1214,7 @@ private:
         if (inst.name != "flat_store_dword") {
             unsupported();
         }
-        guarded_store(active(), b_.op(Op::OpIAdd, u64_, {read64(inst.src[0]), bias_}),
+        guarded_store(active(), device_address(read64(inst.src[0])),
                       read(inst.src[1]));
     }
 
@@ -1244,7 +1244,7 @@ private:
         }
         const Id guest = b_.op(Op::OpIAdd, u64_, {buffer ? v.base : read64(inst.src[0]), offset});
         for (unsigned d = 0; d < inst.dst[0].dwords; ++d) {
-            const Id address = add(add(guest, c64(4 * d)), bias_);
+            const Id address = device_address(add(guest, c64(4 * d)));
             write_scalar(inst.dst[0],
                          buffer ? guarded_load(scalar_in_range(v, offset, d), address)
                                 : load_global(u32_, device_pointer(address), 4),
@@ -1281,7 +1281,7 @@ private:
         const BufferAccess m = buffer_access(inst, &inst.src[load ? 0 : 1]);
         if (narrow != 0) {
             const Id cond = b_.op(Op::OpLogicalAnd, bool_, {active(), inside(m, 0)});
-            const Id at = add(address(m, 0), bias_);
+            const Id at = device_address(address(m, 0));
             if (!load) {
                 when(cond, [&] { store_bytes(at, read(data), narrow); });
                 return;
@@ -1301,7 +1301,7 @@ private:
             return;
         }
         for (unsigned d = 0; d < data.dwords; ++d) {
-            const Id address = add(this->address(m, 4 * d), bias_);
+            const Id address = device_address(this->address(m, 4 * d));
             const Id cond = b_.op(Op::OpLogicalAnd, bool_, {active(), inside(m, d)});
             if (load) {
                 write_vector(data, guarded_load(cond, address), d);
@@ -1348,7 +1348,7 @@ private:
         const Id src = value(0), cmp = compare ? value(1) : 0;
         const BufferAccess m = buffer_access(inst, &inst.src[1]);
         const Id pointer = b_.op(Op::OpConvertUToPtr, global_pointer(type),
-                                 {add(address(m, 0), bias_)});
+                                 {device_address(address(m, 0))});
         const Id old = atomic(op, type, pointer, spv::Scope::Device,
                               b_.op(Op::OpLogicalAnd, bool_, {active(), inside(m, 0)}),
                               compare ? cmp : src, compare ? src : 0);
@@ -1588,7 +1588,7 @@ private:
                                        const FormatEmitter::Words& value) {
         const FormatLayout& layout = *format_layout(dfmt);
         const Id cond = b_.op(Op::OpLogicalAnd, bool_, {active(), inside_buffer});
-        const auto where = [&](unsigned delta) { return add(address(m, delta), bias_); };
+        const auto where = [&](unsigned delta) { return device_address(address(m, delta)); };
         const Id zero = b_.constant_u32(0);
         if (!load) {
             const auto raw = FormatEmitter(b_, u32_).encode(dfmt, nf, value);
@@ -1758,6 +1758,17 @@ private:
     }
     Id device_pointer(Id address) { return b_.op(Op::OpConvertUToPtr, global_pointer(u32_), {address}); }
     Id add(Id a, Id b) { return b_.op(Op::OpIAdd, u64_, {a, b}); }
+    // The device address of a guest address: guest + bias[(guest >> 31) & 15], from the bias
+    // table that the draw block's address_bias field points to (docs/design/graphics.md, "GPU
+    // memory mirror").
+    Id device_address(Id guest) {
+        const Id index = b_.op(Op::OpBitwiseAnd, u64_,
+                               {b_.op(Op::OpShiftRightLogical, u64_, {guest, c64(bias_shift)}),
+                                c64(bias_entries - 1)});
+        const Id entry = add(bias_table_, b_.op(Op::OpShiftLeftLogical, u64_, {index, c64(3)}));
+        return add(guest, load_global(u64_, b_.op(Op::OpConvertUToPtr, global_pointer(u64_),
+                                                  {entry}), 8));
+    }
     Id c64(std::uint64_t value) {
         return b_.constant(u64_, {static_cast<std::uint32_t>(value),
                                   static_cast<std::uint32_t>(value >> 32)});
@@ -2369,7 +2380,7 @@ private:
     detail::ImageOps images_{b_, key_, *this, image_sources_};
     detail::Alu alu_{b_};
     Id bool_ = 0, u32_ = 0, u64_ = 0;
-    Id lane_ = 0, bias_ = 0, lds_ = 0;
+    Id lane_ = 0, bias_table_ = 0, lds_ = 0;
     Id draw_ = 0;  // the draw block's pointer
     std::vector<Id> interface_;
     std::map<unsigned, Id> sgprs_, vgprs_, bools_;  // bools_: masks and SCC by operand code

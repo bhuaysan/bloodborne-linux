@@ -1,6 +1,6 @@
 // The GPU memory mirror spike (#268, docs/design/graphics.md, "GPU memory mirror"): guest memory
 // imported as host pointers or as udmabuf dma-bufs of a memfd, bound into sparse buffers at its
-// window offset, read and written by a translated program through address_bias. On lavapipe, or
+// window offset, read and written by a translated program through the bias table. On lavapipe, or
 // on the driver VK_LOADER_DRIVERS_SELECT picks ('*radeon*'); the tests print what they measured.
 
 #include <fcntl.h>
@@ -372,7 +372,11 @@ struct MemoryMirror : testing::Test {
             const std::uint64_t bias = address(buffers[k]) - at(window_->start + k * buffer_size_);
             const std::array<std::uint64_t, 2> user_data{at(p + 0x1000), at(p + 0x100)};
             std::memcpy(p + bb::gcn::draw_user_data_offset, user_data.data(), sizeof user_data);
-            std::memcpy(p + bb::gcn::draw_address_bias_offset, &bias, sizeof bias);
+            const std::uint64_t table = at(p + 0x200) + bias;  // every entry holds the bias
+            std::memcpy(p + bb::gcn::draw_address_bias_offset, &table, sizeof table);
+            for (std::uint32_t e = 0; e < bb::gcn::bias_entries; ++e) {
+                std::memcpy(p + 0x200 + 8 * e, &bias, sizeof bias);
+            }
             for (std::uint32_t value : {0x1234'0000u, 0xabcd'0000u}) {
                 std::memcpy(p + 0x100, &value, 4);
                 run(at(p) + bias);

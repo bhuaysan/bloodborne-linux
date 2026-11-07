@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -46,7 +47,9 @@ using bb::gcn::draw_user_data_offset;
 struct DrawBlock {
     std::array<std::uint32_t, 16> user_data{};
     std::uint64_t code_address = 0;  // guest address of the program, for s_getpc_b64
-    // address_bias comes from the guest memory: its device address minus its guest address.
+    // address_bias points to a bias table whose entries all hold the guest memory's device
+    // address minus its guest address, or to this table instead (the memory mirror's).
+    std::optional<std::uint64_t> bias_table;
 };
 
 class ComputeRunner {
@@ -67,8 +70,8 @@ public:
 
     // Runs `spirv` (a GLCompute entry point "main" with one 8-byte push constant, the device
     // address of the draw block) on `groups` workgroups and waits for it. Throws
-    // std::logic_error before the first guest_memory() and std::runtime_error when a Vulkan
-    // call fails.
+    // std::logic_error before the first guest_memory() (unless `draw` has a bias table) and
+    // std::runtime_error when a Vulkan call fails.
     void run(std::span<const std::uint32_t> spirv, const DrawBlock& draw,
              std::array<std::uint32_t, 3> groups);
 
@@ -80,8 +83,9 @@ protected:
     // The guest memory's buffer and size, VK_NULL_HANDLE and 0 before the first guest_memory().
     VkBuffer guest_buffer() const;
     std::size_t guest_size() const;
-    // Writes `draw` into the draw block, with the guest memory's address_bias, and returns the
-    // block's device address. Throws std::logic_error before the first guest_memory().
+    // Writes `draw` into the draw block, with the guest memory's bias table unless `draw` has
+    // one, and returns the block's device address. Throws std::logic_error before the first
+    // guest_memory() when `draw` has no bias table.
     VkDeviceAddress draw_block(const DrawBlock& draw);
 
 private:

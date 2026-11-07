@@ -19,6 +19,13 @@ inline constexpr std::uint32_t draw_address_bias_offset = 64;
 inline constexpr std::uint32_t draw_code_address_offset = 72;
 inline constexpr std::uint32_t draw_block_size = 80;
 
+// address_bias holds the device address of the bias table: bias_entries u64 values, and device
+// address = guest address + bias[(guest address >> bias_shift) & (bias_entries - 1)], one entry
+// per 2 GiB buffer of the GPU memory mirror (docs/design/graphics.md, "GPU memory mirror").
+inline constexpr std::uint32_t bias_entries = 16;
+inline constexpr std::uint32_t bias_shift = 31;
+inline constexpr std::uint32_t bias_table_size = 8 * bias_entries;
+
 // The image type class of a T# (docs/design/graphics.md, "Image sampling"): what the SPIR-V
 // image type of its binding depends on. The run time reads it from each T# at draw time with
 // image_class() and translates again when it differs from the key.

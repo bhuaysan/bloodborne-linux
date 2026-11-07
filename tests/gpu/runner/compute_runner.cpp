@@ -170,7 +170,7 @@ struct ComputeRunner::State {
         layout_info.pPushConstantRanges = &range;
         check(vkCreatePipelineLayout(device, &layout_info, nullptr, &layout),
               "vkCreatePipelineLayout");
-        draw = create_buffer(draw_block_size);
+        draw = create_buffer(draw_block_size + bb::gcn::bias_table_size);
         return std::nullopt;
     }
 };
@@ -235,14 +235,19 @@ std::span<std::byte> ComputeRunner::guest_memory(std::uint64_t base, std::size_t
 
 VkDeviceAddress ComputeRunner::draw_block(const DrawBlock& draw) {
     State& s = *state_;
-    if (s.guest.buffer == VK_NULL_HANDLE) {
+    if (s.guest.buffer == VK_NULL_HANDLE && !draw.bias_table) {
         throw std::logic_error("run needs guest memory first");
     }
-    // Device address = guest address + bias, modulo 2^64.
+    // Device address = guest address + bias, modulo 2^64, with the same bias in every entry of
+    // the table, which follows the block.
     const std::uint64_t bias = s.guest.address - s.guest_base;
+    const std::uint64_t table = draw.bias_table.value_or(s.draw.address + draw_block_size);
     auto* block = static_cast<std::byte*>(s.draw.map);
+    for (std::uint32_t k = 0; k < bb::gcn::bias_entries; ++k) {
+        std::memcpy(block + draw_block_size + 8 * k, &bias, sizeof bias);
+    }
     std::memcpy(block + draw_user_data_offset, draw.user_data.data(), sizeof draw.user_data);
-    std::memcpy(block + draw_address_bias_offset, &bias, sizeof bias);
+    std::memcpy(block + draw_address_bias_offset, &table, sizeof table);
     std::memcpy(block + draw_code_address_offset, &draw.code_address, sizeof draw.code_address);
     return s.draw.address;
 }

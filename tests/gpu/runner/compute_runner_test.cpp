@@ -96,7 +96,9 @@ std::vector<std::uint32_t> add_module() {
     const auto user = [&](std::uint32_t k) {
         return load(u32, b.op(Op::OpAccessChain, u32_ptr_t, {draw, c0, b.constant_u32(k)}), 4);
     };
-    const Id bias = load(u64, b.op(Op::OpAccessChain, u64_ptr_t, {draw, c1}), 8);
+    // The runner's bias table holds the same bias in every entry.
+    const Id table = load(u64, b.op(Op::OpAccessChain, u64_ptr_t, {draw, c1}), 8);
+    const Id bias = load(u64, b.op(Op::OpConvertUToPtr, u64_ptr_t, {table}), 8);
     const Id code = load(u64, b.op(Op::OpAccessChain, u64_ptr_t, {draw, c2}), 8);
     // The memory at the guest address in user_data[k] (low) and [k + 1] (high).
     const auto memory = [&](std::uint32_t k) {
