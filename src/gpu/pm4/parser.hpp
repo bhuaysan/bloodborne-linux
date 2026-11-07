@@ -9,7 +9,8 @@
 // (docs/design/graphics.md, "Constant engine").
 //
 // The memory packets (WRITE_DATA, the label writes of EVENT_WRITE_EOP, EVENT_WRITE_EOS and
-// RELEASE_MEM) run on the CPU in stream order; WAIT_REG_MEM waits on memory or a register (docs/design/graphics.md, "Memory packets").
+// RELEASE_MEM) run on the CPU in stream order; WAIT_REG_MEM waits on memory or a register
+// (docs/design/graphics.md, "Memory packets").
 #pragma once
 
 #include <array>
