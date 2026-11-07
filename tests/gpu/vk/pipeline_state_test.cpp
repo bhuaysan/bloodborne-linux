@@ -118,23 +118,40 @@ TEST(PipelineState, ClipSpace) {
     EXPECT_TRUE(s.key.negative_one_to_one);
     EXPECT_EQ(std::pair(s.dynamic.viewport.minDepth, s.dynamic.viewport.maxDepth),
               std::pair(0.f, 1.f));
-    // Without clipping the transform from 0 to w gives the hardware's 0.5 z + 0.5 within 0-1.
+    // Without clipping only the clamp range differs: zoffset +- zscale lies within 0-1, so z from
+    // -w to w clamps to 0-1 like the hardware (z from 0 to w would clamp to 0.5-1).
     for (const std::uint32_t clip : {1u << 16, 1u << 26, 1u << 27}) {
         set(regs, amd::mmPA_CL_CLIP_CNTL, clip);
         s = snapshot(regs);
-        EXPECT_TRUE(s.key.depth_clamp && !s.key.negative_one_to_one) << clip;
+        EXPECT_TRUE(s.key.depth_clamp && s.key.negative_one_to_one) << clip;
         EXPECT_EQ(std::pair(s.dynamic.viewport.minDepth, s.dynamic.viewport.maxDepth),
-                  std::pair(0.5f, 1.f));
+                  std::pair(0.f, 1.f));
     }
+    // Reversed depth (zscale -0.5) also lies within 0-1.
+    set(regs, amd::mmPA_CL_VPORT_ZSCALE, -0.5f);
+    s = snapshot(regs);
+    EXPECT_TRUE(s.key.depth_clamp && s.key.negative_one_to_one);
+    EXPECT_EQ(std::pair(s.dynamic.viewport.minDepth, s.dynamic.viewport.maxDepth),
+              std::pair(1.f, 0.f));
+    // zoffset - zscale below 0 (the game's zscale 1, zoffset 0): z from 0 to w keeps 0-1.
+    set(regs, amd::mmPA_CL_VPORT_ZSCALE, 1.0f);
+    set(regs, amd::mmPA_CL_VPORT_ZOFFSET, 0.0f);
+    s = snapshot(regs);
+    EXPECT_TRUE(s.key.depth_clamp && !s.key.negative_one_to_one);
+    EXPECT_EQ(std::pair(s.dynamic.viewport.minDepth, s.dynamic.viewport.maxDepth),
+              std::pair(0.f, 1.f));
 
     set(regs, amd::mmPA_CL_VPORT_ZSCALE, 2.0f);  // clamped to 0-1; no x scale or offset: 1, 0
     set(regs, amd::mmPA_CL_VTE_CNTL, 0x43cu);
-    const VkViewport w = *viewport(regs, true);
+    const VkViewport w = snapshot(regs).dynamic.viewport;
     EXPECT_EQ(std::vector<float>({w.x, w.width, w.minDepth, w.maxDepth}),
               std::vector<float>({-1, 2, 0, 1}));
     set(regs, amd::mmPA_CL_VTE_CNTL, 0x13fu);  // positions already in screen space
     EXPECT_EQ(failure(regs), "PA_CL_VTE_CNTL 0x13f is not supported yet");
     set(regs, amd::mmPA_CL_VTE_CNTL, 0x43fu);
+    set(regs, amd::mmPA_CL_VPORT_XSCALE, -960.0f);  // Vulkan allows only a negative height
+    EXPECT_EQ(failure(regs), "viewport 0 has a negative x scale");
+    set(regs, amd::mmPA_CL_VPORT_XSCALE, 960.0f);
     set(regs, amd::mmPA_CL_VPORT_YSCALE, 0.0f);
     EXPECT_EQ(failure(regs), "viewport 0 has a zero scale");
 }

@@ -33,8 +33,9 @@ struct PipelineKey {
     VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     // No depth clipping (CLIP_DISABLE or a ZCLIP_*_DISABLE of PA_CL_CLIP_CNTL): depthClampEnable.
     bool depth_clamp = false;
-    // Clip-space z from -w to w (DX_CLIP_SPACE_DEF clear, with depth clipping):
-    // VkPipelineViewportDepthClipControlCreateInfoEXT::negativeOneToOne.
+    // Clip-space z from -w to w: VkPipelineViewportDepthClipControlCreateInfoEXT::negativeOneToOne.
+    // With depth clipping when DX_CLIP_SPACE_DEF is clear, without it when zoffset +- zscale lies
+    // within 0-1 (the depth range then clamps as little as possible).
     bool negative_one_to_one = false;
     bool operator==(const PipelineKey&) const = default;
 };
@@ -50,17 +51,12 @@ struct DrawState {
 };
 
 // The snapshot of a draw. Nothing, with `why` saying what, when the state uses something not
-// supported yet or viewport 0 has a zero scale (which draws nothing). `quad_control` is the
-// device flag of the pixel key.
+// supported yet, viewport 0 has a zero scale (which draws nothing) or a negative x scale (no valid
+// Vulkan viewport). `quad_control` is the device flag of the pixel key.
 std::optional<DrawState> draw_state(const pm4::RegisterMirror& regs, bool quad_control,
                                     std::string& why);
 
 // VGT_PRIMITIVE_TYPE (shadPS4's table); nothing for the types without an equivalent yet.
 std::optional<VkPrimitiveTopology> topology(std::uint32_t prim_type);
-
-// Viewport 0 of PA_CL_VPORT_*_0 and PA_CL_VTE_CNTL with the hardware's transform (a negative
-// yscale gives a negative height; depth from zoffset, or zoffset - zscale with
-// `negative_one_to_one`, to zoffset + zscale, clamped to 0-1). Nothing when xscale or yscale is 0.
-std::optional<VkViewport> viewport(const pm4::RegisterMirror& regs, bool negative_one_to_one);
 
 }  // namespace bb::vk

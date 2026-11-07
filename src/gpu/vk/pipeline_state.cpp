@@ -56,6 +56,34 @@ gcn::ShaderKey pixel_key(const pm4::RegisterMirror& regs, bool quad_control) {
     return key;
 }
 
+// Viewport 0: PA_CL_VPORT_*_0, with PA_CL_VTE_CNTL bits 0-5 enabling the x scale and offset,
+// then y, then z. A disabled scale is 1, a disabled offset 0.
+struct Transform {
+    float xscale, xoffset, yscale, yoffset, zscale, zoffset;
+};
+
+Transform transform(const pm4::RegisterMirror& regs) {
+    const std::uint32_t vte = regs.get(amd::mmPA_CL_VTE_CNTL);
+    const auto get = [&](unsigned bit, std::uint32_t reg, float disabled) {
+        return field(vte, bit, 1) != 0 ? std::bit_cast<float>(regs.get(reg)) : disabled;
+    };
+    return {get(0, amd::mmPA_CL_VPORT_XSCALE, 1), get(1, amd::mmPA_CL_VPORT_XOFFSET, 0),
+            get(2, amd::mmPA_CL_VPORT_YSCALE, 1), get(3, amd::mmPA_CL_VPORT_YOFFSET, 0),
+            get(4, amd::mmPA_CL_VPORT_ZSCALE, 1), get(5, amd::mmPA_CL_VPORT_ZOFFSET, 0)};
+}
+
+// The hardware's transform: a negative yscale gives a negative height; depth from zoffset, or
+// zoffset - zscale with `negative_one_to_one`, to zoffset + zscale, clamped to 0-1.
+VkViewport viewport(const Transform& t, bool negative_one_to_one) {
+    const float min_depth = negative_one_to_one ? t.zoffset - t.zscale : t.zoffset;
+    return {t.xoffset - t.xscale,
+            t.yoffset - t.yscale,
+            2 * t.xscale,
+            2 * t.yscale,
+            std::clamp(min_depth, 0.0f, 1.0f),
+            std::clamp(t.zoffset + t.zscale, 0.0f, 1.0f)};
+}
+
 }  // namespace
 
 std::optional<VkPrimitiveTopology> topology(std::uint32_t prim_type) {
@@ -73,30 +101,6 @@ std::optional<VkPrimitiveTopology> topology(std::uint32_t prim_type) {
     case 13: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
     default: return std::nullopt;  // none, patches, rect list, line loop, quad list and strip
     }
-}
-
-std::optional<VkViewport> viewport(const pm4::RegisterMirror& regs, bool negative_one_to_one) {
-    // PA_CL_VTE_CNTL bits 0-5 enable the x scale and offset, then y, then z.
-    const std::uint32_t vte = regs.get(amd::mmPA_CL_VTE_CNTL);
-    const auto get = [&](unsigned bit, std::uint32_t reg, float disabled) {
-        return field(vte, bit, 1) != 0 ? std::bit_cast<float>(regs.get(reg)) : disabled;
-    };
-    const float xscale = get(0, amd::mmPA_CL_VPORT_XSCALE, 1),
-                xoffset = get(1, amd::mmPA_CL_VPORT_XOFFSET, 0),
-                yscale = get(2, amd::mmPA_CL_VPORT_YSCALE, 1),
-                yoffset = get(3, amd::mmPA_CL_VPORT_YOFFSET, 0),
-                zscale = get(4, amd::mmPA_CL_VPORT_ZSCALE, 1),
-                zoffset = get(5, amd::mmPA_CL_VPORT_ZOFFSET, 0);
-    if (xscale == 0 || yscale == 0) {
-        return std::nullopt;
-    }
-    const float min_depth = negative_one_to_one ? zoffset - zscale : zoffset;
-    return VkViewport{xoffset - xscale,
-                      yoffset - yscale,
-                      2 * xscale,
-                      2 * yscale,
-                      std::clamp(min_depth, 0.0f, 1.0f),
-                      std::clamp(zoffset + zscale, 0.0f, 1.0f)};
 }
 
 std::optional<DrawState> draw_state(const pm4::RegisterMirror& regs, bool quad_control,
@@ -123,22 +127,33 @@ std::optional<DrawState> draw_state(const pm4::RegisterMirror& regs, bool quad_c
     }
     k.topology = *top;
 
-    // PA_CL_CLIP_CNTL: CLIP_DISABLE (16), DX_CLIP_SPACE_DEF (19: z from 0 to w), ZCLIP_NEAR_DISABLE
-    // (26) and ZCLIP_FAR_DISABLE (27). The clip space decides only what is clipped, so without
-    // depth clipping z from 0 to w keeps the hardware's depth within 0-1.
-    const std::uint32_t clip = regs.get(amd::mmPA_CL_CLIP_CNTL);
-    k.depth_clamp = field(clip, 16, 1) != 0 || field(clip, 26, 2) != 0;
-    k.negative_one_to_one = field(clip, 19, 1) == 0 && !k.depth_clamp;
-
     // PA_CL_VTE_CNTL: VTX_W0_FMT (10) without VTX_XY_FMT (8) and VTX_Z_FMT (9) divides by w.
     if (const std::uint32_t vte = regs.get(amd::mmPA_CL_VTE_CNTL); field(vte, 8, 3) != 4) {
         return fail(why, std::format("PA_CL_VTE_CNTL {:#x} is not supported yet", vte));
     }
-    const auto vp = viewport(regs, k.negative_one_to_one);
-    if (!vp) {
+    const Transform t = transform(regs);
+    if (t.xscale == 0 || t.yscale == 0) {
         return fail(why, "viewport 0 has a zero scale");
     }
-    s.dynamic.viewport = *vp;
+    if (t.xscale < 0) {  // a Vulkan viewport may only have a negative height
+        return fail(why, "viewport 0 has a negative x scale");
+    }
+
+    // PA_CL_CLIP_CNTL: CLIP_DISABLE (16), DX_CLIP_SPACE_DEF (19: z from 0 to w), ZCLIP_NEAR_DISABLE
+    // (26) and ZCLIP_FAR_DISABLE (27). The clip space decides only what is clipped; the transform
+    // is the same in both conventions. Without depth clipping only the clamp range differs (in
+    // Vulkan the viewport's depth range, on the hardware PA_SC_VPORT_ZMIN/ZMAX, normally 0-1), so
+    // z goes from -w to w when the whole range zoffset +- zscale lies within 0-1, and from 0 to w
+    // (clamped to zoffset..zoffset + zscale) otherwise.
+    const std::uint32_t clip = regs.get(amd::mmPA_CL_CLIP_CNTL);
+    k.depth_clamp = field(clip, 16, 1) != 0 || field(clip, 26, 2) != 0;
+    if (k.depth_clamp) {
+        const float low = t.zoffset - t.zscale, high = t.zoffset + t.zscale;
+        k.negative_one_to_one = std::min(low, high) >= 0 && std::max(low, high) <= 1;
+    } else {
+        k.negative_one_to_one = field(clip, 19, 1) == 0;
+    }
+    s.dynamic.viewport = viewport(t, k.negative_one_to_one);
     return s;
 }
 
