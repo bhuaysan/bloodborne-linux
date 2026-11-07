@@ -34,11 +34,12 @@ const ShaderKey vertex_key = {.stage = Stage::vertex,
                               .instance_step_rate = {1, 2}};
 
 // ps_discard's key: no user SGPRs, the perspective barycentrics at the center (PERSP_CENTER, bit
-// 1), attr0 at location 0, mrt0 32_ABGR (9).
-ShaderKey pixel_key() {
+// 1), attr0 at location 0, mrt0 32_ABGR (9), and the device flag quad_control.
+ShaderKey pixel_key(bool quad_control) {
     ShaderKey key{.stage = Stage::pixel};
     key.ps_input_ena = key.ps_input_addr = 1u << 1;
     key.col_format = 9;
+    key.quad_control = quad_control;
     return key;
 }
 
@@ -55,12 +56,13 @@ protected:
     // Renders the pair and checks every pixel: the triangle (-1,-1), (3,-1), (-1,3) covers the
     // target, and its attribute (x, y, 0.25, 1) is 0 at the first vertex and 2 in x and y at the
     // others, so at a pixel center it is the center over the target's size. The pixels whose x
-    // is below 0.5 are discarded and keep the clear color.
-    void check() {
+    // is below 0.5 are discarded and keep the clear color. `quad_control` is the pixel key's
+    // device flag.
+    void check(bool quad_control = false) {
         using bb::test::gcn::program_words;
         const auto vs = bb::gcn::translate(program_words("vs_attrs"), {}, vertex_key);
-        const auto ps = bb::gcn::translate(program_words("ps_discard"), {},
-                                           pixel_key());
+        const auto ps =
+            bb::gcn::translate(program_words("ps_discard"), {}, pixel_key(quad_control));
         if (bb::test::gcn::have_spirv_val()) {
             EXPECT_EQ(bb::test::gcn::validate(vs.spirv), "");
             EXPECT_EQ(bb::test::gcn::validate(ps.spirv), "");
@@ -101,6 +103,15 @@ protected:
 };
 
 TEST_F(Render, VertexPixelWithDiscard) { check(); }
+
+// The same pair with QuadDerivativesKHR and RequireFullQuadsKHR, on a device with
+// shaderQuadControl (docs/design/graphics.md, "Quad control").
+TEST_F(Render, QuadControl) {
+    if (!runner_->info().quad_control) {
+        GTEST_SKIP() << "no shaderQuadControl on " << runner_->info().driver;
+    }
+    check(true);
+}
 
 TEST_F(Render, TargetMustFitGuestMemory) {
     EXPECT_THROW(runner_->render({}, {}, {}, 3, {width, height, clear}), std::logic_error);

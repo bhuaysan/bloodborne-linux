@@ -32,6 +32,7 @@ struct DeviceInfo {
     bool round_rte_f32 = false, round_rtz_f32 = false;
     bool signed_zero_inf_nan_f32 = false;
     bool subgroup_quad = false;  // the quad subgroup operations in compute, for s_wqm_b64
+    bool quad_control = false;   // bbvk enabled shaderQuadControl (ShaderKey::quad_control)
 
     std::string describe() const;  // one line per property
 };

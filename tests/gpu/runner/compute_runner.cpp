@@ -60,7 +60,8 @@ std::string DeviceInfo::describe() const {
         << "\nf32 round to nearest even: " << round_rte_f32
         << "\nf32 round toward zero: " << round_rtz_f32
         << "\nf32 signed zero, inf and NaN preserved: " << signed_zero_inf_nan_f32
-        << "\nquad subgroup operations: " << subgroup_quad << '\n';
+        << "\nquad subgroup operations: " << subgroup_quad
+        << "\nshader quad control: " << quad_control << '\n';
     return out.str();
 }
 
@@ -151,6 +152,7 @@ struct ComputeRunner::State {
         // LeakSanitizer reports as leaked once the loader has unloaded the driver.
         ::dlopen("libvulkan_lvp.so", RTLD_LAZY | RTLD_NOLOAD | RTLD_NODELETE);
         info = device_info(vk->properties());
+        info.quad_control = vk->quad_control();
         device = vk->handle();
         constexpr VkMemoryPropertyFlags host =
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
