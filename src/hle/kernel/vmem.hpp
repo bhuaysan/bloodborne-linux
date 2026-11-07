@@ -1,8 +1,8 @@
 // Kernel virtual memory (docs/design/m3-core-os.md, "Memory"): the region table of guest
-// mappings and the guest entry points. Internal to src/hle/kernel/, except mapped(), which the GNM
-// submits (src/hle/video/gnm_driver.cpp) use as the PM4 parser's readable check. Direct memory
-// (#97) adds its mappings through map() with its own fd, flags, offsets and alignment, and maps
-// into the reservations of reserve() (dmem.hpp).
+// mappings and the guest entry points. Internal to src/hle/kernel/; direct memory (#97) adds its
+// mappings through map() with its own fd, flags, offsets and alignment, and maps into the
+// reservations of reserve() (dmem.hpp).
+// Exception: mapped() is also the GNM submits' check (src/hle/video/gnm_driver.cpp, PM4 readable).
 #pragma once
 
 #include <sys/types.h>
