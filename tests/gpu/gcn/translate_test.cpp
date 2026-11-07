@@ -375,8 +375,10 @@ TEST(GcnTranslate, TypedMemoryErrors) {
                                  "allowed at"));
     EXPECT_TRUE(
         message(0, 8, 4).starts_with("tbuffer_load_format_x: data format 8 is not supported"));
-    EXPECT_TRUE(  // 10_11_11 waits for the small floats, whatever the number format
-        message(0, 6, 4).starts_with("tbuffer_load_format_x: data format 6 is not supported"));
+    EXPECT_EQ(message(0, 6, 7), "no error");  // 10_11_11 FLOAT, its small floats
+    EXPECT_EQ(message(4, 6, 7), "no error");
+    EXPECT_TRUE(message(0, 6, 4).starts_with(
+        "tbuffer_load_format_x: number format 4 of data format 6 is not supported"));
     EXPECT_TRUE(
         message(0, 0, 7).starts_with("tbuffer_load_format_x: data format 0 is not supported"));
     EXPECT_TRUE(

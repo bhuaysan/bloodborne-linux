@@ -28,9 +28,8 @@ struct FormatLayout {
     std::array<FormatField, 4> field;
 };
 
-// The layout of a data format, nothing for the invalid format, the reserved one, the two formats
-// whose layout is not known (10_10_10_2 and 11_11_10) and 10_11_11 (its small floats are not
-// done).
+// The layout of a data format, nothing for the invalid format, the reserved one and the two
+// formats whose layout is not known (10_10_10_2 and 11_11_10).
 const FormatLayout* format_layout(unsigned dfmt);
 
 // Why the pair can't be converted (in the translator's error message), or an empty string. A
@@ -52,8 +51,8 @@ public:
 
     // The element's dwords from its components (`value`, X first), the inverse of decode: UNORM
     // and SNORM clamp (NaN gives 0) and round to nearest even, UINT and SINT saturate, FLOAT
-    // rounds to a half float to nearest even. A narrow element sits in the low bits of the result's
-    // [0], and the bits above it are 0.
+    // rounds to a half float or a small float to nearest even (to_small_float). A narrow element
+    // sits in the low bits of the result's [0], and the bits above it are 0.
     Words encode(unsigned dfmt, unsigned nfmt, const Words& value);
 
 private:
@@ -61,7 +60,8 @@ private:
     Id extended(unsigned instruction, Id type, const SpirvBuilder::Words& operands);
     Id decode_field(unsigned nfmt, const FormatField& field, Id word);
     Id encode_field(unsigned nfmt, unsigned width, Id value);
-    Id to_half(Id bits);
+    Id to_small_float(Id bits, unsigned mantissa_bits);
+    Id from_small_float(Id field, unsigned mantissa_bits);
 
     SpirvBuilder& b_;
     Id u32_;

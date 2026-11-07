@@ -34,4 +34,6 @@ s_mov_b32 s20, 0x2c00
 tbuffer_store_format_xyz v[16:18], v1, s[8:11], s20 format:[BUF_DATA_FORMAT_32_32_32,BUF_NUM_FORMAT_FLOAT] offen offset:1
 s_mov_b32 s20, 0x3000
 tbuffer_store_format_xyzw v[20:23], v1, s[8:11], s20 format:[BUF_DATA_FORMAT_8_8_8_8,BUF_NUM_FORMAT_SINT] offen offset:3
+s_mov_b32 s20, 0x3400
+tbuffer_store_format_xyz v[16:18], v1, s[8:11], s20 format:[BUF_DATA_FORMAT_10_11_11,BUF_NUM_FORMAT_FLOAT] offen
 s_endpgm

@@ -34,7 +34,7 @@ constexpr FormatLayout layouts[16] = {
     make(2, {{0, 0, 8}, {0, 8, 8}}),                             // 8_8
     make(4, {{0, 0, 32}}),                                       // 32
     make(4, {{0, 0, 16}, {0, 16, 16}}),                          // 16_16
-    {},                                                          // 10_11_11, small floats
+    make(4, {{0, 0, 11}, {0, 11, 11}, {0, 22, 10}}),             // 10_11_11
     {},                                                          // 11_11_10
     {},                                                          // 10_10_10_2
     make(4, {{0, 0, 10}, {0, 10, 10}, {0, 20, 10}, {0, 30, 2}}),  // 2_10_10_10
@@ -63,7 +63,9 @@ std::string format_error(unsigned dfmt, unsigned nf, bool store) {
     for (unsigned i = 0; i < layout->components; ++i) {
         const unsigned w = layout->field[i].width;
         // Floats have 16 or 32 bits, and the normalized and scaled formats fewer than 32.
-        const bool bad = nf == nfmt::float_                           ? w != 16 && w != 32
+        // 10_11_11 is only converted as its small floats (unsigned, 11, 11 and 10 bits).
+        const bool bad = dfmt == 6                                     ? nf != nfmt::float_
+                         : nf == nfmt::float_                    ? w != 16 && w != 32
                          : nf == nfmt::uint_ || nf == nfmt::sint ? false
                                                                  : w == 32;
         if (bad) {
@@ -124,6 +126,9 @@ Id FormatEmitter::decode_field(unsigned nf, const FormatField& field, Id word) {
         if (w == 32) {
             return word;
         }
+        if (w != 16) {
+            return from_small_float(uext(), w - 5);
+        }
         const Id half = extended(GLSLstd450UnpackHalf2x16, b_.type_vector(f32, 2), {uext()});
         return float_to_bits(b_.op(Op::OpCompositeExtract, f32, {half, 0}));
     }
@@ -175,15 +180,41 @@ Id FormatEmitter::encode_field(unsigned nf, unsigned w, Id value) {
         const Id clamped = extended(GLSLstd450SClamp, i32, {s, low, high});
         return b_.op(Op::OpBitwiseAnd, u32_, {b_.op(Op::OpBitcast, u32_, {clamped}), c(mask)});
     }
-    default:  // float: 16 or 32 bits (format_error)
-        return w == 32 ? value : to_half(value);
+    default:  // float: 10, 11, 16 or 32 bits (format_error)
+        return w == 32 ? value : to_small_float(value, w == 16 ? 10 : w - 5);
     }
 }
 
-// The half float nearest to the f32 with the bits `bits`, ties to even, in integer operations:
-// values from 65520 up become infinities, the ones below 2^-14 denormals, and a NaN becomes the
-// quiet NaN of its sign.
-Id FormatEmitter::to_half(Id bits) {
+// The f32 bits of the unsigned small float `field` with 5 exponent bits (bias 15) and `m` mantissa
+// bits, exactly, in integer operations (the denormals through an exact integer conversion): the
+// exponent 31 is an infinity, or with a mantissa a NaN, which becomes the quiet f32 NaN.
+Id FormatEmitter::from_small_float(Id field, unsigned m) {
+    const auto c = [&](std::uint32_t v) { return b_.constant_u32(v); };
+    const auto u = [&](Op op, Id x, Id y) { return b_.op(op, u32_, {x, y}); };
+    const auto is = [&](Id x, std::uint32_t y) {
+        return b_.op(Op::OpIEqual, b_.type_bool(), {x, c(y)});
+    };
+    const auto pick = [&](Id cond, Id x, Id y) { return b_.op(Op::OpSelect, u32_, {cond, x, y}); };
+    const Id exponent = u(Op::OpShiftRightLogical, field, c(m));
+    const Id mantissa = u(Op::OpBitwiseAnd, field, c((1u << m) - 1));
+    const Id normal = u(Op::OpBitwiseOr,
+                        u(Op::OpShiftLeftLogical, u(Op::OpIAdd, exponent, c(112)), c(23)),
+                        u(Op::OpShiftLeftLogical, mantissa, c(23 - m)));
+    // A denormal is mantissa * 2^-(14 + m): the mantissa as a float, with its exponent lowered.
+    const Id scaled = float_to_bits(b_.op(Op::OpConvertUToF, b_.type_float(32), {mantissa}));
+    const Id denormal =
+        pick(is(mantissa, 0), c(0), u(Op::OpISub, scaled, c((14 + m) << 23)));
+    const Id special = pick(is(mantissa, 0), c(0x7f800000), c(0x7fc00000));
+    return pick(is(exponent, 0), denormal, pick(is(exponent, 31), special, normal));
+}
+
+// The small float with 5 exponent bits (bias 15) and `m` mantissa bits nearest to the f32 with
+// the bits `bits`, ties to even, in integer operations, the magnitudes below 2^-14 as denormals.
+// The half float (m = 10) keeps the sign, makes the values from 65520 up infinities and a NaN the
+// quiet NaN of its sign. The unsigned 11- and 10-bit floats (m = 6, 5) make the negative values
+// and -0 0, clamp the finite values to the largest finite one, keep +Inf and make a NaN the quiet
+// NaN (the mantissa's top bit).
+Id FormatEmitter::to_small_float(Id bits, unsigned m) {
     const auto c = [&](std::uint32_t v) { return b_.constant_u32(v); };
     const auto u = [&](Op op, Id x, Id y) { return b_.op(op, u32_, {x, y}); };
     const auto test = [&](Op op, Id x, std::uint32_t y) {
@@ -197,20 +228,28 @@ Id FormatEmitter::to_half(Id bits) {
             u(Op::OpISub, u(Op::OpShiftLeftLogical, c(1), u(Op::OpISub, s, c(1))), c(1));
         return u(Op::OpShiftRightLogical, u(Op::OpIAdd, u(Op::OpIAdd, x, below_half), odd), s);
     };
-    const Id sign = u(Op::OpShiftRightLogical, u(Op::OpBitwiseAnd, bits, c(0x80000000)), c(16));
+    const Id sign = u(Op::OpBitwiseAnd, bits, c(0x80000000));
     const Id magnitude = u(Op::OpBitwiseAnd, bits, c(0x7fffffff));
-    // A normal half: rebias the exponent from 127 to 15 and drop 13 mantissa bits.
-    const Id normal = round_shift(u(Op::OpISub, magnitude, c(112u << 23)), c(13));
-    // A denormal: the mantissa with its leading 1, shifted by 126 - exponent (14 or more).
+    // A normal value: rebias the exponent from 127 to 15 and drop 23 - m mantissa bits.
+    const Id normal = round_shift(u(Op::OpISub, magnitude, c(112u << 23)), c(23 - m));
+    // A denormal: the mantissa with its leading 1, shifted by 136 - m - exponent (14 or more).
     const Id exponent = u(Op::OpShiftRightLogical, magnitude, c(23));
     const Id mantissa =
         u(Op::OpBitwiseOr, u(Op::OpBitwiseAnd, magnitude, c(0x7fffff)), c(0x800000));
-    const Id shift = extended(GLSLstd450UMin, u32_, {u(Op::OpISub, c(126), exponent), c(31)});
+    const Id shift = extended(GLSLstd450UMin, u32_, {u(Op::OpISub, c(136 - m), exponent), c(31)});
     const Id denormal = round_shift(mantissa, shift);
-    Id half = pick(test(Op::OpULessThan, magnitude, 0x38800000), denormal, normal);
-    half = pick(test(Op::OpUGreaterThanEqual, magnitude, 0x477ff000), c(0x7c00), half);
-    half = pick(test(Op::OpUGreaterThan, magnitude, 0x7f800000), c(0x7e00), half);
-    return u(Op::OpBitwiseOr, sign, half);
+    Id small = pick(test(Op::OpULessThan, magnitude, 0x38800000), denormal, normal);
+    const std::uint32_t infinity = 31u << m, quiet_nan = infinity | 1u << (m - 1);
+    const Id nan = test(Op::OpUGreaterThan, magnitude, 0x7f800000);
+    if (m == 10) {
+        small = pick(test(Op::OpUGreaterThanEqual, magnitude, 0x477ff000), c(infinity), small);
+        small = pick(nan, c(quiet_nan), small);
+        return u(Op::OpBitwiseOr, u(Op::OpShiftRightLogical, sign, c(16)), small);
+    }
+    small = extended(GLSLstd450UMin, u32_, {small, c(infinity - 1)});
+    small = pick(test(Op::OpIEqual, magnitude, 0x7f800000), c(infinity), small);
+    small = pick(test(Op::OpINotEqual, sign, 0), c(0), small);
+    return pick(nan, c(quiet_nan), small);
 }
 
 FormatEmitter::Words FormatEmitter::encode(unsigned dfmt, unsigned nf, const Words& value) {

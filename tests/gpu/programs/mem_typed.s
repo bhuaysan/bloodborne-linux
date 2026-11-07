@@ -67,4 +67,8 @@ s_mov_b32 s20, 0x3c00
 tbuffer_load_format_xyzw v[16:19], v1, s[4:7], 0 format:[BUF_DATA_FORMAT_16_16,BUF_NUM_FORMAT_USCALED] offen offset:4
 s_waitcnt vmcnt(0)
 buffer_store_dwordx4 v[16:19], v1, s[8:11], s20 offen
+s_mov_b32 s20, 0x4000
+tbuffer_load_format_xyzw v[16:19], v1, s[4:7], 0 format:[BUF_DATA_FORMAT_10_11_11,BUF_NUM_FORMAT_FLOAT] offen
+s_waitcnt vmcnt(0)
+buffer_store_dwordx4 v[16:19], v1, s[8:11], s20 offen
 s_endpgm

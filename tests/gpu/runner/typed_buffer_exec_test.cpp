@@ -30,7 +30,7 @@ constexpr unsigned unorm = 0, snorm = 1, uscaled = 2, sscaled = 3, uint_ = 4, si
 
 constexpr std::uint64_t base = 0x12'0000'0000;  // guest address of the output
 constexpr std::uint32_t table_offset = 0x8000, table_size = 2048, lanes = 64;
-constexpr std::uint32_t output_size = 0x4000;  // one block of 1 KB per format
+constexpr std::uint32_t output_size = 0x4400;  // one block of 1 KB per format
 constexpr std::uint32_t identity = 4 | 5 << 3 | 6 << 6 | 7 << 9;  // dst_sel X, Y, Z, W
 
 struct Field {
@@ -42,7 +42,9 @@ std::vector<Field> fields(unsigned dfmt) {
     case 1: return {{0, 8}};
     case 2: return {{0, 16}};
     case 3: return {{0, 8}, {8, 8}};
+    case 4: return {{0, 32}};
     case 5: return {{0, 16}, {16, 16}};
+    case 6: return {{0, 11}, {11, 11}, {22, 10}};
     case 9: return {{0, 10}, {10, 10}, {20, 10}, {30, 2}};
     case 10: return {{0, 8}, {8, 8}, {16, 8}, {24, 8}};
     case 11: return {{0, 32}, {32, 32}};
@@ -67,6 +69,12 @@ float half_to_float(std::uint32_t h) {
     return (h & 0x8000) != 0 ? -v : v;
 }
 
+// The finite unsigned small float `code` with 5 exponent bits (bias 15) and `m` mantissa bits.
+double small_float(std::uint32_t code, unsigned m) {
+    const unsigned e = code >> m, mantissa = code & ((1u << m) - 1);
+    return std::ldexp(e == 0 ? mantissa : mantissa + (1 << m), int(std::max(e, 1u)) - 15 - int(m));
+}
+
 // One component of `bytes` (the element, little endian) in the number format, as 32 bits.
 std::uint32_t component(const std::vector<std::uint8_t>& bytes, Field f, unsigned nfmt) {
     std::uint64_t u = 0;
@@ -88,6 +96,12 @@ std::uint32_t component(const std::vector<std::uint8_t>& bytes, Field f, unsigne
     case nf::snorm_ogl:
         return std::bit_cast<std::uint32_t>(static_cast<float>(2 * s + 1) / max);
     default:  // float
+        if (f.width == 10 || f.width == 11) {  // a NaN becomes the quiet f32 NaN
+            const unsigned m = f.width - 5;
+            return u >> m != 31          ? std::bit_cast<std::uint32_t>(float(small_float(u, m)))
+                   : (u & ((1u << m) - 1)) ? 0x7fc00000u
+                                           : 0x7f800000u;
+        }
         return f.width == 16 ? std::bit_cast<std::uint32_t>(half_to_float(u))
                              : static_cast<std::uint32_t>(u);
     }
@@ -175,7 +189,7 @@ protected:
             }
             ++k;
         }
-        EXPECT_EQ(k, 16u);
+        EXPECT_EQ(k, 17u);
     }
 
     std::unique_ptr<ComputeRunner> runner_;
@@ -228,6 +242,20 @@ std::uint32_t encode(std::uint32_t v, unsigned width, unsigned nfmt) {
     default:
         if (width == 32) {
             return v;
+        }
+        if (width < 16) {  // the unsigned small floats
+            const unsigned m = width - 5, infinity = 31u << m;
+            const float x = std::bit_cast<float>(v);
+            if (std::isnan(x) || std::isinf(x) || std::signbit(x) || x == 0) {
+                return std::isnan(x) ? infinity | 1u << (m - 1) : x > 0 ? infinity : 0;
+            }
+            std::uint32_t best = 0;  // the nearest finite code, ties to the even one
+            for (std::uint32_t code = 1; code < infinity; ++code) {
+                const double d = std::abs(small_float(code, m) - x),
+                             b = std::abs(small_float(best, m) - x);
+                best = d < b || (d == b && code % 2 == 0) ? code : best;
+            }
+            return best;
         }
         if (std::isnan(std::bit_cast<float>(v))) {
             return (v >> 16 & 0x8000) | 0x7e00;
@@ -322,7 +350,7 @@ protected:
             }
             ++k;
         }
-        EXPECT_EQ(k, 13u);
+        EXPECT_EQ(k, 14u);
         for (std::uint32_t i = 0; i < output_size; ++i) {
             ASSERT_EQ(static_cast<unsigned>(memory[i]), expected[i])
                 << "block " << i / 1024 << " byte " << i % 1024;

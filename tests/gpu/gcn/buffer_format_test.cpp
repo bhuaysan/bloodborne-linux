@@ -25,6 +25,10 @@ TEST(GcnBufferFormat, Layouts) {
     ASSERT_NE(wide, nullptr);
     EXPECT_EQ(wide->bytes, 12u);
     EXPECT_EQ(wide->field[2].word, 2);
+    const FormatLayout* small = format_layout(6);  // 10_11_11
+    ASSERT_NE(small, nullptr);
+    EXPECT_EQ(small->field[1].offset, 11);
+    EXPECT_EQ(small->field[2].offset + small->field[2].width, 32);
 }
 
 // Every layout covers its element: the components lie inside its bytes, in order.
@@ -45,9 +49,9 @@ TEST(GcnBufferFormat, LayoutsFit) {
     }
 }
 
-// No layout for the invalid and reserved formats, the two whose layout is not known, and 10_11_11.
+// No layout for the invalid and reserved formats and the two whose layout is not known.
 TEST(GcnBufferFormat, MissingLayouts) {
-    for (const unsigned dfmt : {0u, 6u, 7u, 8u, 15u, 16u, 99u}) {
+    for (const unsigned dfmt : {0u, 7u, 8u, 15u, 16u, 99u}) {
         EXPECT_EQ(format_layout(dfmt), nullptr) << dfmt;
         EXPECT_FALSE(format_error(dfmt, nfmt::uint_).empty()) << dfmt;
     }
@@ -61,6 +65,8 @@ TEST(GcnBufferFormat, NumberFormatsByWidth) {
     EXPECT_TRUE(format_error(2, nfmt::float_).empty());   // 16
     EXPECT_TRUE(format_error(4, nfmt::float_).empty());   // 32
     EXPECT_TRUE(format_error(4, nfmt::uint_).empty());
+    EXPECT_TRUE(format_error(6, nfmt::float_, true).empty());  // 10_11_11: only small floats
+    EXPECT_FALSE(format_error(6, nfmt::uint_).empty());
     for (const unsigned nf : {nfmt::unorm, nfmt::snorm, nfmt::uscaled, nfmt::sscaled,
                               nfmt::snorm_ogl}) {
         EXPECT_FALSE(format_error(4, nf).empty()) << nf;  // no normalizing of 32 bits
