@@ -5,10 +5,12 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "common/log.hpp"
 #include "hle/hle.hpp"
 #include "hle/kernel/vmem.hpp"
 
@@ -135,6 +137,43 @@ TEST(KernelDmem, MappingsAreCongruentToTheirOffsetModTheMirrorBlock) {
     for (void* const v : views) {
         EXPECT_EQ(sceKernelMunmap(v, page_size), 0);
     }
+    EXPECT_EQ(release_direct(offset, 4 * page_size), 0);
+}
+
+// A view the mirror can't bind exactly is logged: an alignment whose multiples the offset is not
+// one of (32 KiB at an odd page, 64 KiB at two pages), or a batch map that the game places at an
+// address not congruent to its offset. Congruent views are not logged.
+TEST(KernelDmem, MapsThatBreakTheCongruenceAreLogged) {
+    const std::uint64_t offset = allocate(4 * page_size, dmem::mirror_block);
+    void* range = nullptr;
+    ASSERT_EQ(reserve_range(&range, 2 * page_size, 0, dmem::mirror_block), 0);
+    const std::uintptr_t r = addr(range);
+    const BatchEntry entries[2] = {
+        {r, offset + page_size, page_size, 3, {}, dmem::batch_map},
+        {r + page_size, offset + page_size, page_size, 3, {}, dmem::batch_map},
+    };
+    const struct {
+        std::uint64_t page, alignment;  // of a map_direct; alignment 0 or 1: that batch entry
+        bool logged;
+    } cases[] = {{1, 2 * page_size, true}, {2, 4 * page_size, true}, {2, 2 * page_size, false},
+                 {3, page_size, false},    {0, 0, true},             {0, 1, false}};
+    bb::common::set_log_filter(bb::common::LogFilter{});  // info and above
+    std::vector<void*> views;
+    for (const auto& c : cases) {
+        testing::internal::CaptureStderr();
+        if (c.alignment > 1) {
+            views.push_back(map(offset + c.page * page_size, page_size, c.alignment));
+        } else {
+            EXPECT_EQ(map_direct_batch(&entries[c.alignment], 1, nullptr), 0);
+        }
+        const std::string log = testing::internal::GetCapturedStderr();
+        EXPECT_EQ(log.find("not congruent mod 0x10000") != std::string::npos, c.logged)
+            << c.page << " " << c.alignment << ": " << log;
+    }
+    for (void* const v : views) {
+        EXPECT_EQ(sceKernelMunmap(v, page_size), 0);
+    }
+    EXPECT_EQ(sceKernelMunmap(range, 2 * page_size), 0);
     EXPECT_EQ(release_direct(offset, 4 * page_size), 0);
 }
 
@@ -343,12 +382,13 @@ TEST(KernelDmem, TheObserverFollowsDirectMemory) {
     EXPECT_EQ(sceKernelMunmap(reinterpret_cast<void*>(a), 3 * page_size), sce_einval);
     EXPECT_EQ(sceKernelMunmap(reinterpret_cast<void*>(a), page_size), 0);
     EXPECT_EQ(release_direct(offset, 2 * page_size), 0);
+    // The last page goes while two views of it are still mapped (0x26d3f70); they unmap later.
+    EXPECT_EQ(release_direct(offset + 2 * page_size, page_size), 0);
     entry.operation = dmem::batch_unmap;
     ASSERT_EQ(map_direct_batch(&entry, 1, nullptr), 0);
     EXPECT_EQ(sceKernelMunmap(reinterpret_cast<void*>(a + 2 * page_size), page_size), 0);
     EXPECT_EQ(sceKernelMunmap(range, 2 * page_size), 0);
     EXPECT_EQ(sceKernelMunmap(anonymous, page_size), 0);
-    EXPECT_EQ(release_direct(offset + 2 * page_size, page_size), 0);
     vmem::set_direct_observer(nullptr);
     const std::vector<Recorder::Call> expected{
         {'m', a, 3 * page_size, offset},
@@ -356,9 +396,9 @@ TEST(KernelDmem, TheObserverFollowsDirectMemory) {
         {'u', a + page_size, page_size, offset + page_size},
         {'u', a, page_size, offset},
         {'r', 0, 2 * page_size, offset},
+        {'r', 0, page_size, offset + 2 * page_size},
         {'u', r + page_size, page_size, offset + 2 * page_size},
         {'u', a + 2 * page_size, page_size, offset + 2 * page_size},
-        {'r', 0, page_size, offset + 2 * page_size},
     };
     EXPECT_EQ(recorder.calls, expected);
 }

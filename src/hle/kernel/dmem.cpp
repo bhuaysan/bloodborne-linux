@@ -233,6 +233,7 @@ int run_batch_entry(const BatchEntry& e) {
     vmem::Mapping m = direct_mapping(e.address, e.length, e.prot, e.offset);
     m.fixed = true;
     m.into_reservation = true;
+    m.congruent = mirror_block;  // only checked: the address is the game's
     std::uintptr_t out = 0;
     return vmem::map(m, out);
 }

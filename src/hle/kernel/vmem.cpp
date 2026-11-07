@@ -279,11 +279,10 @@ void* map_host_placed(const Mapping& m, int prot) {
 // Maps at the lowest free aligned address in the window, at or above the hint if it lies there.
 // Returns the address, or MAP_FAILED with errno set. Needs table_mutex.
 void* map_in_window(const Mapping& m, int prot) {
+    // An alignment whose multiples the offset is not one of rules the congruence out; map_locked
+    // logs that.
     std::uint64_t alignment = m.alignment, residue = 0;
-    if (m.congruent != 0 && m.offset % std::min(m.congruent, alignment) != 0) {
-        log(LogLevel::warn, "map at offset {:#x} aligned to {:#x}: not congruent mod {:#x}",
-            m.offset, alignment, m.congruent);
-    } else if (m.congruent > alignment) {
+    if (m.congruent > alignment && m.offset % alignment == 0) {
         residue = m.offset % m.congruent;
         alignment = m.congruent;
     }
@@ -385,6 +384,10 @@ int map_locked(const Mapping& m, int prot, bool reserved, std::uintptr_t& out) {
     out = reinterpret_cast<std::uintptr_t>(at);
     table.insert_or_assign(out,
                            Region{out, out + m.length, m.prot, m.flags, m.offset, m.name, reserved});
+    if (m.congruent != 0 && (out - m.offset) % m.congruent != 0) {
+        log(LogLevel::warn, "map {:#x}-{:#x} of offset {:#x}{}: not congruent mod {:#x}", out,
+            out + m.length, m.offset, m.fixed ? " (fixed)" : "", m.congruent);
+    }
     DirectObserver* const o = observer.load(std::memory_order_acquire);
     if (o != nullptr && (m.flags & region_direct) != 0) {
         o->mapped(out, m.length, m.offset);
