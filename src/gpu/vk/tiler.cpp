@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "gpu/gcn/spirv_builder.hpp"
+#include "gpu/vk/device.hpp"
 
 namespace bb::vk {
 
@@ -128,6 +129,77 @@ std::vector<std::uint32_t> tiling_shader(std::uint32_t bytes, bool to_linear) {
     b.entry_point(spv::ExecutionModel::GLCompute, main, "main", {constants, id_var});
     b.execution_mode(main, spv::ExecutionMode::LocalSize, {8, 8, 1});
     return b.words();
+}
+
+std::vector<std::uint32_t> table_words(const tile::AddressTables& t) {
+    std::vector<std::uint32_t> words;
+    words.reserve(2 * (t.columns.size() + t.rows.size() + t.layers.size()));
+    for (const auto* part : {&t.columns, &t.rows, &t.layers}) {
+        for (const auto& entry : *part) {
+            words.insert(words.end(), entry.begin(), entry.end());
+        }
+    }
+    return words;
+}
+
+Tiler::Tiler(const Device& device) : device_(device.handle()) {
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(TilingConstants)};
+    auto info = make<VkPipelineLayoutCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+    info.pushConstantRangeCount = 1;
+    info.pPushConstantRanges = &range;
+    check(vkCreatePipelineLayout(device_, &info, nullptr, &layout_), "vkCreatePipelineLayout");
+}
+
+Tiler::~Tiler() {
+    for (const auto& pair : pipelines_) {
+        for (const VkPipeline pipeline : pair) {
+            vkDestroyPipeline(device_, pipeline, nullptr);
+        }
+    }
+    vkDestroyPipelineLayout(device_, layout_, nullptr);
+}
+
+void Tiler::record(VkCommandBuffer commands, const tile::Layout& layout, std::uint32_t level,
+                   const tile::AddressTables& tables, const Addresses& at, bool to_linear) {
+    const tile::Level& lv = layout.levels.at(level);
+    VkPipeline& pipeline = pipelines_.at(std::countr_zero(layout.bytes)).at(to_linear);
+    if (pipeline == VK_NULL_HANDLE) {
+        const std::vector<std::uint32_t> spirv = tiling_shader(layout.bytes, to_linear);
+        auto module_info =
+            make<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
+        module_info.codeSize = 4 * spirv.size();
+        module_info.pCode = spirv.data();
+        VkShaderModule module = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(device_, &module_info, nullptr, &module),
+              "vkCreateShaderModule");
+        auto info =
+            make<VkComputePipelineCreateInfo>(VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO);
+        info.stage = make<VkPipelineShaderStageCreateInfo>(
+            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+        info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        info.stage.module = module;
+        info.stage.pName = "main";
+        info.layout = layout_;
+        const VkResult result =
+            vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
+        vkDestroyShaderModule(device_, module, nullptr);
+        check(result, "vkCreateComputePipelines");
+    }
+    const TilingConstants constants{
+        .tiled = at.tiled + lv.offset,
+        .linear = at.linear + lv.offset,
+        .tables = at.tables,
+        .pitch = lv.pitch,
+        .height = lv.height,
+        .split_bytes = tables.split_bytes,
+        .split_rotation = tables.split_rotation,
+        .pipe_bank_bits = tables.pipe_bank_bits,
+        .pipe_bank_mask = tables.pipe_bank_mask,
+    };
+    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    vkCmdPushConstants(commands, layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof constants,
+                       &constants);
+    vkCmdDispatch(commands, (lv.pitch + 7) / 8, (lv.height + 7) / 8, layout.layers);
 }
 
 }  // namespace bb::vk
