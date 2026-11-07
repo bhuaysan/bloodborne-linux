@@ -1592,7 +1592,10 @@ private:
         }
         std::array<Id, 5> result;  // X to W, then the constant 1 of the number format
         for (Id& v : result) {
-            v = b_.local_variable(b_.type_pointer(SC::Function, u32_), zero);
+            // Stored here, not as the initializer, which runs once on function entry: an access
+            // in a loop would otherwise return a pair without a case the previous pass's values.
+            v = b_.local_variable(b_.type_pointer(SC::Function, u32_));
+            store(v, zero);
         }
         SpirvBuilder::Words words = {field(12, 7), b_.id()};  // nfmt | dfmt << 3, the merge
         for (const auto [dfmt, nf] : formatted_pairs) {
