@@ -120,6 +120,10 @@ public:
     // one), otherwise the graphics queue itself.
     Queue& sparse() { return sparse_ ? *sparse_ : graphics_; }
 
+    // Whether shaderQuadControl of VK_KHR_shader_quad_control is enabled (where the device has
+    // it): the pixel shaders' ShaderKey::quad_control.
+    bool quad_control() const { return quad_control_; }
+
 private:
     Device() = default;
     VkPhysicalDevice physical_ = VK_NULL_HANDLE;
@@ -128,6 +132,7 @@ private:
     VkPhysicalDeviceMemoryProperties memory_{};
     Queue graphics_;
     std::optional<Queue> sparse_;
+    bool quad_control_ = false;
 };
 
 }  // namespace bb::vk

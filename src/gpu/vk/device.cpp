@@ -140,6 +140,32 @@ bool imports_dma_buf(VkPhysicalDevice device) {
            VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
 }
 
+// Whether `device` has the device extension `name`.
+bool has_extension(VkPhysicalDevice device, const char* name) {
+    std::uint32_t count = 0;
+    check(vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr),
+          "vkEnumerateDeviceExtensionProperties");
+    std::vector<VkExtensionProperties> extensions(count);
+    check(vkEnumerateDeviceExtensionProperties(device, nullptr, &count, extensions.data()),
+          "vkEnumerateDeviceExtensionProperties");
+    return std::any_of(extensions.begin(), extensions.end(),
+                       [&](const auto& e) { return std::strcmp(e.extensionName, name) == 0; });
+}
+
+// Whether `device` has VK_KHR_shader_quad_control with shaderQuadControl (optional: translated
+// pixel shaders declare quad control with it, docs/design/graphics.md, "Quad control").
+bool has_quad_control(VkPhysicalDevice device) {
+    if (!has_extension(device, VK_KHR_SHADER_QUAD_CONTROL_EXTENSION_NAME)) {
+        return false;
+    }
+    auto quad = make<VkPhysicalDeviceShaderQuadControlFeaturesKHR>(
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_QUAD_CONTROL_FEATURES_KHR);
+    auto features = make<VkPhysicalDeviceFeatures2>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                                                    &quad);
+    vkGetPhysicalDeviceFeatures2(device, &features);
+    return quad.shaderQuadControl;
+}
+
 // What `device` lacks of the requirements of Device::create, or nothing.
 std::optional<std::string> missing(VkPhysicalDevice device, VkSurfaceKHR surface) {
     VkPhysicalDeviceProperties props;
@@ -147,20 +173,12 @@ std::optional<std::string> missing(VkPhysicalDevice device, VkSurfaceKHR surface
     if (props.apiVersion < VK_API_VERSION_1_3) {
         return "Vulkan 1.3";
     }
-    std::uint32_t count = 0;
-    check(vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr),
-          "vkEnumerateDeviceExtensionProperties");
-    std::vector<VkExtensionProperties> extensions(count);
-    check(vkEnumerateDeviceExtensionProperties(device, nullptr, &count, extensions.data()),
-          "vkEnumerateDeviceExtensionProperties");
     std::vector<const char*> names(std::begin(required_extensions), std::end(required_extensions));
     if (surface != VK_NULL_HANDLE) {
         names.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     }
     for (const char* name : names) {
-        if (std::none_of(extensions.begin(), extensions.end(), [&](const auto& e) {
-                return std::strcmp(e.extensionName, name) == 0;
-            })) {
+        if (!has_extension(device, name)) {
             return name;
         }
     }
@@ -282,14 +300,23 @@ std::unique_ptr<Device> Device::create(const Instance& instance, const DeviceOpt
         queues[i].queueCount = 1;
         queues[i].pQueuePriorities = &priority;
     }
-    auto info = make<VkDeviceCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, &enable.features);
-    info.queueCreateInfoCount = families.sparse ? 2 : 1;
-    info.pQueueCreateInfos = queues;
+    // And shaderQuadControl where the device has it.
     std::vector<const char*> extensions(std::begin(required_extensions),
                                         std::end(required_extensions));
+    auto quad = make<VkPhysicalDeviceShaderQuadControlFeaturesKHR>(
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_QUAD_CONTROL_FEATURES_KHR);
+    device->quad_control_ = has_quad_control(device->physical_);
+    if (device->quad_control_) {
+        extensions.push_back(VK_KHR_SHADER_QUAD_CONTROL_EXTENSION_NAME);
+        quad.shaderQuadControl = VK_TRUE;
+        quad.pNext = std::exchange(enable.features.pNext, &quad);
+    }
     if (options.surface != VK_NULL_HANDLE) {
         extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     }
+    auto info = make<VkDeviceCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, &enable.features);
+    info.queueCreateInfoCount = families.sparse ? 2 : 1;
+    info.pQueueCreateInfos = queues;
     info.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
     info.ppEnabledExtensionNames = extensions.data();
     check(vkCreateDevice(device->physical_, &info, nullptr, &device->device_), "vkCreateDevice");
@@ -301,8 +328,10 @@ std::unique_ptr<Device> Device::create(const Instance& instance, const DeviceOpt
         device->sparse_->family = *families.sparse;
         vkGetDeviceQueue(device->device_, *families.sparse, 0, &device->sparse_->handle);
     }
-    common::log(common::LogLevel::info, "gpu.vk", "device {} ({} {}), sparse queue family {}",
-                p.core.deviceName, p.v12.driverName, p.v12.driverInfo, device->sparse().family);
+    common::log(common::LogLevel::info, "gpu.vk",
+                "device {} ({} {}), sparse queue family {}, quad control {}", p.core.deviceName,
+                p.v12.driverName, p.v12.driverInfo, device->sparse().family,
+                device->quad_control_);
     return device;
 }
 
