@@ -318,7 +318,8 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
     });
 
     std::ofstream out(bb::test::analysis_dir() / "gcn-translation-coverage.txt");
-    out << "# Translation coverage of the shader corpus (stage keys, probes marked, see coverage_test.cpp)\n"
+    out << "# Translation coverage of the shader corpus "
+           "(stage keys, probes marked, see coverage_test.cpp)\n"
         << "program files\t" << files << "\n"
         << "distinct programs\t" << codes.size() << "\n"
         << "distinct translations (code and, for ps, register block)\t" << outcomes.size() << "\n"
@@ -376,8 +377,8 @@ TEST(GcnCoverage, ProgramOutcomes) {
     EXPECT_EQ(open.message.find(" at offset "), std::string::npos);
 
     // Vertex (1) and copy (6) shaders get the vertex key, so a position export translates. The
-    // other types, and a pixel shader without a register block, keep the compute key, where exp is an
-    // error; domain shaders (8) among them.
+    // other types, and a pixel shader without a register block, keep the compute key, where exp is
+    // an error; domain shaders (8) among them.
     Words position = xport(0xf, 12, 0, 1, 2, 3, xp::done);  // exp pos0 v0, v1, v2, v3 done
     position.push_back(s_endpgm);
     for (const unsigned type : {1u, 6u}) {
