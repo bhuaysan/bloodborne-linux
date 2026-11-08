@@ -3,14 +3,20 @@
 // the game's rings there and report how far they are written. The stage registers are in
 // gnm_shader.cpp, the default state, markers and profiling queries in gnm_state.cpp; the other
 // imports stay stubs.
+#include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <cstdint>
 #include <filesystem>
+#include <iterator>
+#include <mutex>
 #include <span>
 #include <vector>
 
 #include "common/log.hpp"
 #include "hle/hle.hpp"
+#include "hle/kernel/abi.hpp"
+#include "hle/kernel/equeue.hpp"
 #include "hle/kernel/vmem.hpp"
 #include "hle/video/video.hpp"
 
@@ -27,6 +33,36 @@ std::atomic<std::uint64_t> submits{0};
 constexpr std::uint32_t compute_pipes = 7;
 constexpr std::uint32_t queues_per_pipe = 8;
 pm4::GpuTrace* gpu_trace = nullptr;  // set before the GPU thread starts, then never changed
+
+// The equeue events of sceGnmAddEqEvent: (queue, interrupt source) with the user data.
+struct EqEvent {
+    std::uint64_t equeue;
+    std::uint64_t id;
+    std::uint64_t user_data;
+};
+std::mutex eq_mutex;
+std::vector<EqEvent> eq_events;
+std::atomic<std::uint64_t> eq_triggered{0};
+
+// On the GPU thread: one event on every queue registered for `source`.
+void gpu_interrupt(std::uint32_t source) {
+    std::vector<EqEvent> targets;
+    {
+        const std::scoped_lock lock(eq_mutex);
+        std::ranges::copy_if(eq_events, std::back_inserter(targets),
+                             [source](const EqEvent& e) { return e.id == source; });
+    }
+    for (const EqEvent& e : targets) {
+        EventQueue::trigger(e.equeue, {.id = e.id,
+                                       .kind = gnm_event_kind,
+                                       .data = static_cast<std::int64_t>(e.id),
+                                       .user_data = e.user_data});
+        const std::uint64_t n = eq_triggered.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= logged_submits) {
+            common::log(common::LogLevel::info, channel, "gpu event {} (source {:#x})", n, e.id);
+        }
+    }
+}
 
 bool guest_readable(const void* address, std::size_t bytes) {
     const auto start = reinterpret_cast<std::uintptr_t>(address);
@@ -103,7 +139,7 @@ bool enable_gpu_trace(const std::filesystem::path& path) {
 }
 
 pm4::GpuThread& gpu_thread() {
-    static pm4::GpuThread thread(guest_readable, {}, gpu_trace);
+    static pm4::GpuThread thread(guest_readable, gpu_interrupt, gpu_trace);
     return thread;
 }
 
@@ -179,6 +215,34 @@ std::int32_t sceGnmSubmitDone() {
     return 0;
 }
 
+std::int32_t sceGnmAddEqEvent(std::uint64_t equeue, std::uint64_t id, std::uint64_t user_data) {
+    if (!EventQueue::find(equeue)) {
+        return kernel::sce_fail(EBADF);
+    }
+    const std::scoped_lock lock(eq_mutex);
+    const auto same = std::ranges::find_if(
+        eq_events, [&](const EqEvent& e) { return e.equeue == equeue && e.id == id; });
+    if (same != eq_events.end()) {
+        same->user_data = user_data;
+    } else {
+        eq_events.push_back({equeue, id, user_data});
+    }
+    return 0;
+}
+
+std::int32_t sceGnmDeleteEqEvent(std::uint64_t equeue, std::uint64_t id) {
+    if (!EventQueue::find(equeue)) {
+        return kernel::sce_fail(EBADF);
+    }
+    const std::scoped_lock lock(eq_mutex);
+    std::erase_if(eq_events, [&](const EqEvent& e) { return e.equeue == equeue && e.id == id; });
+    return 0;
+}
+
+std::int32_t sceGnmGetEqEventType(const GuestEvent* event) {
+    return event != nullptr ? static_cast<std::int32_t>(event->data) : 0;
+}
+
 // sceGnmSubmitCommandBuffers
 BB_HLE_FUNCTION("libSceGnmDriver", "zwY0YV91TTI", gnm_submit);
 // sceGnmValidateCommandBuffers
@@ -190,5 +254,8 @@ BB_HLE_FUNCTION("libSceGnmDriver", "29oKvKXzEZo", gnm_map_compute_queue);  // sc
 BB_HLE_FUNCTION("libSceGnmDriver", "ArSg-TGinhk", gnm_unmap_compute_queue);
 BB_HLE_FUNCTION("libSceGnmDriver", "bX5IbRvECXk", gnm_ding_dong);  // sceGnmDingDong
 BB_HLE_FUNCTION("libSceGnmDriver", "yvZ73uQUqrk", sceGnmSubmitDone);
+BB_HLE_FUNCTION("libSceGnmDriver", "b0xyllnVY-I", sceGnmAddEqEvent);
+BB_HLE_FUNCTION("libSceGnmDriver", "PVT+fuoS9gU", sceGnmDeleteEqEvent);
+BB_HLE_FUNCTION("libSceGnmDriver", "UoYY0DWMC0U", sceGnmGetEqEventType);
 
 }  // namespace bb::hle::video
