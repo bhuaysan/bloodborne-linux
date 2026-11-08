@@ -189,6 +189,9 @@ bool GpuThread::run_front(std::size_t index, bool& waiting) {
         stream = &queue.front();
     }
     const std::uint64_t packets = packets_.load(std::memory_order_relaxed);
+    if (trace_ != nullptr) {
+        trace_->set_source(ring != nullptr ? static_cast<int>(index - queue_count) : -1);
+    }
     const RunResult result = parser_.run(*stream);
     {
         const std::scoped_lock lock(mutex_);

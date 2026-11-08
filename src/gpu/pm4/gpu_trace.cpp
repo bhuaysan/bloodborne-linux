@@ -91,8 +91,9 @@ void GpuTrace::packet(const Packet& packet, const RegisterMirror& regs) {
         return;
     }
     (is_draw(packet.opcode()) ? draws_ : dispatches_) += 1;
-    std::fprintf(sink_, "frame %llu: %s\n", static_cast<unsigned long long>(frame_ + 1),
-                 line.c_str());
+    const std::string source = ring_ < 0 ? std::string() : std::format(" ring{}", ring_);
+    std::fprintf(sink_, "frame %llu%s: %s\n", static_cast<unsigned long long>(frame_ + 1),
+                 source.c_str(), line.c_str());
 }
 
 void GpuTrace::end_frame() {

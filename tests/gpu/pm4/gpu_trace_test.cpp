@@ -84,6 +84,24 @@ TEST(GpuTrace, WritesPacketsDrawsAndDispatchesPerFrame) {
     EXPECT_NE(text.find("frame 2 end: 3 packets"), std::string::npos) << text;
 }
 
+TEST(GpuTrace, MarksRingStreams) {
+    const auto path = temp_path("bb_gpu_trace_c.txt");
+    auto trace = GpuTrace::open(path);
+    ASSERT_NE(trace, nullptr);
+    bb::pm4::RegisterMirror regs;
+    std::vector<std::uint32_t> buf;
+    packet(buf, IT_DISPATCH_DIRECT, {1, 1, 1, 1});
+    const bb::pm4::Packet dispatch{buf[0], std::span(buf).subspan(1)};
+    trace->set_source(2);
+    trace->packet(dispatch, regs);
+    trace->set_source(-1);
+    trace->packet(dispatch, regs);
+    trace.reset();
+    const std::string text = read(path);
+    EXPECT_NE(text.find("frame 1 ring2: dispatch"), std::string::npos) << text;
+    EXPECT_NE(text.find("frame 1: dispatch"), std::string::npos) << text;
+}
+
 TEST(GpuTrace, NoFrameEndWithoutTheMark) {
     const auto path = temp_path("bb_gpu_trace_b.txt");
     auto trace = GpuTrace::open(path);

@@ -29,6 +29,9 @@ public:
 
     // A packet that ran, with the register mirror as it is after the packet.
     void packet(const Packet& packet, const RegisterMirror& regs);
+    // The stream the next packets come from: a compute ring index, or -1 for a submitted one.
+    // Lines of a ring stream read "frame N ringK:".
+    void set_source(int ring) { ring_ = ring; }
     // Closes the frame: its packet counts by opcode, then flushes the file.
     void end_frame();
 
@@ -40,6 +43,7 @@ public:
 private:
     std::FILE* sink_;
     std::uint64_t frame_ = 0;
+    int ring_ = -1;
     std::uint64_t draws_ = 0;
     std::uint64_t dispatches_ = 0;
     std::array<std::uint32_t, 256> opcodes_{};
