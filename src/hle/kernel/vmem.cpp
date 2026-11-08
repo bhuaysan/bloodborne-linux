@@ -588,6 +588,12 @@ std::int32_t map_anonymous_named(void** address, std::uint64_t length, int prot,
     if (const int error = vmem::map(m, out)) {
         return sce_fail(error);
     }
+    // Flexible memory is not direct memory, so the GPU memory mirror doesn't hold it. Which of
+    // these mappings the GPU reads is open until a run shows it.
+    if ((prot & vmem::prot_extra) == vmem::prot_extra) {
+        log(LogLevel::info, "flexible memory {:#x}-{:#x} '{}' mapped with protection {:#x}", out,
+            out + length, m.name, prot);
+    }
     *address = reinterpret_cast<void*>(out);
     return 0;
 }

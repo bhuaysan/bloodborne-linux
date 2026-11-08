@@ -113,6 +113,12 @@ pm4::GpuThread& gpu_thread();
 // gpu_thread(). False if the file can't be created or a trace is already on.
 bool enable_gpu_trace(const std::filesystem::path& path);
 
+// The device address of the GPU memory mirror's bias table (MemoryMirror::bias_table()), or 0
+// when there is no mirror. The draw and dispatch recording puts it into the draw block's
+// address_bias field (offset 64). bb-run sets it before the game starts.
+void set_bias_table(std::uint64_t address);
+std::uint64_t bias_table();
+
 // NID zwY0YV91TTI, sceGnmSubmitCommandBuffers. Submits `count` draw command buffers (addresses and
 // sizes in bytes) and as many optional constant command buffers (null at 0x26b0c23). Called from
 // 12 sites, e.g. 0x1094a02 and 0x26b0c23. Returns 0.

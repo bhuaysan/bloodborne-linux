@@ -25,6 +25,19 @@ unsigned parse_timeout(std::string_view value) {
     return seconds;
 }
 
+// --mirror-size: whole GiB, from 2 to 32 in steps of 2 (MemoryMirror's buffers are 2 GiB).
+unsigned parse_mirror_size(std::string_view value) {
+    unsigned gib = 0;
+    const char* end = value.data() + value.size();
+    const auto [ptr, ec] = std::from_chars(value.data(), end, gib);
+    if (ec != std::errc{} || ptr != end || gib < 2 || gib > max_mirror_gib || gib % 2 != 0) {
+        throw std::invalid_argument(
+            std::format("--mirror-size: \"{}\" is not a number of GiB from 2 to {} in steps of 2",
+                        value, max_mirror_gib));
+    }
+    return gib;
+}
+
 }  // namespace
 
 RunOptions parse_run_options(std::span<const std::string_view> args) {
@@ -67,6 +80,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args) {
             options.headless = true;
         } else if (arg == "--gpu-trace") {
             options.gpu_trace = true;
+        } else if (arg == "--mirror-size") {
+            options.mirror_gib = parse_mirror_size(value());
         } else if (arg == "--device") {
             options.device = value();
         } else {
