@@ -13,10 +13,14 @@ ComputePipelineCache::ComputePipelineCache(const Device& device, CodeReader read
     : device_(device), read_(std::move(read)) {}
 
 ComputePipelineCache::~ComputePipelineCache() {
-    for (auto& [hash, entry] : entries_) {
-        vkDestroyPipeline(device_.handle(), entry.pipeline.pipeline, nullptr);
-        vkDestroyPipelineLayout(device_.handle(), entry.pipeline.layout, nullptr);
-    }
+    for (auto& [hash, entry] : entries_) destroy(entry);
+}
+
+void ComputePipelineCache::destroy(Entry& entry) {
+    vkDestroyPipeline(device_.handle(), entry.pipeline.pipeline, nullptr);
+    vkDestroyPipelineLayout(device_.handle(), entry.pipeline.layout, nullptr);
+    entry.pipeline.pipeline = VK_NULL_HANDLE;
+    entry.pipeline.layout = VK_NULL_HANDLE;
 }
 
 const ComputePipeline* ComputePipelineCache::get(const ComputeState& state, std::string& why) {
@@ -47,15 +51,21 @@ const ComputePipeline* ComputePipelineCache::get(const ComputeState& state, std:
                                   e.what());
     }
     why = entry.error;
-    Entry& stored = entries_.emplace(state.code_address, std::move(entry))->second;
+    const auto node = entries_.emplace(state.code_address, std::move(entry));
+    Entry& stored = node->second;
     if (!why.empty()) {
         common::log(common::LogLevel::warn, "gpu.vk", "{}", why);
         return nullptr;
     }
-    // A failing Vulkan call throws and leaves the entry with this error and what it created.
-    stored.error = "the pipeline's creation failed";
-    create(stored, *translation);
-    stored.error.clear();
+    // A failing Vulkan call may be transient (out of memory): drop the entry and what it
+    // created, so the next request tries again.
+    try {
+        create(stored, *translation);
+    } catch (...) {
+        destroy(stored);
+        entries_.erase(node);
+        throw;
+    }
     return &stored.pipeline;
 }
 
@@ -68,6 +78,7 @@ void ComputePipelineCache::create(Entry& entry, const gcn::Translation& translat
     layout.pushConstantRangeCount = 1;
     layout.pPushConstantRanges = &range;
     check(vkCreatePipelineLayout(device, &layout, nullptr, &p.layout), "vkCreatePipelineLayout");
+    if (create_hook_) create_hook_();
 
     auto module = make<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
     module.codeSize = translation.spirv.size() * sizeof(std::uint32_t);

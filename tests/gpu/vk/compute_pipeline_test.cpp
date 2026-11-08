@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -124,3 +125,22 @@ TEST_F(VkComputePipeline, KeepsTranslationErrorsButNotUnreadableCode) {
 }
 
 }  // namespace
+
+TEST_F(VkComputePipeline, ADeviceFailureIsNotKept) {
+    set_cs(regs_, program, 0, 64);
+    const auto state = compute_state(regs_, why_);
+    ASSERT_TRUE(state) << why_;
+    bool fail = true;
+    cache_->set_create_hook([&] {
+        if (fail) throw std::runtime_error("injected");
+    });
+    EXPECT_THROW(cache_->get(*state, why_), std::runtime_error);
+    EXPECT_EQ(cache_->size(), 0u);
+    // The next request tries again instead of answering with a kept error.
+    fail = false;
+    const ComputePipeline* pipeline = cache_->get(*state, why_);
+    ASSERT_NE(pipeline, nullptr) << why_;
+    EXPECT_NE(pipeline->pipeline, VK_NULL_HANDLE);
+    EXPECT_EQ(cache_->size(), 1u);
+    EXPECT_EQ(cache_->translations(), 2u);
+}
