@@ -767,7 +767,7 @@ Part 1 of #281: `src/gpu/vk/pipeline_state.*`, tests in `tests/gpu/vk/pipeline_s
 
 ### Items
 
-Each item is one issue of at most 500 lines of code and tests. "Design" items are written in the main thread.
+Each item is one issue of at most 500 lines of code and tests. "Design" items are written in the main thread. Items still open on 2026-11-08 were split into issues of one PR each and sorted into M4.1 to M4.6 ([roadmap](../roadmap.md)); the issues hold the current scope and dependencies.
 
 | # | Item | Depends on |
 |---|---|---|
@@ -790,7 +790,7 @@ Each item is one issue of at most 500 lines of code and tests. "Design" items ar
 | 31 (#287) | **Pipeline creation and cache.** Pipelines from the snapshot with the translated stages, dynamic rendering and dynamic state, cached by the snapshot. | 14, 26 |
 | 27 (#282) | **Draw execution.** The draw packets, index state and index buffers through the mirror, draw blocks, `draw`/`drawIndexed`. | 21, 31 |
 | 28 (#283) | **Textures and samplers.** T# and S# to images and samplers, upload and detile, re-upload when the hash changed (above), descriptor sets for the translator's bindings (one non-array binding per image and per sampler, one set per hardware stage, see "Image sampling"), and a draw-time error for a force-unnormalized S#. | 23, 27, #130 |
-| 29 (#284) | **First frame.** Submit-and-flip queues the flip behind its work; the presenter shows the display buffer's render target. Done when the game's first frame appears in the window. | 16, 17, 19, 20, 22, 23, 24, 25, 27 |
+| 29 (#284) | **First frame.** Submit-and-flip queues the flip behind its work; the presenter shows the display buffer's render target. Done when the game's first frame appears in the window. | 16, 17, 19, 20, 22, 23, 24, 25, 27, 28 |
 | 30 (#285) | **GPU trace.** `--gpu-trace`: packets, draws and dispatches per frame. | 18 |
 
 Items 11–14 can start at once; 15 and 16 after 12.
