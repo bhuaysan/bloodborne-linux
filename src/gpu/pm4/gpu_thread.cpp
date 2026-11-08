@@ -193,6 +193,11 @@ bool GpuThread::run_front(std::size_t index, bool& waiting) {
         trace_->set_source(ring != nullptr ? static_cast<int>(index - queue_count) : -1);
     }
     const RunResult result = parser_.run(*stream);
+    // Outside the lock, because the trace writes to disk and guest threads submit under it. Before
+    // the pop, so that wait_idle sees the frame closed.
+    if (trace_ != nullptr && result != RunResult::waiting && stream->ends_frame()) {
+        trace_->end_frame();
+    }
     {
         const std::scoped_lock lock(mutex_);
         if (ring != nullptr && ring->mapped) {
@@ -207,9 +212,6 @@ bool GpuThread::run_front(std::size_t index, bool& waiting) {
         if (result == RunResult::waiting) {
             waiting = true;
             return packets_.load(std::memory_order_relaxed) != packets;
-        }
-        if (trace_ != nullptr && stream->ends_frame()) {
-            trace_->end_frame();
         }
         queue.pop_front();
         ++stats_.finished;
