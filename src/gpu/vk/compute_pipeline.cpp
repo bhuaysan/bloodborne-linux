@@ -1,0 +1,90 @@
+#include "gpu/vk/compute_pipeline.hpp"
+
+#include <format>
+#include <utility>
+
+#include "common/log.hpp"
+#include "gpu/gcn/gcn.hpp"
+#include "gpu/vk/device.hpp"
+
+namespace bb::vk {
+
+ComputePipelineCache::ComputePipelineCache(const Device& device, CodeReader read)
+    : device_(device), read_(std::move(read)) {}
+
+ComputePipelineCache::~ComputePipelineCache() {
+    for (auto& [hash, entry] : entries_) {
+        vkDestroyPipeline(device_.handle(), entry.pipeline.pipeline, nullptr);
+        vkDestroyPipelineLayout(device_.handle(), entry.pipeline.layout, nullptr);
+    }
+}
+
+const ComputePipeline* ComputePipelineCache::get(const ComputeState& state, std::string& why) {
+    const auto [first, last] = entries_.equal_range(state.code_address);
+    for (auto it = first; it != last; ++it) {
+        if (it->second.state == state) {
+            why = it->second.error;
+            return it->second.pipeline.pipeline != VK_NULL_HANDLE ? &it->second.pipeline : nullptr;
+        }
+    }
+
+    // Unreadable code isn't kept: the program may be mapped by the next request.
+    const auto code = read_(state.code_address);
+    if (code.empty()) {
+        why = std::format("no readable code at {:#x}", state.code_address);
+        return nullptr;
+    }
+    Entry entry{state, {}, {}};
+    std::optional<gcn::Translation> translation;
+    try {
+        ++translations_;
+        translation = gcn::translate(code, {}, state.key);
+        if (!translation->interface.images.empty()) {
+            entry.error = "images and samplers are not supported yet";
+        }
+    } catch (const gcn::GcnError& e) {
+        entry.error = std::format("the CS at {:#x} doesn't translate: {}", state.code_address,
+                                  e.what());
+    }
+    why = entry.error;
+    Entry& stored = entries_.emplace(state.code_address, std::move(entry))->second;
+    if (!why.empty()) {
+        common::log(common::LogLevel::warn, "gpu.vk", "{}", why);
+        return nullptr;
+    }
+    // A failing Vulkan call throws and leaves the entry with this error and what it created.
+    stored.error = "the pipeline's creation failed";
+    create(stored, *translation);
+    stored.error.clear();
+    return &stored.pipeline;
+}
+
+void ComputePipelineCache::create(Entry& entry, const gcn::Translation& translation) {
+    const VkDevice device = device_.handle();
+    ComputePipeline& p = entry.pipeline;
+    p.interface = translation.interface;
+    const VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, compute_push_size};
+    auto layout = make<VkPipelineLayoutCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+    layout.pushConstantRangeCount = 1;
+    layout.pPushConstantRanges = &range;
+    check(vkCreatePipelineLayout(device, &layout, nullptr, &p.layout), "vkCreatePipelineLayout");
+
+    auto module = make<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
+    module.codeSize = translation.spirv.size() * sizeof(std::uint32_t);
+    module.pCode = translation.spirv.data();
+    VkShaderModule handle = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(device, &module, nullptr, &handle), "vkCreateShaderModule");
+    auto info = make<VkComputePipelineCreateInfo>(VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO);
+    info.stage = make<VkPipelineShaderStageCreateInfo>(
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+    info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    info.stage.module = handle;
+    info.stage.pName = "main";
+    info.layout = p.layout;
+    const VkResult result =
+        vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &p.pipeline);
+    vkDestroyShaderModule(device, handle, nullptr);
+    check(result, "vkCreateComputePipelines");
+}
+
+}  // namespace bb::vk

@@ -40,6 +40,13 @@ struct PipelineKey {
     bool operator==(const PipelineKey&) const = default;
 };
 
+// The compute state of a dispatch: the program and its ShaderKey, from the CS registers.
+struct ComputeState {
+    std::uint64_t code_address = 0;  // COMPUTE_PGM_LO/HI
+    gcn::ShaderKey key;
+    bool operator==(const ComputeState&) const = default;
+};
+
 // The state a draw sets on the command buffer (core dynamic state in Vulkan 1.3).
 struct DynamicState {
     VkViewport viewport{};
@@ -55,6 +62,11 @@ struct DrawState {
 // Vulkan viewport). `quad_control` is the device flag of the pixel key.
 std::optional<DrawState> draw_state(const pm4::RegisterMirror& regs, bool quad_control,
                                     std::string& why);
+
+// The snapshot of a dispatch: the program address (COMPUTE_PGM_LO/HI) and the key from
+// COMPUTE_PGM_RSRC1/2 and COMPUTE_NUM_THREAD_X/Y/Z (docs/design/graphics.md, item 25). The
+// push offset is 0. Nothing for a zero program address, with `why` saying so.
+std::optional<ComputeState> compute_state(const pm4::RegisterMirror& regs, std::string& why);
 
 // VGT_PRIMITIVE_TYPE (shadPS4's table); nothing for the types without an equivalent yet.
 std::optional<VkPrimitiveTopology> topology(std::uint32_t prim_type);

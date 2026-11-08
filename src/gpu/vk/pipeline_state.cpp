@@ -103,6 +103,21 @@ std::optional<VkPrimitiveTopology> topology(std::uint32_t prim_type) {
     }
 }
 
+std::optional<ComputeState> compute_state(const pm4::RegisterMirror& regs, std::string& why) {
+    ComputeState s;
+    s.code_address = regs.program_address(pm4::Stage::cs);
+    if (s.code_address == 0) {
+        why = "COMPUTE_PGM_LO/HI is 0";
+        return std::nullopt;
+    }
+    s.key = {.stage = gcn::Stage::compute,
+             .pgm_rsrc1 = regs.rsrc1(pm4::Stage::cs),
+             .pgm_rsrc2 = regs.rsrc2(pm4::Stage::cs),
+             .num_threads = {regs.num_threads(0), regs.num_threads(1), regs.num_threads(2)},
+             .push_offset = 0};
+    return s;
+}
+
 std::optional<DrawState> draw_state(const pm4::RegisterMirror& regs, bool quad_control,
                                     std::string& why) {
     DrawState s;

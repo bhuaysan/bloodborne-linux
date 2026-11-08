@@ -803,7 +803,7 @@ Each item is one issue of at most 500 lines of code and tests. "Design" items ar
 | 22 (#277) | **Window and presentation.** SDL3 window, swapchain, the video-out flip thread presenting a test image, flip and vblank events unchanged. | 11, 14 |
 | 23 (#278) | **Tiling.** Tile-mode tables and the compute detiler/tiler, tested against our own tiled data. | 14 |
 | 24 (#279) | **Render targets and depth.** `CB_COLOR*` and `DB_*` to cached images, formats table, clears, dynamic rendering. shadPS4 reads the CB/DB extent from a `0xc0001000` `NOP` hint after those register writes; the game writes it (above). Split in five (above). | 14, 15 |
-| 25 (#280) | **Dispatches.** CS state to a compute pipeline, `DISPATCH_DIRECT` and `DISPATCH_INDIRECT` through the translator and the mirror. | 16, 19, 21 |
+| 25 (#280, #345) | **Dispatches.** CS state to a compute pipeline (#280, as built below), `DISPATCH_DIRECT` and `DISPATCH_INDIRECT` through the translator and the mirror (#345). | 16, 19, 21 |
 | 26 (#281) | **Graphics pipeline state.** Draw snapshot, ShaderKey per stage with the fetch code, blend, depth, stencil, raster and topology tables, clip space. Split in two (above): part 1 the stages, topology and clip space, part 2 raster, blend, depth, stencil and the rest of the dynamic state. | 24, #129 |
 | 31 (#287) | **Pipeline creation and cache.** Pipelines from the snapshot with the translated stages, dynamic rendering and dynamic state, cached by the snapshot. | 14, 26 |
 | 27 (#282) | **Draw execution.** The draw packets, index state and index buffers through the mirror, draw blocks, `draw`/`drawIndexed`. | 21, 31 |
@@ -822,3 +822,7 @@ Items 11–14 can start at once; 15 and 16 after 12.
 - ~~Which clip-space conventions apply?~~ Decided with item 26 against the game's own state code ("Pipeline state (item 26, as built)").
 - ~~How does each graphics stage find its own draw block?~~ A push-constant offset per stage in `ShaderKey` (VS at 0, PS at 8), one 16-byte range for both ("Per-draw data", #281).
 - Does the backend require the vertex stage in `subgroupSupportedStages`? Lavapipe doesn't list it, RADV does; a VS with cross-lane operations needs it, so either the device choice requires it or the translator's error path rejects such a VS on a device without it.
+
+### Compute pipelines (item 25, as built in #280)
+
+`compute_state(regs, why)` (`pipeline_state.hpp`) snapshots the CS registers into a `ComputeState`: the program address (`COMPUTE_PGM_LO/HI`) and a `ShaderKey` with `COMPUTE_PGM_RSRC1/2` and `COMPUTE_NUM_THREAD_X/Y/Z`, push offset 0. A zero program address gives nothing. `ComputePipelineCache` (`compute_pipeline.hpp`) translates the program read through a `CodeReader` and makes a pipeline whose layout has one 8-byte compute push constant (the draw block's address) and no descriptor sets yet (textures item, 28). The cache is keyed by the whole state, so an equal state returns the same pipeline; user data is not part of the key. Translation errors and shaders with images are kept as errors, unreadable code is not. Recording dispatches is #345.
