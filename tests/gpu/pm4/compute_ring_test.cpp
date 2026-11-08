@@ -5,7 +5,9 @@
 #include <chrono>
 #include <cstdint>
 #include <initializer_list>
+#include <future>
 #include <mutex>
+#include <thread>
 #include <span>
 #include <vector>
 
@@ -214,6 +216,41 @@ TEST(ComputeRing, WaitsAtItsPositionAndUnmapDropsTheRest) {
     EXPECT_EQ(read_offset(f.read_pointer), 4u);
     EXPECT_EQ(f.gpu.stats().finished, 1u);
     EXPECT_EQ(f.gpu.stats().errors, 0u);
+}
+
+// Unmapping while the thread is inside a run of the ring waits for the run to return.
+TEST(ComputeRing, UnmapWaitsForARunUnderWay) {
+    std::promise<void> entered_promise;
+    std::promise<void> release_promise;
+    auto release = release_promise.get_future();
+    std::atomic<bool> unmapped = false;
+    std::atomic<bool> ring_read_after_unmap = false;
+    std::array<std::uint32_t, ring_dwords> ring{};
+    std::uint32_t read_pointer = 0;
+    GpuThread gpu({}, [&](std::uint32_t) {
+        entered_promise.set_value();
+        release.wait();
+        // Still inside the run: the ring must not have been given back yet.
+        if (unmapped) {
+            ring_read_after_unmap = true;
+        }
+    });
+    ASSERT_EQ(gpu.map_ring(ring, &read_pointer, 3), 0);
+    put(ring, 0, IT_RELEASE_MEM__CI__VI, {0, 3u << 24, 0, 0, 0, 0});
+    ASSERT_TRUE(gpu.ring_doorbell(0, 7));
+    ASSERT_EQ(entered_promise.get_future().wait_for(5s), std::future_status::ready);
+
+    std::thread unmapper([&] {
+        EXPECT_TRUE(gpu.unmap_ring(0));
+        unmapped = true;
+    });
+    std::this_thread::sleep_for(100ms);
+    EXPECT_FALSE(unmapped);  // the run is still under way
+    release_promise.set_value();
+    unmapper.join();
+    EXPECT_FALSE(ring_read_after_unmap);
+    EXPECT_TRUE(gpu.wait_idle(5s));
+    EXPECT_EQ(read_offset(read_pointer), 0u);  // no write-back after the unmap
 }
 
 }  // namespace

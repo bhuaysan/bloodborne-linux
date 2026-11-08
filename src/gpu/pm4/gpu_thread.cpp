@@ -84,14 +84,17 @@ int GpuThread::map_ring(std::span<const std::uint32_t> ring, std::uint32_t* read
 
 bool GpuThread::unmap_ring(int ring) {
     {
-        const std::scoped_lock lock(mutex_);
+        std::unique_lock lock(mutex_);
         if (ring < 0 || static_cast<std::size_t>(ring) >= ring_count || !rings_[ring].mapped) {
             return false;
         }
         rings_[ring].mapped = false;
         common::log(common::LogLevel::info, channel, "compute ring {} unmapped", ring);
+        work_.notify_all();  // the thread drops the ring's streams
+        // The guest may free the ring once this returns, so a run reading it must have returned.
+        // Streams yield at waits, so this is short.
+        idle_.wait(lock, [&] { return running_ring_ != ring; });
     }
-    work_.notify_all();  // the thread drops the ring's streams
     return true;
 }
 
@@ -187,6 +190,7 @@ bool GpuThread::run_front(std::size_t index, bool& waiting) {
             return true;
         }
         stream = &queue.front();
+        running_ring_ = ring != nullptr ? static_cast<int>(index - queue_count) : -1;
     }
     const std::uint64_t packets = packets_.load(std::memory_order_relaxed);
     if (trace_ != nullptr) {
@@ -200,6 +204,9 @@ bool GpuThread::run_front(std::size_t index, bool& waiting) {
     }
     {
         const std::scoped_lock lock(mutex_);
+        // The run has returned: an unmap waiting for it may go on, and the ring is not read again.
+        running_ring_ = -1;
+        idle_.notify_all();
         if (ring != nullptr && ring->mapped) {
             // The read offset: the stream's position in the ring, wrapped at its end. A failed
             // stream is dropped, so the offset moves past all of it, as for a finished one.

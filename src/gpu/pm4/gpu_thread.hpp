@@ -74,7 +74,8 @@ public:
     int map_ring(std::span<const std::uint32_t> ring, std::uint32_t* read_pointer,
                  std::uint32_t interrupt_source);
     // Unmaps a ring: its queued streams are dropped and its read pointer no longer written. A run
-    // under way finishes. False if `ring` isn't mapped.
+    // under way finishes first: this returns only once the thread no longer reads the ring, so the
+    // caller may free it. Don't call it from the parser's callbacks. False if `ring` isn't mapped.
     bool unmap_ring(int ring);
     // The game wrote the ring up to `write_offset` dwords (modulo its size): queues the dwords
     // from the previous write offset on. False if `ring` isn't mapped or the offset is past it.
@@ -108,11 +109,12 @@ private:
 
     mutable std::mutex mutex_;
     std::condition_variable work_;  // a submission arrived, or stop
-    std::condition_variable idle_;  // a stream finished
+    std::condition_variable idle_;  // a stream finished, or a run returned
     // Submissions only append, so the front stream stays in place while the thread runs it
     // outside the lock (a deque keeps references on push_back).
     std::array<std::deque<Stream>, queue_count + ring_count> queues_;
     std::array<Ring, ring_count> rings_;
+    int running_ring_ = -1;  // the ring whose stream the thread is running, else -1
     Stats stats_;
     GpuTrace* trace_;
     std::atomic<std::uint64_t> packets_{0};
