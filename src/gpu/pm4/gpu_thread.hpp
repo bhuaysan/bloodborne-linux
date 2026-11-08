@@ -9,7 +9,7 @@
 // command buffers on the constant engine; the counters in the parser order the two. Each mapped
 // compute ring is a further queue on the compute engine: a doorbell queues the ring from the last
 // written offset to the new one (two streams when it wraps), and the thread writes the read
-// offset back to the game after each run (docs/design/graphics.md, "Compute queues").
+// offset back to the game after each run (docs/design/graphics.md, second-wave item 20).
 #pragma once
 
 #include <array>
