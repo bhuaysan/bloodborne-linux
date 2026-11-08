@@ -31,7 +31,9 @@ namespace bb::pm4 {
 enum class Queue : std::uint8_t { graphics, constant };
 inline constexpr std::size_t queue_count = 2;
 // Compute rings: 7 pipes of 8 queues (shadPS4's limit; pipe 7 belongs to the system).
-inline constexpr std::size_t ring_count = 56;
+inline constexpr std::size_t compute_pipes = 7;
+inline constexpr std::size_t queues_per_pipe = 8;
+inline constexpr std::size_t ring_count = compute_pipes * queues_per_pipe;
 
 class GpuThread {
 public:

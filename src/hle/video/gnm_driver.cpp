@@ -29,9 +29,6 @@ constexpr std::string_view channel = "hle.libSceGnmDriver";
 constexpr std::uint64_t logged_submits = 3;
 
 std::atomic<std::uint64_t> submits{0};
-// Compute pipes and queues per pipe the map accepts (shadPS4: pipe 7 belongs to the system).
-constexpr std::uint32_t compute_pipes = 7;
-constexpr std::uint32_t queues_per_pipe = 8;
 pm4::GpuTrace* gpu_trace = nullptr;  // set before the GPU thread starts, then never changed
 
 // The equeue events of sceGnmAddEqEvent: (queue, interrupt source) with the user data.
@@ -169,9 +166,9 @@ std::int32_t gnm_map_compute_queue(std::uint32_t pipe, std::uint32_t queue, cons
                                    std::uint32_t ring_dwords, std::uint32_t* read_pointer) {
     const auto ring_address = reinterpret_cast<std::uintptr_t>(ring);
     std::int32_t result = 0;
-    if (pipe >= compute_pipes) {
+    if (pipe >= pm4::compute_pipes) {
         result = compute_queue_invalid_pipe;
-    } else if (queue >= queues_per_pipe) {
+    } else if (queue >= pm4::queues_per_pipe) {
         result = compute_queue_invalid_queue;
     } else if (ring_address % 256 != 0) {
         result = compute_queue_invalid_ring;
