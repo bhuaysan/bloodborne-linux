@@ -83,7 +83,8 @@ struct DeviceProperties {
 constexpr VkBufferCreateFlags mirror_buffer_flags =
     VK_BUFFER_CREATE_SPARSE_BINDING_BIT | VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT;
 constexpr VkBufferUsageFlags mirror_buffer_usage =
-    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+    VK_BUFFER_USAGE_TRANSFER_SRC_BIT;  // tests copy out of the mirror
 
 // One VkQueue. Vulkan wants calls on a queue externally synchronized: hold `lock` around them.
 struct Queue {

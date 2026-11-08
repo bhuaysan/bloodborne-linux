@@ -41,7 +41,8 @@ struct MirrorOptions {
 // blocks is bound.
 //
 // Thread-safe. Calls wait for their binds on the device's sparse queue. Vulkan failures throw
-// std::runtime_error and leave what was bound before bound.
+// std::runtime_error. A failed bind() leaves the mirror as it was; a failed unbind() may leave
+// blocks bound that it meant to unbind.
 class MemoryMirror {
 public:
     // Nothing when the device can't hold the mirror or /dev/udmabuf doesn't open; `why` then says
@@ -69,6 +70,8 @@ public:
     void unbind(std::uintptr_t address, std::uint64_t length, std::uint64_t offset);
     // Buffer k of the mirror (window offsets k * 2 GiB), for tests that copy from it.
     VkBuffer buffer(std::size_t k) const { return buffers_.at(k); }
+    // Entry `e` of the bias table as the host wrote it, for tests.
+    std::uint64_t bias(std::size_t e) const { return table_map_[e]; }
     // The number of live imports, for tests.
     std::size_t imports() const;
 
@@ -76,7 +79,7 @@ private:
     struct Block {
         std::uint64_t offset = 0;  // in the memfd
         std::uint64_t pages = 0;   // guest pages bound in it
-        std::uint64_t import = 0;  // the window offset of its import
+        std::uint64_t import = 0;  // the id of its import
     };
     struct Import {
         VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -86,7 +89,7 @@ private:
 
     explicit MemoryMirror(Device& device) : device_(device) {}
     VkDeviceMemory import(std::uint64_t offset, std::uint64_t length);
-    // Imports and binds `blocks`, by window offset. Needs mutex_.
+    // Imports and binds `blocks`, by window offset; all or, on a throw, none. Needs mutex_.
     void bind_new(const std::map<std::uint64_t, Block>& blocks);
     // Queues a bind of `memory` at `memory_offset` (or nothing) over window offsets
     // [window, window + length) in one buffer; submit() binds and waits.
@@ -97,6 +100,9 @@ private:
     // left; the caller frees the import's memory after submit(). Needs mutex_.
     void drop(std::map<std::uint64_t, Block>::iterator block, std::vector<VkDeviceMemory>& freed);
 
+    // Submits the queued unbinds, then frees `freed`, also when the submit throws.
+    void release(std::vector<VkDeviceMemory>& freed);
+
     Device& device_;
     int memfd_ = -1, udmabuf_ = -1;
     std::uintptr_t window_start_ = 0;
@@ -106,11 +112,13 @@ private:
     VkBuffer table_ = VK_NULL_HANDLE;
     VkDeviceMemory table_memory_ = VK_NULL_HANDLE;
     VkDeviceAddress table_address_ = 0;
+    const std::uint64_t* table_map_ = nullptr;
     VkFence fence_ = VK_NULL_HANDLE;
     PFN_vkGetMemoryFdPropertiesKHR fd_properties_ = nullptr;
     mutable std::mutex mutex_;
     std::map<std::uint64_t, Block> blocks_;    // bound blocks by window offset
-    std::map<std::uint64_t, Import> imports_;  // by the window offset of their first block
+    std::map<std::uint64_t, Import> imports_;  // by id, from next_import_
+    std::uint64_t next_import_ = 0;
     std::vector<std::vector<VkSparseMemoryBind>> pending_;  // per buffer, for submit()
 };
 

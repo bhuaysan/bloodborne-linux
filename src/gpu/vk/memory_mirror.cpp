@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 
 #include "common/log.hpp"
 #include "gpu/gcn/translate.hpp"
@@ -119,8 +120,9 @@ std::unique_ptr<MemoryMirror> MemoryMirror::create(Device& device, const MirrorO
     }
     m->table_memory_ = allocate(d, needs.size, *type);
     check(vkBindBufferMemory(d, m->table_, m->table_memory_, 0), "vkBindBufferMemory");
-    void* map = nullptr;
+    void* map = nullptr;  // stays mapped for bias()
     check(vkMapMemory(d, m->table_memory_, 0, VK_WHOLE_SIZE, 0, &map), "vkMapMemory");
+    m->table_map_ = static_cast<const std::uint64_t*>(map);
     for (std::uint64_t e = 0; e < gcn::bias_entries; ++e) {
         std::uint64_t k = (e - (options.window_start / mirror_buffer_size)) % gcn::bias_entries;
         k = k < count ? k : 0;
@@ -128,7 +130,6 @@ std::unique_ptr<MemoryMirror> MemoryMirror::create(Device& device, const MirrorO
                                    (options.window_start + k * mirror_buffer_size);
         std::memcpy(static_cast<std::byte*>(map) + 8 * e, &bias, sizeof bias);
     }
-    vkUnmapMemory(d, m->table_memory_);
     m->table_address_ = buffer_address(d, m->table_);
     common::log(LogLevel::info, channel, "memory mirror: {} GiB from {:#x}, blocks of {:#x}",
                 options.size >> 30, options.window_start, m->block_);
@@ -230,29 +231,44 @@ void MemoryMirror::submit() {
 }
 
 void MemoryMirror::bind_new(const std::map<std::uint64_t, Block>& blocks) {
-    for (auto it = blocks.begin(); it != blocks.end();) {
-        // A run: contiguous in the window and the memfd, inside one import_limit step.
-        auto end = std::next(it);
-        std::uint64_t length = block_;
-        while (end != blocks.end() && end->first == it->first + length &&
-               end->second.offset == it->second.offset + length &&
-               end->first % mirror_import_limit != 0) {
-            ++end;
-            length += block_;
+    std::vector<std::uint64_t> done;  // the blocks of this call that are bound
+    try {
+        for (auto it = blocks.begin(); it != blocks.end();) {
+            // A run: contiguous in the window and the memfd, inside one import_limit step.
+            auto end = std::next(it);
+            std::uint64_t length = block_;
+            while (end != blocks.end() && end->first == it->first + length &&
+                   end->second.offset == it->second.offset + length &&
+                   end->first % mirror_import_limit != 0) {
+                ++end;
+                length += block_;
+            }
+            const VkDeviceMemory memory = import(it->second.offset, length);
+            queue(it->first, length, memory, 0);
+            try {
+                submit();
+            } catch (...) {
+                vkFreeMemory(device_.handle(), memory, nullptr);
+                throw;
+            }
+            const std::uint64_t id = next_import_++;
+            imports_.emplace(id, Import{memory, it->second.offset, length, length / block_});
+            for (; it != end; ++it) {
+                blocks_.insert_or_assign(it->first, Block{it->second.offset, it->second.pages, id});
+                done.push_back(it->first);
+            }
         }
-        const VkDeviceMemory memory = import(it->second.offset, length);
-        queue(it->first, length, memory, 0);
+    } catch (...) {
+        // Undo the runs that were bound; the failure itself is the one to report.
         try {
-            submit();
+            std::vector<VkDeviceMemory> freed;
+            for (std::uint64_t at : done) {
+                drop(blocks_.find(at), freed);
+            }
+            release(freed);
         } catch (...) {
-            vkFreeMemory(device_.handle(), memory, nullptr);
-            throw;
         }
-        const std::uint64_t key = it->first;
-        imports_.emplace(key, Import{memory, it->second.offset, length, length / block_});
-        for (; it != end; ++it) {
-            blocks_.insert_or_assign(it->first, Block{it->second.offset, it->second.pages, key});
-        }
+        throw;
     }
 }
 
@@ -267,6 +283,7 @@ bool MemoryMirror::bind(std::uintptr_t address, std::uint64_t length, std::uint6
     }
     const std::scoped_lock lock(mutex_);
     std::map<std::uint64_t, Block> fresh;
+    std::vector<std::pair<Block*, std::uint64_t>> shared;  // counted once the new blocks are bound
     for (std::uint64_t at = round_down(window, block_); at < window + length; at += block_) {
         const std::uint64_t pages =
             (std::min(at + block_, window + length) - std::max(at, window)) / guest_page;
@@ -275,14 +292,17 @@ bool MemoryMirror::bind(std::uintptr_t address, std::uint64_t length, std::uint6
         if (it == blocks_.end()) {
             fresh.emplace(at, Block{memfd, pages, 0});
         } else if (it->second.offset == memfd) {
-            it->second.pages += pages;
+            shared.emplace_back(&it->second, pages);
         } else {
             common::log(LogLevel::warn, channel,
                         "memory mirror: block {:#x} stays bound to memfd offset {:#x}, not {:#x}",
                         window_start_ + at, it->second.offset, memfd);
         }
     }
-    bind_new(fresh);
+    bind_new(fresh);  // map nodes keep their addresses, so `shared` stays valid
+    for (auto& [block, pages] : shared) {
+        block->pages += pages;
+    }
     return true;
 }
 
@@ -315,7 +335,23 @@ void MemoryMirror::unbind(std::uintptr_t address, std::uint64_t length, std::uin
         }
         it = next;
     }
-    submit();  // the imports go only once nothing is bound to them
+    release(freed);
+}
+
+void MemoryMirror::release(std::vector<VkDeviceMemory>& freed) {
+    try {
+        submit();  // the imports go only once nothing is bound to them
+    } catch (...) {
+        // The maps have forgotten them: free them once the queue is idle, whatever it bound.
+        {
+            const std::scoped_lock lock(device_.sparse().lock);
+            vkQueueWaitIdle(device_.sparse().handle);
+        }
+        for (VkDeviceMemory memory : freed) {
+            vkFreeMemory(device_.handle(), memory, nullptr);
+        }
+        throw;
+    }
     for (VkDeviceMemory memory : freed) {
         vkFreeMemory(device_.handle(), memory, nullptr);
     }

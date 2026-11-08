@@ -137,6 +137,13 @@ TEST_F(VkMemoryMirror, BindsAndUnbinds) {
     EXPECT_EQ(mirror_->block(), 64 * kib);
     EXPECT_EQ(mirror_->size(), mirror_buffer_size);
     EXPECT_NE(mirror_->bias_table(), 0u);
+    // Every bias takes the guest address to buffer 0's address (one buffer: steps repeat it).
+    auto address = make<VkBufferDeviceAddressInfo>(VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO);
+    address.buffer = mirror_->buffer(0);
+    const std::uint64_t bias = vkGetBufferDeviceAddress(device_->handle(), &address) - window_start;
+    for (std::size_t e = 0; e < 16; ++e) {
+        EXPECT_EQ(mirror_->bias(e), bias) << e;
+    }
     // Window offset 0x30000 views memfd offset 0x10000: the GPU reads what the memfd holds.
     const std::uintptr_t at = window_start + 0x30000;
     ASSERT_TRUE(mirror_->bind(at, 64 * kib, 0x10000));
@@ -148,6 +155,7 @@ TEST_F(VkMemoryMirror, BindsAndUnbinds) {
     EXPECT_EQ(gpu_read(at + 20), 0x1234u);
     mirror_->unbind(at, 64 * kib, 0x10000);
     EXPECT_EQ(mirror_->imports(), 0u);
+    EXPECT_NE(gpu_read(at + 20), 0x1234u);  // the range is gone from the buffer
 }
 
 TEST_F(VkMemoryMirror, RejectsBadRanges) {
@@ -199,6 +207,51 @@ TEST_F(VkMemoryMirror, ContiguousBlocksShareAnImportAndFreeItWithTheLast) {
     mirror_->unbind(window_start + 0x30000, 64 * kib, 0x30000);
     EXPECT_EQ(mirror_->imports(), 1u);
     mirror_->unbind(window_start + 0x100000, 64 * kib, 0x80000);
+    EXPECT_EQ(mirror_->imports(), 0u);
+}
+
+TEST_F(VkMemoryMirror, RebindingTheHeadAfterAPartialUnbind) {
+    // The first block of an import goes and comes back while the rest stays bound.
+    ASSERT_TRUE(mirror_->bind(window_start, 256 * kib, 0));
+    mirror_->unbind(window_start, 64 * kib, 0);
+    EXPECT_EQ(mirror_->imports(), 1u);
+    ASSERT_TRUE(mirror_->bind(window_start, 64 * kib, 0));
+    EXPECT_EQ(mirror_->imports(), 2u);
+    EXPECT_EQ(gpu_read(window_start + 8), pattern(8));
+    EXPECT_EQ(gpu_read(window_start + 0x30008), pattern(0x30008));
+    mirror_->unbind(window_start, 256 * kib, 0);
+    EXPECT_EQ(mirror_->imports(), 0u);
+}
+
+TEST_F(VkMemoryMirror, SplitsARunAtTheImportLimit) {
+    const std::uintptr_t at = window_start + mirror_import_limit - 64 * kib;
+    ASSERT_TRUE(mirror_->bind(at, 128 * kib, 0x10000));
+    EXPECT_EQ(mirror_->imports(), 2u);
+    EXPECT_EQ(gpu_read(at + 4), pattern(0x10004));
+    EXPECT_EQ(gpu_read(at + 0x10004), pattern(0x20004));
+    mirror_->unbind(at, 128 * kib, 0x10000);
+    EXPECT_EQ(mirror_->imports(), 0u);
+}
+
+TEST_F(VkMemoryMirror, ABlockKeepsItsFirstMemfdBlock) {
+    ASSERT_TRUE(mirror_->bind(window_start, 64 * kib, 0));
+    ASSERT_TRUE(mirror_->bind(window_start, 64 * kib, 0x10000));  // congruent, another block
+    EXPECT_EQ(mirror_->imports(), 1u);
+    EXPECT_EQ(gpu_read(window_start + 4), pattern(4));
+    mirror_->unbind(window_start, 64 * kib, 0x10000);  // not its view: changes nothing
+    EXPECT_EQ(mirror_->imports(), 1u);
+    mirror_->unbind(window_start, 64 * kib, 0);
+    EXPECT_EQ(mirror_->imports(), 0u);
+}
+
+TEST_F(VkMemoryMirror, AFailedBindLeavesNothingBehind) {
+    // The second block is past the memfd's end, so its import fails after the first one's.
+    const std::uintptr_t at = window_start + 0x100000;
+    ASSERT_TRUE(mirror_->bind(at - 64 * kib, 64 * kib, 0xf0000));
+    // A shared block that the failing bind would count, and a good run before the bad one.
+    EXPECT_THROW(mirror_->bind(at - 64 * kib, 192 * kib, 0xf0000), std::runtime_error);
+    EXPECT_EQ(mirror_->imports(), 1u);
+    mirror_->unbind(at - 64 * kib, 64 * kib, 0xf0000);  // one unbind frees it: no count leaked
     EXPECT_EQ(mirror_->imports(), 0u);
 }
 
