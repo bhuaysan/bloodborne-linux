@@ -92,7 +92,11 @@ void MirrorObserver::released(std::uint64_t offset, std::uint64_t length) {
         take(p.address, p.address + p.length);
     }
     try {
-        mirror_.release(offset, length);
+        // The mirror drops whole blocks: a neighbouring mapping that shares one loses its pages
+        // there too, so forget them as well (a late unmap must not unbind them).
+        for (const auto& [address, size] : mirror_.release(offset, length)) {
+            take(address, address + size);
+        }
         ++releases_;
     } catch (const std::exception& e) {
         common::log(LogLevel::error, channel, "release {:#x}-{:#x}: {}", offset, offset + length,

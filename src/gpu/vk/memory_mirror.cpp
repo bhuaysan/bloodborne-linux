@@ -357,13 +357,15 @@ void MemoryMirror::release(std::vector<VkDeviceMemory>& freed) {
     }
 }
 
-void MemoryMirror::release(std::uint64_t offset, std::uint64_t length) {
+std::vector<std::pair<std::uintptr_t, std::uint64_t>> MemoryMirror::release(
+    std::uint64_t offset, std::uint64_t length) {
     const std::scoped_lock lock(mutex_);
     // The imports that hold part of the range are freed whole, so every block of theirs goes.
     // The blocks that don't touch the range come back.
     std::map<std::uint64_t, Block> survivors;
     std::vector<VkDeviceMemory> freed;
     std::vector<std::uint64_t> hit;
+    std::vector<std::pair<std::uintptr_t, std::uint64_t>> dropped;
     for (const auto& [id, i] : imports_) {
         if (i.offset < offset + length && offset < i.offset + i.length) {
             hit.push_back(id);
@@ -379,6 +381,7 @@ void MemoryMirror::release(std::uint64_t offset, std::uint64_t length) {
                 common::log(LogLevel::warn, channel,
                             "memory mirror: memfd {:#x}-{:#x} released while bound at {:#x}",
                             offset, offset + length, window_start_ + it->first);
+                dropped.emplace_back(window_start_ + it->first, block_);
             }
             drop(it, freed);
         }
@@ -386,6 +389,7 @@ void MemoryMirror::release(std::uint64_t offset, std::uint64_t length) {
     }
     release(freed);
     bind_new(survivors);
+    return dropped;
 }
 
 }  // namespace bb::vk

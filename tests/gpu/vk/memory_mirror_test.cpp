@@ -328,4 +328,19 @@ TEST_F(VkMemoryMirror, TheObserverForgetsWhatReleaseTook) {
     EXPECT_EQ(mirror_->imports(), 0u);
 }
 
+// Two mappings that share a 64 KiB block: releasing the memfd range of one drops the block, and
+// the observer forgets the neighbour's pages in it, so its late unmap unbinds nothing there.
+TEST_F(VkMemoryMirror, TheObserverForgetsASharedBlockOfANeighbour) {
+    bb::tools::MirrorObserver observer(*mirror_);
+    observer.mapped(window_start, 0x4000, 0);
+    observer.mapped(window_start + 0x4000, 0x4000, 0x4000);
+    EXPECT_EQ(observer.ranges(), 2u);
+    observer.released(0, 0x4000);
+    EXPECT_EQ(observer.releases(), 1u);
+    EXPECT_EQ(observer.ranges(), 0u);  // the neighbour went with the shared block
+    observer.unmapped(window_start + 0x4000, 0x4000, 0x4000);
+    EXPECT_EQ(observer.unbinds(), 0u);
+    EXPECT_EQ(mirror_->imports(), 0u);
+}
+
 }  // namespace

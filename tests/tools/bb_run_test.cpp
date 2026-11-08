@@ -312,8 +312,6 @@ TEST(BbRunGame, ReachesTheMainLoop) {
     EXPECT_NE(read_log_file(dir).find("run: main loop reached after "), std::string::npos);
 }
 
-}  // namespace
-
 // The GPU memory mirror follows the game's direct mappings: the run binds them and ends cleanly
 // (a machine without a suitable Vulkan device logs why and runs without a mirror).
 TEST(BbRunGame, MirrorsDirectMemory) {
@@ -329,5 +327,12 @@ TEST(BbRunGame, MirrorsDirectMemory) {
     EXPECT_NE(r.output.find("GPU memory mirror of 4 GiB"), std::string::npos) << r.output;
     EXPECT_NE(r.output.find(" binds, "), std::string::npos) << r.output;
     EXPECT_EQ(r.output.find("run: mirror: 0 binds"), std::string::npos) << r.output;
-    EXPECT_EQ(r.output.find("[bb-run] mirror: "), std::string::npos) << r.output;  // no error lines
+    // No error line of the mirror; the game's threads write them ("error [game main] mirror: ...").
+    std::istringstream lines(r.output);
+    for (std::string line; std::getline(lines, line);) {
+        EXPECT_FALSE(line.starts_with("error [") && line.find("] mirror: ") != std::string::npos)
+            << line;
+    }
 }
+
+}  // namespace

@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -70,8 +71,11 @@ public:
     void unbind(std::uintptr_t address, std::uint64_t length, std::uint64_t offset);
     // Direct memory [offset, offset + length) is about to be released: unbinds every block that
     // views it and frees the imports that hold it (they pin its pages). The other blocks of
-    // those imports are bound again. Bound blocks that view the range are logged.
-    void release(std::uint64_t offset, std::uint64_t length);
+    // those imports are bound again. Bound blocks that view the range are logged. Returns the
+    // window ranges (address, length) of the blocks it dropped: whole blocks, so also the pages
+    // of a neighbouring mapping that shares a block with the range.
+    std::vector<std::pair<std::uintptr_t, std::uint64_t>> release(std::uint64_t offset,
+                                                                  std::uint64_t length);
     // Buffer k of the mirror (window offsets k * 2 GiB), for tests that copy from it.
     VkBuffer buffer(std::size_t k) const { return buffers_.at(k); }
     // Entry `e` of the bias table as the host wrote it, for tests.
