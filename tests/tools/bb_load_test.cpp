@@ -163,8 +163,8 @@ TEST(BbLoadGame, PrintsTheLoadSet) {
     // src/hle/kernel. Bounds rather than exact numbers, so that each new kernel function
     // doesn't edit this line.
     EXPECT_TRUE(hle_at_least(modules[0].bindings["libkernel"], 80, 16));
-    // src/hle/net implements sceNetInit and sceNetPoolCreate.
-    EXPECT_EQ(modules[0].bindings["libSceNet"], "0 2 33 0");
+    // src/hle/net implements sceNetInit, sceNetPoolCreate and sceNetEpollWait.
+    EXPECT_EQ(modules[0].bindings["libSceNet"], "0 3 32 0");
 
     EXPECT_EQ(modules[1].header.at(0), "module     libSceFios2.prx id 2");
     EXPECT_EQ(modules[1].header.at(1), "base       0x156d4000");

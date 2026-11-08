@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <ctime>
 
 #include "common/log.hpp"
 #include "hle/hle.hpp"
@@ -59,6 +60,22 @@ std::int32_t http_template_set_string_pair(std::int32_t, const char*, const char
     return 0;
 }
 
+std::int32_t sceNetEpollWait(std::int32_t, void*, std::int32_t, std::int32_t timeout_usec) {
+    // Nothing ever becomes ready, so the wait lasts its whole timeout; a negative one is
+    // infinite. EINTR cuts a slice short and is harmless.
+    const auto sleep_nsec = [](std::int64_t sec, std::int64_t nsec) {
+        const timespec t{static_cast<time_t>(sec), static_cast<long>(nsec)};
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &t, nullptr);
+    };
+    if (timeout_usec < 0) {
+        for (;;) {
+            sleep_nsec(3600, 0);
+        }
+    }
+    sleep_nsec(timeout_usec / 1'000'000, (timeout_usec % 1'000'000) * 1000);
+    return 0;
+}
+
 std::int32_t sceNetCtlGetState(std::int32_t* state) {
     *state = 0;
     return 0;
@@ -92,6 +109,7 @@ BB_HLE_FUNCTION("libSceHttp", "6381dWF+xsQ", sceHttpCreateEpoll);
 BB_HLE_FUNCTION("libSceHttp", "s2-NPIvz+iA", http_template_set_int);         // sceHttpSetNonblock
 // sceHttpAddRequestHeader
 BB_HLE_FUNCTION("libSceHttp", "EY28T2bkN7k", http_template_set_string_pair);
+BB_HLE_FUNCTION("libSceNet", "drjIbDbA7UQ", sceNetEpollWait);
 BB_HLE_FUNCTION("libSceNetCtl", "uBPlr0lbuiI", sceNetCtlGetState);
 BB_HLE_FUNCTION("libSceNetCtl", "obuxdTiwkF8", sceNetCtlGetInfo);
 BB_HLE_FUNCTION("libSceNpManager", "eQH7nWPcAgc", sceNpGetState);

@@ -71,3 +71,5 @@ Names are those of `symbols/nids.csv` (hash-matched); "unknown" means no candida
 Notes for M4 and M5:
 - The two busiest stubs spin: the FMOD output thread calls `sceAudioOutOutput` without blocking (it should block until the port takes the buffer), and the network thread polls `sceNetEpollWait`, which returns at once. Both burn a core each; an audio output that paces and an epoll wait that honours its timeout fix that (M5, and the network module).
 - The GNM stubs on the render thread are the M4 work: command buffer state, the ring write offset `bX5IbRvECXk`, and actually executing the command buffers the render thread submits with each flip.
+
+Update (#337): `sceAudioOutOutput` now blocks for one 256-sample buffer at 48 kHz and `sceNetEpollWait` for its timeout. A 30 s headless debug run logs 25 KB (175 lines) and reaches the main loop after 1.1 s.

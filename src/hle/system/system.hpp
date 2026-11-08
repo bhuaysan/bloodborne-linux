@@ -23,6 +23,18 @@ namespace bb::hle::system {
 // start. For tests.
 void reset();
 
+// --- libSceAudioOut ---------------------------------------------------------------------------
+
+// The time sceAudioOutOutput blocks: one buffer of audio_out_grain samples at 48 kHz. The port
+// parameters of sceAudioOutOpen are not read yet (real audio output is M5), so the buffer size is
+// a fixed 256 samples, the common PS4 grain.
+inline constexpr std::uint32_t audio_out_grain = 256;
+inline constexpr std::uint32_t audio_out_rate = 48000;
+
+// Blocks for the duration of one buffer and returns 0, as the port taking the buffer would. The
+// FMOD output thread calls it in a loop (docs/m3-run.md), so returning at once kept a core busy.
+std::int32_t sceAudioOutOutput(std::int32_t handle, const void* buffer);
+
 // --- libSceSysmodule ------------------------------------------------------------------------
 
 // The game unloads ids it may not have loaded and accepts this result (0xc8733e).

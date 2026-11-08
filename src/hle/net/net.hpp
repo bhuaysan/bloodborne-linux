@@ -21,6 +21,12 @@ std::int32_t sceNetInit();
 // A new pool id, from 1. 0xfd200f, 0x2b97fd6 and 0x2b9850d store it when it is non-negative.
 std::int32_t sceNetPoolCreate(const char* name, std::int32_t size, std::int32_t flags);
 
+// Blocks for `timeout_usec` microseconds, forever if it is negative, then returns 0 (no event):
+// no socket ever becomes ready. The network thread polls this in a loop (docs/m3-run.md), so
+// returning at once kept a core busy. `events` and `max_events` are not touched.
+std::int32_t sceNetEpollWait(std::int32_t epoll, void* events, std::int32_t max_events,
+                             std::int32_t timeout_usec);
+
 // libSceSsl
 
 // A new SSL context id, from 1. 0xfd201e stores it when it is non-negative.
