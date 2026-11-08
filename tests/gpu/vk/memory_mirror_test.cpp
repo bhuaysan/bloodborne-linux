@@ -248,10 +248,23 @@ TEST_F(VkMemoryMirror, AFailedBindLeavesNothingBehind) {
     // The second block is past the memfd's end, so its import fails after the first one's.
     const std::uintptr_t at = window_start + 0x100000;
     ASSERT_TRUE(mirror_->bind(at - 64 * kib, 64 * kib, 0xf0000));
-    // A shared block that the failing bind would count, and a good run before the bad one.
+    // A shared block that the failing bind would count.
     EXPECT_THROW(mirror_->bind(at - 64 * kib, 192 * kib, 0xf0000), std::runtime_error);
     EXPECT_EQ(mirror_->imports(), 1u);
     mirror_->unbind(at - 64 * kib, 64 * kib, 0xf0000);  // one unbind frees it: no count leaked
+    EXPECT_EQ(mirror_->imports(), 0u);
+}
+
+TEST_F(VkMemoryMirror, AFailedBindUnbindsTheRunsBoundBeforeIt) {
+    // The import limit splits the range in two runs: the first imports, the second is past
+    // the memfd's end and fails, so the first has to be rolled back.
+    const std::uintptr_t at = window_start + mirror_import_limit - 64 * kib;
+    EXPECT_THROW(mirror_->bind(at, 128 * kib, 0xf0000), std::runtime_error);
+    EXPECT_EQ(mirror_->imports(), 0u);
+    ASSERT_TRUE(mirror_->bind(at, 64 * kib, 0xf0000));  // the block is free to bind again
+    EXPECT_EQ(mirror_->imports(), 1u);
+    EXPECT_EQ(gpu_read(at + 4), pattern(0xf0004));
+    mirror_->unbind(at, 64 * kib, 0xf0000);
     EXPECT_EQ(mirror_->imports(), 0u);
 }
 
