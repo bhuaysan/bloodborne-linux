@@ -56,48 +56,6 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 - Agents may create and comment on issues in this repository. Close issues through commits (`Fixes #N`).
 - Issue text follows the same privacy rules as commits.
 
-## Repository layout
-
-```
-AGENTS.md            this file
-README.md            project overview for humans
-CMakeLists.txt       C++ build (CMakePresets.json: debug, relwithdebinfo, release)
-docs/
-  architecture.md    system design
-  roadmap.md         milestones and tracks
-  clean-room.md      source and license policy, NID naming, game version hash
-  references.md      credit log for every external source
-  formats/           our own notes on PS4 and game file formats
-  design/            design notes (runtime.md: loader, stubs, hooks, harness; graphics.md: shader translator)
-src/                 the runtime, C++20 (see docs/design/runtime.md)
-  common/            file reading, SHA-256, game directory lookup, logging, XDG runtime directories
-  loader/            SELF to ELF, ELF parsing, mapping, relocation
-  hle/               HLE module registry, import stubs, NID name table, linking, the kernel, system, video and net modules
-  hook/              function-entry patches and the replacement registry
-  game/              decompiled game functions
-  harness/           differential test harness (tests only)
-  gpu/               GCN shader translator (gcn/), later PM4 state (pm4/) and the Vulkan backend (vk/)
-  tools/             bb-load, bb-gcn, bb-run (starts the game)
-tests/               GoogleTest unit and differential tests, one directory per target (gpu/gcn/ for bbgcn), plus support/ and gpu/programs/
-symbols/             our analysis as text: functions.csv, nids.csv, types/
-third_party/         copied third-party code with its license (see docs/clean-room.md)
-tools/
-  self2elf/          rebuilds the ELFs from eboot.bin and the bundled .prx files
-  elf2std/           rewrites a PS4 ELF into a standard ELF for stock tools
-  elfimports/        lists modules, libraries, imports and exports of the ELFs
-  nidmatch/          recovers NID names by hashing candidate names
-  noreturn/          finds imports that never return, for Ghidra's analysis
-  nidtable/          generates the runtime's NID name table from symbols/nids.csv
-  ghidra-sync/       syncs Ghidra annotations with symbols/
-  shaderbnd/         extracts the shader programs from the game's archives into analysis/
-  common/            shared Python helpers (paths, pinned files, PS4 ELF reader)
-  githooks/          privacy checks (enabled via core.hooksPath)
-  merge-pr.sh        merges a PR locally after the gate (see Reviews)
-  privacy-check.sh   privacy checks over a branch's commits
-  run-tests.sh       runs every unit test
-.github/             issue templates, CI workflow
-```
-
 ## Workflow: decompiling one function
 
 1. Pick a function, preferably from an open issue or a leaf function that a replaced function calls.
