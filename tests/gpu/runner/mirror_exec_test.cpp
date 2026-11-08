@@ -84,19 +84,24 @@ protected:
                          PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, memfd_,
                          static_cast<off_t>(offset));
         EXPECT_NE(p, MAP_FAILED);
+        if (p == MAP_FAILED) {
+            return 0;
+        }
         EXPECT_TRUE(mirror_->bind(start_ + window, length, offset));
         return start_ + window;
     }
 
     void unmap(std::uintptr_t address, std::uint64_t length, std::uint64_t offset) {
         mirror_->unbind(address, length, offset);
-        ::mmap(reinterpret_cast<void*>(address), length, PROT_NONE,
-               MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0);
+        EXPECT_NE(::mmap(reinterpret_cast<void*>(address), length, PROT_NONE,
+                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0),
+                  MAP_FAILED);
     }
 
     // Whether the program sees `value` that the CPU wrote at `address` and writes value + i for
     // lane i at address + 0x100, which the CPU then reads.
     void expect_round_trip(std::uintptr_t address, std::uint32_t value) {
+        ASSERT_NE(address, 0u) << "the mapping failed";
         auto* p = reinterpret_cast<std::uint32_t*>(address);
         p[0] = value;
         const std::uintptr_t out = address + 0x100;
@@ -150,7 +155,8 @@ TEST_F(MirrorExec, BlocksCountTheirPages) {
 }
 
 // Unbinding the middle of a bound run unbinds only its blocks and keeps the import for the
-// rest.
+// rest. The mirror reports no per-block state, so the middle block's unbinding shows in the
+// import count: binding it again needs a new import (2), where a block still bound would not.
 TEST_F(MirrorExec, PartialUnbindKeepsTheRest) {
     const std::uintptr_t a = map(16 * block, 3 * block, 4 * block);
     EXPECT_EQ(mirror_->imports(), 1u);
@@ -158,7 +164,11 @@ TEST_F(MirrorExec, PartialUnbindKeepsTheRest) {
     EXPECT_EQ(mirror_->imports(), 1u);
     expect_round_trip(a, 0x4444'0000);
     expect_round_trip(a + 2 * block, 0x5555'0000);
+    EXPECT_TRUE(mirror_->bind(a + block, block, 5 * block));
+    EXPECT_EQ(mirror_->imports(), 2u);
+    expect_round_trip(a + block, 0x6666'0000);
     unmap(a, block, 4 * block);
+    unmap(a + block, block, 5 * block);
     unmap(a + 2 * block, block, 6 * block);
     EXPECT_EQ(mirror_->imports(), 0u);
 }
