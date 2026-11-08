@@ -127,9 +127,11 @@ std::int32_t gnm_map_compute_queue(std::uint32_t pipe, std::uint32_t queue, cons
         result = compute_queue_invalid_pipe;
     } else if (queue >= queues_per_pipe) {
         result = compute_queue_invalid_queue;
+    } else if (ring_address % 256 != 0) {
+        result = compute_queue_invalid_ring;
     } else if (ring_dwords == 0 || (ring_dwords & (ring_dwords - 1)) != 0) {
         result = compute_queue_invalid_size;
-    } else if (ring_address % 256 != 0 || !guest_readable(ring, std::size_t{ring_dwords} * 4)) {
+    } else if (!guest_readable(ring, std::size_t{ring_dwords} * 4)) {  // needs the size
         result = compute_queue_invalid_ring;
     } else if (reinterpret_cast<std::uintptr_t>(read_pointer) % 4 != 0 ||
                !guest_readable(read_pointer, 4)) {

@@ -324,6 +324,8 @@ TEST(HleVideo, ComputeQueuesRunTheirRing) {
     EXPECT_EQ(gnm_map_compute_queue(0, 0, ring, 0x30, read_pointer), compute_queue_invalid_size);
     EXPECT_EQ(gnm_map_compute_queue(0, 0, ring + 1, 0x40, read_pointer),
               compute_queue_invalid_ring);
+    EXPECT_EQ(gnm_map_compute_queue(0, 0, ring + 1, 0x30, read_pointer),
+              compute_queue_invalid_ring);  // alignment is checked before the size
     EXPECT_EQ(gnm_map_compute_queue(0, 0, ring, 0x40, reinterpret_cast<std::uint32_t*>(0x10)),
               compute_queue_invalid_read_pointer);
     const std::int32_t first = gnm_map_compute_queue(0, 0, ring, 0x40, read_pointer);
