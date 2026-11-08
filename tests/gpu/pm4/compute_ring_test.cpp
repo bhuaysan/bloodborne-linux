@@ -133,6 +133,33 @@ TEST(ComputeRing, AFailedStreamMovesTheReadOffsetToItsEnd) {
     EXPECT_EQ(f.gpu.stats().errors, 1u);
 }
 
+// A wrapping doorbell queues two streams. A failure in the first drops only that one and the read
+// offset wraps to 0 at its end; a failure in the second leaves the offset at its end.
+TEST(ComputeRing, AFailedStreamAcrossTheWrapDropsOnlyItsSegment) {
+    Fixture f;
+    put_set(f.ring, 0, 0x300, 1);
+    put_set(f.ring, 4, 0x300, 2);
+    put_set(f.ring, 8, 0x300, 3);
+    ASSERT_TRUE(f.gpu.ring_doorbell(f.index, 12));
+    ASSERT_TRUE(f.gpu.wait_idle(5s));
+
+    f.ring[12] = 1u << 30;  // the tail segment [12, 16) fails
+    put_set(f.ring, 0, 0x302, 9);
+    ASSERT_TRUE(f.gpu.ring_doorbell(f.index, 4));
+    ASSERT_TRUE(f.gpu.wait_idle(5s));
+    EXPECT_EQ(read_offset(f.read_pointer), 4u);
+    EXPECT_EQ(f.gpu.registers().get(0xA302), 9u);  // the segment after the wrap still ran
+    EXPECT_EQ(f.gpu.stats().errors, 1u);
+
+    put_set(f.ring, 4, 0x300, 4);
+    f.ring[8] = 1u << 30;  // the segment [4, 12) fails after its first packet
+    ASSERT_TRUE(f.gpu.ring_doorbell(f.index, 12));
+    ASSERT_TRUE(f.gpu.wait_idle(5s));
+    EXPECT_EQ(read_offset(f.read_pointer), 12u);
+    EXPECT_EQ(f.gpu.registers().get(0xA300), 4u);
+    EXPECT_EQ(f.gpu.stats().errors, 2u);
+}
+
 // The ring holds INDIRECT_BUFFERs as the game writes them (0x108b330: shader-type bit, bits 23 and
 // 24). One with the chain bit nests too, so the packet after it in the ring still runs. Its
 // RELEASE_MEM interrupt reports the ring's source.
