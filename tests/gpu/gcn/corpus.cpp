@@ -36,6 +36,25 @@ Program read_program(const fs::path& file, std::string& why) {
     program.type = (info >> 2) & 0xf;
     program.code.resize(size / 4);
     std::memcpy(program.code.data(), data.data(), size);
+
+    // The entry of "<archive>/programs/<path>.<n>" is "<archive>/entries/<path>"; program 0 starts
+    // at 0x34 + the code offset of the register block, which is how the entry says so.
+    const std::string name = file.filename().string();
+    const auto dot = name.rfind('.');
+    if (dot != std::string::npos && name.substr(dot) == ".0") {
+        fs::path entry;
+        for (const auto& part : file.parent_path()) {
+            entry /= part == "programs" ? fs::path("entries") : part;
+        }
+        entry /= name.substr(0, dot);
+        if (fs::is_regular_file(entry)) {
+            const auto bytes = bb::common::read_file(entry);
+            if (bytes.size() >= 0x3c + 64) {
+                std::memcpy(program.block.data(), bytes.data() + 0x3c, 64);
+                program.has_block = true;
+            }
+        }
+    }
     return program;
 }
 

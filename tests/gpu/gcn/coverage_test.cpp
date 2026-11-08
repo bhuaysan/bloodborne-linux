@@ -3,6 +3,7 @@
 // that comes out must pass spirv-val, and a report says what the translator can't do yet. The
 // report goes to analysis/gcn-translation-coverage.txt. It runs with whatever the translator
 // supports: what it rejects is counted, by the instruction it stops at and by its message.
+// Programs of a stage the translator has get that stage's key; the others are probes (below).
 
 #include <algorithm>
 #include <cctype>
@@ -36,17 +37,48 @@ using Words = std::vector<std::uint32_t>;
 constexpr std::size_t max_reports = 20;  // failures reported one by one
 constexpr std::uint32_t s_endpgm = sopp(1);
 
-// The key a program of this type is translated with. The footer doesn't carry the register
-// values, so these are test defaults. Vertex and copy shaders get VGPR_COMP_CNT 3 and no user
-// SGPRs, as in compute. The other programs, whose stages the translator doesn't have yet, get the
-// default compute key and are probes: they count the instructions the translator lacks. Domain
+// The key a program is translated with. The footer doesn't carry the register values, but the
+// first program of an entry finds them in the entry header's register block (docs/design/
+// graphics.md, "Stage register imports"). A pixel shader gets the block's RSRC1 and RSRC2,
+// Z and color formats, input enable and address, DB_SHADER_CONTROL and one identity-mapped
+// SPI_PS_INPUT_CNTL per interpolant (NUM_INTERP of SPI_PS_IN_CONTROL; the VS outputs that the
+// real cntl registers depend on are not in the files). Vertex and copy shaders get VGPR_COMP_CNT 3
+// and no user SGPRs, as in compute. The other programs, whose stages the translator doesn't have
+// yet (ES, LS, GS, HS), get the default compute key and are probes: they count the instructions
+// the translator lacks, and the report keeps them apart from the real translations. Domain
 // shaders (type 8) run on the VS stage too, but the vertex key can't express their inputs.
-ShaderKey default_key(unsigned type) {
+ShaderKey key_of(unsigned type, const std::array<std::uint32_t, 16>& block, bool has_block) {
     if (type == 1 || type == 6) {
         return {.stage = Stage::vertex, .pgm_rsrc1 = 3u << 24};
     }
+    if (type == 0 && has_block) {
+        ShaderKey key{.stage = Stage::pixel};
+        key.pgm_rsrc1 = block[2];
+        key.pgm_rsrc2 = block[3];
+        key.z_format = block[4];
+        key.col_format = block[5];
+        key.ps_input_ena = block[6];
+        key.ps_input_addr = block[7];
+        key.db_shader_control = block[10];
+        for (std::uint32_t n = 0; n < (block[8] & 0x3f) && n < key.ps_input_cntl.size(); ++n) {
+            key.ps_input_cntl[n] = n;
+        }
+        return key;
+    }
     return {};
 }
+
+// Whether the translator has a stage for programs of this type, or the translation is a probe.
+bool is_probe(unsigned type) { return !(type == 0 || type == 1 || type == 4 || type == 6); }
+
+// The stage's name in the report; a probe's is marked.
+std::string stage_label(unsigned type) {
+    return std::string(program_type_name(type)) + (is_probe(type) ? " (probe)" : "");
+}
+
+// A program's translation is told apart by its code and, for a pixel shader, its register block.
+using Registers = std::array<std::uint32_t, 16>;
+using Instance = std::pair<bb::common::Sha256Digest, Registers>;
 
 // The fetch subroutine the vertex shaders call. The run time reads it from user data, and the
 // archives hold none, so offline the call goes to an empty one (s_setpc_b64 s[0:1]): the VS's
@@ -104,6 +136,7 @@ std::string kind_of(const std::string& message, const std::string& mnemonic) {
 // What became of one program (or one probe).
 struct Outcome {
     bool translated = false;
+    bool probe = false;  // translated with a stand-in key, the stage isn't there yet
     bool wave_size_dependent = false;
     std::string message;  // when it didn't translate (or for the other exception types)
     std::string blocker;  // the mnemonic of the instruction the translator stopped at
@@ -111,10 +144,10 @@ struct Outcome {
     std::string invalid;    // spirv-val's messages, when the module is not valid
 };
 
-Outcome translate_program(const Words& code, unsigned type, bool validate_module) {
+Outcome translate_program(const Words& code, const ShaderKey& key, bool validate_module) {
     Outcome out;
     try {
-        const auto translation = translate(code, empty_fetch, default_key(type));
+        const auto translation = translate(code, empty_fetch, key);
         out.translated = true;
         out.wave_size_dependent = translation.interface.wave_size_dependent;
         if (validate_module) {
@@ -144,7 +177,7 @@ struct OpcodeUse {
     Format format = Format::sopp;
     std::uint16_t opcode = 0;
     Words first;
-    unsigned type = 0;  // the type of the program it is from, for the key of the probe
+    ShaderKey key;  // the key of the program it is from, for the probe
     std::uint64_t instructions = 0;
     std::uint64_t programs = 0;
 };
@@ -176,11 +209,12 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
 
     // One program file at a time. The code of a program is translated once, however many files
     // hold it; the files are counted per stage.
-    std::map<bb::common::Sha256Digest, Outcome> outcomes;
-    std::map<bb::common::Sha256Digest, std::string> first_stage;  // of the first file with the code
+    std::map<Instance, Outcome> outcomes;
+    std::map<Instance, std::string> first_stage;  // of the first file with the code
+    std::set<bb::common::Sha256Digest> codes;
     std::map<std::pair<int, int>, OpcodeUse> uses;  // by format and opcode, for the probes
     std::map<std::string, std::uint64_t> files_by_stage, translated_by_stage;
-    std::uint64_t files = 0, translated_files = 0, wave_files = 0;
+    std::uint64_t files = 0, translated_files = 0, probe_files = 0, wave_files = 0;
     std::size_t failures = 0;
     for (const auto& file : program_files(root)) {
         ++files;
@@ -190,11 +224,15 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
             ADD_FAILURE() << file.string() << ": " << why;
             continue;
         }
-        const auto digest = bb::common::sha256(std::as_bytes(std::span(program.code)));
+        const ShaderKey key = key_of(program.type, program.block, program.has_block);
+        const auto code_digest = bb::common::sha256(std::as_bytes(std::span(program.code)));
+        codes.insert(code_digest);
+        const Instance digest{code_digest, key.stage == Stage::pixel ? program.block : Registers{}};
         auto [it, fresh] = outcomes.try_emplace(digest);
         if (fresh) {
-            it->second = translate_program(program.code, program.type, true);
-            first_stage[digest] = program_type_name(program.type);
+            it->second = translate_program(program.code, key, true);
+            it->second.probe = is_probe(program.type);
+            first_stage[digest] = stage_label(program.type);
             const Outcome& o = it->second;
             if (o.internal || !o.invalid.empty()) {
                 if (++failures <= max_reports) {
@@ -205,33 +243,37 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
             }
             std::set<std::pair<int, int>> in_program;
             for (const auto& inst : decode(program.code, Until::program_end)) {
-                const std::pair key{int(inst.format), int(inst.opcode)};
-                OpcodeUse& use = uses[key];
+                const std::pair opcode_key{int(inst.format), int(inst.opcode)};
+                OpcodeUse& use = uses[opcode_key];
                 if (use.first.empty()) {
                     use.name = inst.name;
                     use.format = inst.format;
                     use.opcode = inst.opcode;
-                    use.type = program.type;
+                    use.key = key;
                     use.first.assign(program.code.begin() + inst.offset / 4,
                                      program.code.begin() + inst.offset / 4 + inst.size);
                 }
                 ++use.instructions;
-                use.programs += in_program.insert(key).second;
+                use.programs += in_program.insert(opcode_key).second;
             }
         }
-        const std::string stage = program_type_name(program.type);
+        const std::string stage = stage_label(program.type);
         ++files_by_stage[stage];
         translated_by_stage[stage] += it->second.translated;
-        translated_files += it->second.translated;
+        if (is_probe(program.type)) {
+            probe_files += it->second.translated;
+        } else {
+            translated_files += it->second.translated;
+        }
         wave_files += it->second.wave_size_dependent;
     }
 
     // The gaps: programs by the instruction and by the message they stop at, and by the stage
     // (the type of the first file with the code, which picks the key) and the instruction.
     Counts by_blocker, by_message, by_stage_blocker;
-    std::uint64_t translated = 0, wave = 0;
+    std::uint64_t translated = 0, probe_translated = 0, wave = 0;
     for (const auto& [digest, o] : outcomes) {
-        translated += o.translated;
+        (o.probe ? probe_translated : translated) += o.translated;
         wave += o.wave_size_dependent;
         if (!o.translated) {
             ++by_message[kind_of(o.message, o.blocker)];
@@ -260,7 +302,7 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
             code[0] &= ~0xffffu;  // a branch to the next instruction, the s_endpgm
         }
         code.push_back(s_endpgm);
-        const Outcome o = translate_program(code, use.type, true);
+        const Outcome o = translate_program(code, use.key, true);
         if (o.internal || !o.invalid.empty()) {
             ADD_FAILURE() << "probe of " << use.name << ": "
                           << (o.internal ? "internal error: " + o.message
@@ -276,11 +318,14 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
     });
 
     std::ofstream out(bb::test::analysis_dir() / "gcn-translation-coverage.txt");
-    out << "# Translation coverage of the shader corpus (default key, see coverage_test.cpp)\n"
+    out << "# Translation coverage of the shader corpus (stage keys, probes marked, see coverage_test.cpp)\n"
         << "program files\t" << files << "\n"
-        << "distinct programs\t" << outcomes.size() << "\n"
-        << "translated programs\t" << translated << "\n"
-        << "translated program files\t" << translated_files << "\n"
+        << "distinct programs\t" << codes.size() << "\n"
+        << "distinct translations (code and, for ps, register block)\t" << outcomes.size() << "\n"
+        << "translated programs (real stage keys)\t" << translated << "\n"
+        << "translated program files (real stage keys)\t" << translated_files << "\n"
+        << "translated probe programs (stand-in compute key)\t" << probe_translated << "\n"
+        << "translated probe program files (stand-in compute key)\t" << probe_files << "\n"
         << "wave-size-dependent programs\t" << wave << "\n"
         << "wave-size-dependent program files\t" << wave_files << "\n"
         << "opcodes probed\t" << uses.size() << "\n"
@@ -306,9 +351,10 @@ TEST(GcnCoverage, EveryShaderTranslatesOrIsCounted) {
     EXPECT_TRUE(out.good());
 
     EXPECT_EQ(files, 20218u);
-    EXPECT_EQ(outcomes.size(), 3832u);
+    EXPECT_EQ(codes.size(), 3832u);
     EXPECT_EQ(failures, 0u) << "every program must translate to a valid module or be counted";
-    std::cout << outcomes.size() << " distinct programs, " << translated << " translated, "
+    std::cout << codes.size() << " distinct programs, " << outcomes.size() << " translations, "
+              << translated << " translated, " << probe_translated << " probes translated, "
               << wave << " wave-size-dependent, " << uses.size() << " opcodes probed\n";
 }
 
@@ -316,41 +362,70 @@ TEST(GcnCoverage, ProgramOutcomes) {
     if (!have_spirv_val()) {
         GTEST_SKIP() << "spirv-val not found";
     }
-    const Outcome ok = translate_program({s_endpgm}, 0, true);
+    const Outcome ok = translate_program({s_endpgm}, {}, true);
     EXPECT_TRUE(ok.translated);
     EXPECT_FALSE(ok.internal);
     EXPECT_EQ(ok.invalid, "");
     EXPECT_FALSE(ok.wave_size_dependent);
 
     // A program that doesn't end is a counted gap with a message, not an internal error.
-    const Outcome open = translate_program({sopp(0)}, 0, true);
+    const Outcome open = translate_program({sopp(0)}, {}, true);
     EXPECT_FALSE(open.translated);
     EXPECT_FALSE(open.internal);
     EXPECT_FALSE(open.message.empty());
     EXPECT_EQ(open.message.find(" at offset "), std::string::npos);
 
     // Vertex (1) and copy (6) shaders get the vertex key, so a position export translates. The
-    // other types keep the compute key, where exp is an error; domain shaders (8) among them.
+    // other types, and a pixel shader without a register block, keep the compute key, where exp is an
+    // error; domain shaders (8) among them.
     Words position = xport(0xf, 12, 0, 1, 2, 3, xp::done);  // exp pos0 v0, v1, v2, v3 done
     position.push_back(s_endpgm);
     for (const unsigned type : {1u, 6u}) {
-        const Outcome vertex = translate_program(position, type, true);
+        const Outcome vertex = translate_program(position, key_of(type, {}, false), true);
         EXPECT_TRUE(vertex.translated) << "type " << type << ": " << vertex.message;
         EXPECT_EQ(vertex.invalid, "") << "type " << type;
     }
     for (const unsigned type : {0u, 8u}) {
-        const Outcome compute = translate_program(position, type, true);
+        const Outcome compute = translate_program(position, key_of(type, {}, false), true);
         EXPECT_FALSE(compute.translated) << "type " << type;
         EXPECT_EQ(compute.message, "exp in a compute shader") << "type " << type;
         EXPECT_EQ(compute.blocker, "exp") << "type " << type;
     }
 
+    // A pixel shader with a register block gets the pixel key: a color export translates with the
+    // block's SPI_SHADER_COL_FORMAT (9: 32_ABGR), and the interpolants are mapped one to one.
+    Words color = xport(0xf, 0, 0, 1, 2, 3, xp::done);  // exp mrt0 v0, v1, v2, v3 done
+    color.push_back(s_endpgm);
+    Registers block{};
+    block[5] = 9;
+    block[8] = 3;  // SPI_PS_IN_CONTROL: NUM_INTERP 3
+    const ShaderKey pixel = key_of(0, block, true);
+    EXPECT_EQ(pixel.stage, Stage::pixel);
+    EXPECT_EQ(pixel.col_format, 9u);
+    EXPECT_EQ(pixel.ps_input_cntl[2], 2u);
+    EXPECT_EQ(pixel.ps_input_cntl[3], 0u);
+    const Outcome ps = translate_program(color, pixel, true);
+    EXPECT_TRUE(ps.translated) << ps.message;
+    EXPECT_EQ(ps.invalid, "");
+    EXPECT_FALSE(translate_program(color, key_of(0, {}, false), true).translated);
+
+    // Stages without a key are probes, and the report says so.
+    EXPECT_FALSE(is_probe(0));
+    EXPECT_FALSE(is_probe(1));
+    EXPECT_FALSE(is_probe(4));
+    EXPECT_FALSE(is_probe(6));
+    for (const unsigned type : {2u, 3u, 5u, 7u, 8u}) {
+        EXPECT_TRUE(is_probe(type)) << type;
+    }
+    EXPECT_EQ(stage_label(0), "ps");
+    EXPECT_EQ(stage_label(2), "es (probe)");
+
     // The vertex key calls the empty fetch subroutine; the compute key stops at the call.
     const Words call = {sop1(33, 0, 0), s_endpgm};  // s_swappc_b64 s[0:1], s[0:1]
-    const Outcome vertex = translate_program(call, 1, true);
+    const Outcome vertex = translate_program(call, key_of(1, {}, false), true);
     EXPECT_TRUE(vertex.translated) << vertex.message;
     EXPECT_EQ(vertex.invalid, "");
-    const Outcome compute = translate_program(call, 0, true);
+    const Outcome compute = translate_program(call, key_of(0, {}, false), true);
     EXPECT_EQ(compute.message, "unsupported instruction s_swappc_b64");
     EXPECT_EQ(compute.blocker, "s_swappc_b64");
 }

@@ -2,6 +2,7 @@
 // shader-binary.md), for the corpus tests.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -17,6 +18,10 @@ enum class ProgramType : unsigned { ps, vs, es, ls, cs, gs, copy_vs, hs, ds };
 struct Program {
     std::vector<std::uint32_t> code;
     unsigned type = 0;  // a ProgramType, unchecked
+    // The first 16 dwords of the register block in the entry header (from 0x3c), for the first
+    // program of an entry; `has_block` is false for any other program.
+    std::array<std::uint32_t, 16> block{};
+    bool has_block = false;
 };
 
 // Reads one program file. An empty `code` with `why` set when the file isn't a program.
