@@ -348,8 +348,6 @@ TEST(HleVideo, ComputeQueuesRunTheirRing) {
     EXPECT_EQ(vmem::unmap(base, vmem::page_size), 0);
 }
 
-// The eboot imports each of them under the library it is registered for, so relocating it puts
-// the implementation into the GOT slot.
 // An EVENT_WRITE_EOP with an interrupt writes its label and wakes the queue registered for it.
 TEST(HleVideo, EndOfPipeInterruptTriggersGnmEvents) {
     namespace vmem = bb::hle::kernel::vmem;
@@ -396,6 +394,8 @@ TEST(HleVideo, EndOfPipeInterruptTriggersGnmEvents) {
     EXPECT_EQ(vmem::unmap(base, vmem::page_size), 0);
 }
 
+// The eboot imports each of them under the library it is registered for, so relocating it puts
+// the implementation into the GOT slot.
 TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
     BB_REQUIRE_GAME(game);
     bb::loader::Image image = bb::loader::map_eboot(game);
