@@ -4,11 +4,11 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <initializer_list>
 #include <future>
+#include <initializer_list>
 #include <mutex>
-#include <thread>
 #include <span>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -218,38 +218,40 @@ TEST(ComputeRing, WaitsAtItsPositionAndUnmapDropsTheRest) {
     EXPECT_EQ(f.gpu.stats().errors, 0u);
 }
 
-// Unmapping while the thread is inside a run of the ring waits for the run to return.
+// Unmapping while the thread is inside a run of the ring waits for the whole run. Once the
+// unmap returns the ring is overwritten with garbage, which the parser must never see.
 TEST(ComputeRing, UnmapWaitsForARunUnderWay) {
     std::promise<void> entered_promise;
     std::promise<void> release_promise;
     auto release = release_promise.get_future();
-    std::atomic<bool> unmapped = false;
-    std::atomic<bool> ring_read_after_unmap = false;
+    std::atomic<std::uint32_t> interrupts = 0;
     std::array<std::uint32_t, ring_dwords> ring{};
     std::uint32_t read_pointer = 0;
     GpuThread gpu({}, [&](std::uint32_t) {
-        entered_promise.set_value();
-        release.wait();
-        // Still inside the run: the ring must not have been given back yet.
-        if (unmapped) {
-            ring_read_after_unmap = true;
+        if (interrupts++ == 0) {
+            entered_promise.set_value();
+            release.wait();
         }
     });
     ASSERT_EQ(gpu.map_ring(ring, &read_pointer, 3), 0);
-    put(ring, 0, IT_RELEASE_MEM__CI__VI, {0, 3u << 24, 0, 0, 0, 0});
-    ASSERT_TRUE(gpu.ring_doorbell(0, 7));
+    std::uint32_t end = put(ring, 0, IT_RELEASE_MEM__CI__VI, {0, 3u << 24, 0, 0, 0, 0});
+    end = put(ring, end, IT_RELEASE_MEM__CI__VI, {0, 3u << 24, 0, 0, 0, 0});
+    ASSERT_TRUE(gpu.ring_doorbell(0, end));
     ASSERT_EQ(entered_promise.get_future().wait_for(5s), std::future_status::ready);
 
+    std::atomic<bool> unmapped = false;
     std::thread unmapper([&] {
         EXPECT_TRUE(gpu.unmap_ring(0));
+        ring.fill(0xFFFFFFFFu);  // the guest reuses the ring
         unmapped = true;
     });
     std::this_thread::sleep_for(100ms);
     EXPECT_FALSE(unmapped);  // the run is still under way
     release_promise.set_value();
     unmapper.join();
-    EXPECT_FALSE(ring_read_after_unmap);
     EXPECT_TRUE(gpu.wait_idle(5s));
+    EXPECT_EQ(interrupts, 2u);  // the run finished before the unmap returned
+    EXPECT_EQ(gpu.stats().errors, 0u);  // the garbage was never parsed
     EXPECT_EQ(read_offset(read_pointer), 0u);  // no write-back after the unmap
 }
 
