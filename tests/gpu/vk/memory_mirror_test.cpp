@@ -14,6 +14,7 @@
 
 #include "gpu/vk/device.hpp"
 #include "gpu/vk/memory_mirror.hpp"
+#include "tools/mirror_observer.hpp"
 
 namespace {
 
@@ -265,6 +266,65 @@ TEST_F(VkMemoryMirror, AFailedBindUnbindsTheRunsBoundBeforeIt) {
     EXPECT_EQ(mirror_->imports(), 1u);
     EXPECT_EQ(gpu_read(at + 4), pattern(0xf0004));
     mirror_->unbind(at, 64 * kib, 0xf0000);
+    EXPECT_EQ(mirror_->imports(), 0u);
+}
+
+TEST_F(VkMemoryMirror, ReleaseUnbindsTheRangeAndRebindsTheRestOfItsImports) {
+    // One import of four blocks; releasing the third takes the import, the other blocks return.
+    ASSERT_TRUE(mirror_->bind(window_start, 256 * kib, 0));
+    EXPECT_EQ(mirror_->imports(), 1u);
+    mirror_->release(0x20000, 64 * kib);
+    EXPECT_EQ(mirror_->imports(), 2u);  // blocks 0-1 and block 3
+    EXPECT_EQ(gpu_read(window_start + 0x1fff8), pattern(0x1fff8));
+    EXPECT_EQ(gpu_read(window_start + 0x30008), pattern(0x30008));
+    EXPECT_NE(gpu_read(window_start + 0x20008), pattern(0x20008));  // gone from the buffer
+    mirror_->unbind(window_start, 128 * kib, 0);
+    mirror_->unbind(window_start + 0x30000, 64 * kib, 0x30000);
+    EXPECT_EQ(mirror_->imports(), 0u);
+    mirror_->release(0, 64 * kib);  // nothing bound: nothing happens
+    EXPECT_EQ(mirror_->imports(), 0u);
+}
+
+TEST_F(VkMemoryMirror, TheObserverFollowsMapsAndUnmaps) {
+    bb::tools::MirrorObserver observer(*mirror_);
+    const std::uintptr_t at = window_start + 0x40000;
+    observer.mapped(at, 192 * kib, 0x40000);
+    EXPECT_EQ(observer.binds(), 1u);
+    EXPECT_EQ(gpu_read(at + 0x10008), pattern(0x50008));
+    // Unmapping the middle leaves the two ends bound, each in its own record.
+    observer.unmapped(at + 0x10000, 64 * kib, 0x50000);
+    EXPECT_EQ(observer.unbinds(), 1u);
+    EXPECT_EQ(observer.ranges(), 2u);
+    EXPECT_EQ(mirror_->imports(), 1u);  // one import, two blocks left
+    EXPECT_EQ(gpu_read(at + 8), pattern(0x40008));
+    EXPECT_EQ(gpu_read(at + 0x20008), pattern(0x60008));
+    EXPECT_NE(gpu_read(at + 0x10008), pattern(0x50008));
+    // A range the mirror refuses is not recorded and not unbound.
+    observer.mapped(window_start + mirror_buffer_size, 64 * kib, 0);
+    EXPECT_EQ(observer.binds(), 1u);
+    EXPECT_EQ(observer.ranges(), 2u);
+    observer.unmapped(window_start + mirror_buffer_size, 64 * kib, 0);
+    EXPECT_EQ(observer.unbinds(), 1u);
+    observer.unmapped(at, 192 * kib, 0x40000);  // the parts that is bound
+    observer.unmapped(at, 192 * kib, 0x40000);  // twice changes nothing
+    EXPECT_EQ(observer.unbinds(), 3u);
+    EXPECT_EQ(observer.ranges(), 0u);
+    EXPECT_EQ(mirror_->imports(), 0u);
+}
+
+TEST_F(VkMemoryMirror, TheObserverForgetsWhatReleaseTook) {
+    bb::tools::MirrorObserver observer(*mirror_);
+    observer.mapped(window_start, 128 * kib, 0);
+    observer.mapped(window_start + 0x100000, 64 * kib, 0x80000);
+    observer.released(0x10000, 64 * kib);  // the second block of the first mapping
+    EXPECT_EQ(observer.releases(), 1u);
+    EXPECT_EQ(observer.ranges(), 2u);  // the first block and the second mapping
+    EXPECT_EQ(mirror_->imports(), 2u);
+    // The unmap of the whole first mapping unbinds only what is still bound.
+    observer.unmapped(window_start, 128 * kib, 0);
+    EXPECT_EQ(observer.unbinds(), 1u);
+    EXPECT_EQ(mirror_->imports(), 1u);
+    observer.unmapped(window_start + 0x100000, 64 * kib, 0x80000);
     EXPECT_EQ(mirror_->imports(), 0u);
 }
 

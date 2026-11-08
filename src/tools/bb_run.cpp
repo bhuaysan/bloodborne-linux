@@ -46,8 +46,14 @@
 #include "loader/load_set.hpp"
 #include "tools/main_loop_probe.hpp"
 #include "tools/run_options.hpp"
-#ifdef BB_HAVE_WINDOW
+#ifdef BB_HAVE_MIRROR
 #include "gpu/vk/device.hpp"
+#include "gpu/vk/memory_mirror.hpp"
+#include "hle/kernel/dmem.hpp"
+#include "hle/kernel/vmem.hpp"
+#include "tools/mirror_observer.hpp"
+#endif
+#ifdef BB_HAVE_WINDOW
 #include "gpu/vk/presenter.hpp"
 #include "gpu/window/window.hpp"
 #endif
@@ -70,9 +76,28 @@ constexpr std::string_view channel = "run";
 constexpr std::size_t main_stack_size =
     (std::size_t{16} << 20) + bb::hle::kernel::thread_stack_reserve;
 
+#ifdef BB_HAVE_MIRROR
+// The GPU memory mirror and what keeps it in step with direct memory. Set once before the game
+// starts, never destroyed: game threads map and unmap until the process ends.
+struct Mirror {
+    std::unique_ptr<bb::vk::Instance> instance;  // only when no display has the device
+    std::unique_ptr<bb::vk::Device> device;
+    std::unique_ptr<bb::vk::MemoryMirror> mirror;
+    std::unique_ptr<bb::tools::MirrorObserver> observer;
+};
+Mirror* mirror = nullptr;
+#endif
+
 // Flushes stdio and the log and ends the process without host atexit handlers or static
 // destructors, as the HLE _exit does.
 [[noreturn]] void end_run(int status) {
+#ifdef BB_HAVE_MIRROR
+    if (mirror != nullptr && mirror->observer) {
+        bb::common::log(LogLevel::info, channel, "mirror: {} binds, {} unbinds, {} releases",
+                        mirror->observer->binds(), mirror->observer->unbinds(),
+                        mirror->observer->releases());
+    }
+#endif
     std::fflush(nullptr);
     bb::common::log_flush();
     ::_exit(status);
@@ -254,6 +279,50 @@ void pump_display(std::int32_t timeout_ms) {
     end_run(bb::tools::timeout_status);
 }
 
+#ifdef BB_HAVE_MIRROR
+// Makes the GPU memory mirror over the first `gib` GiB of the guest window and hooks it to direct
+// memory, on `device` or, without one, on a device of its own. Logs why and goes on without a
+// mirror when it can't.
+void open_mirror(bb::vk::Device* device, const std::string& device_selector, unsigned gib) {
+    auto m = std::make_unique<Mirror>();
+    std::string why;
+    try {
+        if (device == nullptr) {
+            m->instance = bb::vk::Instance::create(why);
+            if (m->instance) {
+                m->device = bb::vk::Device::create(*m->instance, {.device = device_selector}, why);
+            }
+            device = m->device.get();
+        }
+        const int memfd = bb::hle::kernel::dmem::fd();
+        if (device != nullptr && memfd < 0) {
+            why = "no direct memory";
+            device = nullptr;
+        }
+        if (device != nullptr) {
+            m->mirror = bb::vk::MemoryMirror::create(
+                *device,
+                {.memfd = memfd,
+                 .window_start = bb::hle::kernel::vmem::window_start,
+                 .size = std::uint64_t{gib} << 30},
+                why);
+        }
+    } catch (const std::runtime_error& e) {
+        why = e.what();
+    }
+    if (!m->mirror) {
+        bb::common::log(LogLevel::warn, channel, "no GPU memory mirror: {}", why);
+        return;
+    }
+    m->observer = std::make_unique<bb::tools::MirrorObserver>(*m->mirror);
+    bb::hle::video::set_bias_table(m->mirror->bias_table());
+    bb::hle::kernel::vmem::set_direct_observer(m->observer.get());
+    bb::common::log(LogLevel::info, channel, "GPU memory mirror of {} GiB, blocks of {:#x}", gib,
+                    m->mirror->block());
+    mirror = m.release();
+}
+#endif
+
 // Everything up to the start of the game's main thread. Returns the exit status of a run that
 // ends before it; throws for errors that end it with status 1.
 int start(const bb::tools::RunOptions& options) {
@@ -313,6 +382,15 @@ int start(const bb::tools::RunOptions& options) {
 #ifdef BB_HAVE_WINDOW
     if (!options.headless) {
         open_display(options.device);
+    }
+#endif
+#ifdef BB_HAVE_MIRROR
+    {
+        bb::vk::Device* gpu = nullptr;
+#ifdef BB_HAVE_WINDOW
+        gpu = display != nullptr ? display->device.get() : nullptr;
+#endif
+        open_mirror(gpu, options.device, options.mirror_gib);
     }
 #endif
     run_game(*game, options.timeout_seconds);
