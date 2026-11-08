@@ -124,8 +124,6 @@ TEST_F(VkComputePipeline, KeepsTranslationErrorsButNotUnreadableCode) {
     EXPECT_EQ(cache_->translations(), 1u);
 }
 
-}  // namespace
-
 TEST_F(VkComputePipeline, ADeviceFailureIsNotKept) {
     set_cs(regs_, program, 0, 64);
     const auto state = compute_state(regs_, why_);
@@ -144,3 +142,5 @@ TEST_F(VkComputePipeline, ADeviceFailureIsNotKept) {
     EXPECT_EQ(cache_->size(), 1u);
     EXPECT_EQ(cache_->translations(), 2u);
 }
+
+}  // namespace
