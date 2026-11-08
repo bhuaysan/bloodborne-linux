@@ -56,6 +56,8 @@ public:
     // The position in the submitted buffer: past an INDIRECT_BUFFER that is still running, at the
     // buffer's end when done. A chained buffer at the top level moves it out of the buffer.
     const std::uint32_t* top_position() const { return levels_[0].pos; }
+    // The end of the submitted buffer (or of the buffer a top-level chain moved to).
+    const std::uint32_t* top_end() const { return levels_[0].end; }
 
 private:
     friend class Parser;

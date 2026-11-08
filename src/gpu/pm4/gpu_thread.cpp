@@ -185,9 +185,11 @@ bool GpuThread::run_front(std::size_t index, bool& waiting) {
     {
         const std::scoped_lock lock(mutex_);
         if (ring != nullptr && ring->mapped) {
-            // The read offset: the stream's position in the ring, wrapped at its end.
-            const auto offset = static_cast<std::uint32_t>(stream->top_position() -
-                                                           ring->dwords.data()) &
+            // The read offset: the stream's position in the ring, wrapped at its end. A failed
+            // stream is dropped, so the offset moves past all of it, as for a finished one.
+            const std::uint32_t* const read =
+                result == RunResult::error ? stream->top_end() : stream->top_position();
+            const auto offset = static_cast<std::uint32_t>(read - ring->dwords.data()) &
                                 static_cast<std::uint32_t>(ring->dwords.size() - 1);
             std::atomic_ref(*ring->read_pointer).store(offset, std::memory_order_release);
         }

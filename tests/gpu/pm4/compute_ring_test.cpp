@@ -112,6 +112,27 @@ TEST(ComputeRing, WrapsAroundTheEnd) {
     EXPECT_EQ(f.gpu.stats().errors, 0u);
 }
 
+// A failed stream is dropped whole: the read offset moves to its end, so the ring's free space
+// doesn't shrink, and the next doorbell runs on.
+TEST(ComputeRing, AFailedStreamMovesTheReadOffsetToItsEnd) {
+    Fixture f;
+    put_set(f.ring, 0, 0x300, 1);
+    f.ring[4] = 1u << 30;  // a type-1 header fails the stream
+    put_set(f.ring, 8, 0x300, 2);
+    ASSERT_TRUE(f.gpu.ring_doorbell(f.index, 12));
+    ASSERT_TRUE(f.gpu.wait_idle(5s));
+    EXPECT_EQ(read_offset(f.read_pointer), 12u);
+    EXPECT_EQ(f.gpu.registers().get(0xA300), 1u);
+    EXPECT_EQ(f.gpu.stats().errors, 1u);
+
+    put_set(f.ring, 12, 0x300, 3);
+    ASSERT_TRUE(f.gpu.ring_doorbell(f.index, 0));
+    ASSERT_TRUE(f.gpu.wait_idle(5s));
+    EXPECT_EQ(read_offset(f.read_pointer), 0u);
+    EXPECT_EQ(f.gpu.registers().get(0xA300), 3u);
+    EXPECT_EQ(f.gpu.stats().errors, 1u);
+}
+
 // The ring holds INDIRECT_BUFFERs as the game writes them (0x108b330: shader-type bit, bits 23 and
 // 24). One with the chain bit nests too, so the packet after it in the ring still runs. Its
 // RELEASE_MEM interrupt reports the ring's source.
