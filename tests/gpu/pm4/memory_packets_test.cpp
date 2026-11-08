@@ -90,21 +90,41 @@ TEST(MemoryPackets, CopyDataMovesBetweenMemoryAndRegisters) {
     EXPECT_EQ(f.regs.get(0xA2CB), 0x11u);
     EXPECT_EQ(f.regs.get(0xA2CC), 0x11u);
     EXPECT_EQ(mem, (std::array<std::uint32_t, 4>{0x11, 0x22, 0x33, 0x44}));
-    EXPECT_EQ(f.syncs, std::vector{SyncPoint::before_write});
+    EXPECT_EQ(f.syncs, std::vector(2, SyncPoint::before_write));
+}
+
+TEST(MemoryPackets, PacketVariantsAndDrops) {
+    Fixture f;
+    alignas(8) std::array<std::uint32_t, 6> mem{0x55, 0x66, 0, 0, 0, 0};
+    alignas(8) std::uint64_t semaphore = 7;
+    std::vector<std::uint32_t> dcb;
+    packet(dcb, IT_COPY_DATA, {0x10509, 0, 0, lo(&mem[2]), hi(&mem[2])});  // GPU clock, 64 bits
+    packet(dcb, IT_COPY_DATA, {0x501, lo(&mem[0]), hi(&mem[0]), lo(&mem[4]), hi(&mem[4])});  // 32
+    packet(dcb, IT_COPY_DATA, {0x3, 0x10, 0, 0xA2CB, 0});  // unknown source: skipped
+    packet(dcb, IT_WRITE_DATA, {0x10000, 0xA300, 0, 5, 6});  // one address: both go to 0xA300
+    packet(dcb, IT_WRITE_DATA, {0, 0x10, 0, 1});              // outside the register spaces
+    packet(dcb, IT_MEM_SEMAPHORE, {lo(&semaphore), hi(&semaphore) | 0x20000000u});  // unknown
+    EXPECT_EQ(f.run(dcb), RunResult::done);
+    EXPECT_NE(mem[2] | mem[3], 0u);
+    EXPECT_EQ(mem[4], 0x55u);
+    EXPECT_EQ(mem[5], 0u);
+    EXPECT_EQ(f.regs.get(0xA2CB), 0u);
+    EXPECT_EQ(f.regs.get(0xA300), 6u);
+    EXPECT_EQ(semaphore, 7u);
 }
 
 TEST(MemoryPackets, DmaDataCopiesAndFills) {
     Fixture f;
     std::array<std::uint8_t, 8> src{1, 2, 3, 4, 5, 6, 7, 8};
     std::array<std::uint8_t, 8> copy{};
-    std::array<std::uint32_t, 3> fill{};
+    alignas(4) std::array<std::uint8_t, 13> fill{};
     std::vector<std::uint32_t> dcb;
     packet(dcb, IT_DMA_DATA__CI__VI, {0, lo(&src[1]), hi(&src[1]), lo(&copy[2]), hi(&copy[2]), 5});
-    packet(dcb, IT_DMA_DATA__CI__VI, {0x40000000, 0xAB, 0, lo(&fill[0]), hi(&fill[0]), 8});
-    packet(dcb, IT_DMA_DATA__CI__VI, {0x40100000, 0xCD, 0, lo(&fill[2]), hi(&fill[2]), 4});  // GDS
+    packet(dcb, IT_DMA_DATA__CI__VI, {0x40000000, 0xAB, 0, lo(&fill[1]), hi(&fill[1]), 8});  // unaligned
+    packet(dcb, IT_DMA_DATA__CI__VI, {0x40100000, 0xCD, 0, lo(&fill[9]), hi(&fill[9]), 4});  // GDS
     EXPECT_EQ(f.run(dcb), RunResult::done);
     EXPECT_EQ(copy, (std::array<std::uint8_t, 8>{0, 0, 2, 3, 4, 5, 6, 0}));
-    EXPECT_EQ(fill, (std::array<std::uint32_t, 3>{0xAB, 0xAB, 0}));
+    EXPECT_EQ(fill, (std::array<std::uint8_t, 13>{0, 0xAB, 0, 0, 0, 0xAB, 0, 0, 0, 0, 0, 0, 0}));
     EXPECT_EQ(f.syncs.size(), 2u);
 }
 

@@ -211,6 +211,7 @@ Parser::Step Parser::copy_data(const Packet& packet) {
         return Step::next;
     }
     std::uint64_t value = 0;
+    bool synced = false;
     if (src_sel == 0) {
         const std::uint32_t reg = packet.body[1] & 0xFFFF;
         value = regs_.get(reg) | (bytes == 8 ? std::uint64_t{regs_.get(reg + 1)} << 32 : 0);
@@ -219,6 +220,8 @@ Parser::Step Parser::copy_data(const Packet& packet) {
         if (!accessible(src, bytes)) {
             return Step::fail;
         }
+        sync(SyncPoint::before_write);  // earlier GPU work may have written the source
+        synced = true;
         value = load32(src) | (bytes == 8 ? std::uint64_t{load32(src + 4)} << 32 : 0);
     } else if (src_sel == 5) {
         value = std::uint64_t{packet.body[2]} << 32 | packet.body[1];
@@ -240,7 +243,9 @@ Parser::Step Parser::copy_data(const Packet& packet) {
     if (!accessible(dest, bytes)) {
         return Step::fail;
     }
-    sync(SyncPoint::before_write);
+    if (!synced) {
+        sync(SyncPoint::before_write);
+    }
     store(dest, value, bytes);
     return Step::next;
 }
@@ -278,8 +283,9 @@ Parser::Step Parser::dma_data(const Packet& packet) {
     }
     sync(SyncPoint::before_write);
     if (fill) {
-        auto* const out = reinterpret_cast<std::uint32_t*>(dest);
-        std::fill_n(out, bytes / 4, packet.body[1]);
+        for (std::size_t i = 0; i < bytes; i += 4) {  // the destination may be unaligned
+            std::memcpy(reinterpret_cast<void*>(dest + i), &packet.body[1], 4);
+        }
     } else {
         std::memmove(reinterpret_cast<void*>(dest), reinterpret_cast<const void*>(src), bytes);
     }
