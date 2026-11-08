@@ -5,6 +5,7 @@
 // imports stay stubs.
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <vector>
 
@@ -25,6 +26,7 @@ std::atomic<std::uint64_t> submits{0};
 // Compute pipes and queues per pipe the map accepts (shadPS4: pipe 7 belongs to the system).
 constexpr std::uint32_t compute_pipes = 7;
 constexpr std::uint32_t queues_per_pipe = 8;
+pm4::GpuTrace* gpu_trace = nullptr;  // set before the GPU thread starts, then never changed
 
 bool guest_readable(const void* address, std::size_t bytes) {
     const auto start = reinterpret_cast<std::uintptr_t>(address);
@@ -58,7 +60,7 @@ bool queueable(std::string_view call, std::string_view kind, std::uint32_t i,
 // wait for packets that never run.
 void queue_buffers(std::string_view call, std::uint32_t count, const std::uint64_t* draw,
                    const std::uint32_t* draw_sizes, const std::uint64_t* ccb,
-                   const std::uint32_t* ccb_sizes) {
+                   const std::uint32_t* ccb_sizes, bool flip = false) {
     log_submit(call, count, draw_sizes);
     if (draw == nullptr || draw_sizes == nullptr) {
         count = 0;
@@ -86,14 +88,22 @@ void queue_buffers(std::string_view call, std::uint32_t count, const std::uint64
         gpu_thread().submit(pm4::Queue::constant, constants);
     }
     if (!draws.empty()) {
-        gpu_thread().submit(pm4::Queue::graphics, draws);
+        gpu_thread().submit(pm4::Queue::graphics, draws, flip);
     }
 }
 
 }  // namespace
 
+bool enable_gpu_trace(const std::filesystem::path& path) {
+    if (gpu_trace != nullptr) {
+        return false;
+    }
+    gpu_trace = pm4::GpuTrace::open(path).release();  // never destroyed, like the thread
+    return gpu_trace != nullptr;
+}
+
 pm4::GpuThread& gpu_thread() {
-    static pm4::GpuThread thread(guest_readable);
+    static pm4::GpuThread thread(guest_readable, {}, gpu_trace);
     return thread;
 }
 
@@ -115,7 +125,7 @@ std::int32_t gnm_submit_and_flip(std::uint32_t count, const std::uint64_t* draw,
                                  const std::uint32_t* draw_sizes, const std::uint64_t* ccb,
                                  const std::uint32_t* ccb_sizes, std::int32_t handle,
                                  std::int32_t index, std::int32_t mode, std::int64_t arg) {
-    queue_buffers("submit and flip", count, draw, draw_sizes, ccb, ccb_sizes);
+    queue_buffers("submit and flip", count, draw, draw_sizes, ccb, ccb_sizes, true);
     return sceVideoOutSubmitFlip(handle, index, mode, arg);
 }
 

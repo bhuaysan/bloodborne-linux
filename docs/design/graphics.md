@@ -631,6 +631,16 @@ The game reaches its main loop (M3). On the render thread it binds shaders, buil
 - **Clip space** (`PA_CL_CLIP_CNTL`, depth range, viewport orientation) is settled in the pipeline-state item against a known draw of the game ("Pipeline state (item 26, as built)" below).
 - **Debugging.** `--gpu-trace` logs per frame the packets, draws and dispatches with their key state; RenderDoc can capture the Vulkan side.
 
+### GPU trace (item 30, as built)
+
+`bb-run --gpu-trace` writes `<UTC time>-<pid>-gpu-trace.txt` (mode 0600, never overwritten) in the logs directory of the state directory. `pm4::GpuTrace` (`src/gpu/pm4/gpu_trace.cpp`) is written by the GPU thread only, from the parser's per-packet trace hook, so the register mirror is as it is after the packet. Without the option the hook costs one pointer test per packet (`trace_ != nullptr`), on top of the counter and the trace-level log call that were already there.
+
+- A draw (`DRAW_*`) or dispatch packet gives one line: `frame <n>: draw op=<opcode> body=<dwords> <first four dwords> vs=<address> ps=<address> rt0=<CB_COLOR0_BASE address> prim=<VGT_PRIMITIVE_TYPE>`, or `frame <n>: dispatch op=<opcode> body=<dwords> <first four dwords> cs=<address> threads=<x>x<y>x<z>`.
+- A frame ends when the GPU thread finished the last draw stream of a `sceGnmSubmitAndFlipCommandBuffers` call (`GpuThread::submit(..., ends_frame)` marks that stream). The line `frame <n> end: <packets> packets, <draws> draws, <dispatches> dispatches; opcodes: <opcode>x<count> ...` counts every packet that ran since the previous frame end, then the file is flushed. Constant and compute streams count into the frame in which they ran.
+- Test: `tests/gpu/pm4/gpu_trace_test.cpp` (lines, frame ends, no overwrite, no frame end without the mark).
+
+Short game run (`bb-run --headless --gpu-trace --timeout 40`, debug preset): the trace is empty (0 bytes). In the first 40 s the game's only call into the submit imports is `sceGnmValidateCommandBuffers`, which queues nothing; it never reaches a submit-and-flip, because the compute queue imports (`sceGnmDingDong` and the rest) are still logging stubs and the game goes on to its network and pad polling. The per-frame output is therefore verified by the unit tests only, and the game-run trace has to be repeated once the first-frame item (28, #284) lands.
+
 ### shadPS4 map
 
 Commit `ff1b7a2e87eef8f301377e0cabbbeeeb73cc3b49`, all GPL-2.0-or-later except `externals/gcn` (MIT, AMD):

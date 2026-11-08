@@ -1,3 +1,3 @@
 bb_add_test(pm4_test SOURCES packet_test.cpp registers_test.cpp parser_test.cpp targets_test.cpp
             gpu_thread_test.cpp constant_engine_test.cpp memory_packets_test.cpp
-            compute_ring_test.cpp LIBS bbpm4)
+            compute_ring_test.cpp gpu_trace_test.cpp LIBS bbpm4)

@@ -22,6 +22,7 @@
 #include <span>
 #include <thread>
 
+#include "gpu/pm4/gpu_trace.hpp"
 #include "gpu/pm4/parser.hpp"
 #include "gpu/pm4/registers.hpp"
 
@@ -45,7 +46,10 @@ public:
     // registers, then starts the thread. `readable` checks INDIRECT_BUFFER targets and the memory
     // packets' addresses (Parser::set_readable); `interrupt` receives the end-of-pipe interrupts
     // (Parser::set_interrupt) on the GPU thread.
-    explicit GpuThread(Parser::Readable readable = {}, Parser::Interrupt interrupt = {});
+    // `trace`, if not null, logs the packets, draws and dispatches (gpu_trace.hpp) and must
+    // outlive the thread; without one a packet costs one branch more.
+    explicit GpuThread(Parser::Readable readable = {}, Parser::Interrupt interrupt = {},
+                       GpuTrace* trace = nullptr);
     // Stops the thread, also while a stream waits. Queued streams are dropped.
     ~GpuThread();
 
@@ -54,7 +58,9 @@ public:
 
     // Queues one stream per buffer, in order, at the end of `queue`. The buffers must stay
     // readable until their streams finished.
-    void submit(Queue queue, std::span<const std::span<const std::uint32_t>> buffers);
+    // `ends_frame` marks the last stream: the trace closes a frame when it finished.
+    void submit(Queue queue, std::span<const std::span<const std::uint32_t>> buffers,
+                bool ends_frame = false);
 
     // Waits until every queue is empty. False if `timeout` passed first.
     bool wait_idle(std::chrono::milliseconds timeout);
@@ -106,6 +112,7 @@ private:
     std::array<std::deque<Stream>, queue_count + ring_count> queues_;
     std::array<Ring, ring_count> rings_;
     Stats stats_;
+    GpuTrace* trace_;
     std::atomic<std::uint64_t> packets_{0};
     bool stop_ = false;
 

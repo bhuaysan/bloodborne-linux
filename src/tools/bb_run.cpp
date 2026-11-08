@@ -41,6 +41,7 @@
 #include "hle/prx_init.hpp"
 #include "hle/system/save_data.hpp"
 #include "hle/system/system.hpp"
+#include "hle/video/video.hpp"
 #include "hook/hook.hpp"
 #include "loader/load_set.hpp"
 #include "tools/main_loop_probe.hpp"
@@ -49,7 +50,6 @@
 #include "gpu/vk/device.hpp"
 #include "gpu/vk/presenter.hpp"
 #include "gpu/window/window.hpp"
-#include "hle/video/video.hpp"
 #endif
 
 // The guest window lies in AddressSanitizer's shadow gap, which ASan keeps PROT_NONE without this
@@ -280,6 +280,16 @@ int start(const bb::tools::RunOptions& options) {
     }
     bb::common::log(LogLevel::info, channel, "game {}, profile {}", game_dir->string(),
                     options.profile);
+    if (options.gpu_trace) {
+        const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
+        const fs::path trace = dirs.ensure(dirs.logs()) /
+                               std::format("{:%Y%m%dT%H%M%S}Z-{}-gpu-trace.txt", now, ::getpid());
+        if (!bb::hle::video::enable_gpu_trace(trace)) {
+            std::cerr << "bb-run: cannot create the GPU trace " << trace.string() << '\n';
+            return 1;
+        }
+        bb::common::log(LogLevel::info, channel, "GPU trace {}", trace.string());
+    }
 
     // Never destroyed: the game runs in it until the process ends.
     auto* game = new Game{bb::loader::map_load_set(*game_dir)};

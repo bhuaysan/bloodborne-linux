@@ -14,6 +14,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 
 #include "gpu/pm4/gpu_thread.hpp"
 
@@ -103,6 +104,10 @@ inline constexpr std::size_t flip_count_offset = 0x18;
 // The GPU thread, started on first use. INDIRECT_BUFFER targets are checked against the guest
 // mappings.
 pm4::GpuThread& gpu_thread();
+
+// Starts the GPU trace (gpu_trace.hpp) into a new file at `path`. Call it before the first use of
+// gpu_thread(). False if the file can't be created or a trace is already on.
+bool enable_gpu_trace(const std::filesystem::path& path);
 
 // NID zwY0YV91TTI, sceGnmSubmitCommandBuffers. Submits `count` draw command buffers (addresses and
 // sizes in bytes) and as many optional constant command buffers (null at 0x26b0c23). Called from

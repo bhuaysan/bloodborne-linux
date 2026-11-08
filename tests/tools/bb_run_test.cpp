@@ -54,6 +54,7 @@ TEST(RunOptions, Defaults) {
     EXPECT_FALSE(o.log_spec);
     EXPECT_TRUE(o.log_file);
     EXPECT_FALSE(o.headless);
+    EXPECT_FALSE(o.gpu_trace);
     EXPECT_EQ(o.device, "");
     EXPECT_FALSE(o.help);
 }
@@ -61,12 +62,13 @@ TEST(RunOptions, Defaults) {
 TEST(RunOptions, ParsesEveryOption) {
     const RunOptions o = parse({"--game-dir", "/games/bb", "--profile", "test_1-a", "--timeout",
                                 "10", "--stop-at-main-loop", "--log", "hle=trace,warn",
-                                "--no-log-file", "--headless", "--device", "RADV"});
+                                "--no-log-file", "--headless", "--device", "RADV", "--gpu-trace"});
     EXPECT_EQ(o.game_dir, std::filesystem::path("/games/bb"));
     EXPECT_EQ(o.profile, "test_1-a");
     EXPECT_EQ(o.timeout_seconds, 10U);
     EXPECT_TRUE(o.stop_at_main_loop);
     EXPECT_EQ(o.log_spec, "hle=trace,warn");
+    EXPECT_TRUE(o.gpu_trace);
     EXPECT_FALSE(o.log_file);
     EXPECT_TRUE(o.headless);
     EXPECT_EQ(o.device, "RADV");

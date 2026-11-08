@@ -51,6 +51,9 @@ public:
     Engine engine() const { return engine_; }
     std::uint32_t interrupt_source() const { return interrupt_source_; }
     bool done() const { return depth_ == 0; }
+    // Whether the stream is the last of a submit-and-flip (the GPU trace ends a frame there).
+    bool ends_frame() const { return ends_frame_; }
+    void set_ends_frame() { ends_frame_ = true; }
     // The next dword to run, or null when done.
     const std::uint32_t* position() const;
     // The position in the submitted buffer: past an INDIRECT_BUFFER that is still running, at the
@@ -73,6 +76,7 @@ private:
     unsigned depth_ = 0;
     Engine engine_;
     std::uint32_t interrupt_source_;
+    bool ends_frame_ = false;
 };
 
 class Parser {

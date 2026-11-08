@@ -65,6 +65,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args) {
             options.log_file = false;
         } else if (arg == "--headless") {
             options.headless = true;
+        } else if (arg == "--gpu-trace") {
+            options.gpu_trace = true;
         } else if (arg == "--device") {
             options.device = value();
         } else {

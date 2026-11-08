@@ -20,7 +20,8 @@ constexpr auto poll_interval = std::chrono::microseconds(100);
 
 }  // namespace
 
-GpuThread::GpuThread(Parser::Readable readable, Parser::Interrupt interrupt) {
+GpuThread::GpuThread(Parser::Readable readable, Parser::Interrupt interrupt, GpuTrace* trace)
+    : trace_(trace) {
     regs_.set_context_defaults(context_defaults());
     regs_.clear_context();
     parser_.set_readable(std::move(readable));
@@ -29,6 +30,9 @@ GpuThread::GpuThread(Parser::Readable readable, Parser::Interrupt interrupt) {
         packets_.fetch_add(1, std::memory_order_relaxed);
         common::log(common::LogLevel::trace, channel, "packet {:#04x}, {} dwords",
                     packet.opcode(), packet.body.size());
+        if (trace_ != nullptr) {
+            trace_->packet(packet, regs_);
+        }
     });
     thread_ = std::thread([this] { loop(); });
 }
@@ -42,12 +46,16 @@ GpuThread::~GpuThread() {
     thread_.join();
 }
 
-void GpuThread::submit(Queue queue, std::span<const std::span<const std::uint32_t>> buffers) {
+void GpuThread::submit(Queue queue, std::span<const std::span<const std::uint32_t>> buffers,
+                       bool ends_frame) {
     {
         const std::scoped_lock lock(mutex_);
         for (const auto buffer : buffers) {
             queues_[static_cast<std::size_t>(queue)].emplace_back(
                 buffer, queue == Queue::constant ? Engine::constant : Engine::draw);
+        }
+        if (ends_frame && !buffers.empty()) {
+            queues_[static_cast<std::size_t>(queue)].back().set_ends_frame();
         }
         stats_.submitted += buffers.size();
     }
@@ -196,6 +204,9 @@ bool GpuThread::run_front(std::size_t index, bool& waiting) {
         if (result == RunResult::waiting) {
             waiting = true;
             return packets_.load(std::memory_order_relaxed) != packets;
+        }
+        if (trace_ != nullptr && stream->ends_frame()) {
+            trace_->end_frame();
         }
         queue.pop_front();
         ++stats_.finished;

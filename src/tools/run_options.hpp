@@ -16,7 +16,7 @@ namespace bb::tools {
 
 inline constexpr std::string_view run_usage =
     "usage: bb-run [--game-dir DIR] [--profile NAME] [--timeout SECONDS] [--stop-at-main-loop]\n"
-    "              [--log SPEC] [--no-log-file] [--headless] [--device NAME]\n"
+    "              [--log SPEC] [--no-log-file] [--headless] [--device NAME] [--gpu-trace]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
@@ -27,6 +27,8 @@ inline constexpr std::string_view run_usage =
     "                       (replaces BB_LOG)\n"
     "  --no-log-file        log to stderr only, not to a file in the logs directory\n"
     "  --headless           open no window; flips complete without being presented\n"
+    "  --gpu-trace          write the GPU packets, draws and dispatches of each frame to a file\n"
+    "                       in the logs directory\n"
     "  --device NAME        the Vulkan device whose name contains NAME, ignoring case\n"
     "                       (default: a discrete GPU first)\n";
 
@@ -42,6 +44,7 @@ struct RunOptions {
     bool log_file = true;
     bool headless = false;  // --headless: no window and no presentation
     std::string device;     // --device: the selector of bb::vk::choose_device, empty for any
+    bool gpu_trace = false;  // --gpu-trace
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 
