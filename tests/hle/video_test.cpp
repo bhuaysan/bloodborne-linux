@@ -350,6 +350,52 @@ TEST(HleVideo, ComputeQueuesRunTheirRing) {
 
 // The eboot imports each of them under the library it is registered for, so relocating it puts
 // the implementation into the GOT slot.
+// An EVENT_WRITE_EOP with an interrupt writes its label and wakes the queue registered for it.
+TEST(HleVideo, EndOfPipeInterruptTriggersGnmEvents) {
+    namespace vmem = bb::hle::kernel::vmem;
+    vmem::Mapping m;
+    m.length = vmem::page_size;
+    m.prot = PROT_READ | PROT_WRITE;
+    m.host_flags = MAP_PRIVATE | MAP_ANONYMOUS;
+    std::uintptr_t base = 0;
+    ASSERT_EQ(vmem::map(m, base), 0);
+    auto* dwords = reinterpret_cast<std::uint32_t*>(base);
+    const auto label = base + 0x100;
+    const std::array<std::uint32_t, 6> eop{bb::pm4::type3_header(IT_EVENT_WRITE_EOP, 5), 0x504,
+                                           static_cast<std::uint32_t>(label),
+                                           1u << 29 | 2u << 24 |
+                                               static_cast<std::uint32_t>(label >> 32),
+                                           0x77, 0};
+    std::memcpy(dwords, eop.data(), sizeof eop);
+    const std::uint64_t buffer = base;
+    const std::uint32_t size = sizeof eop;
+    std::uint64_t queue = 0;
+    ASSERT_EQ(bb::hle::kernel::equeue_create(&queue, "GnmEop"), 0);
+    EXPECT_LT(sceGnmAddEqEvent(queue + 1000, bb::pm4::gfx_eop_interrupt, 0), 0);
+    EXPECT_EQ(sceGnmAddEqEvent(queue, bb::pm4::gfx_eop_interrupt, 0x99), 0);
+
+    EXPECT_EQ(gnm_submit(1, &buffer, &size, nullptr, nullptr), 0);
+    const std::uint32_t timeout = 5'000'000;
+    const WaitOutcome w = wait_for(queue, &timeout);
+    EXPECT_EQ(w.result, 0);
+    EXPECT_EQ(w.count, 1);
+    EXPECT_EQ(w.event.kind, gnm_event_kind);
+    EXPECT_EQ(w.event.user_data, 0x99u);
+    EXPECT_EQ(sceGnmGetEqEventType(&w.event), 0x40);
+    ASSERT_TRUE(gpu_thread().wait_idle(5s));
+    EXPECT_EQ(dwords[0x40], 0x77u);
+
+    // Without the registration the interrupt triggers nothing.
+    EXPECT_EQ(sceGnmDeleteEqEvent(queue, bb::pm4::gfx_eop_interrupt), 0);
+    EXPECT_EQ(gnm_submit(1, &buffer, &size, nullptr, nullptr), 0);
+    ASSERT_TRUE(gpu_thread().wait_idle(5s));
+    const std::uint32_t no_wait = 0;
+    const auto timed_out = static_cast<std::int32_t>(0x8002003c);  // ETIMEDOUT
+    EXPECT_EQ(wait_for(queue, &no_wait).result, timed_out);
+    EXPECT_EQ(bb::hle::kernel::equeue_delete(queue), 0);
+    EXPECT_EQ(vmem::unmap(base, vmem::page_size), 0);
+}
+
 TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
     BB_REQUIRE_GAME(game);
     bb::loader::Image image = bb::loader::map_eboot(game);
@@ -359,7 +405,7 @@ TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
         std::string_view library, nid;
         void* impl;
     };
-    const std::array<Expected, 20> expected{{
+    const std::array<Expected, 23> expected{{
         {"libSceVideoOut", "Up36PTk687E", reinterpret_cast<void*>(&sceVideoOutOpen)},
         {"libSceGnmDriver", "29oKvKXzEZo", reinterpret_cast<void*>(&gnm_map_compute_queue)},
         {"libSceGnmDriver", "ArSg-TGinhk", reinterpret_cast<void*>(&gnm_unmap_compute_queue)},
@@ -380,6 +426,9 @@ TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
         {"libSceGnmDriver", "bQVd5YzCal0", reinterpret_cast<void*>(&sceGnmSetPsShader)},
         {"libSceGnmDriver", "4MgRw-bVNQU", reinterpret_cast<void*>(&sceGnmSetPsShader)},
         {"libSceGnmDriver", "KXltnCwEJHQ", reinterpret_cast<void*>(&sceGnmSetCsShader)},
+        {"libSceGnmDriver", "b0xyllnVY-I", reinterpret_cast<void*>(&sceGnmAddEqEvent)},
+        {"libSceGnmDriver", "PVT+fuoS9gU", reinterpret_cast<void*>(&sceGnmDeleteEqEvent)},
+        {"libSceGnmDriver", "UoYY0DWMC0U", reinterpret_cast<void*>(&sceGnmGetEqEventType)},
     }};
     std::set<std::string> imports;
     for (const bb::loader::Symbol& sym : image.dyn.symbols) {

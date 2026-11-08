@@ -16,6 +16,7 @@
 #include <cstdint>
 
 #include "gpu/pm4/gpu_thread.hpp"
+#include "hle/kernel/equeue.hpp"
 
 namespace bb::hle::video {
 
@@ -28,6 +29,9 @@ inline constexpr std::int32_t video_out_error = static_cast<std::int32_t>(0x8029
 // no caller reads a field): id is the port handle, kind is flip_event_kind, detail the buffer
 // index, data the flip argument, user_data the value given at registration.
 inline constexpr std::int16_t flip_event_kind = 1;
+// The GPU events (sceGnmAddEqEvent): id and data are the interrupt source, kind is
+// gnm_event_kind, user_data the value given at registration.
+inline constexpr std::int16_t gnm_event_kind = 2;
 
 // The interval of flip completion.
 using Tick = std::chrono::duration<std::int64_t, std::ratio<1, 60>>;
@@ -165,5 +169,17 @@ void gnm_ding_dong(std::uint32_t id, std::uint32_t write_offset);
 // Returns 0 and does nothing else: the GPU thread needs no signal that a frame's submissions are
 // complete. Called through 0x1089b50 after the submit-and-flip at 0x26b0dff and 0x26b0ee2.
 std::int32_t sceGnmSubmitDone();
+
+// NID b0xyllnVY-I. Registers queue `equeue` for the GPU interrupts of source `id`
+// (pm4::gfx_eop_interrupt, 0x40, for the EVENT_WRITE_EOP and RELEASE_MEM interrupts of the
+// graphics queue), with `user_data` for the events; a second registration replaces the user data.
+// Fails with EBADF for a queue that doesn't exist.
+std::int32_t sceGnmAddEqEvent(std::uint64_t equeue, std::uint64_t id, std::uint64_t user_data);
+
+// NID PVT+fuoS9gU. Ends that registration. EBADF for a queue that doesn't exist.
+std::int32_t sceGnmDeleteEqEvent(std::uint64_t equeue, std::uint64_t id);
+
+// NID UoYY0DWMC0U. The interrupt source of a GPU event (its data field).
+std::int32_t sceGnmGetEqEventType(const GuestEvent* event);
 
 }  // namespace bb::hle::video
