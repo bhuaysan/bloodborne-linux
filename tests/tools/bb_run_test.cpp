@@ -273,6 +273,23 @@ TEST(BbRunGame, RunsTheEntry) {
                                               "data/bloodborne-linux/profiles/test/savedata"));
 }
 
+// --gpu-trace creates its file next to the log file, and the run says where.
+TEST(BbRunGame, CreatesTheGpuTrace) {
+    BB_REQUIRE_GAME(game);
+    const TempDir dir;
+    const Result r = run_bb_run(dir, "--headless --gpu-trace --timeout 10 --profile test "
+                                     "--game-dir " +
+                                         quote(game.string()));
+    ASSERT_NE(r.status, -1) << r.output;
+    EXPECT_NE(r.output.find("GPU trace "), std::string::npos) << r.output;
+    int traces = 0;
+    for (const auto& entry :
+         std::filesystem::directory_iterator(dir.path() / "state/bloodborne-linux/logs")) {
+        traces += entry.path().string().ends_with("-gpu-trace.txt") ? 1 : 0;
+    }
+    EXPECT_EQ(traces, 1) << r.output;
+}
+
 // The goal of M3 (docs/design/m3-core-os.md, "Goal"): the game reaches its main loop, and bb-run
 // stops there with status 0.
 TEST(BbRunGame, ReachesTheMainLoop) {

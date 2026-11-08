@@ -94,6 +94,8 @@ void GpuTrace::packet(const Packet& packet, const RegisterMirror& regs) {
     const std::string source = ring_ < 0 ? std::string() : std::format(" ring{}", ring_);
     std::fprintf(sink_, "frame %llu%s: %s\n", static_cast<unsigned long long>(frame_ + 1),
                  source.c_str(), line.c_str());
+    // Flush per line so a timeout or crash mid-frame keeps the partial frame.
+    std::fflush(sink_);
 }
 
 void GpuTrace::end_frame() {
