@@ -185,7 +185,10 @@ Parser::Step Parser::execute(Stream& stream, const Packet& packet) {
         regs_.clear_context();
         break;
     case IT_WRITE_DATA:
+    case IT_COPY_DATA:
+    case IT_DMA_DATA__CI__VI:
     case IT_WAIT_REG_MEM:
+    case IT_MEM_SEMAPHORE:
     case IT_EVENT_WRITE_EOP:
     case IT_EVENT_WRITE_EOS:
     case IT_RELEASE_MEM__CI__VI: {

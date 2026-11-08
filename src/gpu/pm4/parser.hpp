@@ -123,12 +123,17 @@ private:
     // The memory packets (memory_packets.cpp). On `next` the caller moves past the packet.
     Step memory_packet(Engine engine, const Packet& packet);
     Step write_data(Engine engine, const Packet& packet);
+    Step copy_data(const Packet& packet);
+    Step dma_data(const Packet& packet);
     Step wait_reg_mem(const Packet& packet);
+    Step mem_semaphore(const Packet& packet);
     // The label write and interrupt of EVENT_WRITE_EOP, EVENT_WRITE_EOS and RELEASE_MEM.
     Step release(std::uint64_t address, std::uint32_t data_sel, std::uint64_t data,
                  std::uint32_t int_sel);
     // Whether [address, address + bytes) is guest memory (`readable`). Logs if not.
     bool accessible(std::uint64_t address, std::size_t bytes);
+    // Writes one register at an absolute dword offset. Logs once per offset outside the spaces.
+    void write_register(std::uint32_t reg, std::uint32_t value);
     void sync(SyncPoint point) const;
     // Whether an unsupported packet variant `key` is seen for the first time (to log it once).
     bool first_time(std::uint32_t key) { return logged_variants_.insert(key).second; }

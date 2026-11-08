@@ -56,17 +56,18 @@ struct Fixture {
     }
 };
 
-TEST(MemoryPackets, WriteDataWritesMemory) {
+TEST(MemoryPackets, WriteDataWritesMemoryAndRegisters) {
     Fixture f;
     std::array<std::uint32_t, 4> mem{};
     std::vector<std::uint32_t> dcb;
     packet(dcb, IT_WRITE_DATA, {0x04000500, lo(&mem[0]), hi(&mem[0]), 1, 2});  // the game's
     packet(dcb, IT_WRITE_DATA, {0x00010200, lo(&mem[3]), hi(&mem[3]), 7, 8});  // one address
-    packet(dcb, IT_WRITE_DATA, {0, 0xA300, 0, 5, 6});  // to registers: not yet
+    packet(dcb, IT_WRITE_DATA, {0, 0xA300, 0, 5, 6});                           // registers
     packet(dcb, IT_WRITE_DATA, {0x80000500, lo(&mem[2]), hi(&mem[2]), 9});     // CE's: skipped
     EXPECT_EQ(f.run(dcb), RunResult::done);
     EXPECT_EQ(mem, (std::array<std::uint32_t, 4>{1, 2, 0, 8}));
-    EXPECT_EQ(f.regs.get(0xA300), 0u);
+    EXPECT_EQ(f.regs.get(0xA300), 5u);
+    EXPECT_EQ(f.regs.get(0xA301), 6u);
     EXPECT_EQ(f.syncs, (std::vector{SyncPoint::before_write, SyncPoint::before_write}));
 
     // The CE runs the WRITE_DATA with engine select 2 (0x11fd520) and skips the others.
@@ -75,6 +76,36 @@ TEST(MemoryPackets, WriteDataWritesMemory) {
     packet(ccb, IT_WRITE_DATA, {0x00000500, lo(&mem[0]), hi(&mem[0]), 9});
     EXPECT_EQ(f.run(ccb, Engine::constant), RunResult::done);
     EXPECT_EQ(mem, (std::array<std::uint32_t, 4>{1, 2, 9, 8}));
+}
+
+TEST(MemoryPackets, CopyDataMovesBetweenMemoryAndRegisters) {
+    Fixture f;
+    std::array<std::uint32_t, 4> mem{0x11, 0x22, 0, 0};
+    std::vector<std::uint32_t> dcb;
+    // The game's copy into VGT_STRMOUT_DRAW_OPAQUE_BUFFER_FILLED_SIZE (0x107be30).
+    packet(dcb, IT_COPY_DATA, {0x1, lo(&mem[0]), hi(&mem[0]), 0xA2CB, 0});
+    packet(dcb, IT_COPY_DATA, {0x10505, 0x33, 0x44, lo(&mem[2]), hi(&mem[2])});  // immediate, 64
+    packet(dcb, IT_COPY_DATA, {0x0, 0xA2CB, 0, 0xA2CC, 0});                       // register
+    EXPECT_EQ(f.run(dcb), RunResult::done);
+    EXPECT_EQ(f.regs.get(0xA2CB), 0x11u);
+    EXPECT_EQ(f.regs.get(0xA2CC), 0x11u);
+    EXPECT_EQ(mem, (std::array<std::uint32_t, 4>{0x11, 0x22, 0x33, 0x44}));
+    EXPECT_EQ(f.syncs, std::vector{SyncPoint::before_write});
+}
+
+TEST(MemoryPackets, DmaDataCopiesAndFills) {
+    Fixture f;
+    std::array<std::uint8_t, 8> src{1, 2, 3, 4, 5, 6, 7, 8};
+    std::array<std::uint8_t, 8> copy{};
+    std::array<std::uint32_t, 3> fill{};
+    std::vector<std::uint32_t> dcb;
+    packet(dcb, IT_DMA_DATA__CI__VI, {0, lo(&src[1]), hi(&src[1]), lo(&copy[2]), hi(&copy[2]), 5});
+    packet(dcb, IT_DMA_DATA__CI__VI, {0x40000000, 0xAB, 0, lo(&fill[0]), hi(&fill[0]), 8});
+    packet(dcb, IT_DMA_DATA__CI__VI, {0x40100000, 0xCD, 0, lo(&fill[2]), hi(&fill[2]), 4});  // GDS
+    EXPECT_EQ(f.run(dcb), RunResult::done);
+    EXPECT_EQ(copy, (std::array<std::uint8_t, 8>{0, 0, 2, 3, 4, 5, 6, 0}));
+    EXPECT_EQ(fill, (std::array<std::uint32_t, 3>{0xAB, 0xAB, 0}));
+    EXPECT_EQ(f.syncs.size(), 2u);
 }
 
 TEST(MemoryPackets, LabelWritesAndInterrupts) {
@@ -127,6 +158,29 @@ TEST(MemoryPackets, WaitRegMemWaitsUntilTheCompareHolds) {
     EXPECT_EQ(f.run(reserved), RunResult::error);
 }
 
+TEST(MemoryPackets, MemSemaphoreSignalsAndWaits) {
+    Fixture f;
+    alignas(8) std::uint64_t semaphore = 0;
+    const std::uint32_t hi_bits = hi(&semaphore);
+    std::vector<std::uint32_t> wait;
+    packet(wait, IT_MEM_SEMAPHORE, {lo(&semaphore), 0xE0000000 | hi_bits});
+    std::vector<std::uint32_t> signal;
+    packet(signal, IT_MEM_SEMAPHORE, {lo(&semaphore), 0xC0000000 | hi_bits});  // increment
+    packet(signal, IT_MEM_SEMAPHORE, {lo(&semaphore), 0xC0000000 | hi_bits});
+    std::vector<std::uint32_t> write_one;
+    packet(write_one, IT_MEM_SEMAPHORE, {lo(&semaphore), 0xC0100000 | hi_bits});
+
+    Stream waiting(wait);
+    EXPECT_EQ(f.parser.run(waiting), RunResult::waiting);
+    EXPECT_EQ(f.run(signal), RunResult::done);
+    EXPECT_EQ(semaphore, 2u);
+    EXPECT_EQ(f.parser.run(waiting), RunResult::done);
+    EXPECT_EQ(semaphore, 1u);
+    EXPECT_EQ(f.run(write_one), RunResult::done);
+    EXPECT_EQ(f.run(write_one), RunResult::done);
+    EXPECT_EQ(semaphore, 1u);
+}
+
 TEST(MemoryPackets, AccessesOutsideTheMappingsFail) {
     Fixture f;
     std::array<std::uint32_t, 2> mem{};
@@ -142,6 +196,9 @@ TEST(MemoryPackets, AccessesOutsideTheMappingsFail) {
     };
     EXPECT_TRUE(fails(IT_WRITE_DATA, {0x500, lo(&mem[1]), hi(&mem[1]), 1, 2}));
     const std::uint32_t* past = mem.data() + 2;
+    EXPECT_TRUE(fails(IT_COPY_DATA, {0x501, lo(past), hi(past), lo(&mem[0]), hi(&mem[0])}));
+    EXPECT_TRUE(fails(IT_DMA_DATA__CI__VI, {0, lo(&mem[0]), hi(&mem[0]), lo(&mem[1]), hi(&mem[1]),
+                                            8}));
     EXPECT_TRUE(fails(IT_EVENT_WRITE_EOP, {0x504, lo(&mem[1]), 2u << 29 | hi(&mem[1]), 0, 0}));
     EXPECT_TRUE(fails(IT_WAIT_REG_MEM, {0x13, lo(past), hi(past), 0, 0, 10}));
     EXPECT_TRUE(fails(IT_RELEASE_MEM__CI__VI, {0x514, 1u << 29}));  // body too short
