@@ -44,7 +44,7 @@ const std::array<std::uint32_t, 1> empty_fetch_shader = {s_setpc_b64_s0};
 constexpr std::size_t low_block_align = 0x10000;
 
 // Memory below 4 GiB, 64 KiB aligned. A dword holding such an address, repeated, reads as that
-// address both as a pointer (64 bits masked to 48) and as a V# base (44 bits).
+// address both as a pointer (64 bits masked to 48) and as a V# base (40 bits).
 void* low_block(std::size_t size) {
     void* memory = mmap(nullptr, size + low_block_align, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
@@ -138,9 +138,9 @@ void fill_pixel(Shader::RuntimeInfo& info, const Program& program) {
     info.hw.fs.z_export_format = static_cast<AmdGpu::ShaderExportFormat>(program.block[4] & 0xf);
     const std::uint32_t db_shader_control = program.block[10];
     const std::uint32_t z = (db_shader_control >> 0) & 1;
-    const std::uint32_t stencil = ((db_shader_control >> 6) | (db_shader_control >> 7)) & 1;
+    const std::uint32_t stencil = ((db_shader_control >> 1) | (db_shader_control >> 2)) & 1;
     const std::uint32_t mask = (db_shader_control >> 8) & 1;
-    const std::uint32_t coverage = (db_shader_control >> 10) & 1;
+    const std::uint32_t coverage = (db_shader_control >> 7) & 1;
     info.hw.fs.mrtz_mask = z | (stencil << 1) | (mask << 2) | (coverage << 3);
 }
 
@@ -169,8 +169,9 @@ void fill_geometry(Shader::RuntimeInfo& info, std::span<const std::uint32_t> cop
     gs.vs_copy_hash = 1;
 }
 
-void fill_tess_control(Shader::RuntimeInfo& info) {
+void fill_tess_control(Shader::RuntimeInfo& info, const Settings& settings) {
     auto& tcs = info.sw.tcs;
+    tcs.offchip_lds_enable = (settings.tgid_enable & 1) != 0;  // RSRC2 bit 7 is OC_LDS_EN for a HS
     tcs.hs_output_cp_stride = stride_bytes;
     tcs.num_input_control_points = control_points;
     tcs.num_threads = control_points;
@@ -220,7 +221,7 @@ Shader::RuntimeInfo runtime_info_of(const Program& program,
         break;
     case ProgramType::hs:
         info.Initialize(HwStage::Hull, SwStage::TessellationControl);
-        fill_tess_control(info);
+        fill_tess_control(info, settings);
         break;
     case ProgramType::ds:
         info.Initialize(HwStage::Vertex, SwStage::TessellationEval);
@@ -285,9 +286,6 @@ void install_walker_fault_handler() {
     action.sa_flags = SA_SIGINFO;
     sigemptyset(&action.sa_mask);
     sigaction(SIGSEGV, &action, nullptr);
-
-    // Sirit aborts on an undefined id instead of asserting, so it would end up as a bare signal.
-    signal(SIGABRT, [](int) { report_failure("abort: Sirit met an undefined SPIR-V id"); });
 }
 
 }  // namespace bb::test::shadps4

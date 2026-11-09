@@ -23,8 +23,8 @@ Shader::RuntimeInfo runtime_info_of(const gcn::Program& program,
 enum class TessConstantsForm { inline_v_sharp, through_pointer };
 
 // User data whose pointers lead to what the translator dereferences while translating: the empty
-// fetch shader for a vertex stage, the tessellation constants for a hull or domain shader. All
-// other registers are 0.
+// fetch shader for a vertex stage, the tessellation constants for a hull or domain shader, where
+// every register holds that address. In all other cases the registers are 0.
 UserData user_data_of(const gcn::Program& program, TessConstantsForm form);
 
 // Starts the line a corpus program prints when it fails with a reason.
