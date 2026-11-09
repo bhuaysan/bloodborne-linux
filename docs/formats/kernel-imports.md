@@ -1,6 +1,6 @@
 # Unnamed core OS imports
 
-What the unnamed firmware imports of the static load set (eboot, libc.prx, libSceFios2.prx) do, as far as their callers show. M3 implements them. This note was written before #226 and gives NIDs and behaviour, not names. Names come only from hash matching (see the NID section of [clean-room.md](../clean-room.md)) and live in `symbols/nids.csv`; most of these NIDs have one there, and the HLE registrations carry it in a comment. Only a NID without a row in `symbols/nids.csv` has no name. The implementing issue registers each NID under a descriptive C++ name.
+What the unnamed firmware imports of the static load set (eboot, libc.prx, libSceFios2.prx) do, as far as their callers show. M3 implements them. This note was written before #226 and gives NIDs and behaviour, not names. Names come only from hash matching (see the NID section of [source-policy.md](../source-policy.md)) and live in `symbols/nids.csv`; most of these NIDs have one there, and the HLE registrations carry it in a comment. Only a NID without a row in `symbols/nids.csv` has no name. The implementing issue registers each NID under a descriptive C++ name.
 
 Addresses are link addresses of the file that makes the call. "Survey" marks facts from the M3 survey that the implementing issue still checks at the call sites; the other rows were read at the call sites given.
 

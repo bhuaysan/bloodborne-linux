@@ -1,6 +1,6 @@
 """Checks that every copy of the pinned SHA-256 hashes agrees.
 
-The hashes of eboot.bin and of the PRXs the runtime loads are in docs/clean-room.md,
+The hashes of eboot.bin and of the PRXs the runtime loads are in docs/source-policy.md,
 tools/self2elf/self2elf.py and src/loader/self.hpp. The hash of the eboot.elf that self2elf
 rebuilds is in tools/common/ps4elf.py and tests/loader/self_test.cpp. Needs no game files.
 """
@@ -30,9 +30,9 @@ def by_name(pinned: dict[str, str]) -> dict[str, str]:
 
 class PinnedHashesTest(unittest.TestCase):
     def test_game_files_match_clean_room_table(self):
-        rows = re.findall(rf"^\| `([^`]+)`[^|]*\| `({HEX})` \|$", read("docs/clean-room.md"),
+        rows = re.findall(rf"^\| `([^`]+)`[^|]*\| `({HEX})` \|$", read("docs/source-policy.md"),
                           re.MULTILINE)
-        self.assertTrue(rows, "no hash table in docs/clean-room.md")
+        self.assertTrue(rows, "no hash table in docs/source-policy.md")
         # Compare the rows as a list, so a duplicate or extra row fails instead of being merged.
         known = [(name, digest) for digest, name in self2elf.KNOWN_FILES.items()]
         self.assertEqual(sorted(rows), sorted(known))

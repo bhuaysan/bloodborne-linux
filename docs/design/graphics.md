@@ -9,7 +9,7 @@ How the game's GPU work reaches Vulkan: the shader translator (GCN → SPIR-V), 
   - LLVM's gfx8 (`tonga`) decoder rejects them as invalid encodings.
   - `v_cvt_pkrtz_f16_f32` appears as a VOP2 instruction, which gfx8 only has as VOP3.
   
-  The corpus test (#121) answered whether the game uses Sea Islands (CI) additions to Southern Islands (SI, gfx6): every distinct instruction of the 3,832 programs with different code, assembled for `tahiti` (SI), gives the words of the game, except 265 distinct SMRD encodings with the 32-bit literal offset (`s_load_dwordx8 s[24:31], s[12:13], 0x100`; the SI offset field has 8 bits). No FLAT, no `flat_scratch` and no other CI instruction occurs. So the game relies on CI only for SMRD offsets of 256 dwords and more, which the decoder handles. References: the AMD documents in [clean-room.md](../clean-room.md#allowed-with-credit).
+  The corpus test (#121) answered whether the game uses Sea Islands (CI) additions to Southern Islands (SI, gfx6): every distinct instruction of the 3,832 programs with different code, assembled for `tahiti` (SI), gives the words of the game, except 265 distinct SMRD encodings with the 32-bit literal offset (`s_load_dwordx8 s[24:31], s[12:13], 0x100`; the SI offset field has 8 bits). No FLAT, no `flat_scratch` and no other CI instruction occurs. So the game relies on CI only for SMRD offsets of 256 dwords and more, which the decoder handles. References: the AMD documents in [source-policy.md](../source-policy.md#allowed-with-credit).
 - **Command buffers** are built by GNM code that is statically linked into the eboot. Only the driver boundary is imported: `libSceGnmDriver` has 50 imported functions, two of them named so far. The game hands us finished PM4 streams at submission time.
 - **Shaders live in the game files** (below). Each one can be found again at run time by the hash of its code.
 - **The first wave ran offline**, before M3 reached the main loop: extraction, decoding, translation, and execution tests on our own GCN programs. The second wave works on the running game.
@@ -80,7 +80,7 @@ What a first look shows, to be worked out and documented in `docs/formats/`:
   
   Some files hold more than one program.
 
-FromSoftware file-format material may be used under the rules in [clean-room.md](../clean-room.md). Everything gets checked against the files.
+FromSoftware file-format material may be used under the rules in [source-policy.md](../source-policy.md). Everything gets checked against the files.
 
 `tools/shaderbnd` checks each archive's SHA-256 against a pinned table in a new file in `tools/common/`. It refuses other files. It writes to `analysis/shaders/<archive>/`:
 
@@ -571,7 +571,7 @@ Items 1, 3a and 10 can start at once. Items 5 and 6a wait for item 0.
 
 ## Command buffers to the first frame (second wave)
 
-The game reaches its main loop (M3). On the render thread it binds shaders, builds command buffers, submits them and flips three video-out buffers, all into logging stubs (a 60 s run on 2026-11-06). The second wave turns those submissions into Vulkan work up to the first presented frame. shadPS4 (GPL-2.0-or-later, like us) solves the same problem; its structure is summarised below and its code may be adapted where that is faster, file by file with the notices `docs/clean-room.md` asks for.
+The game reaches its main loop (M3). On the render thread it binds shaders, builds command buffers, submits them and flips three video-out buffers, all into logging stubs (a 60 s run on 2026-11-06). The second wave turns those submissions into Vulkan work up to the first presented frame. shadPS4 (GPL-2.0-or-later, like us) solves the same problem; its structure is summarised below and its code may be adapted where that is faster, file by file with the notices `docs/source-policy.md` asks for.
 
 ### Decisions
 

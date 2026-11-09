@@ -60,7 +60,7 @@ esac
 
 # Paths whose changes always go to the maintainer (pathspecs).
 # A .gitattributes can hide files from diffs, so any of them is protected.
-PROTECTED="AGENTS.md docs/clean-room.md .gitignore :(glob)**/.gitattributes .github tools/githooks tools/merge-pr.sh tools/privacy-check.sh tools/run-tests.sh tools/common/toolenv.py"
+PROTECTED="AGENTS.md docs/source-policy.md .gitignore :(glob)**/.gitattributes .github tools/githooks tools/merge-pr.sh tools/privacy-check.sh tools/run-tests.sh tools/common/toolenv.py"
 MAX_CODE_LINES=500
 
 repo_root="$(git rev-parse --show-toplevel)"

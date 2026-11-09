@@ -7,7 +7,7 @@ The values of the guest kernel ABI (FreeBSD 10, amd64) that differ from Linux or
 Each value names its source:
 
 - **errno(2)**: FreeBSD errno(2), 10.4-RELEASE.
-- **header**: FreeBSD's public system headers, release 10.4.0, upstream source tree (allowed by [clean-room.md](../clean-room.md), logged in [references.md](../references.md)). The file is named per section.
+- **header**: FreeBSD's public system headers, release 10.4.0, upstream source tree (allowed by [source-policy.md](../source-policy.md), logged in [references.md](../references.md)). The file is named per section.
 - **libc NNNN**, **eboot NNNN**, **Fios NNNN**: a use in `libc.prx`, the eboot or `libSceFios2.prx` of the pinned build, at that link address. The address is where the value appears as a constant or offset. Read from our standard-ELF rewrites with objdump.
 - **no use found**: the value comes from the source before it only. Nothing in the three files of the load set was found to use it, so it is not confirmed.
 

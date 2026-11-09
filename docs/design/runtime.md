@@ -54,7 +54,7 @@ Code that names a game address always takes a link address and converts it throu
 
 ### Input
 
-`map_eboot` reads `eboot.bin`, checks its SHA-256 against the hash in `docs/clean-room.md`, and rebuilds the ELF in memory (format in `docs/formats/self.md`). A unit test compares the rebuilt ELF's SHA-256 with the pinned `eboot.elf` hash in `tools/common/ps4elf.py`, which checks the C++ port against `tools/self2elf`.
+`map_eboot` reads `eboot.bin`, checks its SHA-256 against the hash in `docs/source-policy.md`, and rebuilds the ELF in memory (format in `docs/formats/self.md`). A unit test compares the rebuilt ELF's SHA-256 with the pinned `eboot.elf` hash in `tools/common/ps4elf.py`, which checks the C++ port against `tools/self2elf`.
 
 The game directory comes from `BB_GAME_DIR` in the environment. Tests also read `local.env` from the **main checkout**, found the same way as `tools/common/toolenv.py` does: CMake runs `git rev-parse --git-common-dir` at configure time. A linked worktree has no `local.env` of its own, so reading it from the worktree root would skip every game test there. `bb::test::game_dir()` in `tests/support/` implements this. Tests that need the game use `BB_REQUIRE_GAME`, which calls `GTEST_SKIP()` when neither source sets the directory.
 
@@ -112,7 +112,7 @@ LoadSet map_load_set(const std::filesystem::path& game_dir, uintptr_t base = def
 }
 ```
 
-`map_prx` reads `sce_module/<name>`, checks it against `prx_sha256` in `loader/self.hpp` (a copy of the table in `docs/clean-room.md`, checked by `tools/common/test_pinned_hashes.py`) and maps it like `map_eboot`. Only the two PRXs of the load set have an entry there. `map_load_set` maps the eboot at `base`, then each PRX at the first address after the previous image's span that is aligned to its largest `p_align` (0x4000 in both), with module ids 1, 2, 3 in that order. It relocates nothing. `exports` checks that every export lies inside a segment of its image.
+`map_prx` reads `sce_module/<name>`, checks it against `prx_sha256` in `loader/self.hpp` (a copy of the table in `docs/source-policy.md`, checked by `tools/common/test_pinned_hashes.py`) and maps it like `map_eboot`. Only the two PRXs of the load set have an entry there. `map_load_set` maps the eboot at `base`, then each PRX at the first address after the previous image's span that is aligned to its largest `p_align` (0x4000 in both), with module ids 1, 2, 3 in that order. It relocates nothing. `exports` checks that every export lies inside a segment of its image.
 
 ### Loaded image
 

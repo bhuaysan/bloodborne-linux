@@ -10,7 +10,7 @@ The PS4 runs x86-64 code, so the game's own machine code can run directly on a L
 
 On top of that, game functions are gradually decompiled into readable C++ until the original executable is no longer needed.
 
-The port builds on existing work, such as PS4 emulators and community research, under the rules in [docs/clean-room.md](docs/clean-room.md). Every source is credited in [docs/references.md](docs/references.md).
+The port builds on existing work, such as PS4 emulators and community research, under the rules in [docs/source-policy.md](docs/source-policy.md). Every source is credited in [docs/references.md](docs/references.md).
 
 ## Status
 
@@ -57,7 +57,7 @@ CI (GitHub Actions, `.github/workflows/ci.yml`) builds all three presets on Ubun
 
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
-- [Source and license policy](docs/clean-room.md)
+- [Source and license policy](docs/source-policy.md)
 - [References and credits](docs/references.md)
 
 ## Contributing

@@ -112,7 +112,7 @@ std::optional<std::uint64_t> read_proc_param(std::span<const Phdr> phdrs);
 Image map_elf(std::span<const std::byte> elf, std::uintptr_t base);
 
 // Reads eboot.bin from `game_dir`, checks that it is the pinned build (eboot_bin_sha256, see
-// docs/clean-room.md), rebuilds its ELF and maps it at `base` with map_elf. Throws
+// docs/source-policy.md), rebuilds its ELF and maps it at `base` with map_elf. Throws
 // std::system_error when the file can't be read, LoadError when it is not the pinned build.
 Image map_eboot(const std::filesystem::path& game_dir, std::uintptr_t base = default_base);
 

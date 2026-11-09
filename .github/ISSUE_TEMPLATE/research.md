@@ -18,4 +18,4 @@ labels: [research]
 
 ## Sources consulted
 
-<!-- External sources used (also add them to docs/references.md). Source and license rules: docs/clean-room.md (only leaked SDK material is off-limits; copied code needs a license on its allow-list). -->
+<!-- External sources used (also add them to docs/references.md). Source and license rules: docs/source-policy.md (only leaked SDK material is off-limits; copied code needs a license on its allow-list). -->

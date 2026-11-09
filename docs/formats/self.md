@@ -6,7 +6,7 @@ The files in this game build are **fake-signed SELFs**: no segment is encrypted 
 
 ## Sources and confidence
 
-The layout was first worked out from the 8 SELF files of the pinned build (see `docs/clean-room.md`). It was then compared with the PS4 Developer Wiki page on SELF (credited in `docs/references.md`). The wiki supplied most field names. Several findings here aren't on the wiki page: the block digest table entries, the SCE_LIBVERSION trailer, the meta size formula, and the 0x30-byte block.
+The layout was first worked out from the 8 SELF files of the pinned build (see `docs/source-policy.md`). It was then compared with the PS4 Developer Wiki page on SELF (credited in `docs/references.md`). The wiki supplied most field names. Several findings here aren't on the wiki page: the block digest table entries, the SCE_LIBVERSION trailer, the meta size formula, and the 0x30-byte block.
 
 The main check is that the digest in the program identification header equals SHA-256 of the rebuilt ELF for all 8 files. That confirms the segment mapping, the trailer rule and the location of the digest.
 

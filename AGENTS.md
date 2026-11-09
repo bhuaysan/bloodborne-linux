@@ -22,16 +22,16 @@ See `docs/architecture.md` and `docs/roadmap.md`.
 ## Hard rules
 
 ### Sources and licenses
-**Read [`docs/clean-room.md`](docs/clean-room.md) (the source and license policy) before reusing external code.** In short:
+**Read [`docs/source-policy.md`](docs/source-policy.md) (the source and license policy) before reusing external code.** In short:
 - **Never** look at leaked Sony SDK material (also when it is copied into another project), and never use game data other than the maintainer's own dump.
 - Everything else is allowed: public docs and NID lists, PS4 emulators (for example shadPS4), Mesa and other open-source code, and Bloodborne/FromSoftware reverse-engineering, decomp and modding material.
-- The project is GPL-2.0-or-later. Code is copied or adapted only from files whose license keeps it so (see `docs/clean-room.md`). Whole files go unchanged into `third_party/` with their license; adapted code keeps its copyright and license notices and gets an SPDX tag, a `// Source:` line and a `// Changed for bloodborne-linux, <date>` line.
+- The project is GPL-2.0-or-later. Code is copied or adapted only from files whose license keeps it so (see `docs/source-policy.md`). Whole files go unchanged into `third_party/` with their license; adapted code keeps its copyright and license notices and gets an SPDX tag, a `// Source:` line and a `// Changed for bloodborne-linux, <date>` line.
 - Log every source in `docs/references.md` in the same change that uses it.
 - Import names need a NID that matches the documented hash; record the name's source in `symbols/nids.csv`.
 - If a source's license is unclear, don't copy from it. Ask the maintainer.
 
 ### Game version
-All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is listed in `docs/clean-room.md`. Tools must verify it.
+All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is listed in `docs/source-policy.md`. Tools must verify it.
 
 ### Game data
 - The game is provided by the user from their own dump. Its location comes from the environment variable `BB_GAME_DIR`, or from `local.env` (untracked) in the repo root.
@@ -40,7 +40,7 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 - Never hard-code absolute paths in code, scripts or docs.
 
 ### Privacy and repository hygiene
-- No personal information in commits, issues, PRs or files: no real names, email addresses, usernames in paths, or home-directory paths. Exception: third-party copyright and license notices kept under `docs/clean-room.md` (in `third_party/` and in header comments of adapted code). They never contain the maintainer's own data.
+- No personal information in commits, issues, PRs or files: no real names, email addresses, usernames in paths, or home-directory paths. Exception: third-party copyright and license notices kept under `docs/source-policy.md` (in `third_party/` and in header comments of adapted code). They never contain the maintainer's own data.
 - Commits use the repository-local identity, the GitHub noreply address. Check with `git config user.email` before committing.
 - Agent or AI tool files are never committed. `AGENTS.md` is the only exception.
 - The git hooks in `tools/githooks/` enforce part of this. Never bypass them (`--no-verify`).
@@ -78,8 +78,8 @@ Code is never reviewed only in the session that wrote it.
    - Every finding of the independent review is fixed, or moved to a linked issue because it needs its own design work, or withdrawn by the reviewer in a re-review. The PR's author can't dismiss a finding on its own. A finding it disagrees with goes to the maintainer.
    - Every function the PR marks `replaced` in `symbols/functions.csv` passed its differential test and its disassembly review (item 2).
    - The PR stays within the 500-line limit above.
-   - The PR doesn't change the guardrails: `AGENTS.md`, `docs/clean-room.md`, `.gitignore`, any `.gitattributes`, `.github/`, `tools/githooks/`, `tools/merge-pr.sh`, `tools/privacy-check.sh`, `tools/run-tests.sh` or `tools/common/toolenv.py` (it finds the game for the tests).
-   - Each new source in `docs/references.md` is allowed by `docs/clean-room.md` (no leaked SDK material), as checked by the independent review. For code sources the review also checks that the license column matches the files, that copied or adapted code keeps its notices, that nothing was copied from a file whose license is not on the allow-list in `docs/clean-room.md` (it keeps the program GPL-2.0-or-later), and that `third_party/` holds only unchanged copies plus their license files.
+   - The PR doesn't change the guardrails: `AGENTS.md`, `docs/source-policy.md`, `.gitignore`, any `.gitattributes`, `.github/`, `tools/githooks/`, `tools/merge-pr.sh`, `tools/privacy-check.sh`, `tools/run-tests.sh` or `tools/common/toolenv.py` (it finds the game for the tests).
+   - Each new source in `docs/references.md` is allowed by `docs/source-policy.md` (no leaked SDK material), as checked by the independent review. For code sources the review also checks that the license column matches the files, that copied or adapted code keeps its notices, that nothing was copied from a file whose license is not on the allow-list in `docs/source-policy.md` (it keeps the program GPL-2.0-or-later), and that `third_party/` holds only unchanged copies plus their license files.
 
    Anything that fails the gate goes to the maintainer. `tools/merge-pr.sh` refuses guardrail changes and oversized PRs unless the maintainer runs it with `--maintainer`. Agents never pass that flag. Agents always pass `--sha <commit>`, the PR head the independent review saw; the script refuses the merge if the branch has moved since.
    **Never use GitHub's merge button or `gh pr merge`**: GitHub writes the account's display name into the commit. Merge with `tools/merge-pr.sh --sha <reviewed head> <N>` instead. It rebases locally, runs the tests and the privacy check (which includes authorship) on the rebased commits, and fast-forwards `main`.

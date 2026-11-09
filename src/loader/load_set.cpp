@@ -21,7 +21,7 @@ std::vector<std::byte> read_prx(const std::filesystem::path& game_dir, std::stri
     auto pinned = std::ranges::find(prx_sha256, name, &std::pair<std::string_view,
                                                                  std::string_view>::first);
     if (pinned == prx_sha256.end()) {
-        throw LoadError(std::format("{} is not a pinned PRX (see docs/clean-room.md)", name));
+        throw LoadError(std::format("{} is not a pinned PRX (see docs/source-policy.md)", name));
     }
     return read_pinned_self(game_dir / "sce_module" / name, pinned->second);
 }

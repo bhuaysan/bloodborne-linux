@@ -25,7 +25,7 @@ from cli import checked_out_dir, convert_each  # noqa: E402
 from toolenv import load_game_dir  # noqa: E402
 from ps4elf import ELF_DIR, ELF_HEADER, ELF_PHDR, Phdr  # noqa: E402
 
-# CUSA03173 patch 1.09. docs/clean-room.md lists the same hashes.
+# CUSA03173 patch 1.09. docs/source-policy.md lists the same hashes.
 KNOWN_FILES = {
     "d65f0b4f01d59166aed16f8604196d8b7dd805abbf0758b356e8f1354c9429f9": "eboot.bin",
     "4378b47f46f1d856824a6f971db1a0c3f41833b77f49d2fba9538f667a139166": "sce_module/libc.prx",

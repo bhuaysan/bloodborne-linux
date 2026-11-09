@@ -2,7 +2,7 @@
 
 Which libraries the game imports, how many functions and data symbols from each, and which of them ship with the game. The record and symbol formats are in [elf-dynamic.md](elf-dynamic.md).
 
-All numbers come from `tools/elfimports`, run on the 8 ELFs of the pinned build (`eboot.bin` and the 7 PRXs in `sce_module/`). Counts are unique NIDs. The tool writes the full lists, with NIDs, to `analysis/imports/`. They stay local: only NIDs that have a name or an implementation are committed (see the NID section of [clean-room.md](../clean-room.md)).
+All numbers come from `tools/elfimports`, run on the 8 ELFs of the pinned build (`eboot.bin` and the 7 PRXs in `sce_module/`). Counts are unique NIDs. The tool writes the full lists, with NIDs, to `analysis/imports/`. They stay local: only NIDs that have a name or an implementation are committed (see the NID section of [source-policy.md](../source-policy.md)).
 
 ## Files
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Derive candidate names for sce* NIDs from names we already have.
 
-These are the derivation rules allowed by the NID section of docs/clean-room.md. Each rule writes
+These are the derivation rules allowed by the NID section of docs/source-policy.md. Each rule writes
 one list to analysis/nids/candidates/ (local, regenerate any time):
     derive-posix.txt   <prefix><C name in CamelCase>   sce + pthread_attr_setstacksize
     derive-words.txt   <prefix><1 to 3 words>          sceFios + FH + Open + Sync

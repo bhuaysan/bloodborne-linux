@@ -11,12 +11,12 @@
 
 namespace bb::loader {
 
-// SHA-256 of eboot.bin of CUSA03173 patch 1.09, as listed in docs/clean-room.md.
+// SHA-256 of eboot.bin of CUSA03173 patch 1.09, as listed in docs/source-policy.md.
 inline constexpr std::string_view eboot_bin_sha256 =
     "d65f0b4f01d59166aed16f8604196d8b7dd805abbf0758b356e8f1354c9429f9";
 
 // SHA-256 of the bundled PRXs in sce_module/ that the runtime loads, as listed in
-// docs/clean-room.md: (file name, digest).
+// docs/source-policy.md: (file name, digest).
 inline constexpr std::array<std::pair<std::string_view, std::string_view>, 2> prx_sha256 = {{
     {"libSceFios2.prx", "3b8eb4d5a5c5a7b381d8d0610077e6cd404c29695a686274802f6b2737f6bf22"},
     {"libc.prx", "4378b47f46f1d856824a6f971db1a0c3f41833b77f49d2fba9538f667a139166"},

@@ -3,7 +3,7 @@
 
 A NID is a hash of a symbol name (see tools/common/nid.py). A candidate name is accepted only if
 its NID equals one that the pinned ELFs import or export. This is the procedure in the NID
-section of docs/clean-room.md. Every match records the candidate sources it came from. A source
+section of docs/source-policy.md. Every match records the candidate sources it came from. A source
 may be any allowed one, including a public NID list or an emulator's HLE code: the hash decides,
 and the label says where the name came from (docs/formats/nid.md).
 

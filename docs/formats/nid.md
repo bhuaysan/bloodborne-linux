@@ -1,6 +1,6 @@
 # NIDs
 
-PS4 ELFs import and export symbols by **NID**, a hash of the symbol name, instead of by the name itself. The symbol name format is in [elf-dynamic.md](elf-dynamic.md#symbols). This note covers how a NID is computed and how we recover names from it. The rules for which names we may accept are in the NID section of [clean-room.md](../clean-room.md).
+PS4 ELFs import and export symbols by **NID**, a hash of the symbol name, instead of by the name itself. The symbol name format is in [elf-dynamic.md](elf-dynamic.md#symbols). This note covers how a NID is computed and how we recover names from it. The rules for which names we may accept are in the NID section of [source-policy.md](../source-policy.md).
 
 ## Hash
 
@@ -71,7 +71,7 @@ The game's identifiers use the same words as the API. Leaving out the `sce*` nam
 
 `derive-words` repeats until nothing new turns up. Every new match adds its words to the vocabulary, and the next round tries only combinations that contain a new word. A name is kept only if its NID belongs to a library that its prefix came from. Names from earlier runs that came only from these rules are not used as input, so a rerun gives the same lists.
 
-**No excluded libraries.** Under the earlier policy the libraries of the exposure log (libSceRtc, libSceSaveData, libSceSaveDataDialog, libSceRegMgr, libSceRemoteplay) got no prefixes and no derived names. [clean-room.md](../clean-room.md) lifted that on 2026-11-06 and #226 removed it from the tools: every library gets prefixes, every NID is a target, and a name from a derivation rule alone is accepted for any library.
+**No excluded libraries.** Under the earlier policy the libraries of the exposure log (libSceRtc, libSceSaveData, libSceSaveDataDialog, libSceRegMgr, libSceRemoteplay) got no prefixes and no derived names. [source-policy.md](../source-policy.md) lifted that on 2026-11-06 and #226 removed it from the tools: every library gets prefixes, every NID is a target, and a name from a derivation rule alone is accepted for any library.
 
 ### Public name lists
 
