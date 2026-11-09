@@ -143,6 +143,59 @@ TEST_F(VkPipelineCache, ComparesTheFetchAddressOfAProgramThatCallsIt) {
     EXPECT_EQ(cache_->translations(), 2u);
 }
 
+// The cache hashes the code of both stages and the fetch subroutine on every request (#371).
+TEST_F(VkPipelineCache, CodeChangedAtTheSameAddressIsAnotherPipeline) {
+    const GraphicsPipeline* first = cache_->get(pair_, color_, why_);
+    ASSERT_NE(first, nullptr) << why_;
+
+    // Another pixel shader.
+    const auto ps = code_[ps_address];
+    code_[ps_address] = std::vector<std::uint32_t>{sopp(0), sopp(1)};  // s_nop; s_endpgm
+    const GraphicsPipeline* second = cache_->get(pair_, color_, why_);
+    ASSERT_NE(second, nullptr) << why_;
+    EXPECT_NE(second, first);
+    EXPECT_EQ(cache_->get(pair_, color_, why_), second);
+    code_[ps_address] = ps;
+    EXPECT_EQ(cache_->get(pair_, color_, why_), first);
+
+    // Another vertex shader.
+    const auto vs = code_[vs_address];
+    code_[vs_address] = std::vector<std::uint32_t>{sopp(0), sopp(1)};
+    const GraphicsPipeline* third = cache_->get(pair_, color_, why_);
+    ASSERT_NE(third, nullptr) << why_;
+    EXPECT_NE(third, first);
+    EXPECT_NE(third, second);
+    code_[vs_address] = vs;
+    EXPECT_EQ(cache_->get(pair_, color_, why_), first);
+    EXPECT_EQ(cache_->translations(), 6u);
+    EXPECT_EQ(cache_->size(), 3u);
+}
+
+TEST_F(VkPipelineCache, ChangedFetchSubroutineAndNewFetchCallsAreNoticed) {
+    code_[0x3000] = {sop1(33, 4, 0), sopp(1)};  // s_swappc_b64 s[4:5], s[0:1]; s_endpgm
+    code_[0x4000] = {sop1(32, 0, 4)};           // s_setpc_b64 s[4:5]
+    PipelineKey key;
+    key.vs = {0x3000, 0x4000, {.stage = Stage::vertex, .pgm_rsrc2 = 4u << 1}};
+    const RenderingInfo none;
+    const GraphicsPipeline* first = cache_->get(key, none, why_);
+    ASSERT_NE(first, nullptr) << why_;
+    code_[0x4000] = {sopp(0), sop1(32, 0, 4)};  // an s_nop first
+    const GraphicsPipeline* second = cache_->get(key, none, why_);
+    ASSERT_NE(second, nullptr) << why_;
+    EXPECT_NE(second, first);
+
+    // A program that didn't call the fetch subroutine does now: the fetch address counts again.
+    code_[0x5000] = {sopp(1)};
+    key.vs = {0x5000, 0x4000, {.stage = Stage::vertex, .pgm_rsrc2 = 4u << 1}};
+    const GraphicsPipeline* plain = cache_->get(key, none, why_);
+    ASSERT_NE(plain, nullptr) << why_;
+    EXPECT_FALSE(plain->vs.calls_fetch);
+    code_[0x5000] = code_[0x3000];
+    const GraphicsPipeline* calling = cache_->get(key, none, why_);
+    ASSERT_NE(calling, nullptr) << why_;
+    EXPECT_TRUE(calling->vs.calls_fetch);
+}
+
 TEST_F(VkPipelineCache, KeepsTranslationErrorsButNotUnreadableCode) {
     PipelineKey bad = pair_;
     bad.vs.key.pgm_rsrc2 = 17u << 1;  // USER_SGPR 17

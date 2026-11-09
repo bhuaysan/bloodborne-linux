@@ -114,6 +114,46 @@ TEST_F(VkComputePipeline, ReusesThePipelineOfAnEqualState) {
     EXPECT_EQ(cache_->get(*state, why_), first);
 }
 
+// The cache hashes the code on every request (#371): other code at the address is another
+// pipeline, the old one stays valid and is found again when its code returns, and only the
+// program's own dwords count, not what follows it in the mapping.
+TEST_F(VkComputePipeline, CodeChangedAtTheSameAddressIsAnotherPipeline) {
+    set_cs(regs_, program, 2u << 1, 128);
+    const auto state = compute_state(regs_, why_);
+    ASSERT_TRUE(state) << why_;
+    code_[program] = {sopp(1), 0x12345678};  // s_endpgm, then data after the program
+    const ComputePipeline* first = cache_->get(*state, why_);
+    ASSERT_NE(first, nullptr) << why_;
+    code_[program][1] = 0x9abcdef0;
+    EXPECT_EQ(cache_->get(*state, why_), first);
+    EXPECT_EQ(cache_->translations(), 1u);
+
+    const auto original = code_[program];
+    code_[program] = {sopp(0), sopp(1)};  // s_nop, s_endpgm
+    const ComputePipeline* second = cache_->get(*state, why_);
+    ASSERT_NE(second, nullptr) << why_;
+    EXPECT_NE(second, first);
+    EXPECT_EQ(cache_->get(*state, why_), second);
+    EXPECT_EQ(cache_->translations(), 2u);
+
+    code_[program] = original;
+    EXPECT_EQ(cache_->get(*state, why_), first);
+    EXPECT_EQ(cache_->translations(), 2u);
+    EXPECT_NE(first->pipeline, second->pipeline);
+}
+
+// A kept translation error is for that code only.
+TEST_F(VkComputePipeline, CodeFixedAtTheSameAddressLeavesTheKeptError) {
+    set_cs(regs_, program, 2u << 1, 128);
+    const auto state = compute_state(regs_, why_);
+    ASSERT_TRUE(state) << why_;
+    code_[program] = {0xffffffff};  // no instruction
+    EXPECT_EQ(cache_->get(*state, why_), nullptr);
+    EXPECT_FALSE(why_.empty());
+    code_[program] = {sopp(1)};
+    EXPECT_NE(cache_->get(*state, why_), nullptr) << why_;
+}
+
 TEST_F(VkComputePipeline, KeepsTranslationErrorsButNotUnreadableCode) {
     ComputeState state;
     state.code_address = 0x99900;

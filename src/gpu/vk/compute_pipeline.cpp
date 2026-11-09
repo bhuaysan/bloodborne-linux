@@ -24,25 +24,29 @@ void ComputePipelineCache::destroy(Entry& entry) {
 }
 
 const ComputePipeline* ComputePipelineCache::get(const ComputeState& state, std::string& why) {
+    // The code is read again on every request: an entry counts only while the code at the
+    // address is what it was made from. An older entry stays (the GPU may still use its pipeline)
+    // and matches again if the code returns.
+    const auto code = read_(state.code_address);
     const auto [first, last] = entries_.equal_range(state.code_address);
     for (auto it = first; it != last; ++it) {
-        if (it->second.state == state) {
+        if (it->second.state == state && it->second.stamp.matches(code)) {
             why = it->second.error;
             return it->second.pipeline.pipeline != VK_NULL_HANDLE ? &it->second.pipeline : nullptr;
         }
     }
 
     // Unreadable code isn't kept: the program may be mapped by the next request.
-    const auto code = read_(state.code_address);
     if (code.empty()) {
         why = std::format("no readable code at {:#x}", state.code_address);
         return nullptr;
     }
-    Entry entry{state, {}, {}};
+    Entry entry{state, {}, {}, common::CodeStamp::of(code, common::error_stamp_dwords)};
     std::optional<gcn::Translation> translation;
     try {
         ++translations_;
         translation = gcn::translate(code, {}, state.key);
+        entry.stamp = common::CodeStamp::of(code, translation->code_dwords);
         if (!translation->interface.images.empty()) {
             entry.error = "images and samplers are not supported yet";
         }
