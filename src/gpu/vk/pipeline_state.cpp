@@ -7,6 +7,8 @@
 // Source: shadPS4 src/video_core/amdgpu/regs_color.h @0d5f2739d2544d2a35c73e354cba7a32b7a81bea
 // Changed for bloodborne-linux, 2026-11-07: the topology table without fallbacks; the viewport of
 // UpdateViewportScissorState for viewport 0 of our register mirror, also when clipping is off.
+// Changed for bloodborne-linux, 2026-11-09: the scissor, depth bias and primitive restart of
+// UpdateViewportScissorState and UpdateDepthStencilState/UpdatePrimitiveState from our registers.
 // Changed for bloodborne-linux, 2026-11-09: the blend factor and function, stencil operation and
 // compare tables as numbers to optionals, without fallbacks; the raster, blend and depth-stencil
 // state of UpdateDepthStencilState and the pipeline key from our register mirror.
@@ -209,6 +211,60 @@ bool blend_state(const pm4::RegisterMirror& regs, DrawState& s, std::string& why
     return true;
 }
 
+// A scissor register pair (TL_X/TL_Y at bits 0-14 and 16-30, signed; BR the same) as a rectangle.
+struct Rect {
+    std::int32_t left, top, right, bottom;
+};
+
+Rect scissor_rect(std::uint32_t top_left, std::uint32_t bottom_right) {
+    const auto coord = [](std::uint32_t reg, unsigned first) {
+        const std::int32_t raw = static_cast<std::int32_t>(field(reg, first, 15));
+        return raw >= 0x4000 ? raw - 0x8000 : raw;
+    };
+    return {coord(top_left, 0), coord(top_left, 16), coord(bottom_right, 0),
+            coord(bottom_right, 16)};
+}
+
+// Scissor, depth bias and primitive restart: the dynamic state that doesn't change the pipeline.
+void window_state(const pm4::RegisterMirror& regs, DrawState& s) {
+    Rect r = scissor_rect(regs.get(amd::mmPA_SC_SCREEN_SCISSOR_TL),
+                          regs.get(amd::mmPA_SC_SCREEN_SCISSOR_BR));
+    const auto intersect = [&r](const Rect& o) {
+        r = {std::max(r.left, o.left), std::max(r.top, o.top), std::min(r.right, o.right),
+             std::min(r.bottom, o.bottom)};
+    };
+    intersect(scissor_rect(regs.get(amd::mmPA_SC_GENERIC_SCISSOR_TL),
+                           regs.get(amd::mmPA_SC_GENERIC_SCISSOR_BR)));
+    intersect(scissor_rect(regs.get(amd::mmPA_SC_WINDOW_SCISSOR_TL),
+                           regs.get(amd::mmPA_SC_WINDOW_SCISSOR_BR)));
+    if (field(regs.get(amd::mmPA_SC_MODE_CNTL_0), 1, 1) != 0) {  // VPORT_SCISSOR_ENABLE
+        intersect(scissor_rect(regs.get(amd::mmPA_SC_VPORT_SCISSOR_0_TL),
+                               regs.get(amd::mmPA_SC_VPORT_SCISSOR_0_BR)));
+    }
+    r.left = std::max(r.left, 0), r.top = std::max(r.top, 0);
+    s.dynamic.scissor = {{r.left, r.top},
+                         {static_cast<std::uint32_t>(std::max(r.right - r.left, 0)),
+                          static_cast<std::uint32_t>(std::max(r.bottom - r.top, 0))}};
+
+    // PA_SU_SC_MODE_CNTL: POLY_OFFSET_FRONT_ENABLE (11), _BACK_ENABLE (12), _PARA_ENABLE (13).
+    const std::uint32_t mode = regs.get(amd::mmPA_SU_SC_MODE_CNTL);
+    s.dynamic.depth_bias = field(mode, 11, 3) != 0;
+    const bool front = field(mode, 11, 1) != 0;
+    s.dynamic.bias_constant = std::bit_cast<float>(regs.get(
+        front ? amd::mmPA_SU_POLY_OFFSET_FRONT_OFFSET : amd::mmPA_SU_POLY_OFFSET_BACK_OFFSET));
+    s.dynamic.bias_slope = std::bit_cast<float>(regs.get(
+        front ? amd::mmPA_SU_POLY_OFFSET_FRONT_SCALE : amd::mmPA_SU_POLY_OFFSET_BACK_SCALE)) /
+                           16.0f;
+
+    const VkPrimitiveTopology t = s.key.topology;
+    s.dynamic.primitive_restart =
+        field(regs.get(amd::mmVGT_MULTI_PRIM_IB_RESET_EN), 0, 1) != 0 &&
+        (t == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP || t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
+         t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ||
+         t == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY ||
+         t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY);
+}
+
 bool depth_stencil_state(const pm4::RegisterMirror& regs, DrawState& s, std::string& why) {
     // DB_DEPTH_CONTROL: STENCIL_ENABLE (0), Z_ENABLE (1), Z_WRITE_ENABLE (2), ZFUNC (4-6),
     // BACKFACE_ENABLE (7), STENCILFUNC (8-10), STENCILFUNC_BF (20-22). DEPTH_BOUNDS_ENABLE (3) is
@@ -397,6 +453,7 @@ std::optional<DrawState> draw_state(const pm4::RegisterMirror& regs, bool quad_c
         !depth_stencil_state(regs, s, why)) {
         return std::nullopt;
     }
+    window_state(regs, s);
     return s;
 }
 

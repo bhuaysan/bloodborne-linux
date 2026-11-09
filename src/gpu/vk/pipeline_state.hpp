@@ -84,6 +84,18 @@ struct DynamicState {
     VkCompareOp depth_compare = VK_COMPARE_OP_ALWAYS;
     bool stencil_test = false;
     StencilFace front, back;  // write masks 0 under STENCIL_CLEAR_ENABLE
+    // The scissor of viewport 0: the screen, generic and window scissors and, with
+    // VPORT_SCISSOR_ENABLE, the viewport's own, intersected (never negative; empty draws
+    // nothing). The recording clips it to the render area.
+    VkRect2D scissor{};
+    // Depth bias from PA_SU_SC_MODE_CNTL.POLY_OFFSET_*_ENABLE (front's values when it is enabled,
+    // else back's): the constant offset and the slope scale (the register / 16). The clamp
+    // (PA_SU_POLY_OFFSET_CLAMP) is not applied: depthBiasClamp is not an enabled feature.
+    bool depth_bias = false;
+    float bias_constant = 0, bias_slope = 0;
+    // VGT_MULTI_PRIM_IB_RESET_EN on a strip or fan topology (list restart needs a feature we
+    // don't enable). The restart index is taken as the all-ones index of the draw's type.
+    bool primitive_restart = false;
 };
 
 struct DrawState {

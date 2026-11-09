@@ -66,6 +66,57 @@ TEST(PipelineState, Topology) {
     }
 }
 
+TEST(PipelineState, ScissorIsTheIntersectionOfTheScissors) {
+    RegisterMirror regs = draw_registers();
+    set(regs, amd::mmPA_SC_SCREEN_SCISSOR_BR, 1080u << 16 | 1920u);
+    set(regs, amd::mmPA_SC_GENERIC_SCISSOR_TL, 0x80000000u | 10u << 16 | 20u);  // window offset off
+    set(regs, amd::mmPA_SC_GENERIC_SCISSOR_BR, 1000u << 16 | 1900u);
+    set(regs, amd::mmPA_SC_WINDOW_SCISSOR_BR, 1080u << 16 | 1920u);
+    set(regs, amd::mmPA_SC_VPORT_SCISSOR_0_TL, 100u << 16 | 200u);
+    set(regs, amd::mmPA_SC_VPORT_SCISSOR_0_BR, 500u << 16 | 600u);
+    VkRect2D r = snapshot(regs).dynamic.scissor;
+    EXPECT_EQ(r.offset.x, 20);  // the viewport scissor is ignored without VPORT_SCISSOR_ENABLE
+    EXPECT_EQ(r.offset.y, 10);
+    EXPECT_EQ(r.extent.width, 1880u);
+    EXPECT_EQ(r.extent.height, 990u);
+    set(regs, amd::mmPA_SC_MODE_CNTL_0, 2u);
+    r = snapshot(regs).dynamic.scissor;
+    EXPECT_EQ(r.offset.x, 200);
+    EXPECT_EQ(r.offset.y, 100);
+    EXPECT_EQ(r.extent.width, 400u);
+    EXPECT_EQ(r.extent.height, 400u);
+    set(regs, amd::mmPA_SC_VPORT_SCISSOR_0_TL, 700u << 16 | 700u);  // past the other corner: empty
+    r = snapshot(regs).dynamic.scissor;
+    EXPECT_EQ(r.extent.width, 0u);
+    EXPECT_EQ(r.extent.height, 0u);
+}
+
+TEST(PipelineState, DepthBiasAndPrimitiveRestart) {
+    RegisterMirror regs = draw_registers();
+    DrawState s = snapshot(regs);
+    EXPECT_FALSE(s.dynamic.depth_bias);
+    EXPECT_FALSE(s.dynamic.primitive_restart);
+    set(regs, amd::mmPA_SU_SC_MODE_CNTL, 1u << 12);  // POLY_OFFSET_BACK_ENABLE
+    set(regs, amd::mmPA_SU_POLY_OFFSET_FRONT_OFFSET, 1.0f);
+    set(regs, amd::mmPA_SU_POLY_OFFSET_FRONT_SCALE, 32.0f);
+    set(regs, amd::mmPA_SU_POLY_OFFSET_BACK_OFFSET, 3.0f);
+    set(regs, amd::mmPA_SU_POLY_OFFSET_BACK_SCALE, 64.0f);
+    s = snapshot(regs);
+    EXPECT_TRUE(s.dynamic.depth_bias);
+    EXPECT_EQ(s.dynamic.bias_constant, 3.0f);  // the back face's, as only it is enabled
+    EXPECT_EQ(s.dynamic.bias_slope, 4.0f);     // the register / 16
+    set(regs, amd::mmPA_SU_SC_MODE_CNTL, 1u << 11);
+    s = snapshot(regs);
+    EXPECT_EQ(s.dynamic.bias_constant, 1.0f);
+    EXPECT_EQ(s.dynamic.bias_slope, 2.0f);
+
+    // Restart counts on strips and fans only: lists would need primitiveTopologyListRestart.
+    set(regs, amd::mmVGT_MULTI_PRIM_IB_RESET_EN, 1u);
+    EXPECT_FALSE(snapshot(regs).dynamic.primitive_restart);  // triangle list
+    set(regs, amd::mmVGT_PRIMITIVE_TYPE__CI__VI, 6u);        // triangle strip
+    EXPECT_TRUE(snapshot(regs).dynamic.primitive_restart);
+}
+
 TEST(PipelineState, Stages) {
     RegisterMirror regs = draw_registers();
     set(regs, amd::mmSPI_SHADER_PGM_LO_VS, 0x1234u);  // address >> 8
