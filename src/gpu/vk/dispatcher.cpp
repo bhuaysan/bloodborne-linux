@@ -227,10 +227,7 @@ void Dispatcher::record(const pm4::RegisterMirror& regs, const pm4::DispatchCall
 
 void Dispatcher::remember(const RecentDispatch& dispatch) {
     recent_[remembered_++ % recent_.size()] = dispatch;
-    const bool first = std::ranges::find(seen_, dispatch.program) == seen_.end();
-    if (first) {
-        seen_.push_back(dispatch.program);
-    }
+    const bool first = seen_.insert(dispatch.program).second;
     const common::LogLevel level = first ? common::LogLevel::info : common::LogLevel::trace;
     if (common::log_enabled(level, channel)) {  // describe() only for a line that is written
         common::log_message(level, channel, describe(dispatch));
@@ -248,7 +245,8 @@ std::vector<RecentDispatch> Dispatcher::recent() const {
 }
 
 void Dispatcher::report(const std::exception& error) {
-    if (reported_ || dynamic_cast<const VulkanError*>(&error) == nullptr) {
+    const auto* const vulkan = dynamic_cast<const VulkanError*>(&error);
+    if (reported_ || vulkan == nullptr || vulkan->result() != VK_ERROR_DEVICE_LOST) {
         return;
     }
     reported_ = true;

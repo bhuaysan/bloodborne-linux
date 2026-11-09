@@ -766,6 +766,7 @@ TEST_F(TranslateExec, BufferModes) {
         {.stride = 0, .records = 0x2b0, .soffset = 0x200},
         // The game's V#s have bits set above the 40-bit base (dword 1 bits 8-15).
         {.stride = 0, .records = 0x2b0, .soffset = 0x200, .base_high = 0x80},
+        {.stride = 0, .records = 0x2b0, .soffset = 0x200, .base_high = 0xff},
         {.stride = 8, .records = 64, .soffset = 0x200, .swizzle = true, .element = 1},
         {.stride = 16, .records = 100, .soffset = 0x40, .add_tid = true},
         {.stride = 16, .records = 20, .soffset = 0x40, .heap = true},

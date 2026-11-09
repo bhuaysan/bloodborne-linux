@@ -8,6 +8,7 @@
 #include <cstring>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -164,6 +165,26 @@ TEST_F(VkDispatcher, DirectDispatchRunsTheGroups) {
     EXPECT_EQ(dispatcher_->stats().failed, 0u);
 }
 
+TEST_F(VkDispatcher, RecentHoldsOnlyWhatWasRecorded) {
+    EXPECT_TRUE(dispatcher_->recent().empty());
+    std::vector<std::uint32_t> stream;
+    set_state(stream, code_at);
+    packet(stream, IT_DISPATCH_DIRECT, {1, 1, 1, 1});
+    ASSERT_EQ(run(stream), RunResult::done);
+    ASSERT_EQ(dispatcher_->recent().size(), 1u);
+    EXPECT_EQ(dispatcher_->recent()[0].number, 1u);
+    EXPECT_EQ(dispatcher_->recent()[0].indirect, 0u);
+}
+
+TEST_F(VkDispatcher, OnlyALostDeviceReportsTheRecentDispatches) {
+    dispatcher_->report(std::runtime_error("not a Vulkan error"));
+    EXPECT_FALSE(dispatcher_->reported());
+    dispatcher_->report(VulkanError("out of memory", VK_ERROR_OUT_OF_DEVICE_MEMORY));
+    EXPECT_FALSE(dispatcher_->reported());
+    dispatcher_->report(VulkanError("lost", VK_ERROR_DEVICE_LOST));
+    EXPECT_TRUE(dispatcher_->reported());
+}
+
 TEST_F(VkDispatcher, RecentKeepsTheLastDispatchesOldestFirst) {
     std::vector<std::uint32_t> stream;
     set_state(stream, code_at);
@@ -209,6 +230,7 @@ TEST_F(VkDispatcher, IndirectDispatchReadsTheCountsAtBasePlusOffset) {
     EXPECT_EQ(word(out_at, 0), 7u);
     EXPECT_EQ(word(out_at, 1), 0u);
     EXPECT_EQ(dispatcher_->stats().recorded, 1u);
+    EXPECT_EQ(dispatcher_->recent().back().indirect, base + 16);
 }
 
 TEST_F(VkDispatcher, SecondDispatchSeesTheFirstOnesWrites) {
