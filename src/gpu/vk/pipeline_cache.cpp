@@ -214,6 +214,7 @@ void PipelineCache::create(Entry& entry, const gcn::Translation& vs, const gcn::
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO);
     // The blend state of the key per colour target; the write mask nibble is VkColorComponentFlags.
     VkPipelineColorBlendAttachmentState attachments[pm4::color_targets] = {};
+    last_blend_enable_ = 0;
     for (std::uint32_t n = 0; n < pm4::color_targets; ++n) {
         const BlendAttachment& b = key.blend[n];
         // A format without COLOR_ATTACHMENT_BLEND (integer formats) can't blend: the hardware
@@ -225,6 +226,7 @@ void PipelineCache::create(Entry& entry, const gcn::Translation& vs, const gcn::
             can_blend = (properties.optimalTilingFeatures &
                          VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT) != 0;
         }
+        last_blend_enable_ |= std::uint32_t{can_blend} << n;
         attachments[n] = {can_blend,    b.src_color, b.dst_color, b.color_op,
                           b.src_alpha, b.dst_alpha, b.alpha_op,  b.write_mask};
     }

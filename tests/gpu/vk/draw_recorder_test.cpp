@@ -392,15 +392,25 @@ TEST_F(VkDrawRecorder, ScissorLimitsTheDraw) {
 }
 
 TEST_F(VkDrawRecorder, UnsupportedDrawsAreCountedAndTheStreamGoesOn) {
+    // Two unsupported draws (no colour target; a restart index that isn't all ones) and then a
+    // supported one, which draws. A strip of three vertices is the same triangle as a list.
+    const std::uint32_t triangle_strip = 6;
+    regs_.write(RegSpace::uconfig, amd::mmVGT_PRIMITIVE_TYPE__CI__VI - 0xC000,
+                std::span(&triangle_strip, 1));
     std::vector<std::uint32_t> stream;
     packet(stream, IT_SET_CONTEXT_REG, {amd::mmCB_TARGET_MASK - context_base, 0});  // no target
     packet(stream, IT_DRAW_INDEX_AUTO, {3, 2});
     packet(stream, IT_SET_CONTEXT_REG, {amd::mmCB_TARGET_MASK - context_base, 0xF});
-    code_[vs_code].clear();  // a vertex shader without code doesn't translate
+    packet(stream, IT_SET_CONTEXT_REG, {amd::mmVGT_MULTI_PRIM_IB_RESET_EN - context_base, 1});
+    packet(stream, IT_SET_CONTEXT_REG, {amd::mmVGT_MULTI_PRIM_IB_RESET_INDX - context_base, 0x1234});
+    packet(stream, IT_DRAW_INDEX_AUTO, {3, 2});
+    packet(stream, IT_SET_CONTEXT_REG, {amd::mmVGT_MULTI_PRIM_IB_RESET_EN - context_base, 0});
     packet(stream, IT_DRAW_INDEX_AUTO, {3, 2});
     ASSERT_EQ(run(stream), RunResult::done);
-    EXPECT_EQ(recorder_->stats().recorded, 0u);
+    EXPECT_EQ(recorder_->stats().unsupported, 2u);
+    EXPECT_EQ(recorder_->stats().recorded, 1u);
     EXPECT_EQ(recorder_->stats().failed, 0u);
+    EXPECT_TRUE(triangle_in(0, width));
 }
 
 TEST_F(VkDrawRecorder, SyncBeforeWaitSubmitsOnceAndThenNothing) {
@@ -424,8 +434,8 @@ TEST_F(VkDrawRecorder, BlendingIntoAnIntegerTargetDrawsWithoutBlending) {
     // 8_8_8_8 UINT can't blend in Vulkan (no COLOR_ATTACHMENT_BLEND) and the hardware ignores the
     // blend state there: the pipeline is made with blendEnable cleared. With ONE + ONE a second
     // draw over the first would add up if it blended; it leaves the texels as they were. (llvmpipe
-    // skips the blend of integer formats itself, so this checks the draw, not the pipeline's
-    // blendEnable; a driver that applies it would show the sum.)
+    // skips the blend of integer formats itself, so the pipeline cache reports the blendEnable it
+    // made the pipeline with; a driver that applies it would show the sum.)
     VkFormatProperties properties;
     vkGetPhysicalDeviceFormatProperties(device_->physical(), VK_FORMAT_R8G8B8A8_UINT, &properties);
     ASSERT_EQ(properties.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT, 0u);
@@ -436,12 +446,26 @@ TEST_F(VkDrawRecorder, BlendingIntoAnIntegerTargetDrawsWithoutBlending) {
     twice = once;
     packet(twice, IT_DRAW_INDEX_AUTO, {3, 2});
     ASSERT_EQ(run(once), RunResult::done);
+    const auto key = color_image_key(*bb::pm4::color_target(regs_, hints_, 0));
+    ASSERT_TRUE(key);
+    EXPECT_EQ(key->format, VK_FORMAT_R8G8B8A8_UINT);
+    EXPECT_EQ(pipelines_->last_blend_enable(), 0u);
     const std::vector<std::uint8_t> single = read();
     ASSERT_EQ(run(twice), RunResult::done);
     EXPECT_EQ(recorder_->stats().recorded, 3u);
     EXPECT_EQ(recorder_->stats().failed, 0u);
     EXPECT_EQ(read(), single);
     EXPECT_NE(single, std::vector<std::uint8_t>(single.size()));  // something was drawn
+}
+
+TEST_F(VkDrawRecorder, BlendingIntoATargetThatCanBlendKeepsBlendEnable) {
+    // The same blend state on the UNORM target stays on; this is what the test above clears.
+    context(amd::mmCB_BLEND0_CONTROL, 1u << 30 | 1u << 0 | 1u << 8 | 1u << 16 | 1u << 24);
+    std::vector<std::uint32_t> stream;
+    packet(stream, IT_DRAW_INDEX_AUTO, {3, 2});
+    ASSERT_EQ(run(stream), RunResult::done);
+    EXPECT_EQ(recorder_->stats().recorded, 1u);
+    EXPECT_EQ(pipelines_->last_blend_enable(), 1u);
 }
 
 }  // namespace

@@ -82,6 +82,8 @@ public:
 
     std::size_t size() const { return entries_.size(); }  // pipelines and kept errors
     std::size_t translations() const { return translations_; }
+    // For tests: bit n is set when the last pipeline made has blendEnable on for colour target n.
+    std::uint32_t last_blend_enable() const { return last_blend_enable_; }
 
 private:
     struct Formats {
@@ -111,6 +113,7 @@ private:
     // they don't call the subroutine, or fail for another reason.
     std::unordered_multimap<std::uint64_t, gcn::ShaderKey> fetchless_;
     std::size_t translations_ = 0;
+    std::uint32_t last_blend_enable_ = 0;
 };
 
 }  // namespace bb::vk
