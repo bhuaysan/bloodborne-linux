@@ -67,8 +67,8 @@ TEST(GcnTranslate, ProgramsPassSpirvVal) {
         // subgroup), and the shuffles of ds_swizzle_b32
         EXPECT_EQ(translation.interface.wave_size_dependent,
                   name == "cross_lane" || name == "mask_exec" || name == "mask_scc" ||
-                      name == "mask_branch" || name == "salu_arith" || name == "ds_swizzle" ||
-                      name.starts_with("lds_"));
+                      name == "mask_branch" || name == "mask_user" || name == "salu_arith" ||
+                      name == "ds_swizzle" || name.starts_with("lds_"));
         // s[8:9] of cross_lane; the mask programs keep only lane masks in their mask pairs
         EXPECT_EQ(translation.interface.mask_round_trip, name == "cross_lane");
     }
@@ -280,12 +280,23 @@ TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
         code.insert(code.end(), rest.begin(), rest.end());
         return code;
     };
-    EXPECT_EQ(error({sop2(15, 2, 6, 126), s_endpgm}),  // s_and_b64 s[2:3], s[6:7], exec
-              "user data s2 is used as a mask at offset 0x0 (word 0x87827e06)");
-    EXPECT_EQ(error(cmp(2, {s_endpgm})),
-              "user data s2 is used as a mask at offset 0x0 (word 0xd1820002)");
     EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 1u << 7}),  // TGID_X_EN
               "COMPUTE_PGM_RSRC2 0x80 is not supported yet at offset 0x0 (word 0x00000000)");
+    // A user pair written as a mask stops being user data: s[2:3] holds a value from the start.
+    const std::uint32_t mask_s2 = sop1(4, 2, 126);          // s_mov_b64 s[2:3], exec
+    const std::uint32_t read_s2 = sop1(3, 6, 2);            // s_mov_b32 s6, s2
+    const std::uint32_t skip_next = sopp(4, 1);             // s_cbranch_scc0 past the next word
+    EXPECT_EQ(error({sop2(15, 2, 6, 126), s_endpgm}), "no error");  // s_and_b64 s[2:3], s[6:7], exec
+    EXPECT_EQ(error(cmp(2, {s_endpgm})), "no error");
+    EXPECT_EQ(error({mask_s2, read_s2, s_endpgm}), "no error");  // the mask, as a value
+    EXPECT_EQ(error({skip_next, mask_s2, s_endpgm}), "no error");  // dead where the paths meet
+    EXPECT_EQ(error({skip_next, mask_s2, read_s2, s_endpgm}),
+              "initial s2 is a value or a mask, depending on the path at offset 0x8 "
+              "(word 0xbe860302)");
+    EXPECT_EQ(error({sop2(15, 6, 2, 126), s_endpgm}),  // s_and_b64 s[6:7], s[2:3], exec
+              "user data s2 is used as a mask at offset 0x0 (word 0x87867e02)");
+    EXPECT_EQ(error({sop1(4, 126, 2), s_endpgm}),  // s_mov_b64 exec, s[2:3]
+              "user data s2 is used as a mask at offset 0x0 (word 0xbefe0402)");
     EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 5u << 1 | 4u << 15}), "no error");  // LDS_SIZE
     const auto with_ds = [](std::vector<std::uint32_t> inst) {
         inst.push_back(s_endpgm);

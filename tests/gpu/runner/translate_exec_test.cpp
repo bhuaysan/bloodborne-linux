@@ -855,6 +855,24 @@ TEST_F(TranslateExec, MaskScalarOps) {
     }
 }
 
+// Masks in user data pairs after their last read (tests/gpu/programs/mask_user.s). A dword of a
+// mask read as a value is checked at the lane's own bit, because the other subgroups' bits read
+// as 0 in a subgroup smaller than the wave.
+TEST_F(TranslateExec, MasksInUserPairs) {
+    constexpr std::uint32_t input_s2 = 0x1234, input_s4 = 0x9abc;
+    const auto out = run("mask_user", {input_s2, 0, input_s4}, 7 * lanes);
+    for (std::uint32_t i = 0; i < lanes; ++i) {
+        SCOPED_TRACE(testing::Message() << "lane " << i);
+        const std::uint32_t mask_word = i < 32 ? out[lanes + i] : out[2 * lanes + i];
+        EXPECT_EQ(out[i], i < 8 ? 2u : 1u);
+        EXPECT_EQ(mask_word >> (i % 32) & 1, i < 8 ? 1u : 0u);
+        EXPECT_EQ(out[3 * lanes + i], i < 8 ? 3u : 0u);
+        EXPECT_EQ(out[4 * lanes + i], input_s2);
+        EXPECT_EQ(out[5 * lanes + i], input_s4);
+        EXPECT_EQ(out[6 * lanes + i], 0x55u);
+    }
+}
+
 // SCC after a mask operation is any of the result, and after a value operation result != 0. The
 // data is the same in every lane, so the branches don't depend on the subgroup size. The
 // chain of the eight operations on values is checked against the same operations here.

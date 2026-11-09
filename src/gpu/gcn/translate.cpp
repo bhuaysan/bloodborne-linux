@@ -314,14 +314,14 @@ private:
     // The mask type pass: the SGPR pairs that hold lane masks are the mask operands of the
     // instructions below, and what s_mov_b64 copies to or from a mask. VCC and EXEC are masks. A
     // mask's dwords can still be read as values (a ballot) and written as values (each lane
-    // takes its bit).
+    // takes its bit). The other SGPRs have one type for the whole program; the initial registers
+    // have one per instruction (see StartState). They run in turn until neither changes, because
+    // an s_mov_b64 can carry a mask between the two kinds.
     void collect_masks() {
         const auto mark = [this](const Operand& o) {
-            if (o.kind != OperandKind::scalar || o.dwords != 2 || o.code >= code::flat_scratch) {
+            if (o.kind != OperandKind::scalar || o.dwords != 2 || o.code >= code::flat_scratch ||
+                is_start_sgpr(o.code)) {
                 return false;
-            }
-            if ((o.code & ~1u) < user_sgprs()) {
-                fail(std::format("user data s{} is used as a mask", o.code & ~1u));
             }
             return mask_sgprs_.insert(o.code & ~1u).second;
         };
@@ -333,15 +333,127 @@ private:
         }
         for (bool changed = true; changed;) {
             changed = false;
+            flow_start_sgprs();
             for (const Instruction& inst : program_) {
                 inst_ = &inst;
-                if (inst.name == "s_mov_b64" && (is_mask(inst.dst[0]) || is_mask(inst.src[0]))) {
+                if (inst.name == "s_mov_b64" &&
+                    (is_mask(inst.dst[0], When::after) || is_mask(inst.src[0]))) {
                     changed |= mark(inst.dst[0]);
                     changed |= mark(inst.src[0]);
                 }
             }
         }
+        check_start_sgprs();
     }
+
+    // The registers set before the program starts (user data, the primitive mask): a dword
+    // holds a value at the start and a lane mask once an instruction writes one to it, which is
+    // how the compiler reuses a pair after its last read. Bit k stands for s<k>; both bits of a
+    // dword are set where paths that disagree meet, and neither in an unreachable instruction.
+    struct StartState {
+        std::uint32_t value = 0, mask = 0;
+        bool operator==(const StartState&) const = default;
+    };
+
+    // Where the initial registers end. A pair that starts in them counts as a whole.
+    unsigned start_sgprs_end() const {
+        unsigned count = user_sgprs();
+        if (key_.stage == Stage::pixel) {
+            ++count;  // the primitive mask
+        }
+        return (count + 1) & ~1u;
+    }
+    bool is_start_sgpr(unsigned c) const { return c < start_sgprs_end(); }
+    static std::uint32_t pair_bits(unsigned pair) { return 3u << (pair & ~1u); }
+
+    // Whether the source `o` holds a mask in state `s`.
+    bool source_is_mask(const Operand& o, const StartState& s) const {
+        if (o.kind != OperandKind::scalar || o.dwords != 2) {
+            return false;
+        }
+        if (is_start_sgpr(o.code)) {
+            return (s.mask & pair_bits(o.code)) != 0;
+        }
+        return o.code == code::exec || o.code == code::vcc || mask_sgprs_.contains(o.code);
+    }
+
+    void transfer_start_sgprs(const Instruction& inst, StartState& s) const {
+        for (unsigned k = 0; k < inst.num_dst; ++k) {
+            const Operand& dst = inst.dst[k];
+            if (dst.kind != OperandKind::scalar || !is_start_sgpr(dst.code)) {
+                continue;
+            }
+            const auto operands = mask_operands(inst);
+            const bool mask = inst.name == "s_mov_b64"
+                                  ? source_is_mask(inst.src[0], s)
+                                  : std::ranges::find(operands, &dst) != operands.end();
+            const std::uint32_t bits = ((1u << dst.dwords) - 1) << dst.code;
+            s.value = mask ? s.value & ~bits : s.value | bits;
+            s.mask = mask ? s.mask | bits : s.mask & ~bits;
+        }
+    }
+
+    // Forward dataflow over the blocks, keeping the state before and after each instruction.
+    void flow_start_sgprs() {
+        start_before_.assign(program_.size(), {});
+        start_after_.assign(program_.size(), {});
+        std::vector<std::optional<StartState>> in(cfg_.blocks.size());
+        in[0] = StartState{.value = (1u << start_sgprs_end()) - 1};
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (std::uint32_t b = 0; b < cfg_.blocks.size(); ++b) {
+                if (!in[b]) {
+                    continue;
+                }
+                StartState s = *in[b];
+                const Block& block = cfg_.blocks[b];
+                for (std::uint32_t i = block.first; i < block.first + block.count; ++i) {
+                    start_before_[i] = s;
+                    transfer_start_sgprs(program_[i], s);
+                    start_after_[i] = s;
+                }
+                for (std::uint32_t next : successors(block)) {
+                    StartState merged = in[next].value_or(s);
+                    merged.value |= s.value;
+                    merged.mask |= s.mask;
+                    changed |= !in[next] || merged != *in[next];
+                    in[next] = merged;
+                }
+            }
+        }
+    }
+
+    // What the program can't get from one register: a dword read where a value and a mask meet,
+    // and a mask operand that holds a value (it would have to keep the value's bits per lane).
+    void check_start_sgprs() {
+        for (const Instruction& inst : program_) {
+            inst_ = &inst;
+            const StartState& s = start_before_[index()];
+            for (unsigned k = 0; k < inst.num_src; ++k) {
+                const Operand& o = inst.src[k];
+                if (o.kind != OperandKind::scalar || !is_start_sgpr(o.code)) {
+                    continue;
+                }
+                if ((s.value & s.mask & (((1u << o.dwords) - 1) << o.code)) != 0) {
+                    fail(std::format("initial s{} is a value or a mask, depending on the path",
+                                     o.code));
+                }
+            }
+            std::vector<const Operand*> reads = mask_operands(inst);
+            if (inst.name == "s_mov_b64" && is_mask(inst.dst[0], When::after)) {
+                reads.push_back(&inst.src[0]);
+            }
+            for (const Operand* o : reads) {
+                const bool source = o >= inst.src.data() && o < inst.src.data() + inst.src.size();
+                if (source && o->kind == OperandKind::scalar && is_start_sgpr(o->code) &&
+                    !source_is_mask(*o, s)) {
+                    fail(std::format("user data s{} is used as a mask", o->code & ~1u));
+                }
+            }
+        }
+    }
+
+    std::uint32_t index() const { return static_cast<std::uint32_t>(inst_ - program_.data()); }
 
     // The operands of an instruction that are lane masks.
     static std::vector<const Operand*> mask_operands(const Instruction& inst) {
@@ -366,15 +478,32 @@ private:
         return {};
     }
 
-    bool is_mask(const Operand& o) const {
-        return o.kind == OperandKind::scalar && o.dwords == 2 &&
-               (o.code == code::exec || o.code == code::vcc || mask_sgprs_.contains(o.code));
+    // An instruction reads its sources in the state before it and writes its destinations in the
+    // state after it.
+    enum class When { before, after };
+
+    bool is_mask(const Operand& o, When when = When::before) const {
+        if (o.kind != OperandKind::scalar || o.dwords != 2) {
+            return false;
+        }
+        if (is_start_sgpr(o.code)) {
+            const std::uint32_t bits = pair_bits(o.code);
+            return (start_state(when).mask & bits) == bits;
+        }
+        return o.code == code::exec || o.code == code::vcc || mask_sgprs_.contains(o.code);
     }
 
     // A dword of EXEC, VCC or a mask pair.
-    bool is_mask_half(unsigned c) const {
+    bool is_mask_half(unsigned c, When when = When::before) const {
+        if (is_start_sgpr(c)) {
+            return (start_state(when).mask >> c & 1) != 0;
+        }
         const unsigned pair = c & ~1u;
         return pair == code::exec || pair == code::vcc || mask_sgprs_.contains(pair);
+    }
+
+    const StartState& start_state(When when) const {
+        return (when == When::before ? start_before_ : start_after_)[index()];
     }
 
     unsigned user_sgprs() const { return (key_.pgm_rsrc2 >> rsrc2_user_sgpr_shift) & 31; }
@@ -518,7 +647,7 @@ private:
         const Operand& dst = inst.dst[0];
         if (static_cast<std::uint32_t>(&inst - program_.data()) == fetch_.call) {
             return_address(inst);
-        } else if (name == "s_mov_b64" && is_mask(dst)) {
+        } else if (name == "s_mov_b64" && is_mask(dst, When::after)) {
             mask_copy(dst, inst.src[0]);
         } else if (name == "s_mov_b32" || name == "s_mov_b64") {
             const unsigned dwords = name == "s_mov_b64" ? 2 : 1;
@@ -2276,7 +2405,7 @@ private:
     // ...) sets the lanes of that half to their bit of the value.
     void write_scalar(const Operand& o, Id value, unsigned dword = 0) {
         const unsigned c = o.code + dword;
-        if (o.kind == OperandKind::scalar && is_mask_half(c)) {
+        if (o.kind == OperandKind::scalar && is_mask_half(c, When::after)) {
             const Op half = (c & 1) != 0 ? Op::OpUGreaterThanEqual : Op::OpULessThan;
             const Id mine = b_.op(half, bool_, {lane_, b_.constant_u32(32)});
             const Id var = mask_var(c & ~1u);
@@ -2312,7 +2441,7 @@ private:
     }
 
     void write_mask(const Operand& o, Id value) {
-        if (!is_mask(o)) {
+        if (!is_mask(o, When::after)) {
             fail(std::format("unsupported mask operand of {}", inst_->name));
         }
         store(mask_var(o.code), value);
@@ -2390,6 +2519,7 @@ private:
     std::map<unsigned, Id> sgprs_, vgprs_, bools_;  // bools_: masks and SCC by operand code
     std::map<std::uint32_t, Id> builtins_;
     std::set<unsigned> mask_sgprs_;                 // the first SGPR of each mask pair
+    std::vector<StartState> start_before_, start_after_;  // per instruction of program_
     const Instruction* inst_ = nullptr;
     std::set<unsigned> value_writes_, value_reads_;  // mask pairs written or read as values
     std::multimap<unsigned, unsigned> mask_copies_;  // mask_flow() between masks: source, dest
