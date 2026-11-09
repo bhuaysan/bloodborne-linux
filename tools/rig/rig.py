@@ -135,9 +135,12 @@ def read_only_game_prefix(game_dir: Path) -> list[str]:
 
 def check_game_read_only(game_dir: Path) -> None:
     """Refuses to run when the sandbox would not make the game directory read-only."""
-    probe = subprocess.run([*read_only_game_prefix(game_dir), "test", "-w", str(game_dir)])
-    if probe.returncode == 0:
-        raise SystemExit("the game directory would be writable inside the sandbox")
+    # `test` only asks the kernel, so the probe can't write into the game directory. It exits 0
+    # when the directory is not writable, and any other status (bwrap failing too) refuses.
+    probe = subprocess.run([*read_only_game_prefix(game_dir), "sh", "-c", 'test ! -w "$1"', "_",
+                            str(game_dir)])
+    if probe.returncode != 0:
+        raise SystemExit("the sandbox does not make the game directory read-only")
 
 
 @dataclass
@@ -342,10 +345,11 @@ def stop_target(unit: str, process: subprocess.Popen) -> None:
         process.wait()
 
 
-def kernel_journal(since: float) -> str:
+def kernel_journal(since: float) -> str | None:
+    """The kernel log since a time, or None when it could not be read."""
     run = subprocess.run(["journalctl", "-k", "--since", f"@{int(since)}", "--no-pager"],
                          capture_output=True, text=True)
-    return run.stdout
+    return run.stdout if run.returncode == 0 or "-- No entries --" in run.stdout else None
 
 
 def convert_shots(run: Path) -> list[str]:
@@ -413,6 +417,10 @@ def run_target(args: argparse.Namespace) -> int:
                 time.sleep(0.5)
         if not scenario.steps:
             process.wait(timeout=seconds + 40)
+        elif process.poll() is not None:
+            # Waits notice a dead target, but the last steps and --hold may not.
+            failure = "the target exited before the end of the scenario"
+            events("fail", failure)
     except scn.StepFailed as e:
         failure = str(e)
         events("fail", failure)
@@ -433,8 +441,10 @@ def run_target(args: argparse.Namespace) -> int:
     frames = report.read_frames(run / "frames.csv")
     conversion_errors = convert_shots(run)
     journal = kernel_journal(started)
-    (run / "kernel.log").write_text(journal)
-    faults = report.kernel_faults(journal)
+    (run / "kernel.log").write_text(journal or "")
+    faults = report.kernel_faults(journal or "")
+    if journal is None:
+        failure = failure or "could not read the kernel log"
     changes = report.tree_changes(before, report.tree_state(game_dir))
     if work_root:
         if (work_root / "state").exists():

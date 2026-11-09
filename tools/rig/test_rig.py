@@ -25,6 +25,8 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(command[:5], ["systemd-run", "--user", "--scope", "-q", "--unit=bb-rig-1"])
         self.assertIn("MemoryMax=8G", command)
         self.assertIn("MemorySwapMax=0", command)
+        self.assertLess(command.index("--dev-bind"), command.index("--ro-bind"))
+        self.assertLess(command.index("--ro-bind"), command.index("timeout"))
         ro = command.index("--ro-bind")
         self.assertEqual(command[ro:ro + 3], ["--ro-bind", "/games/bb", "/games/bb"])
         at = command.index("timeout")
@@ -32,11 +34,18 @@ class CommandTests(unittest.TestCase):
 
     def test_read_only_check_refuses_a_writable_game_dir(self) -> None:
         with unittest.mock.patch("subprocess.run") as run_mock:
-            run_mock.return_value = subprocess.CompletedProcess([], 0)
+            run_mock.return_value = subprocess.CompletedProcess([], 1)
             with self.assertRaises(SystemExit):
                 rig.check_game_read_only(Path("/games/bb"))
-            run_mock.return_value = subprocess.CompletedProcess([], 1)
+            run_mock.return_value = subprocess.CompletedProcess([], 0)
             rig.check_game_read_only(Path("/games/bb"))
+
+    def test_kernel_log_failure_is_not_an_empty_log(self) -> None:
+        with unittest.mock.patch("subprocess.run") as run_mock:
+            run_mock.return_value = subprocess.CompletedProcess([], 1, stdout="", stderr="denied")
+            self.assertIsNone(rig.kernel_journal(0))
+            run_mock.return_value = subprocess.CompletedProcess([], 1, stdout="-- No entries --\n")
+            self.assertIsNotNone(rig.kernel_journal(0))
 
     def test_bb_run_uses_per_run_xdg_dirs_and_no_window(self) -> None:
         with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
