@@ -145,9 +145,14 @@ def parse(text: str) -> Scenario:
             want, allowed = _SPEC.get(op, (0, {"time", "memory"}))
             # Only this step's own option names are options, so a regex like "state=ready" is
             # an argument.
-            options = [t for t in rest if t.partition("=")[0] in allowed and "=" in t]
-            opts = dict(t.split("=", 1) for t in options)
-            args = [t for t in rest if t not in options]
+            opts: dict[str, str] = {}
+            args: list[str] = []
+            for token in rest:
+                key, sep, value = token.partition("=")
+                if sep and key in allowed:
+                    opts[key] = value
+                else:
+                    args.append(token)
             if op == "limit":
                 if scenario.steps:
                     raise ValueError("limit must come before the first step")
@@ -243,7 +248,8 @@ class Interpreter:
             action()
 
     def _step(self, step: Step) -> None:
-        self._check_alive()
+        if step.op != "log":  # a log wait still reads what a target wrote before it exited
+            self._check_alive()
         head = step.args[0] if step.args else ""
         match step.op:
             case "tap":
@@ -301,7 +307,8 @@ class Interpreter:
             match = pattern.search(self._log_buffer, 0, complete)
             if match:
                 # Consume up to the end of the matching line, so the next wait starts after it.
-                self._log_buffer = self._log_buffer[self._log_buffer.find("\n", match.end()) + 1:]
+                end = max(match.start(), match.end() - 1)
+                self._log_buffer = self._log_buffer[self._log_buffer.find("\n", end) + 1:]
                 return
             # Keep only the unfinished last line, so the buffer stays small over a long run.
             self._log_buffer = self._log_buffer[complete:]
