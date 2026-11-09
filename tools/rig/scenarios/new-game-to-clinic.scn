@@ -1,0 +1,75 @@
+# The reference run: main menu, New Game, character creation, intro, first control in the clinic.
+# Needs a fresh user directory, so run it without --user-from. Waits use the game's own events
+# where the log shows one, and the picture elsewhere. The sleeps are menu input pacing only.
+limit time=900
+
+log sceSystemServiceHideSplashScreen timeout=120
+mark logos
+# The logos fade and hold for a few seconds each; only the title stays still this long.
+stable seconds=6 delta=1 timeout=90
+shot 01-title
+mark menu
+
+dpad D                  # Play Offline
+tap A
+stable seconds=1.5 delta=1 timeout=20
+shot 02-new-game
+tap A                   # New Game
+stable seconds=1.5 delta=1 timeout=20
+shot 03-brightness
+dpad D
+tap A
+stable seconds=1.5 delta=1 timeout=20
+shot 04-controls
+dpad D count=6          # to Next
+sleep 0.5
+shot 05-controls-next
+tap A
+mark movie
+
+# The opening is a video. The game unloads its player when it ends.
+log "sceSysmoduleUnloadModule.*0xa5" timeout=180
+nonblack level=20 timeout=60
+stable seconds=2 delta=1 timeout=60
+shot 06-editor
+mark editor
+
+tap A                   # Enter Name
+log sceImeDialogInit timeout=20
+sleep 1
+shot 07-name-dialog
+tap A                   # types "g"
+sleep 0.7
+shot 08-name-typed
+trigger R               # Done
+sleep 2
+shot 09-name-done
+dpad D count=5          # to Finish
+sleep 0.5
+shot 10-finish
+tap A
+sleep 2
+shot 11-finalise
+dpad L                  # the default answer is No
+sleep 0.4
+shot 12-finalise-yes
+tap A
+mark intro
+
+# The game saves twice right after Finish, and a third time as the intro hands over to the clinic.
+log "Unlinked /savedata0/backup0000" timeout=30
+log "Unlinked /savedata0/backup0000" timeout=30
+log "Unlinked /savedata0/backup0000" timeout=420
+nonblack level=7 timeout=60
+stable seconds=5 delta=1 timeout=90
+shot 13-clinic
+mark clinic
+
+# The character answers the stick: this is the check that the player has control.
+stick LY -32767
+changed delta=1 timeout=15
+sleep 1
+neutral
+shot 14-moved
+sleep 30
+shot 15-end

@@ -42,4 +42,6 @@ The official shadPS4 v.0.21.0 Linux release on the reference machine (RADV on an
 - It ran 25 minutes without a crash and without an amdgpu fault in the kernel log.
 - It held 30 FPS, the game's cap, in the menu and the clinic, with 5.6 GB peak memory.
 
-Not measured yet: combat, outdoor areas, sound and per-frame times. R2 adds the measurements.
+The test rig (`docs/test-rig.md`) repeats the run from a fresh data directory to first control in the clinic. In its last five runs (2026-11-09) every frame interval had a median of 33.33 ms and a 99th percentile of 33 to 50 ms, with about 4.1 GB of program memory at peak.
+
+Not measured yet: combat, outdoor areas and sound.
