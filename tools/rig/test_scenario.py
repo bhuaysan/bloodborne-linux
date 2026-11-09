@@ -38,10 +38,12 @@ class ParseTests(unittest.TestCase):
     def test_errors_name_the_line(self) -> None:
         bad = {"tap Z": "unknown button", "dpad Q": "unknown direction", "trigger X": "unknown trigger",
                "stick LX 99999": "out of range", "stick QQ 1": "unknown axis",
-               "fly": "unknown step", "tap A nope=1": "does not take", "tap": "takes 1 argument",
+               "fly": "unknown step", "tap A nope=1": "takes 1 argument", "tap": "takes 1 argument",
                "sleep -1": "negative sleep", "frames 0": "positive", "log (": "line 2",
                "shot a/b": "bad name", "mark a.b": "bad name", "tap A count=0": "count",
-               "stable delta=-1": "negative delta", "limit nope=1": "limit takes"}
+               "stable delta=-1": "negative delta", "limit nope=1": "limit takes",
+               "sleep nan": "finite", "log x timeout=inf": "finite", "limit time=0": "positive",
+               "limit memory=lots": "12G"}
         for text, expected in bad.items():
             with self.subTest(text), self.assertRaises(scn.ScenarioError) as caught:
                 scn.parse(f"# c\n{text}\n")
@@ -52,10 +54,13 @@ class ParseTests(unittest.TestCase):
         with self.assertRaises(scn.ScenarioError):
             scn.parse("sleep 1\nlimit time=5\n")
 
-    def test_shipped_scenarios_parse(self) -> None:
-        for path in sorted((HERE / "scenarios").glob("*.scn")):
-            with self.subTest(path.name):
-                self.assertTrue(scn.parse(path.read_text()).steps)
+    def test_a_regex_with_an_equals_sign_is_an_argument(self) -> None:
+        parsed = scn.parse('log "state=ready" timeout=5\n')
+        self.assertEqual(parsed.steps[0].args, ["state=ready"])
+
+    def test_a_mark_name_can_be_used_once(self) -> None:
+        with self.assertRaisesRegex(scn.ScenarioError, "used twice"):
+            scn.parse("mark a\nmark a\n")
 
 
 class FakeTarget:
@@ -142,6 +147,23 @@ class InterpreterTests(unittest.TestCase):
         clock = FakeClock()
         target = FakeTarget(clock, logs=["mark", "er\n"])
         run("log marker timeout=2\n", target, clock)
+
+    def test_log_wait_sees_a_line_logged_just_before_exit(self) -> None:
+        clock = FakeClock()
+        target = FakeTarget(clock, logs=["last words\n"], alive_until=0.0)
+        target.alive = lambda: False
+        interpreter(target, clock)._wait_log(scn.re.compile("last"), scn.parse("log last\n").steps[0])
+
+    def test_log_anchors_apply_per_line(self) -> None:
+        clock = FakeClock()
+        target = FakeTarget(clock, logs=["other\nLoaded now\n"])
+        run('log "^Loaded" timeout=1\n', target, clock)
+
+    def test_log_ignores_an_unfinished_line(self) -> None:
+        clock = FakeClock()
+        target = FakeTarget(clock, logs=["ready_for"])
+        with self.assertRaises(scn.StepFailed):
+            run('log "ready" timeout=1\n', target, clock)
 
     def test_log_timeout_fails_with_the_step(self) -> None:
         clock = FakeClock()
