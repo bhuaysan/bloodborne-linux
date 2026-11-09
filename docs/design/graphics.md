@@ -856,6 +856,42 @@ Items 11–14 can start at once; 15 and 16 after 12.
 - **`bb-run`** makes the scheduler, the cache (its code reader returns the guest dwords up to the end of the mapping, at most 1 MiB) and the dispatcher right after the mirror, and installs them with `gpu_thread().set_backend` before the game starts, because `set_backend` asserts that no stream is queued. Without a mirror (no device, no direct memory) or when the dispatcher can't be made, dispatches are skipped as before and a warning says why. The objects are never destroyed: `bb-run` ends in `_exit`, so they outlive the GPU thread. The run ends with `dispatches: N recorded, N untranslated, N failed`.
 - **Game run** (2026-11-09, debug build, `bb-run --headless --timeout 40`, 8 GiB cap): `dispatches: 0 recorded, 7961 untranslated, 0 failed`. The programs are rejected by the translator with `COMPUTE_PGM_RSRC2` 0x98 or 0xa0 (thread-group and thread id enables the translator doesn't support yet, #253), so no game dispatch runs through the mirror yet; they will once the translator handles those ids.
 
+## First-frame gaps (#344)
+
+What the game really submits in its first frames, from `--gpu-trace` (see "GPU trace") and from translating the programs it runs with the keys the draw and dispatch snapshots build from the register mirror. Measured 2026-11-09 on the debug build: `bb-run --headless --gpu-trace --timeout 60`, 1,715 frames (the trace ends at the timeout, so this is the game's first minute, not a known stage of its progress), about 1.2 million packets. Programs were captured at their first draw or dispatch with the register mirror as it was then, and translated offline with `vk::compute_state`, `vk::draw_state` and `gcn::translate` (a throwaway harness, not committed). Which frames appear on screen is not known, since nothing is drawn yet: "the first frame" below means the programs of the first frames of the trace, frames 1 to 3 first, then the rest of the run.
+
+**Programs.** The game runs 6 compute programs, 11 vertex programs and 9 pixel programs (12 vertex/pixel pairs, one of them depth only). Frames 1 to 3 use 5 of the 6 compute programs (the 6th from frame 3) and 3 vertex/pixel pairs; the other 9 vertex programs and 6 pixel programs appear from frame 40 on. No geometry, tessellation or copy shader appears, and no program of the run uses an export target that the VS and PS stages don't translate.
+
+**Packets.** Every opcode of the run is handled (no "unknown opcode" in the log). The only skipped packet is one `DMA_DATA` in frame 3 (control `0x60000000`, command `0x28200064`: register-addressed destination with a fixed address, which the parser logs and skips). It stays as it is until a draw depends on it. Draws are `DRAW_INDEX_AUTO` (opcode 0x2d, 5,141) and `DRAW_INDEX_OFFSET_2` (0x35, 15,097); the primitive types are 4 (triangle list, 15,097 draws, all `DRAW_INDEX_OFFSET_2`), 17 (rectangle list, 3,428) and 6 (triangle strip, 1,713).
+
+**Dispatches (6 programs, all rejected today).** Every one stops first at `COMPUTE_PGM_RSRC2` 0x98 or 0xa0: `TGID_X_EN` (bit 7) with 12 or 16 user SGPRs; `TIDIG_COMP_CNT` is 0 in all six, `TGID_Y/Z_EN`, `TG_SIZE_EN` and `SCRATCH_EN` are never set. With that bit ignored the next stops are:
+
+| Program | Next gap |
+|---|---|
+| `0x80d1b00500`, `0x80d1b00600` | none (they translate; only the initial register is missing) |
+| `0x80d1b00100` | `s_and_saveexec_b64 s[0:1]` with 16 user SGPRs: "user data s0 is used as a mask" |
+| `0x80d1b00800` | `image_store` (2D unorm, one with `da`) |
+| `0x80d1b00900`, `0x80d1b00b00` | `v_cmp_*_e64`/`v_cndmask_b32_e64`/`s_and_b64` writing a mask to s4, s2 or s6 under 16 user SGPRs, and `image_store` |
+
+The programs also use `buffer_load_format_x/xyz/xyzw` and `buffer_store_format_x/xyzw` (formatted MUBUF; the probe of each opcode translates, the V#-driven format is #265's open decision) and `s_buffer_load_*`. They use no `tbuffer_store`, no 10_11_11 format, no `tfe`, no gather, no image atomic, no f64, no `v_med3`/`v_cmp_class`.
+
+**Graphics (11 vertex, 9 pixel programs).**
+- All 11 vertex programs translate with the keys the draws build, including the fetch subroutine. No `exp` target gap (#340) and no `v_cndmask` VOP3 gap shows in the run.
+- Pixel: 3 of 9 translate. 5 stop at "user data s0 is used as a mask" (`s_mov_b64 s[0:1], exec`, with 16 user SGPRs, the same gap as the compute programs above). 1 (`0x80d1b00f00`, the pixel shader of the draws of frames 1 and 2) stops at `image_load_mip`.
+- The draw of frames 1 and 2 is a rectangle list (primitive type 17), which `draw_state` rejects ("VGT_PRIMITIVE_TYPE 17 is not supported yet"). Its vertex program translates.
+- `image_sample` (8 uses) translates; the SPI_PS_INPUT_ENA, `v_cmp_*_e64` modifier and `image_sample_lz_o` gaps of the corpus do not occur.
+
+**Missing for the first frames, by owner.**
+1. User-data SGPRs written as lane masks (`s_mov_b64 s[0:1], exec`, `s_and_saveexec_b64`, `v_cmp_*_e64` into s2-s6): 8 of the 12 programs that do not translate (3 compute programs, one of them first and two behind `TGID_X_EN`, and 5 pixel programs). The corpus has 301 programs stopping at s0 and 49 at other user SGPRs. Not covered by an open issue: the mask pass must treat a user SGPR pair that is dead after its last read as free (or the translator renames it). Needs its own issue (M4.4).
+2. `TGID_X_EN` initial registers (#253): all 6 compute programs. `TGID_Y/Z_EN`, `TG_SIZE_EN` and `TIDIG_COMP_CNT` are not needed.
+3. `image_store` and `image_load_mip` (#131): 3 compute programs and 1 pixel program. Gather and atomics are not needed.
+4. Formatted MUBUF load/store semantics (#265): all 6 compute programs. The typed stores, 10_11_11 and `tfe` are not needed.
+5. Rectangle list topology in `draw_state` (draw item, #346): the draws of frames 1 and 2.
+
+**Not needed by the run, so M4.6:** the f64 operations and compares, `v_cmp_class_f32` and `v_med3/min3/max3_f32`, `TG_SIZE_EN`, `TGID_Y/Z_EN` and `TIDIG_COMP_CNT`, `tbuffer_store_format_*`, the 10_11_11 small floats and `tfe` (#265), image gather and atomics (#131), the vertex export targets of #340 and VOP3 `v_cndmask` (no vertex program of the run uses them), `DMA_DATA` with register addressing, the ES, GS, HS and LS stages and domain shaders.
+
+**ES, GS, HS, LS imports.** `sceGnmSetEsShader`, `sceGnmSetGsShader`, `sceGnmSetHsShader`, `sceGnmSetLsShader`, `sceGnmUpdateGsShader`, `sceGnmUpdateHsShader` and `sceGnmSetGsRingSizes` are imported by the eboot and registered by nothing. None of them was called in the 1,715 frames: an unregistered import resolves to a logging stub that logs its first call, and the only GnmDriver stub that fired was `sceGnmGetTheTessellationFactorRingBufferBaseAddress` (once, at start-up, not a writer). The trace shows no program for those stages either. They stay unregistered until a game run calls them (M4.6); until then the risk of a stub advancing a writer over unwritten dwords does not arise in the first minute. The measurement covers one run and one path through the game: a later scene that uses tessellation or geometry shaders would call them.
+
 ## Draw packets (item 27, #282, parser part)
 
 `src/gpu/pm4/draw_packets.cpp`. `INDEX_BASE`, `INDEX_BUFFER_SIZE`, `INDEX_TYPE` and `NUM_INSTANCES` set the index state of the stream (like `SET_BASE`; `NUM_INSTANCES` starts at 1). `DRAW_INDEX_2`, `DRAW_INDEX_AUTO`, `DRAW_INDEX_OFFSET_2`, `DRAW_INDEX_INDIRECT` and `DRAW_INDIRECT` each call `Parser::set_draw`'s callback with the register mirror (the snapshot source: the backend builds it with `vk::draw_state`) and a `DrawCall` (kind, index buffer address and size, first index and count, instances, indirect argument address and the two user data registers, initiator). Without a callback, draws are skipped; a draw with no vertices or no instances is not reported and is not checked further (it needs no index buffer). A packet that is too short, an indexed draw without a buffer address, unreadable indices or arguments, or an indexed draw with an `INDEX_TYPE` other than 16 or 32 bit (8-bit is not supported) stop the stream. The `*_MULTI` draws have no callers and stay unhandled. Recording into Vulkan is #346.
