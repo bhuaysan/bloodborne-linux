@@ -7,7 +7,6 @@
 #include <string_view>
 #include <utility>
 
-#include "common/log.hpp"
 #include "gpu/gcn/gcn.hpp"
 #include "gpu/gcn/rect_list.hpp"
 #include "gpu/vk/device.hpp"

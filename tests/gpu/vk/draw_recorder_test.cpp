@@ -442,6 +442,33 @@ TEST_F(VkDrawRecorder, IndicesPastTheMirrorBufferFailTheDraw) {
     EXPECT_EQ(recorder_->stats().recorded, 0u);
 }
 
+TEST_F(VkDrawRecorder, MoreIndicesThanTheMaxSizeFailTheDraw) {
+    const std::uint64_t base = guest_ + indices_at;
+    std::vector<std::uint32_t> stream;
+    packet(stream, IT_INDEX_TYPE, {1});
+    // Max size 2, but three indices.
+    packet(stream, IT_DRAW_INDEX_2, {2, static_cast<std::uint32_t>(base),
+                                     static_cast<std::uint32_t>(base >> 32), 3, 0});
+    ASSERT_EQ(run(stream), RunResult::done);
+    EXPECT_EQ(recorder_->stats().failed, 1u);
+    EXPECT_EQ(recorder_->stats().recorded, 0u);
+}
+
+TEST_F(VkDrawRecorder, EveryFailedDrawIsCountedWhateverIsLogged) {
+    // Logging stops after 16 failures (then powers of two); the count and the stream go on. A
+    // failure that isn't a lost device doesn't make the dispatcher report its recent work.
+    const std::uint64_t base = guest_ + indices_at;
+    std::vector<std::uint32_t> stream;
+    packet(stream, IT_INDEX_TYPE, {1});
+    for (int i = 0; i < 20; ++i) {
+        packet(stream, IT_DRAW_INDEX_2, {2, static_cast<std::uint32_t>(base),
+                                         static_cast<std::uint32_t>(base >> 32), 3, 0});
+    }
+    ASSERT_EQ(run(stream), RunResult::done);
+    EXPECT_EQ(recorder_->stats().failed, 20u);
+    EXPECT_FALSE(dispatcher_->reported());
+}
+
 TEST_F(VkDrawRecorder, ScissorLimitsTheDraw) {
     context(amd::mmPA_SC_GENERIC_SCISSOR_BR, height << 16 | 12);  // columns 0-11
     std::vector<std::uint32_t> stream;
