@@ -64,8 +64,9 @@ struct ShaderKey {
     // counts, priority, debug bits) is ignored.
     std::uint32_t pgm_rsrc1 = 0;
     // COMPUTE_PGM_RSRC2 or SPI_SHADER_PGM_RSRC2_VS. USER_SGPR (bits 1-5, at most 16) gives the
-    // user data in s0 and up. The fields that add initial registers are rejected so far: compute
-    // SCRATCH_EN, TGID_*_EN, TG_SIZE_EN and TIDIG_COMP_CNT (v0 holds the thread ID in X); VS
+    // user data in s0 and up, and compute TGID_X_EN (bit 7) the workgroup's X in the next SGPR.
+    // The other fields that add initial registers are rejected so far: compute SCRATCH_EN,
+    // TGID_Y_EN, TGID_Z_EN, TG_SIZE_EN and TIDIG_COMP_CNT (v0 holds the thread ID in X); VS
     // SCRATCH_EN, OC_LDS_EN and the stream-out fields SO_BASE0_EN to SO_EN. Compute LDS_SIZE sizes
     // the LDS (a DS instruction with none is an error). The others don't change the initial
     // registers and are ignored.

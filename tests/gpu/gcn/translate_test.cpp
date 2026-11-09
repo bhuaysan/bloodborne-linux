@@ -280,8 +280,9 @@ TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
         code.insert(code.end(), rest.begin(), rest.end());
         return code;
     };
-    EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 1u << 7}),  // TGID_X_EN
-              "COMPUTE_PGM_RSRC2 0x80 is not supported yet at offset 0x0 (word 0x00000000)");
+    EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 1u << 8}),  // TGID_Y_EN
+              "COMPUTE_PGM_RSRC2 0x100 is not supported yet at offset 0x0 (word 0x00000000)");
+    EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 16u << 1 | 1u << 7}), "no error");  // TGID_X_EN
     // A user pair written as a mask stops being user data: s[2:3] holds a value from the start.
     const std::uint32_t mask_s2 = sop1(4, 2, 126);          // s_mov_b64 s[2:3], exec
     const std::uint32_t read_s2 = sop1(3, 6, 2);            // s_mov_b32 s6, s2
@@ -297,6 +298,14 @@ TEST(GcnTranslate, ErrorsNameWhatIsUnsupported) {
               "user data s2 is used as a mask at offset 0x0 (word 0x87867e02)");
     EXPECT_EQ(error({sop1(4, 126, 2), s_endpgm}),  // s_mov_b64 exec, s[2:3]
               "user data s2 is used as a mask at offset 0x0 (word 0xbefe0402)");
+    // The group ID in s16 is initial data, and so is the pair it starts: s[16:17].
+    EXPECT_EQ(error({sop1(3, 6, 16), sop1(4, 16, 126), s_endpgm},
+                    {.pgm_rsrc2 = 16u << 1 | 1u << 7}),
+              "no error");
+    EXPECT_EQ(error({skip_next, sop1(4, 16, 126), sop1(3, 6, 16), s_endpgm},
+                    {.pgm_rsrc2 = 16u << 1 | 1u << 7}),
+              "initial s16 is a value or a mask, depending on the path at offset 0x8 "
+              "(word 0xbe860310)");
     EXPECT_EQ(error({s_endpgm}, {.pgm_rsrc2 = 5u << 1 | 4u << 15}), "no error");  // LDS_SIZE
     const auto with_ds = [](std::vector<std::uint32_t> inst) {
         inst.push_back(s_endpgm);

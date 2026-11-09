@@ -67,6 +67,15 @@ protected:
     std::string why_;
 };
 
+// A dispatch can't start its group IDs elsewhere than 0 yet: the group ID would be wrong.
+TEST_F(VkComputePipeline, RejectsADispatchStart) {
+    set_cs(regs_, program, 2u << 1, 128);
+    const std::array<std::uint32_t, 1> start = {4};
+    regs_.write(RegSpace::sh, 0x205, start);  // COMPUTE_START_Y
+    EXPECT_FALSE(compute_state(regs_, why_));
+    EXPECT_EQ(why_, "COMPUTE_START_* 0x4 is not supported yet");
+}
+
 TEST_F(VkComputePipeline, StateComesFromTheCsRegisters) {
     EXPECT_FALSE(compute_state(regs_, why_));
     EXPECT_FALSE(why_.empty());

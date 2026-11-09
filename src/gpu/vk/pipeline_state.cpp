@@ -325,6 +325,15 @@ std::optional<ComputeState> compute_state(const pm4::RegisterMirror& regs, std::
         why = "COMPUTE_PGM_LO/HI is 0";
         return std::nullopt;
     }
+    // TGID_X_EN gives a program its group ID, which on the hardware counts from these and in
+    // Vulkan from 0. The game leaves them at 0.
+    for (const std::uint32_t reg :
+         {amd::mmCOMPUTE_START_X, amd::mmCOMPUTE_START_Y, amd::mmCOMPUTE_START_Z}) {
+        if (regs.get(reg) != 0) {
+            why = std::format("COMPUTE_START_* {:#x} is not supported yet", regs.get(reg));
+            return std::nullopt;
+        }
+    }
     s.key = {.stage = gcn::Stage::compute,
              .pgm_rsrc1 = regs.rsrc1(pm4::Stage::cs),
              .pgm_rsrc2 = regs.rsrc2(pm4::Stage::cs),

@@ -55,7 +55,8 @@ protected:
     // float mode.
     std::vector<std::uint32_t> run(std::string_view name, std::vector<std::uint32_t> inputs,
                                    std::uint32_t words, std::uint32_t pgm_rsrc1 = 0,
-                                   std::uint32_t threads = lanes) {
+                                   std::uint32_t threads = lanes,
+                                   std::array<std::uint32_t, 3> groups = {1, 1, 1}) {
         const auto translation = bb::gcn::translate(
             bb::test::gcn::program_words(name), {},
             {.pgm_rsrc1 = pgm_rsrc1,
@@ -69,7 +70,7 @@ protected:
         DrawBlock draw;
         draw.user_data = {static_cast<std::uint32_t>(base), static_cast<std::uint32_t>(base >> 32)};
         std::ranges::copy(inputs, draw.user_data.begin() + 2);
-        runner_->run(translation.spirv, draw, {1, 1, 1});
+        runner_->run(translation.spirv, draw, groups);
         std::vector<std::uint32_t> out(words);
         std::memcpy(out.data(), memory.data(), words * 4);
         return out;
@@ -852,6 +853,17 @@ TEST_F(TranslateExec, MaskScalarOps) {
         EXPECT_EQ(out[2 * lanes + i], (bitwise(1, a, b) & 1) << 1 | (bitwise(6, a, b) & 1));
         EXPECT_EQ(out[3 * lanes + i], (bitwise(3, a, in_exec) & 1) << 2 | in_exec << 1 |
                                           (bitwise(4, a, in_exec) & 1));
+    }
+}
+
+// TGID_X_EN: each of three workgroups stores its X, read from the SGPR after the user data.
+TEST_F(TranslateExec, WorkgroupIdInSgpr) {
+    const auto out = run("tgid_x", {}, 3 * lanes, 0, lanes, {3, 1, 1});
+    for (std::uint32_t x = 0; x < 3; ++x) {
+        for (std::uint32_t i = 0; i < lanes; ++i) {
+            SCOPED_TRACE(testing::Message() << "group " << x << " lane " << i);
+            EXPECT_EQ(out[x * lanes + i], x << 8 | i);
+        }
     }
 }
 

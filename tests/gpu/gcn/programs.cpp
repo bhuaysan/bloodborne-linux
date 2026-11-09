@@ -51,8 +51,9 @@ fs::path programs_dir() {
 
 std::uint32_t program_pgm_rsrc2(std::string_view name) {
     const std::uint32_t user_sgprs = name.starts_with("mem_") ? 13 : 5;
+    const std::uint32_t tgid_x_en = name.starts_with("tgid_") ? 1u << 7 : 0;
     constexpr std::uint32_t lds_size = 24;  // in units of 512 bytes
-    return user_sgprs << 1 | lds_size << 15;
+    return user_sgprs << 1 | tgid_x_en | lds_size << 15;
 }
 
 std::vector<std::string> program_names() {

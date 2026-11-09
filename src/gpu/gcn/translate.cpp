@@ -42,11 +42,12 @@ using Id = SpirvBuilder::Id;
 using Op = spv::Op;
 using SC = spv::StorageClass;
 
-// COMPUTE_PGM_RSRC2: USER_SGPR in bits 1-5. The other fields that change the initial registers
-// (SCRATCH_EN in bit 0, TGID_X_EN to TG_SIZE_EN in bits 7-10, TIDIG_COMP_CNT in bits 11-12)
-// are not supported yet.
+// COMPUTE_PGM_RSRC2: USER_SGPR in bits 1-5, TGID_X_EN in bit 7. The other fields that change the
+// initial registers (SCRATCH_EN in bit 0, TGID_Y_EN to TG_SIZE_EN in bits 8-10, TIDIG_COMP_CNT in
+// bits 11-12) are not supported yet.
 constexpr unsigned rsrc2_user_sgpr_shift = 1;
-constexpr std::uint32_t rsrc2_unsupported = 1u << 0 | 0xfu << 7 | 3u << 11;
+constexpr std::uint32_t rsrc2_tgid_x_en = 1u << 7;
+constexpr std::uint32_t rsrc2_unsupported = 1u << 0 | 7u << 8 | 3u << 11;
 
 // LDS_SIZE in bits 15-23 of COMPUTE_PGM_RSRC2, in units of 128 dwords (512 bytes). shadPS4's
 // regs_shader.h says "lds_dwords is in units of 128 dwords". The LDS of one workgroup is at most
@@ -346,7 +347,7 @@ private:
         check_start_sgprs();
     }
 
-    // The registers set before the program starts (user data, the primitive mask): a dword
+    // The registers set before the program starts (user data, TGID_X, the primitive mask): a dword
     // holds a value at the start and a lane mask once an instruction writes one to it, which is
     // how the compiler reuses a pair after its last read. Bit k stands for s<k>; both bits of a
     // dword are set where paths that disagree meet, and neither in an unreachable instruction.
@@ -358,8 +359,8 @@ private:
     // Where the initial registers end. A pair that starts in them counts as a whole.
     unsigned start_sgprs_end() const {
         unsigned count = user_sgprs();
-        if (key_.stage == Stage::pixel) {
-            ++count;  // the primitive mask
+        if (key_.stage == Stage::pixel || tgid_x()) {
+            ++count;  // the primitive mask or the group ID
         }
         return (count + 1) & ~1u;
     }
@@ -507,9 +508,12 @@ private:
     }
 
     unsigned user_sgprs() const { return (key_.pgm_rsrc2 >> rsrc2_user_sgpr_shift) & 31; }
+    bool tgid_x() const { return !graphics() && (key_.pgm_rsrc2 & rsrc2_tgid_x_en) != 0; }
 
     // The draw block and the initial registers: user data in the first SGPRs, then the stage's.
-    // In compute, the thread ID in X is in v0, and the lane ID is LocalInvocationIndex modulo 64.
+    // In compute, the thread ID in X is in v0, the lane ID is LocalInvocationIndex modulo 64, and
+    // TGID_X_EN puts the workgroup's X in the SGPR after the user data (the order of shadPS4's
+    // Translator::EmitPrologue, whose only initial SGPR the game uses is this one).
     // In the graphics stages the lane ID is the subgroup's (docs/design/graphics.md, "Execution
     // model"), so subgroup_base is 0.
     void prologue() {
@@ -548,6 +552,10 @@ private:
         const Id uvec3 = b_.type_vector(u32_, 3);
         const Id local = load(uvec3, builtin(spv::BuiltIn::LocalInvocationId, uvec3));
         store(vgpr(0), b_.op(Op::OpCompositeExtract, u32_, {local, 0}));
+        if (tgid_x()) {
+            const Id group = load(uvec3, builtin(spv::BuiltIn::WorkgroupId, uvec3));
+            store(sgpr(user_sgprs()), b_.op(Op::OpCompositeExtract, u32_, {group, 0}));
+        }
     }
 
     // The input variable of a built-in, declared on first use. `type` defaults to u32.

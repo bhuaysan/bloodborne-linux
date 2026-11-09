@@ -1,7 +1,7 @@
 // DISPATCH_DIRECT and DISPATCH_INDIRECT through the parser, the compute pipeline cache, the
 // scheduler and the memory mirror on lavapipe (docs/design/graphics.md, item 25). The shader
-// adds 1 to word 0 of the buffer that user data 0-3 describe (the translator takes no group ids
-// yet), so the word counts the groups that ran, with a workgroup of one thread.
+// adds 1 to word 0 of the buffer that user data 0-3 describe (the shader uses no group ID), so
+// the word counts the groups that ran, with a workgroup of one thread.
 #include <array>
 #include <cstdint>
 #include <cstdlib>
