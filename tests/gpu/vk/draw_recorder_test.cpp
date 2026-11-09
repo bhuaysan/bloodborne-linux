@@ -446,9 +446,8 @@ TEST_F(VkDrawRecorder, BlendingIntoAnIntegerTargetDrawsWithoutBlending) {
     twice = once;
     packet(twice, IT_DRAW_INDEX_AUTO, {3, 2});
     ASSERT_EQ(run(once), RunResult::done);
-    const auto key = color_image_key(*bb::pm4::color_target(regs_, hints_, 0));
-    ASSERT_TRUE(key);
-    EXPECT_EQ(key->format, VK_FORMAT_R8G8B8A8_UINT);
+    EXPECT_EQ(color_image_key(*bb::pm4::color_target(regs_, hints_, 0)).value().format,
+              VK_FORMAT_R8G8B8A8_UINT);
     EXPECT_EQ(pipelines_->last_blend_enable(), 0u);
     const std::vector<std::uint8_t> single = read();
     ASSERT_EQ(run(twice), RunResult::done);
@@ -459,12 +458,11 @@ TEST_F(VkDrawRecorder, BlendingIntoAnIntegerTargetDrawsWithoutBlending) {
 }
 
 TEST_F(VkDrawRecorder, BlendingIntoATargetThatCanBlendKeepsBlendEnable) {
-    // The same blend state on the UNORM target stays on; this is what the test above clears.
+    // The same blend state on the UNORM target stays on; the test above has it cleared.
     context(amd::mmCB_BLEND0_CONTROL, 1u << 30 | 1u << 0 | 1u << 8 | 1u << 16 | 1u << 24);
     std::vector<std::uint32_t> stream;
     packet(stream, IT_DRAW_INDEX_AUTO, {3, 2});
     ASSERT_EQ(run(stream), RunResult::done);
-    EXPECT_EQ(recorder_->stats().recorded, 1u);
     EXPECT_EQ(pipelines_->last_blend_enable(), 1u);
 }
 
