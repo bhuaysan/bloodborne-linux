@@ -4,16 +4,22 @@ Guidance for coding agents working on this repository. Humans should start with 
 
 ## Goal
 
-Reverse engineer Bloodborne (PS4, CUSA03173, patch 1.09) and run it **natively on Linux x86-64**, with **no emulation**, as an optimized port. The main goal is the complete game, playable from start to end, with the best performance and quality we can reach. Build on existing work (emulators, community research, open-source code) wherever that is faster, with credit and under compatible licenses.
+Run Bloodborne (PS4, CUSA03173, patch 1.09) **natively on Linux x86-64**: the game's own machine code runs directly on the CPU, with no CPU emulation and no instruction translation. The main goal is the complete game, playable from start to end, with the best performance and quality we can reach.
 
-## Architecture: incremental hybrid
+We build on shadPS4 where it already does the job. The renderer, the shader translator and the system libraries we are missing are derived from it, with credit and under `docs/source-policy.md`. Reverse engineering of the game itself stays our own work.
 
-The PS4 CPU is x86-64, so the game's machine code can run directly on a Linux PC. The parts that don't exist on Linux are the PS4 operating system and the GPU.
+## Architecture: native execution with a compatibility layer
 
-1. **Loader.** Our own Linux program extracts the ELF from `eboot.bin` (an unencrypted fSELF), maps its segments, applies relocations and resolves imports. It then jumps to the entry point. There is no CPU emulation and no instruction translation.
-2. **HLE system libraries.** Every Sony library the game imports (libkernel, libc, file I/O, pad, audio, GNM, …) is reimplemented by us on top of Linux APIs. Imports are matched by NID. Unknown imports resolve to logging stubs.
-3. **Graphics.** GNM command buffers are translated to Vulkan. GCN shader binaries are translated to SPIR-V by our own translator.
+The PS4 CPU is x86-64, so the game's machine code can run directly on a Linux PC. The parts that don't exist on Linux are the PS4 operating system and the GPU. Think of Wine plus DXVK, built for one game.
+
+1. **Loader (ours).** Our own Linux program extracts the ELF from `eboot.bin` (an unencrypted fSELF), maps its segments, applies relocations and resolves imports. It then jumps to the entry point. There is no CPU emulation and no instruction translation.
+2. **HLE system libraries (ours, some derived).** Every Sony library the game imports is implemented on top of Linux APIs. Imports are matched by NID. Unknown imports resolve to logging stubs. Kernel, memory, threads and files are ours. Pad, audio with ATRAC9, video playback and dialogs are derived from shadPS4.
+3. **Graphics (derived from shadPS4).** PM4 command processing, the renderer, the buffer and texture caches and the GCN→SPIR-V translator come from shadPS4's `video_core` and `shader_recompiler`. They run on our runtime behind a thin host layer.
 4. **Targeted function replacement.** Game functions are decompiled into readable C++ where that serves playability, performance or quality: bugs, crashes, bottlenecks, limits such as the frame rate. Each one replaces the original through a hook or trampoline at its address. A complete decompilation is not a goal, so the original machine code keeps running for everything else.
+
+**Derive first, rewrite later.** Code from shadPS4 goes in nearly unchanged and has to work first. After that we rewrite it piece by piece where that measurably helps, and compare each step against the reference run and the shader corpus. We don't rewrite before it works: that is how M4 ended with 17,000 lines of GPU code and no frame of the game.
+
+**A compatibility layer first, not a strict port.** The game still produces PS4 GPU commands, and we translate them at run time. Two later steps make it more native: translating the shaders ahead of time, and replacing engine render functions with hooks that call Vulkan directly, where that measurably helps performance or quality.
 
 The goal is **functional equivalence**, not byte-matching. Sony's compiler is not available to us.
 
@@ -24,7 +30,8 @@ See `docs/architecture.md` and `docs/roadmap.md`.
 ### Sources and licenses
 **Read [`docs/source-policy.md`](docs/source-policy.md) (the source and license policy) before reusing external code.** In short:
 - **Never** look at leaked Sony SDK material (also when it is copied into another project), and never use game data other than the maintainer's own dump.
-- Everything else is allowed: public docs and NID lists, PS4 emulators (for example shadPS4), Mesa and other open-source code, and Bloodborne/FromSoftware reverse-engineering, decomp and modding material.
+- **Never** use third-party recompilation, decompilation or port projects of the game, or what comes out of them (symbol maps, address lists, community game patches).
+- Everything else is allowed: public docs and NID lists, PS4 emulators (for example shadPS4), Mesa and other open-source code, and public documentation of the game's file formats.
 - The project is GPL-2.0-or-later. Code is copied or adapted only from files whose license keeps it so (see `docs/source-policy.md`). Whole files go unchanged into `third_party/` with their license; adapted code keeps its copyright and license notices and gets an SPDX tag, a `// Source:` line and a `// Changed for bloodborne-linux, <date>` line.
 - Log every source in `docs/references.md` in the same change that uses it.
 - Import names need a NID that matches the documented hash; record the name's source in `symbols/nids.csv`.
@@ -36,7 +43,7 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 ### Game data
 - The game is provided by the user from their own dump. Its location comes from the environment variable `BB_GAME_DIR`, or from `local.env` (untracked) in the repo root.
 - Treat the game directory as **read-only**. Never write into it.
-- **Never commit** game files, extracted assets, the ELF, disassembly or decompiler output dumps, or large hex excerpts. Short excerpts needed to explain something are fine.
+- **Never commit** game files, extracted assets, the ELF, disassembly or decompiler output dumps, captured frames or GPU traces of the game, or large hex excerpts. Short excerpts needed to explain something are fine.
 - Never hard-code absolute paths in code, scripts or docs.
 
 ### Privacy and repository hygiene
@@ -53,6 +60,7 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 - At the end of every work session, post a handoff comment on the issue: done, open, next step, gotchas.
 - If an issue can only start after another one is merged, add a line `Depends on #N` to its body. An issue starts only once every issue it depends on is merged into `main`. If a dependency goes to the maintainer instead of merging, the issues that depend on it wait as well.
 - One issue per task with one checkable result, normally one PR. Per-function progress goes in `symbols/functions.csv`, not in issues.
+- Every task names what it checks in the real game: a fault it reproduces, a measurement, or the reference result it has to match. It ends with a run that shows the result. Synthetic tests back this up and don't replace it.
 - Agents may create and comment on issues in this repository. Close issues through commits (`Fixes #N`).
 - Issue text follows the same privacy rules as commits.
 
@@ -78,19 +86,19 @@ Risky code is never reviewed only in the session that wrote it.
 1. **Automatic:** git hooks on every commit. From M2, CI (build with sanitizers, unit and differential tests, privacy check, and formatting and lint once there is code).
 2. **Per decompiled function:** a differential test. Non-trivial functions also get an independent review that compares the C++ against the original disassembly without seeing the author's reasoning. Trivial means a leaf function of a few instructions that only reads or writes fields or returns a constant.
 3. **Per PR:** every change goes through a PR. The session that opens it picks the review class and names it in the PR body:
-   - **Core** (shader translator, loader, ABI, memory mirror, decompiled functions, interfaces other issues build on): an independent review of the PR diff in a fresh context at high effort, up to two fix rounds.
+   - **Core** (shader translator, renderer, loader, ABI, guest memory and write tracking, decompiled functions, interfaces other issues build on): an independent review of the PR diff in a fresh context at high effort, up to two fix rounds.
    - **Normal** (all other code): one independent review in a fresh context, one fix round.
    - **Small** (only docs, `symbols/` or tests, or at most 50 changed lines in total with none in core code): no independent review. A PR that adds a source to `docs/references.md`, copies or adapts external code, or adds NID names from an external source is never Small.
 
-   Findings about correctness, security or licenses block the merge. Style findings are optional. Fix blocking findings in the same PR unless they need their own design work. Keep PRs to at most 800 changed lines of non-test code (docs, `symbols/`, `tests/` and `tools/**/test_*.py` don't count), and put generated data and copied `third_party/` files in a PR of their own (they don't count either). Never remove or weaken a test to meet the limit.
+   Findings about correctness, security or licenses block the merge. Style findings are optional. Fix blocking findings in the same PR unless they need their own design work. Keep PRs to at most 800 changed lines of non-test code (docs, `symbols/`, `tests/` and `tools/**/test_*.py` don't count), and put generated data and copied `third_party/` files in a PR of their own (they don't count either). A bulk import of shadPS4 code is also a PR of its own: copied from the pinned commit and changed only by a committed script (notices, include paths). The independent review re-runs the script and checks that it reproduces the tree. An import exceeds the line limit, so the maintainer merges it. Never remove or weaken a test to meet the limit.
    **Merging:** an agent may merge a PR once it passes every part of the gate:
-   - `tools/run-tests.sh` passes, locally with the game where tests need it, and in CI once it exists. `tools/merge-pr.sh` runs it again on the rebased commits, so what lands on `main` is what was tested.
+   - `tools/run-tests.sh` passes, locally with the game where tests need it, and in CI. Check the PR head with `gh pr checks` before merging, and don't merge while a check is pending or failed. A failure the PR didn't cause goes to the maintainer. `tools/merge-pr.sh` runs the tests again on the rebased commits, so what lands on `main` is what was tested.
    - `tools/privacy-check.sh` is clean. `tools/merge-pr.sh` runs it too.
    - Every blocking finding of the independent review is fixed, or moved to a linked issue because it needs its own design work, or withdrawn by the reviewer in a re-review. The PR's author can't dismiss a blocking finding on its own. If it disagrees, a second independent reviewer decides from the code and the finding. If that reviewer can't decide, the finding goes to the maintainer.
    - Every function the PR marks `replaced` in `symbols/functions.csv` passed its differential test and, unless trivial, its disassembly review (item 2).
    - The PR stays within the 800-line limit above.
    - The PR doesn't change the guardrails: `AGENTS.md`, `docs/source-policy.md`, `.gitignore`, any `.gitattributes`, `.github/`, `tools/githooks/`, `tools/merge-pr.sh`, `tools/privacy-check.sh`, `tools/run-tests.sh` or `tools/common/toolenv.py` (it finds the game for the tests).
-   - Each new source in `docs/references.md` is allowed by `docs/source-policy.md` (no leaked SDK material), as checked by the independent review. For code sources the review also checks that the license column matches the files, that copied or adapted code keeps its notices, that nothing was copied from a file whose license is not on the allow-list in `docs/source-policy.md` (it keeps the program GPL-2.0-or-later), and that `third_party/` holds only unchanged copies plus their license files.
+   - Each new source in `docs/references.md` is allowed by `docs/source-policy.md` (nothing from its off-limits list), as checked by the independent review. For code sources the review also checks that the license column matches the files, that copied or adapted code keeps its notices, that nothing was copied from a file whose license is not on the allow-list in `docs/source-policy.md` (it keeps the program GPL-2.0-or-later), and that `third_party/` holds only unchanged copies plus their license files.
 
    Anything that fails the gate goes to the maintainer. `tools/merge-pr.sh` refuses guardrail changes and oversized PRs unless the maintainer runs it with `--maintainer`. Agents never pass that flag. Agents always pass `--sha <commit>`, the PR head the independent review saw (for a Small PR, the head that was tested); the script refuses the merge if the branch has moved since.
    **Never use GitHub's merge button or `gh pr merge`**: GitHub writes the account's display name into the commit. Merge with `tools/merge-pr.sh --sha <reviewed head> <N>` instead. It rebases locally, runs the tests and the privacy check (which includes authorship) on the rebased commits, and fast-forwards `main`.
@@ -98,10 +106,16 @@ Risky code is never reviewed only in the session that wrote it.
    - a walkthrough of the new code
    - code health and an architecture check
    - a sample check of `symbols/` quality
-   - a source and license audit (`docs/references.md` complete, code sources and `third_party/` match their licenses, no leaked SDK material)
+   - a source and license audit (`docs/references.md` complete, code sources and `third_party/` match their licenses, nothing from the off-limits list)
    - a privacy audit of the history
    
    Small fixes go into a follow-up PR. Bigger findings become issues labeled `review`. Then the maintainer tags the milestone.
+
+## Game runs
+
+Test against the real game. Agents may run it on the real GPU without the maintainer at the machine, with a time limit and a memory limit on every run (`timeout`, and `systemd-run --user --scope -p MemoryMax=… -p MemorySwapMax=0`). The game directory stays read-only, also for emulators run on it.
+
+The reference for what the game should do is the official shadPS4 v.0.21.0 Linux release, run as a program on our dump. When the game misbehaves in our program, check the reference first. If the reference has the same fault, the cause is probably in the derived code and not in our runtime.
 
 ## Builds, branches and data
 
@@ -115,7 +129,7 @@ There are no separate dev and prod environments. The differences live in build p
 ### Branches
 - `main` always builds and passes its tests.
 - Work happens on short-lived feature branches (`feat/…`, `fix/…`, `docs/…`) merged through PRs, so CI runs.
-- The maintainer tags each completed milestone (`m1`, `m2`, …) after its review. Agents never create tags.
+- The maintainer tags each completed milestone (`m3`, `r1`, …) after its review. Agents never create tags.
 - No long-lived `develop` branch.
 
 ### CI (from M2)
@@ -131,5 +145,6 @@ GitHub Actions builds every preset, runs the unit tests and the privacy checks. 
 
 - Language: C++20 for the runtime and decomp, Python 3 for tools. Build with CMake + Ninja.
 - Documentation and code comments are in English.
+- Docs record decisions and their reasons. How code works as built belongs in comments and tests, not in a design-doc log.
 - Commit messages are in the imperative mood, under 72 characters, and say what changed. Reference issues with `Fixes #N` / `Refs #N`.
 - Keep changes small and focused, one logical change per commit.
