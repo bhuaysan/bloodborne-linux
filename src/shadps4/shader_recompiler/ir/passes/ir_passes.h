@@ -1,0 +1,49 @@
+// SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Source: shadPS4 src/shader_recompiler/ir/passes/ir_passes.h @11557f2eb60b3b00712c8887c30852de7615d6df
+// Changed for bloodborne-linux, 2026-11-09
+// License texts: third_party/shadps4/LICENSES/
+
+#pragma once
+
+#include "shader_recompiler/ir/basic_block.h"
+#include "shader_recompiler/ir/passes/resource_pass.h"
+#include "shader_recompiler/ir/program.h"
+
+namespace Shader {
+struct Profile;
+void InjectClipDistanceAttributes(IR::Program& program, RuntimeInfo& runtime_info);
+} // namespace Shader
+
+namespace Shader::Optimization {
+
+void SsaRewritePass(IR::Program& program);
+void SsaRepairPass(IR::Program& program);
+void PhiSimplificationPass(IR::Program& program);
+void InverseBallotEliminationPass(IR::Program& program);
+void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info,
+                           const Profile& profile);
+void LowerHardwareIntrinsics(IR::Program& program);
+void LowerPhisToRegsPass(IR::Program& program);
+void DeadCodeEliminationPass(IR::Program& program);
+void ConstantPropagationPass(IR::BlockList& program);
+void FlattenExtendedUserdataPass(IR::Program& program);
+void ReadLaneEliminationPass(IR::Program& program);
+ResourceDiscoveryList ResourceDiscoverPass(IR::Program& program, const Profile& profile);
+void ResourcePatchingPass(Shader::Info& info, const ResourceDiscoveryList& sharp_usages,
+                          const Profile& profile);
+void CollectShaderInfoPass(IR::Program& program, const Profile& profile);
+void LowerBufferFormatToRaw(IR::Program& program);
+void LowerUserClipPlanes(IR::Program& program, const RuntimeInfo& runtime_info);
+void LowerFp64ToFp32(IR::Program& program);
+void RingAccessElimination(const IR::Program& program, const RuntimeInfo& runtime_info);
+void TessellationPreprocess(IR::Program& program, RuntimeInfo& runtime_info);
+void HullShaderTransform(IR::Program& program, const RuntimeInfo& runtime_info);
+void DomainShaderTransform(const IR::Program& program, const RuntimeInfo& runtime_info);
+void SharedMemoryBarrierPass(IR::Program& program, const RuntimeInfo& runtime_info,
+                             const Profile& profile);
+void SharedMemorySimplifyPass(IR::Program& program, const Profile& profile);
+void SharedMemoryToStoragePass(IR::Program& program, const RuntimeInfo& runtime_info,
+                               const Profile& profile);
+
+} // namespace Shader::Optimization

@@ -1,0 +1,28 @@
+// SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Source: shadPS4 src/common/div_ceil.h @11557f2eb60b3b00712c8887c30852de7615d6df
+// Changed for bloodborne-linux, 2026-11-09
+// License texts: third_party/shadps4/LICENSES/
+
+#pragma once
+
+#include <cstddef>
+#include <type_traits>
+
+namespace Common {
+
+/// Ceiled integer division.
+template <typename N, typename D>
+    requires std::is_integral_v<N> && std::is_unsigned_v<D>
+[[nodiscard]] constexpr N DivCeil(N number, D divisor) {
+    return static_cast<N>((static_cast<D>(number) + divisor - 1) / divisor);
+}
+
+/// Ceiled integer division with logarithmic divisor in base 2
+template <typename N, typename D>
+    requires std::is_integral_v<N> && std::is_unsigned_v<D>
+[[nodiscard]] constexpr N DivCeilLog2(N value, D alignment_log2) {
+    return static_cast<N>((static_cast<D>(value) + (D(1) << alignment_log2) - 1) >> alignment_log2);
+}
+
+} // namespace Common
