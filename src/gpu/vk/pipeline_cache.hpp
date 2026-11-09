@@ -13,6 +13,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include "common/code_hash.hpp"
 #include "gpu/gcn/translate.hpp"
 #include "gpu/vk/pipeline_state.hpp"
 #include "gpu/vk/rendering.hpp"
@@ -68,7 +69,9 @@ public:
     PipelineCache& operator=(const PipelineCache&) = delete;
 
     // The pipeline for `key` drawing into `targets` (their formats and sample count). Made on the
-    // first request; an equal request returns the same pipeline. The VS's fetch address counts
+    // first request; an equal request returns the same pipeline while the code of its stages and
+    // the fetch subroutine is unchanged (hashed on every request, see docs/design/graphics.md,
+    // "Code hash of a cached pipeline"); changed code gets a pipeline of its own. The VS's fetch address counts
     // only for a program that calls the fetch subroutine. Nothing, with `why` saying what, when a
     // stage's code isn't readable, doesn't translate or uses images or samplers (not yet); the
     // error is kept and given again for an equal request, except unreadable code (also an
@@ -97,9 +100,16 @@ private:
         Formats formats;
         GraphicsPipeline pipeline;
         std::string error;  // why there is no pipeline
+        // Of the code it was made from: the stages' programs and the fetch subroutine (empty
+        // without a pixel stage or a call).
+        common::CodeStamp vs_code, ps_code, fetch_code;
+    };
+    struct Fetchless {
+        gcn::ShaderKey key;
+        common::CodeStamp code;  // of the VS program, which must still be that one
     };
 
-    bool fetchless(const StageState& vs) const;
+    bool fetchless(const StageState& vs, std::span<const std::uint32_t> code) const;
     void create(Entry& entry, const gcn::Translation& vs, const gcn::Translation* ps);
 
     const Device& device_;
@@ -110,7 +120,7 @@ private:
     std::unordered_multimap<std::uint64_t, Entry> entries_;
     // The VS programs (code address and key) whose result doesn't depend on the fetch address:
     // they don't call the subroutine, or fail for another reason.
-    std::unordered_multimap<std::uint64_t, gcn::ShaderKey> fetchless_;
+    std::unordered_multimap<std::uint64_t, Fetchless> fetchless_;
     std::size_t translations_ = 0;
 };
 

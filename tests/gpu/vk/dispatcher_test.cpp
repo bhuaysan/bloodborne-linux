@@ -164,6 +164,24 @@ TEST_F(VkDispatcher, DirectDispatchRunsTheGroups) {
     EXPECT_EQ(dispatcher_->stats().failed, 0u);
 }
 
+// New code at the address of a cached program runs instead of the old one (#371).
+TEST_F(VkDispatcher, CodeOverwrittenInPlaceRunsTheNewProgram) {
+    std::vector<std::uint32_t> stream;
+    set_state(stream, code_at);
+    packet(stream, IT_DISPATCH_DIRECT, {2, 1, 1, 1});
+    ASSERT_EQ(run(stream), RunResult::done);
+    EXPECT_EQ(word(out_at, 0), 2u);
+
+    const std::uint32_t add_two = vop1(1, 1, 130);  // v_mov_b32 v1, 2
+    std::memcpy(bytes() + code_at, &add_two, 4);
+    stream.clear();
+    set_state(stream, code_at);
+    packet(stream, IT_DISPATCH_DIRECT, {3, 1, 1, 1});
+    ASSERT_EQ(run(stream), RunResult::done);
+    EXPECT_EQ(word(out_at, 0), 2u + 3u * 2u);
+    EXPECT_EQ(pipelines_->translations(), 2u);
+}
+
 TEST_F(VkDispatcher, IndirectDispatchReadsTheCountsAtBasePlusOffset) {
     const std::uint32_t counts[3] = {7, 1, 1};
     std::memcpy(bytes() + counts_at + 16, counts, sizeof counts);

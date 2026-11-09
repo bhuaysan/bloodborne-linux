@@ -36,10 +36,10 @@ PipelineCache::~PipelineCache() {
     }
 }
 
-bool PipelineCache::fetchless(const StageState& vs) const {
+bool PipelineCache::fetchless(const StageState& vs, std::span<const std::uint32_t> code) const {
     const auto [first, last] = fetchless_.equal_range(vs.code_address);
     for (auto it = first; it != last; ++it) {
-        if (it->second == vs.key) {
+        if (it->second.key == vs.key && it->second.code.matches(code)) {
             return true;
         }
     }
@@ -52,19 +52,30 @@ const GraphicsPipeline* PipelineCache::get(const PipelineKey& request,
                 {targets.color, targets.color_count, targets.depth, targets.stencil,
                  targets.samples},
                 {},
+                {},
+                {},
+                {},
                 {}};
     PipelineKey& key = entry.key;
     for (std::uint32_t n = targets.color_count; n < key.blend.size(); ++n) {
         key.blend[n] = {};  // no such attachment: not part of the pipeline
     }
-    if (fetchless(key.vs)) {
+    // The code is read again on every request: an entry counts only while the code it was made
+    // from is still there. Older entries stay (the GPU may still use their pipelines) and
+    // match again if their code returns.
+    const auto vs_now = read_(key.vs.code_address);
+    if (fetchless(key.vs, vs_now)) {
         key.vs.fetch_address = 0;
     }
+    const auto ps_now = key.ps ? read_(key.ps->code_address) : std::span<const std::uint32_t>{};
+    const auto fetch_now = key.vs.fetch_address != 0 ? read_(key.vs.fetch_address)
+                                                      : std::span<const std::uint32_t>{};
     const auto found = [&]() -> std::optional<const GraphicsPipeline*> {
         const auto [first, last] = entries_.equal_range(hash_stages(key));
         for (auto it = first; it != last; ++it) {
             const Entry& e = it->second;
-            if (e.key == key && e.formats == entry.formats) {
+            if (e.key == key && e.formats == entry.formats && e.vs_code.matches(vs_now) &&
+                e.ps_code.matches(ps_now) && e.fetch_code.matches(fetch_now)) {
                 why = e.error;
                 return e.pipeline.pipeline != VK_NULL_HANDLE ? &e.pipeline : nullptr;
             }
@@ -76,17 +87,23 @@ const GraphicsPipeline* PipelineCache::get(const PipelineKey& request,
     }
 
     // Unreadable code isn't kept: the program may be mapped by the next request.
-    const auto translate = [&](const StageState& s) -> std::optional<gcn::Translation> {
-        const auto code = read_(s.code_address);
+    // A stage that fails to translate keeps the stamps of the code it read (the extent of a
+    // rejected program is unknown).
+    const auto translate = [&](const StageState& s, std::span<const std::uint32_t> code,
+                               std::span<const std::uint32_t> fetch, common::CodeStamp& stamp,
+                               common::CodeStamp& fetch_stamp) -> std::optional<gcn::Translation> {
         if (code.empty()) {
             why = std::format("no readable code at {:#x}", s.code_address);
             return std::nullopt;
         }
-        const auto fetch = s.fetch_address != 0 ? read_(s.fetch_address)
-                                                : std::span<const std::uint32_t>{};
         ++translations_;
+        stamp = common::CodeStamp::of(code, common::error_stamp_dwords);
+        fetch_stamp = common::CodeStamp::of(fetch, common::error_stamp_dwords);
         try {
-            return gcn::translate(code, fetch, s.key);
+            auto t = gcn::translate(code, fetch, s.key);
+            stamp = common::CodeStamp::of(code, t.code_dwords);
+            fetch_stamp = common::CodeStamp::of(fetch, t.fetch_dwords);
+            return t;
         } catch (const gcn::GcnError& e) {
             // A VS that needs the fetch subroutine and finds it unmapped may succeed once it is.
             if (s.fetch_address != 0 && fetch.empty() &&
@@ -99,16 +116,17 @@ const GraphicsPipeline* PipelineCache::get(const PipelineKey& request,
     };
     std::optional<gcn::Translation> vs, ps;
     try {
-        if (!(vs = translate(key.vs))) {
+        common::CodeStamp no_fetch;
+        if (!(vs = translate(key.vs, vs_now, fetch_now, entry.vs_code, entry.fetch_code))) {
             return nullptr;
         }
         // Before the first translation of this VS no entry holds it, so no entry has to be
         // looked up again without the fetch address.
-        if (!vs->interface.calls_fetch && !fetchless(key.vs)) {
-            fetchless_.emplace(key.vs.code_address, key.vs.key);
+        if (!vs->interface.calls_fetch && !fetchless(key.vs, vs_now)) {
+            fetchless_.emplace(key.vs.code_address, Fetchless{key.vs.key, entry.vs_code});
             key.vs.fetch_address = 0;
         }
-        if (key.ps && !(ps = translate(*key.ps))) {
+        if (key.ps && !(ps = translate(*key.ps, ps_now, {}, entry.ps_code, no_fetch))) {
             return nullptr;
         }
         // An MIMG instruction takes a T#, so a stage with samplers has images too.
@@ -122,11 +140,12 @@ const GraphicsPipeline* PipelineCache::get(const PipelineKey& request,
             // A VS error that doesn't depend on the fetch subroutine is kept without its
             // address, so a per-draw pointer in the user data doesn't add an entry per draw.
             try {
-                gcn::translate(read_(key.vs.code_address), {}, key.vs.key);
+                gcn::translate(vs_now, {}, key.vs.key);
             } catch (const gcn::GcnError& probe) {
                 if (std::string_view(probe.what()) == e.what()) {
-                    fetchless_.emplace(key.vs.code_address, key.vs.key);
+                    fetchless_.emplace(key.vs.code_address, Fetchless{key.vs.key, entry.vs_code});
                     key.vs.fetch_address = 0;
+                    entry.fetch_code = {};
                 }
             }
         }
