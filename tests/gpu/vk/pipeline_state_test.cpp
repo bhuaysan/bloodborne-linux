@@ -178,8 +178,14 @@ TEST(PipelineState, Stages) {
     set(regs, amd::mmVGT_SHADER_STAGES_EN, 1u << 5);  // GS
     EXPECT_EQ(failure(regs), "VGT_SHADER_STAGES_EN 0x20: only VS and PS are supported yet");
     set(regs, amd::mmVGT_SHADER_STAGES_EN, 0u);
-    set(regs, amd::mmVGT_PRIMITIVE_TYPE__CI__VI, 17u);  // rect list
-    EXPECT_EQ(failure(regs), "VGT_PRIMITIVE_TYPE 17 is not supported yet");
+    set(regs, amd::mmVGT_PRIMITIVE_TYPE__CI__VI, 19u);  // quad list
+    EXPECT_EQ(failure(regs), "VGT_PRIMITIVE_TYPE 19 is not supported yet");
+    // A rect list is a triangle list of its corners, with the flag for the geometry stage.
+    set(regs, amd::mmVGT_PRIMITIVE_TYPE__CI__VI, 17u);
+    const auto rect = snapshot(regs);
+    EXPECT_EQ(rect.key.topology, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    EXPECT_TRUE(rect.key.rect_list);
+    EXPECT_FALSE(s.key.rect_list);
 }
 
 TEST(PipelineState, Tables) {

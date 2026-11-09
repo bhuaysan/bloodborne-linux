@@ -15,6 +15,7 @@ add_library(bbgcn STATIC
     lds.cpp
     memory.cpp
     opcodes.cpp
+    rect_list.cpp
     spirv_builder.cpp
     stages.cpp
     structurize.cpp

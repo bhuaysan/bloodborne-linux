@@ -105,6 +105,8 @@ struct Query {
             {&features.features.independentBlend, "independentBlend"},
             // The draw snapshot's clip space: no depth clipping, and z from -w to w.
             {&features.features.depthClamp, "depthClamp"},
+            // A rectangle list is completed by a geometry shader (docs/design/graphics.md).
+            {&features.features.geometryShader, "geometryShader"},
             // image_store: a translated storage image is declared without a format.
             {&features.features.shaderStorageImageWriteWithoutFormat,
              "shaderStorageImageWriteWithoutFormat"},

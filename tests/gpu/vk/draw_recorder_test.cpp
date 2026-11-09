@@ -292,6 +292,26 @@ TEST_F(VkDrawRecorder, AutoDrawRendersTheTriangle) {
     EXPECT_EQ(pipelines_->size(), 1u);
 }
 
+TEST_F(VkDrawRecorder, ARectangleListDrawsItsFourthCorner) {
+    // Three corners of the rectangle that covers the target, the right-angle one in the middle:
+    // the triangle alone would cover the lower-left half. The fourth corner (1, 1) with
+    // attribute (1, 1) is derived by the geometry stage, so every texel is drawn.
+    const float vertices[3][8] = {{1, -1, 0, 1, 1, 0, 0.25f, 1},
+                                  {-1, -1, 0, 1, 0, 0, 0.25f, 1},
+                                  {-1, 1, 0, 1, 0, 1, 0.25f, 1}};
+    std::memcpy(bytes() + vertices_at, vertices, sizeof vertices);
+    const std::uint32_t rect_list = 17;
+    regs_.write(RegSpace::uconfig, amd::mmVGT_PRIMITIVE_TYPE__CI__VI - 0xC000,
+                std::span(&rect_list, 1));
+    std::vector<std::uint32_t> stream;
+    packet(stream, IT_DRAW_INDEX_AUTO, {3, 2});
+    ASSERT_EQ(run(stream), RunResult::done);
+    EXPECT_TRUE(triangle_in(0, width));
+    EXPECT_EQ(recorder_->stats().recorded, 1u);
+    EXPECT_EQ(recorder_->stats().unsupported, 0u);
+    EXPECT_EQ(recorder_->stats().failed, 0u);
+}
+
 TEST_F(VkDrawRecorder, IndexedDrawsReadTheIndicesThroughTheMirror) {
     // 16-bit indices (2, 0, 1) of DRAW_INDEX_2, then 32-bit indices of DRAW_INDEX_OFFSET_2 from
     // INDEX_BASE that skip the first one: (9, 1, 2, 0) from index 1.

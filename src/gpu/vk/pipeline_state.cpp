@@ -425,7 +425,10 @@ std::optional<DrawState> draw_state(const pm4::RegisterMirror& regs, bool quad_c
     }
 
     const std::uint32_t prim = regs.get(amd::mmVGT_PRIMITIVE_TYPE__CI__VI);
-    const auto top = topology(prim);
+    // A rectangle list has no Vulkan topology: it is drawn as a triangle list of its corners.
+    const auto top = prim == rect_list_primitive ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+                                                  : topology(prim);
+    k.rect_list = prim == rect_list_primitive;
     if (!top) {
         return fail(why, std::format("VGT_PRIMITIVE_TYPE {} is not supported yet", prim));
     }

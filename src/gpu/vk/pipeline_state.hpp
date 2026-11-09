@@ -45,6 +45,9 @@ struct PipelineKey {
     StageState vs;
     std::optional<StageState> ps;  // none when SPI_SHADER_PGM_LO_PS is 0 (depth only)
     VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    // VGT_PRIMITIVE_TYPE 17: a triangle list of three corners per rectangle, which a geometry
+    // stage completes with the fourth (gcn::rect_list_geometry).
+    bool rect_list = false;
     // No depth clipping (CLIP_DISABLE or a ZCLIP_*_DISABLE of PA_CL_CLIP_CNTL): depthClampEnable.
     bool depth_clamp = false;
     // Clip-space z from -w to w: VkPipelineViewportDepthClipControlCreateInfoEXT::negativeOneToOne.
@@ -124,6 +127,8 @@ std::optional<VkStencilOp> stencil_op(std::uint32_t op);
 VkCompareOp compare_op(std::uint32_t function);
 
 // VGT_PRIMITIVE_TYPE (shadPS4's table); nothing for the types without an equivalent yet.
+// VGT_PRIMITIVE_TYPE of a rectangle list, which topology() does not map.
+constexpr std::uint32_t rect_list_primitive = 17;
 std::optional<VkPrimitiveTopology> topology(std::uint32_t prim_type);
 
 }  // namespace bb::vk

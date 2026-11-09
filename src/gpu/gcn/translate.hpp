@@ -131,6 +131,8 @@ struct ShaderInterface {
     bool mask_round_trip = false;
     // The vertex stage's program calls the fetch subroutine (s_swappc_b64), which was inlined.
     bool calls_fetch = false;
+    // The locations of the vec4 outputs (a VS's parameter exports), ascending.
+    std::vector<std::uint32_t> outputs{};
 };
 
 struct Translation {

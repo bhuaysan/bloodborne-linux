@@ -59,6 +59,14 @@ public:
 
     // The global variables the stage declared, for the entry point.
     const std::vector<Id>& interface() const { return interface_; }
+    // The locations of the outputs the stage declared (the parameter exports of a VS).
+    std::vector<std::uint32_t> output_locations() const {
+        std::vector<std::uint32_t> locations;
+        for (const auto& [location, id] : outputs_) {
+            locations.push_back(location);
+        }
+        return locations;
+    }
 
 private:
     enum class Interp { flat, smooth, noperspective };

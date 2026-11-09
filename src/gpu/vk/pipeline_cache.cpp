@@ -3,11 +3,13 @@
 #include <algorithm>
 #include <format>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <utility>
 
 #include "common/log.hpp"
 #include "gpu/gcn/gcn.hpp"
+#include "gpu/gcn/rect_list.hpp"
 #include "gpu/vk/device.hpp"
 
 namespace bb::vk {
@@ -188,7 +190,7 @@ void PipelineCache::create(Entry& entry, const gcn::Translation& vs, const gcn::
     GraphicsPipeline& p = entry.pipeline;
     struct Modules {
         VkDevice device;
-        VkShaderModule handles[2] = {};
+        VkShaderModule handles[3] = {};
         ~Modules() {
             for (VkShaderModule m : handles) {
                 vkDestroyShaderModule(device, m, nullptr);
@@ -205,20 +207,28 @@ void PipelineCache::create(Entry& entry, const gcn::Translation& vs, const gcn::
     check(vkCreatePipelineLayout(device, &layout, nullptr, &p.layout), "vkCreatePipelineLayout");
     if (create_hook_) create_hook_();
 
-    VkPipelineShaderStageCreateInfo stages[2];
-    const gcn::Translation* translations[2] = {&vs, ps};
-    const std::uint32_t stage_count = ps ? 2 : 1;
-    for (std::uint32_t i = 0; i < stage_count; ++i) {
+    // The VS, the geometry stage of a rectangle list, the PS.
+    VkPipelineShaderStageCreateInfo stages[3];
+    std::uint32_t stage_count = 0;
+    const auto add_stage = [&](VkShaderStageFlagBits stage, std::span<const std::uint32_t> code) {
         auto module = make<VkShaderModuleCreateInfo>(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
-        module.codeSize = translations[i]->spirv.size() * sizeof(std::uint32_t);
-        module.pCode = translations[i]->spirv.data();
-        check(vkCreateShaderModule(device, &module, nullptr, &modules.handles[i]),
+        module.codeSize = code.size() * sizeof(std::uint32_t);
+        module.pCode = code.data();
+        check(vkCreateShaderModule(device, &module, nullptr, &modules.handles[stage_count]),
               "vkCreateShaderModule");
-        stages[i] = make<VkPipelineShaderStageCreateInfo>(
+        stages[stage_count] = make<VkPipelineShaderStageCreateInfo>(
             VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
-        stages[i].stage = i == 0 ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_FRAGMENT_BIT;
-        stages[i].module = modules.handles[i];
-        stages[i].pName = "main";
+        stages[stage_count].stage = stage;
+        stages[stage_count].module = modules.handles[stage_count];
+        stages[stage_count].pName = "main";
+        ++stage_count;
+    };
+    add_stage(VK_SHADER_STAGE_VERTEX_BIT, vs.spirv);
+    if (key.rect_list) {
+        add_stage(VK_SHADER_STAGE_GEOMETRY_BIT, gcn::rect_list_geometry(vs.interface.outputs));
+    }
+    if (ps) {
+        add_stage(VK_SHADER_STAGE_FRAGMENT_BIT, ps->spirv);
     }
 
     // No vertex buffers: the translated VS fetches through the mirror.

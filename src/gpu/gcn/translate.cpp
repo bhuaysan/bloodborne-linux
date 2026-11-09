@@ -290,7 +290,8 @@ public:
                  .stored_images = image_sources_.stored,
                  .wave_size_dependent = wave_size_dependent_,
                  .mask_round_trip = round_trip(),
-                 .calls_fetch = fetch_.call != detail::FetchSite::none},
+                 .calls_fetch = fetch_.call != detail::FetchSite::none,
+                 .outputs = stage_.output_locations()},
                 code_dwords_,
                 fetch_.dwords};
     }
