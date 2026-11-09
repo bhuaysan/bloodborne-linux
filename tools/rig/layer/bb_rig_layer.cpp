@@ -475,8 +475,9 @@ VKAPI_ATTR VkResult VKAPI_CALL rig_CreateSwapchainKHR(VkDevice device,
     VkSwapchainCreateInfoKHR patched = *info;
     if (capturable) patched.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     VkResult result = d->create_swapchain(device, &patched, alloc, out);
-    if (result != VK_SUCCESS && capturable) {
-        // The surface allows the usage in general, but maybe not with this format or mode.
+    if (result != VK_SUCCESS && capturable && info->oldSwapchain == VK_NULL_HANDLE) {
+        // The surface allows the usage in general, but maybe not with this format or mode. A
+        // failed creation retires oldSwapchain, so with one set the app has to retry itself.
         capturable = false;
         result = d->create_swapchain(device, info, alloc, out);
     }
