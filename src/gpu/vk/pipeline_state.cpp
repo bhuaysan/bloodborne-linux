@@ -265,6 +265,7 @@ bool window_state(const pm4::RegisterMirror& regs, DrawState& s, std::string& wh
          t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY);
     // Vulkan restarts only on the all-ones index of the index type, so another reset index would
     // draw the wrong geometry.
+    // The index type is not known here: the recorder must check it against this value.
     const std::uint32_t reset_index = regs.get(amd::mmVGT_MULTI_PRIM_IB_RESET_INDX);
     if (s.dynamic.primitive_restart && reset_index != 0xffffu && reset_index != 0xffffffffu) {
         why = "primitive restart with an index other than all ones";
