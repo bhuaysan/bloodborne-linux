@@ -119,8 +119,17 @@ TEST_F(VkDrawRecorderUnit, RestartNeedsTheAllOnesIndexOfTheIndexType) {
     recorder_->draw(strip_registers(0xffffu), call);
     recorder_->draw(strip_registers(0x1234u), call);  // the snapshot itself rejects this one
     EXPECT_EQ(recorder_->stats().unsupported, 3u);
+    // Positive control: a matching reset index passes this check. The address is outside the
+    // mirror, so the draw then fails on the index buffer (a later check) instead of counting as
+    // unsupported.
+    call.index_address = bb::hle::kernel::vmem::window_start - 4;
+    call.index_bytes = 2;
+    recorder_->draw(strip_registers(0xffffu), call);
+    call.index_bytes = 4;
+    recorder_->draw(strip_registers(0xffffffffu), call);
+    EXPECT_EQ(recorder_->stats().unsupported, 3u);
+    EXPECT_EQ(recorder_->stats().failed, 2u);
     EXPECT_EQ(recorder_->stats().recorded, 0u);
-    EXPECT_EQ(recorder_->stats().failed, 0u);
 }
 
 TEST_F(VkDrawRecorderUnit, IndirectDrawsAreNotSupportedYet) {
@@ -138,6 +147,24 @@ TEST_F(VkDrawRecorderUnit, AnIndexBufferOutsideTheMirrorFailsTheDraw) {
     call.index_address = bb::hle::kernel::vmem::window_start - 2;
     recorder_->draw(strip_registers(0xffffu), call);
     call.index_address = bb::hle::kernel::vmem::window_start + 1;  // unaligned
+    recorder_->draw(strip_registers(0xffffu), call);
+    EXPECT_EQ(recorder_->stats().failed, 2u);
+    EXPECT_EQ(recorder_->stats().recorded, 0u);
+}
+
+TEST_F(VkDrawRecorderUnit, IndicesRunningPastTheMirrorBufferFailTheDraw) {
+    DrawCall call;
+    call.kind = DrawKind::index_2;
+    call.index_bytes = 2;
+    call.index_count = 3;
+    // Starts inside buffer 0 but the third index lies past its end.
+    call.index_address = bb::hle::kernel::vmem::window_start + mirror_buffer_size - 4;
+    recorder_->draw(strip_registers(0xffffu), call);
+    // Fits without first_index, not with it.
+    call.index_address = bb::hle::kernel::vmem::window_start + mirror_buffer_size - 6;
+    recorder_->draw(strip_registers(0xffffu), call);
+    EXPECT_EQ(recorder_->stats().failed, 1u);
+    call.first_index = 1;
     recorder_->draw(strip_registers(0xffffu), call);
     EXPECT_EQ(recorder_->stats().failed, 2u);
     EXPECT_EQ(recorder_->stats().recorded, 0u);
