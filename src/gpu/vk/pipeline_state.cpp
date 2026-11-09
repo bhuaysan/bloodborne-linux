@@ -5,6 +5,8 @@
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_rasterizer.cpp @0d5f2739d2544d2a35c73e354cba7a32b7a81bea
 // Source: shadPS4 src/video_core/amdgpu/regs_primitive.h @0d5f2739d2544d2a35c73e354cba7a32b7a81bea
 // Source: shadPS4 src/video_core/amdgpu/regs_color.h @0d5f2739d2544d2a35c73e354cba7a32b7a81bea
+// Source: shadPS4 src/video_core/amdgpu/regs_depth.h @0d5f2739d2544d2a35c73e354cba7a32b7a81bea
+// Source: shadPS4 src/video_core/renderer_vulkan/vk_pipeline_cache.cpp @0d5f2739d2544d2a35c73e354cba7a32b7a81bea
 // Changed for bloodborne-linux, 2026-11-07: the topology table without fallbacks; the viewport of
 // UpdateViewportScissorState for viewport 0 of our register mirror, also when clipping is off.
 // Changed for bloodborne-linux, 2026-11-09: the scissor, depth bias and primitive restart of

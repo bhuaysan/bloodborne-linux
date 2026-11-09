@@ -1,6 +1,7 @@
 #include "gpu/vk/dispatcher.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <exception>
 #include <format>
@@ -143,8 +144,11 @@ void Dispatcher::dispatch(const pm4::RegisterMirror& regs, const pm4::DispatchCa
     try {
         record(regs, call);
     } catch (const std::exception& e) {
-        ++failed_;
-        common::log(common::LogLevel::error, channel, "dispatch failed: {}", e.what());
+        const std::uint64_t n = failed_.fetch_add(1) + 1;
+        // A lost device fails every dispatch: log the first 16, then only at powers of two.
+        if (n <= 16 || std::has_single_bit(n)) {
+            common::log(common::LogLevel::error, channel, "dispatch failed ({}): {}", n, e.what());
+        }
         report(e);
     }
 }

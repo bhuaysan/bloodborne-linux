@@ -170,7 +170,6 @@ const GraphicsPipeline* PipelineCache::get(const PipelineKey& request,
     const auto node = entries_.emplace(hash_stages(key), std::move(entry));
     Entry& stored = node->second;
     if (!why.empty()) {
-        common::log(common::LogLevel::warn, "gpu.vk", "{}", why);
         return nullptr;
     }
     // A failing Vulkan call may be transient (out of memory): drop the entry and what it

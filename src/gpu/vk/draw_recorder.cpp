@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 #include <exception>
 #include <format>
@@ -99,8 +100,12 @@ void DrawRecorder::draw(const pm4::RegisterMirror& regs, const pm4::DrawCall& ca
             common::log(common::LogLevel::warn, channel, "draw skipped: {}", why);
         }
     } catch (const std::exception& e) {
-        ++failed_;
-        common::log(common::LogLevel::error, channel, "draw failed: {}", e.what());
+        const std::uint64_t n = failed_.fetch_add(1) + 1;
+        // A lost device fails every draw: log the first 16, then only at powers of two.
+        if (n <= 16 || std::has_single_bit(n)) {
+            common::log(common::LogLevel::error, channel, "draw failed ({}): {}", n, e.what());
+        }
+        dispatcher_.report(e);
     }
 }
 
@@ -137,6 +142,12 @@ bool DrawRecorder::record(const pm4::RegisterMirror& regs, const pm4::DrawCall& 
             indices_offset % call.index_bytes != 0) {
             throw std::runtime_error(std::format(
                 "index buffer at {:#x} is outside the mirror or unaligned", call.index_address));
+        }
+        if (call.max_indices != 0 &&
+            std::uint64_t{call.first_index} + call.index_count > call.max_indices) {
+            throw std::runtime_error(std::format(
+                "indices at {:#x} ({} from {}) run past the {} the packet allows",
+                call.index_address, call.index_count, call.first_index, call.max_indices));
         }
         // The device has no robust buffer access: the whole index range must lie in the buffer.
         const std::uint64_t end =
