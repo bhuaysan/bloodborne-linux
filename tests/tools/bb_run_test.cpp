@@ -327,10 +327,11 @@ TEST(BbRunGame, MirrorsDirectMemory) {
     EXPECT_NE(r.output.find("GPU memory mirror of 4 GiB"), std::string::npos) << r.output;
     EXPECT_NE(r.output.find(" binds, "), std::string::npos) << r.output;
     EXPECT_EQ(r.output.find("run: mirror: 0 binds"), std::string::npos) << r.output;
-    // No error line of the mirror; the game's threads write them ("error [game main] mirror: ...").
+    // No error line of the mirror. Lines start with a clock stamp: "23:57:19.639 error [game main]
+    // mirror: ...".
     std::istringstream lines(r.output);
     for (std::string line; std::getline(lines, line);) {
-        EXPECT_FALSE(line.starts_with("error [") && line.find("] mirror: ") != std::string::npos)
+        EXPECT_FALSE(line.find(" error [") != std::string::npos && line.find("] mirror: ") != std::string::npos)
             << line;
     }
 }
