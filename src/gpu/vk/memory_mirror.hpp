@@ -59,6 +59,7 @@ public:
     // steps past the mirror repeat buffer 0's bias.
     VkDeviceAddress bias_table() const { return table_address_; }
     std::uint64_t block() const { return block_; }
+    std::uintptr_t window_start() const { return window_start_; }
     std::uint64_t size() const { return buffers_.size() * mirror_buffer_size; }
 
     // Binds the guest pages [address, address + length), a view of the memfd at `offset`.
