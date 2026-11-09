@@ -1,14 +1,17 @@
 // The image sampling render tests on lavapipe (docs/design/graphics.md, "Image sampling"):
 // vs_attrs draws one triangle over an 8x8 target and ps_sample samples a 16x16 image with five
 // levels four ways, for a 2D image, a 2D array and a cube array. ps_load_mip reads levels of the
-// same image with image_load_mip (docs/design/graphics.md, "Image loads").
+// same image with image_load_mip, and mem_image_store writes a storage image in the compute stage
+// (docs/design/graphics.md, "Image loads and stores").
 
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -119,16 +122,18 @@ protected:
         }
     }
 
-    void check_load(ImageClass c, std::uint32_t layers);
+    void check_load(ImageClass c, std::uint32_t layers, unsigned z, unsigned w);
 
     std::unique_ptr<GraphicsRunner> runner_;
 };
 
-// ps_load_mip: attr0 interpolates to (x + 0.5, y + 0.5, 1.5, 3.5) at pixel (x, y) of the target, so
-// red and green read level 1 at (x, y) and, with da, blue and alpha level 3 at slice 1 (a 2D image
-// ignores the slice). Level 3 is 2x2: the rest of it reads 0 where the device has
-// robustImageAccess2.
-void ImageRender::check_load(ImageClass c, std::uint32_t layers) {
+// ps_load_mip: attr0 interpolates to (x + 0.5, y + 0.5, z + 0.5, w + 0.5) at pixel (x, y) of the
+// target, so red and green read level z at (x, y) of layer 0 and, with da, blue and alpha level w
+// at slice z (a 2D image ignores the slice). Whatever is out of range (texel, level or slice) reads
+// 0, which robustImageAccess2 guarantees; the runner's lavapipe must have it, or this check of the
+// out-of-range reads would mean nothing.
+void ImageRender::check_load(ImageClass c, std::uint32_t layers, unsigned z, unsigned w) {
+    ASSERT_TRUE(runner_->info().robust_image_access2);
     using bb::test::gcn::program_words;
     const auto vs = bb::gcn::translate(program_words("vs_attrs"), {}, vertex_key);
     const auto ps = bb::gcn::translate(program_words("ps_load_mip"), {}, pixel_key(c));
@@ -140,9 +145,10 @@ void ImageRender::check_load(ImageClass c, std::uint32_t layers) {
         texels += (size >> level) * (size >> level) * layers;
     }
     auto memory = runner_->guest_memory(base, texture_offset + texels * 16);
-    const float vertices[3][8] = {{-1, -1, 0, 1, 0, 0, 1.5f, 3.5f},
-                                  {3, -1, 0, 1, 16, 0, 1.5f, 3.5f},
-                                  {-1, 3, 0, 1, 0, 16, 1.5f, 3.5f}};
+    const float zf = z + 0.5f, wf = w + 0.5f;
+    const float vertices[3][8] = {{-1, -1, 0, 1, 0, 0, zf, wf},
+                                  {3, -1, 0, 1, 16, 0, zf, wf},
+                                  {-1, 3, 0, 1, 0, 16, zf, wf}};
     std::memcpy(memory.data() + vertex_offset, vertices, sizeof vertices);
     auto* out = reinterpret_cast<float*>(memory.data() + texture_offset);
     for (unsigned level = 0; level < levels; ++level) {
@@ -163,27 +169,33 @@ void ImageRender::check_load(ImageClass c, std::uint32_t layers) {
     const Texture texture{size, size, layers, levels, c.type != 9, texture_offset};
     runner_->render(vs.spirv, ps.spirv, draw, 3, {width, height, {}}, {&texture, 1}, 0);
 
-    const unsigned slice = layers > 1 ? 1 : 0;
+    const unsigned slice = c.type == 13 ? z : 0;
+    const auto loaded = [&](unsigned ch, unsigned level, unsigned layer, unsigned x, unsigned y) {
+        const bool inside = level < levels && layer < layers && x < size >> level &&
+                            y < size >> level;
+        return inside ? texel(ch, level, layer, x, y) : 0.0f;
+    };
     for (std::uint32_t y = 0; y < height; ++y) {
         for (std::uint32_t x = 0; x < width; ++x) {
             SCOPED_TRACE(testing::Message() << "pixel " << x << ", " << y);
             std::array<float, 4> pixel;
             std::memcpy(pixel.data(), memory.data() + (y * width + x) * 16, 16);
-            EXPECT_EQ(pixel[0], texel(0, 1, 0, x, y));
-            EXPECT_EQ(pixel[1], texel(1, 1, 0, x, y));
-            if (x < 2 && y < 2) {
-                EXPECT_EQ(pixel[2], texel(2, 3, slice, x, y));
-                EXPECT_EQ(pixel[3], texel(3, 3, slice, x, y));
-            } else if (runner_->info().robust_image_access2) {
-                EXPECT_EQ(pixel[2], 0.0f);
-                EXPECT_EQ(pixel[3], 0.0f);
-            }
+            EXPECT_EQ(pixel[0], loaded(0, z, 0, x, y));
+            EXPECT_EQ(pixel[1], loaded(1, z, 0, x, y));
+            EXPECT_EQ(pixel[2], loaded(2, w, slice, x, y));
+            EXPECT_EQ(pixel[3], loaded(3, w, slice, x, y));
         }
     }
 }
 
-TEST_F(ImageRender, LoadMipTwoD) { check_load({}, 1); }
-TEST_F(ImageRender, LoadMipArray) { check_load({.type = 13}, 2); }
+// Level 3 is 2x2, so most of the blue and alpha reads are out of range.
+TEST_F(ImageRender, LoadMipTwoD) { check_load({}, 1, 1, 3); }
+TEST_F(ImageRender, LoadMipArray) { check_load({.type = 13}, 2, 1, 3); }
+// Level 5 is the first one past the image's five.
+TEST_F(ImageRender, LoadMipLevelOutOfRange) { check_load({}, 1, 5, 5); }
+TEST_F(ImageRender, LoadMipArrayLevelOutOfRange) { check_load({.type = 13}, 2, 1, 5); }
+// Slice 2 is the first one past the array's two; red and green then read level 2.
+TEST_F(ImageRender, LoadMipSliceOutOfRange) { check_load({.type = 13}, 2, 2, 3); }
 
 // The slice in z is ignored: the image has one layer.
 TEST_F(ImageRender, TwoD) { check({}, 1, 1.0f / 64, 2, {0, 0, 0, 0}); }
@@ -193,5 +205,59 @@ TEST_F(ImageRender, Array) { check({.type = 13}, 4, 1.0f / 64, 2, {0, 2, 2, 0});
 
 // face_id 10 is face 2 of cube 1, layer 8 of the 2D array; x and y are in [1, 2].
 TEST_F(ImageRender, CubeArray) { check({.type = 11}, 12, 1 + 1.0f / 64, 10, {8, 8, 8, 8}); }
+
+// mem_image_store runs 8 lanes on a 4x4 image, with lane 3 inactive. Each lane stores to (x, 1)
+// with dmask 0x9 and, with da, to (x, 2) of slice 1 with dmask 0x7. Lanes 4 to 7 are out of range,
+// so robust image access drops those stores.
+void check_store(GraphicsRunner& runner, ImageClass c, std::uint32_t layers,
+                 VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT) {
+    constexpr std::uint32_t side = 4, untouched = 0xffffffff;
+    ShaderKey key{.pgm_rsrc2 = 13u << 1, .num_threads = {8, 1, 1}};
+    key.images = {c};
+    const auto t = bb::gcn::translate(bb::test::gcn::program_words("mem_image_store"), {}, key);
+    EXPECT_EQ(t.interface.stored_images, std::vector<bool>{true});
+    if (bb::test::gcn::have_spirv_val()) {
+        EXPECT_EQ(bb::test::gcn::validate(t.spirv), "");
+    }
+    auto memory = runner.guest_memory(base, std::size_t{side} * side * layers * 16);
+    std::memset(memory.data(), 0xff, memory.size());
+
+    runner.dispatch(t.spirv, {}, {1, 1, 1},
+                    {.width = side, .height = side, .layers = layers, .arrayed = c.type != 9,
+                     .format = format});
+
+    // The bits of a float: the store writes what is in the VGPRs, for every number format.
+    const auto bits = [](float value) { return std::bit_cast<std::uint32_t>(value); };
+    const std::uint32_t slice = layers > 1 ? 1 : 0;
+    for (std::uint32_t l = 0; l < layers; ++l) {
+        for (std::uint32_t y = 0; y < side; ++y) {
+            for (std::uint32_t x = 0; x < side; ++x) {
+                SCOPED_TRACE(testing::Message() << "layer " << l << " row " << y << " x " << x);
+                std::array<std::uint32_t, 4> stored = {untouched, untouched, untouched, untouched};
+                if (x != 3) {  // lane 3 is inactive
+                    const std::uint32_t value = bits(static_cast<float>(x));
+                    if (l == 0 && y == 1) {
+                        stored = {value, 0, 0, bits(0.5f)};  // green and blue get 0 (8.2.4)
+                    } else if (l == slice && y == 2) {
+                        stored = {value, bits(2.0f), bits(4.0f), 0};
+                    }
+                }
+                std::array<std::uint32_t, 4> found;
+                std::memcpy(found.data(),
+                            memory.data() + ((std::size_t{l} * side + y) * side + x) * 16, 16);
+                EXPECT_EQ(found, stored);
+            }
+        }
+    }
+}
+
+TEST_F(ImageRender, StoreTwoD) { check_store(*runner_, {}, 1); }
+TEST_F(ImageRender, StoreArray) { check_store(*runner_, {.type = 13}, 2); }
+TEST_F(ImageRender, StoreUint) {
+    check_store(*runner_, {.number = ImageClass::Number::uint}, 1, VK_FORMAT_R32G32B32A32_UINT);
+}
+TEST_F(ImageRender, StoreSint) {
+    check_store(*runner_, {.number = ImageClass::Number::sint}, 1, VK_FORMAT_R32G32B32A32_SINT);
+}
 
 }  // namespace

@@ -28,6 +28,7 @@ struct Texture {
     std::uint32_t width = 0, height = 0, layers = 1, levels = 1;
     bool arrayed = false;
     std::size_t offset = 0;
+    VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT;  // 16 bytes per texel in any case
 };
 
 class GraphicsRunner : public ComputeRunner {
@@ -47,6 +48,12 @@ public:
     void render(std::span<const std::uint32_t> vs, std::span<const std::uint32_t> ps,
                 const DrawBlock& draw, std::uint32_t vertices, const ColorTarget& target,
                 std::span<const Texture> textures = {}, std::uint32_t samplers = 0);
+
+    // Runs the compute `spirv` (entry point "main") as run() does, with `image` as a storage image
+    // at set 0, binding 0: its single level starts from the guest memory at its offset and is
+    // copied back there afterwards.
+    void dispatch(std::span<const std::uint32_t> spirv, const DrawBlock& draw,
+                  std::array<std::uint32_t, 3> groups, const Texture& image);
 
 private:
     explicit GraphicsRunner(ComputeRunner&& base);

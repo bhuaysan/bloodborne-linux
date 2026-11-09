@@ -71,12 +71,12 @@ VkShaderModule create_module(VkDevice device, std::span<const std::uint32_t> spi
     return module;
 }
 
-// An R32G32B32A32_SFLOAT image of `texture`'s size, levels and layers, and its view.
+// An image of `texture`'s format, size, levels and layers, and its view.
 void create_image(const bb::vk::Device& device, VkDevice handle, Image& out,
                   const Texture& texture, VkImageUsageFlags usage) {
     auto info = make<VkImageCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
     info.imageType = VK_IMAGE_TYPE_2D;
-    info.format = color_format;
+    info.format = texture.format;
     info.extent = {texture.width, texture.height, 1};
     info.mipLevels = texture.levels;
     info.arrayLayers = texture.layers;
@@ -94,7 +94,7 @@ void create_image(const bb::vk::Device& device, VkDevice handle, Image& out,
     auto view = make<VkImageViewCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
     view.image = out.image;
     view.viewType = texture.arrayed ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
-    view.format = color_format;
+    view.format = texture.format;
     view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, texture.levels, 0, texture.layers};
     check(vkCreateImageView(handle, &view, nullptr, &out.view), "vkCreateImageView");
 }
@@ -354,6 +354,103 @@ void GraphicsRunner::render(std::span<const std::uint32_t> vs, std::span<const s
     constexpr std::uint64_t timeout_ns = 30'000'000'000;
     if (!scheduler().wait(scheduler().flush(), timeout_ns)) {
         throw std::runtime_error("the render did not complete within 30 s");
+    }
+}
+
+void GraphicsRunner::dispatch(std::span<const std::uint32_t> spirv, const DrawBlock& draw,
+                              std::array<std::uint32_t, 3> groups, const Texture& image) {
+    constexpr VkShaderStageFlags compute = VK_SHADER_STAGE_COMPUTE_BIT;
+    constexpr VkDescriptorType type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    const VkDeviceAddress block = draw_block(draw);  // throws without guest memory
+    if (image.offset + std::size_t{image.width} * image.height * image.layers * texel_size >
+        guest_size()) {
+        throw std::logic_error("the storage image doesn't fit into the guest memory");
+    }
+    const auto r = std::make_shared<Render>(device().handle());
+    r->modules[0] = create_module(r->device, spirv);
+    create_image(device(), r->device, r->textures.emplace_back(), image,
+                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                     VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    const VkImage handle = r->textures[0].image;
+
+    const VkDescriptorSetLayoutBinding binding{0, type, 1, compute, nullptr};
+    auto set_layout = make<VkDescriptorSetLayoutCreateInfo>(
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+    set_layout.bindingCount = 1;
+    set_layout.pBindings = &binding;
+    check(vkCreateDescriptorSetLayout(r->device, &set_layout, nullptr, &r->set_layouts[0]),
+          "vkCreateDescriptorSetLayout");
+    const VkPushConstantRange range{compute, 0, sizeof(VkDeviceAddress)};
+    auto layout = make<VkPipelineLayoutCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+    layout.setLayoutCount = 1;
+    layout.pSetLayouts = r->set_layouts.data();
+    layout.pushConstantRangeCount = 1;
+    layout.pPushConstantRanges = &range;
+    check(vkCreatePipelineLayout(r->device, &layout, nullptr, &r->layout),
+          "vkCreatePipelineLayout");
+
+    const VkDescriptorPoolSize pool_size{type, 1};
+    auto pool = make<VkDescriptorPoolCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
+    pool.maxSets = 1;
+    pool.poolSizeCount = 1;
+    pool.pPoolSizes = &pool_size;
+    check(vkCreateDescriptorPool(r->device, &pool, nullptr, &r->pool), "vkCreateDescriptorPool");
+    auto alloc = make<VkDescriptorSetAllocateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+    alloc.descriptorPool = r->pool;
+    alloc.descriptorSetCount = 1;
+    alloc.pSetLayouts = r->set_layouts.data();
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    check(vkAllocateDescriptorSets(r->device, &alloc, &set), "vkAllocateDescriptorSets");
+    const VkDescriptorImageInfo info{VK_NULL_HANDLE, r->textures[0].view, VK_IMAGE_LAYOUT_GENERAL};
+    auto write = make<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+    write.dstSet = set;
+    write.descriptorCount = 1;
+    write.descriptorType = type;
+    write.pImageInfo = &info;
+    vkUpdateDescriptorSets(r->device, 1, &write, 0, nullptr);
+
+    auto pipeline = make<VkComputePipelineCreateInfo>(
+        VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO);
+    pipeline.stage = make<VkPipelineShaderStageCreateInfo>(
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+    pipeline.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    pipeline.stage.module = r->modules[0];
+    pipeline.stage.pName = "main";
+    pipeline.layout = r->layout;
+    check(vkCreateComputePipelines(r->device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &r->pipeline),
+          "vkCreateComputePipelines");
+
+    const VkCommandBuffer commands = scheduler().commands();
+    constexpr std::pair<VkPipelineStageFlags2, VkAccessFlags2> copy_write = {
+        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT};
+    constexpr std::pair<VkPipelineStageFlags2, VkAccessFlags2> shader = {
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+    VkBufferImageCopy copy{};
+    copy.bufferOffset = image.offset;
+    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, image.layers};
+    copy.imageExtent = {image.width, image.height, 1};
+    transition(commands, handle, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+               {VK_PIPELINE_STAGE_2_NONE, 0}, copy_write, 1, image.layers);
+    vkCmdCopyBufferToImage(commands, guest_buffer(), handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           1, &copy);
+    transition(commands, handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+               copy_write, shader, 1, image.layers);
+    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_COMPUTE, r->pipeline);
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_COMPUTE, r->layout, 0, 1, &set, 0,
+                            nullptr);
+    vkCmdPushConstants(commands, r->layout, compute, 0, sizeof block, &block);
+    vkCmdDispatch(commands, groups[0], groups[1], groups[2]);
+    transition(commands, handle, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+               shader, {VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT}, 1,
+               image.layers);
+    vkCmdCopyImageToBuffer(commands, handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, guest_buffer(),
+                           1, &copy);
+    scheduler().defer([r] {});
+    // The scheduler's submission ends with a barrier from all writes to host reads.
+    constexpr std::uint64_t timeout_ns = 30'000'000'000;
+    if (!scheduler().wait(scheduler().flush(), timeout_ns)) {
+        throw std::runtime_error("the dispatch did not complete within 30 s");
     }
 }
 

@@ -61,8 +61,7 @@ std::string DeviceInfo::describe() const {
         << "\nf32 round toward zero: " << round_rtz_f32
         << "\nf32 signed zero, inf and NaN preserved: " << signed_zero_inf_nan_f32
         << "\nquad subgroup operations: " << subgroup_quad
-        << "\nshader quad control: " << quad_control
-        << "\nrobust image access 2: " << robust_image_access2 << '\n';
+        << "\nshader quad control: " << quad_control << '\n';
     return out.str();
 }
 
