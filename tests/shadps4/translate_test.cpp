@@ -52,11 +52,18 @@ TEST(ShaderTranslator, AssertionFailureReachesTheCaller) {
     }
 }
 
-// A failed assertion leaves the translator usable for the next program.
-TEST(ShaderTranslator, TranslatesAfterAFailure) {
-    EXPECT_THROW((void)translate(illegal_encoding, fragment_runtime_info()),
+// s_wqm_b32 s0, s1 decodes but has no translation, so this fails halfway through translating,
+// with the pools in use. The same pools then have to serve the next program.
+TEST(ShaderTranslator, SamePoolsTranslateAfterAFailure) {
+    const std::vector<std::uint32_t> untranslated = {0xbeeb03ff, 0x00000001, 0xbe800901, s_endpgm};
+    Shader::Pools pools;
+    EXPECT_THROW((void)translate(untranslated, fragment_runtime_info(), pools),
                  bb::shader::TranslationFailure);
-    EXPECT_FALSE(translate(constant_color, fragment_runtime_info()).empty());
+    const auto module = translate(constant_color, fragment_runtime_info(), pools);
+    ASSERT_FALSE(module.empty());
+    if (bb::test::gcn::have_spirv_val()) {
+        EXPECT_EQ(bb::test::gcn::validate(module), "");
+    }
 }
 
 // The smallest pixel shader of the game's corpus that carries its register block.

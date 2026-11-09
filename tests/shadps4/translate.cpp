@@ -7,7 +7,6 @@
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/params.h"
 #include "shader_recompiler/profile.h"
-#include "shader_recompiler/recompiler.h"
 
 namespace bb::test::shadps4 {
 
@@ -63,16 +62,21 @@ Shader::RuntimeInfo fragment_runtime_info(const std::array<std::uint32_t, 16>& b
 }
 
 std::vector<std::uint32_t> translate(std::span<const std::uint32_t> code,
-                                     Shader::RuntimeInfo runtime_info) {
+                                     Shader::RuntimeInfo runtime_info, Shader::Pools& pools) {
     static const std::array<std::uint32_t, Shader::ShaderParams::NumShaderUserData> user_data{};
     const Shader::ShaderParams params{.user_data = user_data, .code = code, .hash = 0};
     Shader::Info info(runtime_info.hw_stage, runtime_info.sw_stage, params);
     const Shader::Profile profile = reference_profile();
-    Shader::Pools pools;
     const Shader::IR::Program program =
         Shader::TranslateProgram(code, pools, info, runtime_info, profile);
     Shader::Backend::Bindings bindings{};
     return Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, program, bindings);
+}
+
+std::vector<std::uint32_t> translate(std::span<const std::uint32_t> code,
+                                     Shader::RuntimeInfo runtime_info) {
+    Shader::Pools pools;
+    return translate(code, runtime_info, pools);
 }
 
 }  // namespace bb::test::shadps4

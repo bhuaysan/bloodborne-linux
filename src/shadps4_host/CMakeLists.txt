@@ -34,10 +34,10 @@ target_include_directories(bbshadps4 SYSTEM PUBLIC
 # shadPS4 is written against C++23 (std::to_underlying, std::ranges::contains).
 target_compile_features(bbshadps4 PUBLIC cxx_std_23)
 target_compile_definitions(bbshadps4 PUBLIC FMT_HEADER_ONLY)
-target_link_libraries(bbshadps4 PUBLIC sirit Zydis PRIVATE bbcommon)
-# Derived code stays nearly unchanged, so it doesn't get our warning flags (no bb_warnings here).
-target_compile_options(bbshadps4 PRIVATE -w)
-# GcnCodeSlice reads 64-bit literals at any 32-bit offset of the code, which x86-64 allows.
-if(BB_SANITIZE)
-    target_compile_options(bbshadps4 PRIVATE -fno-sanitize=alignment)
-endif()
+target_link_libraries(bbshadps4 PUBLIC sirit Zydis PRIVATE bbcommon bb_warnings)
+# Derived code stays nearly unchanged, so it builds without warnings. host.cpp is ours and keeps them.
+set_source_files_properties(${BB_SHADPS4_SOURCES} PROPERTIES COMPILE_OPTIONS -w)
+# readu64 in frontend/decode.h reads 8-byte instructions at any 32-bit offset of the code, which
+# x86-64 allows, and only decode.cpp calls it.
+set_source_files_properties(${BB_SHADPS4_DIR}/shader_recompiler/frontend/decode.cpp PROPERTIES
+    COMPILE_OPTIONS "-w;$<$<BOOL:${BB_SANITIZE}>:-fno-sanitize=alignment>")

@@ -6,7 +6,9 @@
 namespace bb::shader {
 
 // Thrown by ASSERT, UNREACHABLE and UNIMPLEMENTED in src/shadps4. what() is the assertion's log
-// line, with its file, line and message. The translator's pools hold partial state afterwards:
+// line, with its file, line and message. In a noexcept function of the derived code (Value::Hash,
+// PhiScc::HasCommonOp, TypeOf and UndefOpcode in the SSA pass) the throw ends in std::terminate
+// instead, so a caller that must survive every program isolates it. The translator's pools hold partial state afterwards:
 // call Pools::ReleaseContents (TranslateProgram does) before using them again.
 class TranslationFailure : public std::runtime_error {
 public:
