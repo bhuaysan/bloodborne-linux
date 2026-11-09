@@ -2,7 +2,7 @@
 """The Vulkan layer of the test rig builds without warnings and exports its entry point.
 
 Run: python3 -m unittest discover -s tools/rig. It needs g++ and the Vulkan headers and skips
-without them. How the layer behaves is checked by running it on the game (docs/test-rig.md).
+without them. How the layer behaves is checked by running it on the game through the rig.
 """
 
 from __future__ import annotations

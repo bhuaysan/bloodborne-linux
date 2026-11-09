@@ -22,6 +22,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -103,6 +104,7 @@ struct Device {
     VkDeviceSize buffer_size = 0;
     void* mapped = nullptr;
     bool mapped_coherent = false;
+    bool capture_broken = false;  // a copy never finished, so its command buffer can't be reused
 };
 
 std::mutex g_lock;  // guards the maps below and all capture state
@@ -170,6 +172,7 @@ bool write_all(int fd, const void* data, size_t size) {
     auto* p = static_cast<const char*>(data);
     while (size > 0) {
         ssize_t n = write(fd, p, size);
+        if (n < 0 && errno == EINTR) continue;
         if (n <= 0) return false;
         p += n;
         size -= size_t(n);
@@ -187,6 +190,21 @@ void publish(const std::string& path, const std::string& header, const void* dat
         rename(tmp.c_str(), path.c_str());
     } else {
         unlink(tmp.c_str());
+    }
+}
+
+// The formats a capture can copy: 4 bytes per pixel, the size the buffer and the raw file assume.
+bool capturable_format(VkFormat format) {
+    switch (format) {
+    case VK_FORMAT_B8G8R8A8_UNORM:
+    case VK_FORMAT_B8G8R8A8_SRGB:
+    case VK_FORMAT_R8G8B8A8_UNORM:
+    case VK_FORMAT_R8G8B8A8_SRGB:
+    case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+    case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
+        return true;
+    default:
+        return false;
     }
 }
 
@@ -275,9 +293,20 @@ bool ensure_buffer(Device& d, VkDeviceSize size) {
     return true;
 }
 
+bool family_can_copy(Device& d, uint32_t family) {
+    uint32_t count = 0;
+    d.instance->queue_families(d.gpu, &count, nullptr);
+    std::vector<VkQueueFamilyProperties> props(count);
+    d.instance->queue_families(d.gpu, &count, props.data());
+    return family < count && (props[family].queueFlags & (VK_QUEUE_GRAPHICS_BIT |
+                                                          VK_QUEUE_COMPUTE_BIT |
+                                                          VK_QUEUE_TRANSFER_BIT));
+}
+
 VkCommandBuffer command_buffer(Device& d, uint32_t family) {
     auto found = d.cmds.find(family);
     if (found != d.cmds.end()) return found->second;
+    if (!family_can_copy(d, family)) return VK_NULL_HANDLE;
     VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pool_info.queueFamilyIndex = family;
@@ -316,7 +345,10 @@ void image_barrier(Device& d, VkCommandBuffer cmd, VkImage image, VkImageLayout 
 bool capture(Device& d, VkQueue queue, const VkPresentInfoKHR* info, Swapchain& sc, uint32_t index,
              bool& submitted) {
     auto family = d.queue_family.find(queue);
-    if (family == d.queue_family.end() || !sc.capturable || index >= sc.images.size()) return false;
+    if (d.capture_broken || family == d.queue_family.end() || !sc.capturable ||
+        index >= sc.images.size()) {
+        return false;
+    }
     const VkDeviceSize size = VkDeviceSize(sc.extent.width) * sc.extent.height * 4;
     if (!ensure_buffer(d, size)) return false;
     VkCommandBuffer cmd = command_buffer(d, family->second);
@@ -352,7 +384,11 @@ bool capture(Device& d, VkQueue queue, const VkPresentInfoKHR* info, Swapchain& 
     d.reset_fence(d.handle, 1, &d.fence);
     if (d.submit(queue, 1, &submit, d.fence) != VK_SUCCESS) return false;
     submitted = true;
-    return d.wait_fence(d.handle, 1, &d.fence, VK_TRUE, 5000000000ull) == VK_SUCCESS;
+    if (d.wait_fence(d.handle, 1, &d.fence, VK_TRUE, 5000000000ull) != VK_SUCCESS) {
+        d.capture_broken = true;
+        return false;
+    }
+    return true;
 }
 
 void handle_captured(Device& d, Swapchain& sc) {
@@ -383,11 +419,14 @@ VKAPI_ATTR VkResult VKAPI_CALL rig_QueuePresentKHR(VkQueue queue, const VkPresen
     bool captured = false;
     VkPresentInfoKHR patched = *info;
     uint32_t width = 0, height = 0;
+    uint64_t frame = 0;
+    int frames_fd = -1;
     {
         std::lock_guard lock(g_lock);
         device = g_devices.at(key(queue));
         if (g_out.active && info->swapchainCount > 0) {
-            ++g_out.frame;
+            frame = ++g_out.frame;
+            frames_fd = g_out.frames_fd;
             poll_commands();
             auto sc = device->swapchains.find(info->pSwapchains[0]);
             if (sc != device->swapchains.end()) {
@@ -407,12 +446,12 @@ VKAPI_ATTR VkResult VKAPI_CALL rig_QueuePresentKHR(VkQueue queue, const VkPresen
         }
     }
     VkResult result = device->present(queue, &patched);
-    if (g_out.active && g_out.frames_fd >= 0) {
+    if (frames_fd >= 0) {
         char line[160];
         int n = snprintf(line, sizeof(line), "%llu,%llu,%llu,%d,%u,%u,%d\n",
-                         (unsigned long long)g_out.frame, (unsigned long long)begin,
+                         (unsigned long long)frame, (unsigned long long)begin,
                          (unsigned long long)now_ns(), int(result), width, height, captured ? 1 : 0);
-        (void)!write(g_out.frames_fd, line, size_t(n));
+        (void)!write(frames_fd, line, size_t(n));
     }
     return result;
 }
@@ -422,17 +461,25 @@ VKAPI_ATTR VkResult VKAPI_CALL rig_CreateSwapchainKHR(VkDevice device,
                                                       const VkAllocationCallbacks* alloc,
                                                       VkSwapchainKHR* out) {
     Device* d;
+    bool active;
     {
         std::lock_guard lock(g_lock);
         d = g_devices.at(key(device));
+        active = g_out.active;
     }
     VkSurfaceCapabilitiesKHR caps{};
-    bool capturable = d->instance->surface_caps &&
+    bool capturable = active && capturable_format(info->imageFormat) &&
+                      d->instance->surface_caps &&
                       d->instance->surface_caps(d->gpu, info->surface, &caps) == VK_SUCCESS &&
                       (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     VkSwapchainCreateInfoKHR patched = *info;
     if (capturable) patched.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     VkResult result = d->create_swapchain(device, &patched, alloc, out);
+    if (result != VK_SUCCESS && capturable) {
+        // The surface allows the usage in general, but maybe not with this format or mode.
+        capturable = false;
+        result = d->create_swapchain(device, info, alloc, out);
+    }
     if (result != VK_SUCCESS) return result;
     Swapchain sc;
     sc.extent = info->imageExtent;
