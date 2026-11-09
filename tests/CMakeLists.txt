@@ -36,6 +36,7 @@ function(bb_add_test name)
 endfunction()
 
 add_subdirectory(common)
+add_subdirectory(shadps4)
 add_subdirectory(hle)
 add_subdirectory(loader)
 add_subdirectory(hook)

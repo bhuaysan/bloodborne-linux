@@ -1,0 +1,16 @@
+// How a failed assertion of the derived translator reaches its caller.
+#pragma once
+
+#include <stdexcept>
+
+namespace bb::shader {
+
+// Thrown by ASSERT, UNREACHABLE and UNIMPLEMENTED in src/shadps4. what() is the assertion's log
+// line, with its file, line and message. The translator's pools hold partial state afterwards:
+// call Pools::ReleaseContents (TranslateProgram does) before using them again.
+class TranslationFailure : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+}  // namespace bb::shader
