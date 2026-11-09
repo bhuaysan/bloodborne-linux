@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
@@ -24,6 +25,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -47,8 +49,11 @@
 #include "tools/main_loop_probe.hpp"
 #include "tools/run_options.hpp"
 #ifdef BB_HAVE_MIRROR
+#include "gpu/vk/compute_pipeline.hpp"
 #include "gpu/vk/device.hpp"
+#include "gpu/vk/dispatcher.hpp"
 #include "gpu/vk/memory_mirror.hpp"
+#include "gpu/vk/scheduler.hpp"
 #include "hle/kernel/dmem.hpp"
 #include "hle/kernel/vmem.hpp"
 #include "tools/mirror_observer.hpp"
@@ -84,6 +89,10 @@ struct Mirror {
     std::unique_ptr<bb::vk::Device> device;
     std::unique_ptr<bb::vk::MemoryMirror> mirror;
     std::unique_ptr<bb::tools::MirrorObserver> observer;
+    // The dispatches of the game's compute and draw streams, recorded on the GPU thread.
+    std::unique_ptr<bb::vk::Scheduler> scheduler;
+    std::unique_ptr<bb::vk::ComputePipelineCache> pipelines;
+    std::unique_ptr<bb::vk::Dispatcher> dispatcher;
 };
 Mirror* mirror = nullptr;
 #endif
@@ -96,6 +105,12 @@ Mirror* mirror = nullptr;
         bb::common::log(LogLevel::info, channel, "mirror: {} binds, {} unbinds, {} releases",
                         mirror->observer->binds(), mirror->observer->unbinds(),
                         mirror->observer->releases());
+    }
+    if (mirror != nullptr && mirror->dispatcher) {
+        const auto stats = mirror->dispatcher->stats();
+        bb::common::log(LogLevel::info, channel,
+                        "dispatches: {} recorded, {} untranslated, {} failed", stats.recorded,
+                        stats.untranslated, stats.failed);
     }
 #endif
     std::fflush(nullptr);
@@ -280,6 +295,20 @@ void pump_display(std::int32_t timeout_ms) {
 }
 
 #ifdef BB_HAVE_MIRROR
+// The readable guest dwords from `address` on, to the end of its mapping (at most 1 MiB).
+std::span<const std::uint32_t> read_guest_code(std::uint64_t address) {
+    constexpr std::uint64_t page = 16384, limit = std::uint64_t{1} << 20;
+    std::uint64_t bytes = 0;
+    while (bytes < limit) {
+        const std::uint64_t next = std::min(limit, ((address + bytes) / page + 1) * page - address);
+        if (!bb::hle::kernel::vmem::mapped(address, address + next)) {
+            break;
+        }
+        bytes = next;
+    }
+    return {reinterpret_cast<const std::uint32_t*>(address), bytes / 4};
+}
+
 // Makes the GPU memory mirror over the first `gib` GiB of the guest window and hooks it to direct
 // memory, on `device` or, without one, on a device of its own. Logs why and goes on without a
 // mirror when it can't.
@@ -319,6 +348,21 @@ void open_mirror(bb::vk::Device* device, const std::string& device_selector, uns
     bb::hle::kernel::vmem::set_direct_observer(m->observer.get());
     bb::common::log(LogLevel::info, channel, "GPU memory mirror of {} GiB, blocks of {:#x}", gib,
                     m->mirror->block());
+    // Dispatches run through the mirror on the GPU thread.
+    try {
+        m->scheduler = std::make_unique<bb::vk::Scheduler>(*device);
+        m->pipelines = std::make_unique<bb::vk::ComputePipelineCache>(*device, read_guest_code);
+        m->dispatcher = std::make_unique<bb::vk::Dispatcher>(*device, *m->scheduler,
+                                                             *m->pipelines, *m->mirror);
+        Mirror* const raw = m.get();
+        bb::hle::video::gpu_thread().set_backend(
+            [raw](const bb::pm4::RegisterMirror& regs, const bb::pm4::DispatchCall& call) {
+                raw->dispatcher->dispatch(regs, call);
+            },
+            [raw](bb::pm4::SyncPoint point) { raw->dispatcher->sync(point); });
+    } catch (const std::runtime_error& e) {
+        bb::common::log(LogLevel::warn, channel, "no GPU dispatches: {}", e.what());
+    }
     mirror = m.release();
 }
 #endif
