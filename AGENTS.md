@@ -80,7 +80,7 @@ Risky code is never reviewed only in the session that wrote it.
 3. **Per PR:** every change goes through a PR. The session that opens it picks the review class and names it in the PR body:
    - **Core** (shader translator, loader, ABI, memory mirror, decompiled functions, interfaces other issues build on): an independent review of the PR diff in a fresh context at high effort, up to two fix rounds.
    - **Normal** (all other code): one independent review in a fresh context, one fix round.
-   - **Small** (only docs, `symbols/` or tests, or at most 50 changed lines outside core code): no independent review. A PR that adds a source to `docs/references.md` is never Small.
+   - **Small** (only docs, `symbols/` or tests, or at most 50 changed lines in total with none in core code): no independent review. A PR that adds a source to `docs/references.md`, copies or adapts external code, or adds NID names from an external source is never Small.
 
    Findings about correctness, security or licenses block the merge. Style findings are optional. Fix blocking findings in the same PR unless they need their own design work. Keep PRs to at most 800 changed lines of non-test code (docs, `symbols/`, `tests/` and `tools/**/test_*.py` don't count), and put generated data and copied `third_party/` files in a PR of their own (they don't count either). Never remove or weaken a test to meet the limit.
    **Merging:** an agent may merge a PR once it passes every part of the gate:

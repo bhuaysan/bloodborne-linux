@@ -1,6 +1,6 @@
 ---
 name: Task
-about: A unit of implementation work (about a day or more)
+about: A unit of implementation work with one checkable result
 labels: []
 ---
 
