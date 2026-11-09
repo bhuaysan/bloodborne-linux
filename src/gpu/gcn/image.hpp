@@ -30,7 +30,8 @@ public:
     const std::vector<Id>& interface() const { return interface_; }
 
 private:
-    void load_mip(const Instruction& inst, std::uint32_t index);
+    // image_store and image_load_mip.
+    void no_sampler(const Instruction& inst, std::uint32_t index);
     // The components of `texel`, a vec4 of `component`, that dmask selects into dst[0]'s VGPRs.
     void write_result(const Instruction& inst, ImageClass c, Id component, Id texel);
     Id binding(Id type, std::uint32_t index);  // the UniformConstant variable at that binding

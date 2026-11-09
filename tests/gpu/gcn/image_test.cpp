@@ -84,7 +84,8 @@ std::string error(const std::vector<std::uint32_t>& code, const ShaderKey& key) 
     return "no error";
 }
 
-TEST(GcnImage, LoadMipValidates) {
+// image_load_mip, and image_store with v10 the data and v6 the address (the opcode is 8).
+TEST(GcnImage, LoadsAndStoresValidate) {
     constexpr std::uint32_t da = 1u << 14, unorm = 1u << 12;
     for (const ImageClass c : {ImageClass{}, ImageClass{.type = 13},
                                ImageClass{.type = 9, .number = ImageClass::Number::uint},
@@ -95,8 +96,16 @@ TEST(GcnImage, LoadMipValidates) {
                                  pixel_key({c}));
         EXPECT_EQ(t.interface.images, std::vector{ResourceSource{{0}}});
         EXPECT_TRUE(t.interface.samplers.empty());  // an image_load has no sampler
+        EXPECT_EQ(t.interface.stored_images, std::vector<bool>{false});
+        ShaderKey key{.pgm_rsrc2 = 12u << 1};
+        key.images = {c};
+        const auto s = translate(program({mimg(8, unorm | da, 15), mimg(8, unorm, 9)}), {}, key);
+        EXPECT_EQ(s.interface.images, std::vector{ResourceSource{{0}}});
+        EXPECT_EQ(s.interface.stored_images, std::vector<bool>{true});
+        EXPECT_TRUE(s.interface.samplers.empty());
         if (bb::test::gcn::have_spirv_val()) {
             EXPECT_EQ(bb::test::gcn::validate(t.spirv), "");
+            EXPECT_EQ(bb::test::gcn::validate(s.spirv), "");
         }
     }
     // A 2D image reads and ignores the slice with da, like sampling.
@@ -123,6 +132,16 @@ TEST(GcnImage, ErrorsNameWhatIsUnsupported) {
               "image_load_mip with tfe or lwe is not supported yet");
     EXPECT_EQ(error(program({mimg(1, 0, 1)}), pixel_key({{.type = 11}})),
               "image type 11 of image_load_mip is not supported yet");
+    EXPECT_EQ(error(program({mimg(8, 0, 0)}), compute),
+              "image_store with dmask 0 is not supported");
+    EXPECT_EQ(error(program({mimg(8, 1u << 16, 1)}), compute),
+              "image_store with tfe or lwe is not supported yet");
+    // A loaded image can't also be written: a load needs a sampled binding, a store a storage one.
+    for (unsigned load : {1u, 39u}) {
+        const std::string name = load == 1 ? "image_load_mip" : "image_sample_lz";
+        EXPECT_EQ(error(program({mimg(load, 0, 1), mimg(8, 0, 1)}), compute),
+                  "the image that " + name + " reads is also written");
+    }
     ShaderKey few = pixel;  // only 8 user SGPRs: the S# can't be followed
     few.pgm_rsrc2 = 8u << 1;
     EXPECT_EQ(error(program({mimg(32)}), few),

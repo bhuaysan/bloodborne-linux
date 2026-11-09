@@ -127,7 +127,7 @@ public:
     bool quad_control() const { return quad_control_; }
 
     // Whether robustImageAccess2 is enabled (where the device has it): image loads out of range
-    // read 0; with only robustImageAccess a load's value is undefined.
+    // read 0 and stores are dropped; with only robustImageAccess a load's value is undefined.
     bool robust_image_access2() const { return robust_image_access2_; }
 
 private:

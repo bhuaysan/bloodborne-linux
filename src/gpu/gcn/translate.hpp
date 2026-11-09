@@ -110,8 +110,9 @@ struct ShaderKey {
 
 // Where a stage's images and samplers are bound: one descriptor set per hardware stage, 0 for VS
 // and CS, 1 for PS (ES/LS 2 and GS/HS 3 later; docs/design/graphics.md, "Image sampling"). Image i
-// of ShaderInterface::images is binding i (a sampled image, arrayed for a cube), sampler j of
-// ShaderInterface::samplers is binding images.size() + j.
+// of ShaderInterface::images is binding i (a sampled image, arrayed for a cube, or a storage
+// image when ShaderInterface::stored_images says so), sampler j of ShaderInterface::samplers is
+// binding images.size() + j.
 constexpr std::uint32_t descriptor_set(Stage stage) { return stage == Stage::pixel ? 1 : 0; }
 
 // What the run time must know about a translated shader.
@@ -120,6 +121,10 @@ struct ShaderInterface {
     std::vector<ResourceSource> buffers;
     // The T# and S# sources of the MIMG instructions, in order of first use (bindings above).
     std::vector<ResourceSource> images{}, samplers{};
+    // Parallel to `images`: the program writes it with image_store, so it is bound as a storage
+    // image in a format the store can write, not as a sampled image (see "Image loads and
+    // stores" in docs/design/graphics.md).
+    std::vector<bool> stored_images{};
     bool wave_size_dependent = false;  // the result can differ in lane-local mode (also: LDS)
     // VCC or an SGPR mask pair is written as a value and read back as a value (flow-insensitive).
     // The value survives only in 64-lane subgroups: smaller ones lose the other lanes' bits.

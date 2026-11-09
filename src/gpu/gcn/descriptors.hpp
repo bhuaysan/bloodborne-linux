@@ -39,6 +39,8 @@ struct ImageSources {
         std::optional<std::uint32_t> sampler{};  // nothing for an instruction without an S#
     };
     std::vector<ResourceSource> images, samplers;
+    // Parallel to `images`: whether an image_store of the program writes that image.
+    std::vector<bool> stored;
     std::map<std::uint32_t, Use> uses;
 };
 ImageSources find_image_sources(std::span<const Instruction> program, const Cfg& cfg,

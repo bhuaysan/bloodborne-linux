@@ -286,6 +286,7 @@ public:
                 {.buffers = find_buffer_sources(program_, cfg_, user_sgprs()),
                  .images = image_sources_.images,
                  .samplers = image_sources_.samplers,
+                 .stored_images = image_sources_.stored,
                  .wave_size_dependent = wave_size_dependent_,
                  .mask_round_trip = round_trip(),
                  .calls_fetch = fetch_.call != detail::FetchSite::none}};

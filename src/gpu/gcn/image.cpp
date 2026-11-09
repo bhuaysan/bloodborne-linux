@@ -52,8 +52,9 @@ constexpr SampleForm sample_forms[] = {{"image_sample", Lod::implicit},
 }  // namespace
 
 void ImageOps::translate(const Instruction& inst, std::uint32_t index) {
-    if (std::string_view(inst.name) == "image_load_mip") {
-        load_mip(inst, index);
+    const std::string_view name = inst.name;
+    if (name == "image_store" || name == "image_load_mip") {
+        no_sampler(inst, index);
         return;
     }
     const auto* form = std::ranges::find(sample_forms, inst.name, &SampleForm::name);
@@ -72,6 +73,9 @@ void ImageOps::translate(const Instruction& inst, std::uint32_t index) {
                                inst.name));
     }
     const std::uint32_t i = use->second.image;
+    if (sources_.stored[i]) {
+        regs_.fail(std::format("the image that {} reads is also written", inst.name));
+    }
     const ImageClass c = i < key_.images.size() ? key_.images[i] : ImageClass{};
     if (c.type != type_2d && c.type != type_cube && c.type != type_2d_array) {
         regs_.fail(std::format("image type {} of {} is not supported yet", c.type, inst.name));
@@ -157,12 +161,14 @@ void ImageOps::write_result(const Instruction& inst, ImageClass c, Id component,
     }
 }
 
-// image_load_mip takes no sampler and its address is integers (8.2.2): x and y, the slice with
-// da (which only an array uses, as for sampling), then the level. It reads a sampled image with
-// OpImageFetch, whose Lod is the level. The load runs in every lane, like sampling: a coordinate
-// or level out of range is the business of robust image access (docs/design/graphics.md, "Image
-// loads").
-void ImageOps::load_mip(const Instruction& inst, std::uint32_t index) {
+// image_store and image_load_mip take no sampler, and their address is integers (8.2.2): x and y,
+// the slice with da (which only an array uses, as for sampling), then the level for _mip. The
+// binding follows the image's use in the whole program: written ones are storage images (and
+// can't be read, see the check in translate), the others sampled images read with OpImageFetch,
+// whose Lod is the level. Stores run in active lanes only; loads run in every lane and rely on
+// robust image access for coordinates or levels that are out of range.
+void ImageOps::no_sampler(const Instruction& inst, std::uint32_t index) {
+    const bool store = std::string_view(inst.name) == "image_store";
     if ((inst.flags & (flag::tfe | flag::lwe)) != 0) {
         regs_.fail(std::format("{} with tfe or lwe is not supported yet", inst.name));
     }
@@ -175,8 +181,11 @@ void ImageOps::load_mip(const Instruction& inst, std::uint32_t index) {
     if (c.type != type_2d && c.type != type_2d_array) {
         regs_.fail(std::format("image type {} of {} is not supported yet", c.type, inst.name));
     }
+    if (!store && sources_.stored[i]) {
+        regs_.fail(std::format("the image that {} reads is also written", inst.name));
+    }
 
-    unsigned next = inst.src[0].code;
+    unsigned next = inst.src[store ? 1 : 0].code;
     const auto take = [&] { return b_.op(Op::OpLoad, u32(), {regs_.vgpr(next++)}); };
     const Id x = take(), y = take();
     const Id slice = (inst.flags & flag::da) != 0 ? take() : b_.constant_u32(0);
@@ -187,11 +196,36 @@ void ImageOps::load_mip(const Instruction& inst, std::uint32_t index) {
     const Id component = c.number == ImageClass::Number::float_
                              ? f32()
                              : b_.type_int(32, c.number == ImageClass::Number::sint);
-    const Id image_t = b_.type_image(component, spv::Dim::Dim2D, 0, c.type != type_2d, false, 1);
-    const Id texel = b_.op(Op::OpImageFetch, b_.type_vector(component, 4),
-                           {b_.op(Op::OpLoad, image_t, {binding(image_t, i)}), coords,
-                            spirv_word(spv::ImageOperandsMask::Lod), take()});
-    write_result(inst, c, component, texel);
+    const Id image_t = b_.type_image(component, spv::Dim::Dim2D, 0, c.type != type_2d, false,
+                                     store ? 2 : 1);
+    if (!store) {
+        const Id texel = b_.op(Op::OpImageFetch, b_.type_vector(component, 4),
+                               {b_.op(Op::OpLoad, image_t, {binding(image_t, i)}), coords,
+                                spirv_word(spv::ImageOperandsMask::Lod), take()});
+        write_result(inst, c, component, texel);
+        return;
+    }
+
+    // The enabled components come from consecutive VGPRs; the others are written as 0 (8.2.4).
+    const unsigned dmask = inst.mem_offset;
+    if (dmask == 0) {
+        regs_.fail("image_store with dmask 0 is not supported");
+    }
+    unsigned data = inst.src[0].code;
+    SpirvBuilder::Words parts;
+    for (unsigned k = 0; k < 4; ++k) {
+        const Id value = (dmask >> k & 1) != 0 ? b_.op(Op::OpLoad, u32(), {regs_.vgpr(data++)})
+                                               : b_.constant_u32(0);
+        parts.push_back(c.number == ImageClass::Number::uint
+                            ? value
+                            : b_.op(Op::OpBitcast, component, {value}));
+    }
+    const Id texel = b_.op(Op::OpCompositeConstruct, b_.type_vector(component, 4), parts);
+    b_.capability(spv::Capability::StorageImageWriteWithoutFormat);
+    regs_.guarded(regs_.active(), [&] {
+        b_.op_void(Op::OpImageWrite,
+                   {b_.op(Op::OpLoad, image_t, {binding(image_t, i)}), coords, texel});
+    });
 }
 
 ImageOps::Id ImageOps::binding(Id type, std::uint32_t index) {

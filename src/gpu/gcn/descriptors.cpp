@@ -195,6 +195,10 @@ ImageSources find_image_sources(std::span<const Instruction> program, const Cfg&
             return;
         }
         ImageSources::Use use{.image = position(result.images, *image)};
+        result.stored.resize(result.images.size());
+        if (std::string_view(inst.name) == "image_store") {
+            result.stored[use.image] = true;
+        }
         if (sampler) {
             use.sampler = position(result.samplers, *sampler);
         }

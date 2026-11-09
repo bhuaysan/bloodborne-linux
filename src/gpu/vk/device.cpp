@@ -105,6 +105,9 @@ struct Query {
             {&features.features.independentBlend, "independentBlend"},
             // The draw snapshot's clip space: no depth clipping, and z from -w to w.
             {&features.features.depthClamp, "depthClamp"},
+            // image_store: a translated storage image is declared without a format.
+            {&features.features.shaderStorageImageWriteWithoutFormat,
+             "shaderStorageImageWriteWithoutFormat"},
             {&clip_control.depthClipControl, "depthClipControl"},
             // The tiler copies 8- and 16-bit elements through device addresses.
             {&f11.storageBuffer16BitAccess, "storageBuffer16BitAccess"},
@@ -377,10 +380,11 @@ std::unique_ptr<Device> Device::create(const Instance& instance, const DeviceOpt
         vkGetDeviceQueue(device->device_, *families.sparse, 0, &device->sparse_->handle);
     }
     common::log(common::LogLevel::info, "gpu.vk",
-                "device {} ({} {}), sparse queue family {}, quad control {}, robust image "
-                "access 2 {}",
-                p.core.deviceName, p.v12.driverName, p.v12.driverInfo, device->sparse().family,
-                device->quad_control_, device->robust_image_access2_);
+                "device {} ({} {}), sparse queue family {}, quad control {}", p.core.deviceName,
+                p.v12.driverName, p.v12.driverInfo, device->sparse().family,
+                device->quad_control_);
+    common::log(common::LogLevel::info, "gpu.vk", "robust image access 2: {}",
+                device->robust_image_access2_);
     return device;
 }
 
