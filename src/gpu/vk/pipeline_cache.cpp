@@ -216,7 +216,16 @@ void PipelineCache::create(Entry& entry, const gcn::Translation& vs, const gcn::
     VkPipelineColorBlendAttachmentState attachments[pm4::color_targets] = {};
     for (std::uint32_t n = 0; n < pm4::color_targets; ++n) {
         const BlendAttachment& b = key.blend[n];
-        attachments[n] = {b.enable,   b.src_color, b.dst_color, b.color_op,
+        // A format without COLOR_ATTACHMENT_BLEND (integer formats) can't blend: the hardware
+        // writes the shader's value there, as with blending off.
+        bool can_blend = false;
+        if (b.enable && n < f.color_count) {
+            VkFormatProperties properties;
+            vkGetPhysicalDeviceFormatProperties(device_.physical(), f.color[n], &properties);
+            can_blend = (properties.optimalTilingFeatures &
+                         VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT) != 0;
+        }
+        attachments[n] = {can_blend,    b.src_color, b.dst_color, b.color_op,
                           b.src_alpha, b.dst_alpha, b.alpha_op,  b.write_mask};
     }
     auto blend = make<VkPipelineColorBlendStateCreateInfo>(

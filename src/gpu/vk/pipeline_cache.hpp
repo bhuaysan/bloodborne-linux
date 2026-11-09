@@ -27,8 +27,7 @@ using CodeReader = std::function<std::span<const std::uint32_t>(std::uint64_t ad
 
 // The dynamic state of every pipeline of the cache, which a draw sets before it draws: Vulkan
 // 1.3's core dynamic state for what the draw snapshot leaves out of the pipeline key. The
-// snapshot (DynamicState) has the viewport, cull mode, front face and blend constants; the draw must
-// still set the others (depth and stencil, scissor, depth bias and primitive restart: not done).
+// snapshot (DynamicState) has all of it, and DrawRecorder sets it before each draw.
 inline constexpr VkDynamicState graphics_dynamic_states[] = {
     VK_DYNAMIC_STATE_VIEWPORT,
     VK_DYNAMIC_STATE_SCISSOR,
