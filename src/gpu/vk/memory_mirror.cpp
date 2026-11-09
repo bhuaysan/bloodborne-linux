@@ -28,10 +28,6 @@ constexpr std::uint64_t round_down(std::uint64_t value, std::uint64_t alignment)
     return value & ~(alignment - 1);
 }
 
-constexpr std::uint64_t round_up(std::uint64_t value, std::uint64_t alignment) {
-    return round_down(value + alignment - 1, alignment);
-}
-
 VkDeviceAddress buffer_address(VkDevice device, VkBuffer buffer) {
     auto info = make<VkBufferDeviceAddressInfo>(VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO);
     info.buffer = buffer;
@@ -265,7 +261,7 @@ void MemoryMirror::bind_new(const std::map<std::uint64_t, Block>& blocks) {
             for (std::uint64_t at : done) {
                 drop(blocks_.find(at), freed);
             }
-            release(freed);
+            submit_and_free(freed);
         } catch (...) {
         }
         throw;
@@ -335,10 +331,10 @@ void MemoryMirror::unbind(std::uintptr_t address, std::uint64_t length, std::uin
         }
         it = next;
     }
-    release(freed);
+    submit_and_free(freed);
 }
 
-void MemoryMirror::release(std::vector<VkDeviceMemory>& freed) {
+void MemoryMirror::submit_and_free(std::vector<VkDeviceMemory>& freed) {
     try {
         submit();  // the imports go only once nothing is bound to them
     } catch (...) {
@@ -387,7 +383,7 @@ std::vector<std::pair<std::uintptr_t, std::uint64_t>> MemoryMirror::release(
         }
         it = next;
     }
-    release(freed);
+    submit_and_free(freed);
     bind_new(survivors);
     return dropped;
 }

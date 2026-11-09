@@ -27,7 +27,8 @@ inline constexpr std::uint64_t mirror_import_limit = std::uint64_t{64} << 20;
 
 struct MirrorOptions {
     int memfd = -1;               // sealed against shrinking (F_SEAL_SHRINK)
-    std::uintptr_t window_start;  // the guest address of the mirror's start: a multiple of 2 GiB
+    // The guest address of the mirror's start: a multiple of 2 GiB.
+    std::uintptr_t window_start = 0;
     std::uint64_t size = mirror_max_size;  // a multiple of 2 GiB, at most mirror_max_size
     // The binding block is max(the buffers' binding granularity, 16 KiB, min_block). Tests raise
     // it to RADV's 64 KiB on lavapipe. A power of two up to mirror_import_limit.
@@ -110,7 +111,7 @@ private:
     void drop(std::map<std::uint64_t, Block>::iterator block, std::vector<VkDeviceMemory>& freed);
 
     // Submits the queued unbinds, then frees `freed`, also when the submit throws.
-    void release(std::vector<VkDeviceMemory>& freed);
+    void submit_and_free(std::vector<VkDeviceMemory>& freed);
 
     Device& device_;
     int memfd_ = -1, udmabuf_ = -1;
