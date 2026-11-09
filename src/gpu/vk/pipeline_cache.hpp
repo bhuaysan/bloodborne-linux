@@ -70,10 +70,15 @@ public:
     // first request; an equal request returns the same pipeline. The VS's fetch address counts
     // only for a program that calls the fetch subroutine. Nothing, with `why` saying what, when a
     // stage's code isn't readable, doesn't translate or uses images or samplers (not yet); the
-    // error is kept and given again for an equal request, except unreadable code. Throws
-    // std::runtime_error when a Vulkan call fails.
+    // error is kept and given again for an equal request, except unreadable code (also an
+    // unreadable fetch subroutine a VS needs). Throws std::runtime_error when a Vulkan call
+    // fails; nothing is kept then, so the next request tries again.
     const GraphicsPipeline* get(const PipelineKey& key, const RenderingInfo& targets,
                                 std::string& why);
+
+    // For tests: called in the middle of creating a pipeline (after its layout exists); what it
+    // throws is a Vulkan failure.
+    void set_create_hook(std::function<void()> hook) { create_hook_ = std::move(hook); }
 
     std::size_t size() const { return entries_.size(); }  // pipelines and kept errors
     std::size_t translations() const { return translations_; }
@@ -98,10 +103,12 @@ private:
 
     const Device& device_;
     CodeReader read_;
+    std::function<void()> create_hook_;
     // By the stages' code addresses (hash_stages), so the nodes, and the pipelines handed out,
     // stay where they are.
     std::unordered_multimap<std::uint64_t, Entry> entries_;
-    // The VS programs (code address and key) found not to call the fetch subroutine.
+    // The VS programs (code address and key) whose result doesn't depend on the fetch address:
+    // they don't call the subroutine, or fail for another reason.
     std::unordered_multimap<std::uint64_t, gcn::ShaderKey> fetchless_;
     std::size_t translations_ = 0;
 };

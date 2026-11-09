@@ -2,6 +2,7 @@
 
 #include <format>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include "common/log.hpp"
@@ -21,6 +22,8 @@ void destroy(VkDevice device, GraphicsPipeline& p) {
     vkDestroyPipeline(device, p.pipeline, nullptr);
     vkDestroyPipelineLayout(device, p.layout, nullptr);
 }
+
+constexpr std::string_view missing_fetch = "without a fetch subroutine";  // gcn/fetch.cpp
 
 }  // namespace
 
@@ -79,7 +82,17 @@ const GraphicsPipeline* PipelineCache::get(const PipelineKey& request,
         const auto fetch = s.fetch_address != 0 ? read_(s.fetch_address)
                                                 : std::span<const std::uint32_t>{};
         ++translations_;
-        return gcn::translate(code, fetch, s.key);
+        try {
+            return gcn::translate(code, fetch, s.key);
+        } catch (const gcn::GcnError& e) {
+            // A VS that needs the fetch subroutine and finds it unmapped may succeed once it is.
+            if (s.fetch_address != 0 && fetch.empty() &&
+                std::string_view(e.what()).find(missing_fetch) != std::string_view::npos) {
+                why = std::format("no readable code at {:#x}", s.fetch_address);
+                return std::nullopt;
+            }
+            throw;
+        }
     };
     std::optional<gcn::Translation> vs, ps;
     try {
@@ -102,17 +115,35 @@ const GraphicsPipeline* PipelineCache::get(const PipelineKey& request,
     } catch (const gcn::GcnError& e) {
         entry.error = std::format("the {} at {:#x} doesn't translate: {}", vs ? "PS" : "VS",
                                   vs ? key.ps->code_address : key.vs.code_address, e.what());
+        if (!vs && key.vs.fetch_address != 0) {
+            // A VS error that doesn't depend on the fetch subroutine is kept without its
+            // address, so a per-draw pointer in the user data doesn't add an entry per draw.
+            try {
+                gcn::translate(read_(key.vs.code_address), {}, key.vs.key);
+            } catch (const gcn::GcnError& probe) {
+                if (std::string_view(probe.what()) == e.what()) {
+                    fetchless_.emplace(key.vs.code_address, key.vs.key);
+                    key.vs.fetch_address = 0;
+                }
+            }
+        }
     }
     why = entry.error;
-    Entry& stored = entries_.emplace(hash_stages(key), std::move(entry))->second;
+    const auto node = entries_.emplace(hash_stages(key), std::move(entry));
+    Entry& stored = node->second;
     if (!why.empty()) {
         common::log(common::LogLevel::warn, "gpu.vk", "{}", why);
         return nullptr;
     }
-    // A failing Vulkan call throws and leaves the entry with this error and what it created.
-    stored.error = "the pipeline's creation failed";
-    create(stored, *vs, ps ? &*ps : nullptr);
-    stored.error.clear();
+    // A failing Vulkan call may be transient (out of memory): drop the entry and what it
+    // created, so the next request tries again.
+    try {
+        create(stored, *vs, ps ? &*ps : nullptr);
+    } catch (...) {
+        destroy(device_.handle(), stored.pipeline);
+        entries_.erase(node);
+        throw;
+    }
     return &stored.pipeline;
 }
 
@@ -138,6 +169,7 @@ void PipelineCache::create(Entry& entry, const gcn::Translation& vs, const gcn::
     layout.pushConstantRangeCount = 1;
     layout.pPushConstantRanges = &range;
     check(vkCreatePipelineLayout(device, &layout, nullptr, &p.layout), "vkCreatePipelineLayout");
+    if (create_hook_) create_hook_();
 
     VkPipelineShaderStageCreateInfo stages[2];
     const gcn::Translation* translations[2] = {&vs, ps};

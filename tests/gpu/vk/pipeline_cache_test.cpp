@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -140,6 +141,41 @@ TEST_F(VkPipelineCache, KeepsTranslationErrorsButNotUnreadableCode) {
     EXPECT_EQ(cache_->size(), 1u);
     code_[0x9000] = code_[ps_address];
     EXPECT_NE(cache_->get(unmapped, color_, why_), nullptr) << why_;
+}
+
+TEST_F(VkPipelineCache, ADeviceFailureIsNotKept) {
+    bool fail = true;
+    cache_->set_create_hook([&] {
+        if (fail) throw std::runtime_error("injected");
+    });
+    EXPECT_THROW(cache_->get(pair_, color_, why_), std::runtime_error);
+    EXPECT_EQ(cache_->size(), 0u);
+    fail = false;
+    ASSERT_NE(cache_->get(pair_, color_, why_), nullptr) << why_;
+    EXPECT_EQ(cache_->size(), 1u);
+}
+
+TEST_F(VkPipelineCache, AnUnmappedFetchSubroutineIsNotKept) {
+    code_[0x3000] = {sop1(33, 4, 0), sopp(1)};
+    PipelineKey key;
+    key.vs = {0x3000, 0x4000, {.stage = Stage::vertex, .pgm_rsrc2 = 4u << 1}};
+    const RenderingInfo none;
+    EXPECT_EQ(cache_->get(key, none, why_), nullptr);
+    EXPECT_EQ(why_, "no readable code at 0x4000");
+    EXPECT_EQ(cache_->size(), 0u);
+    code_[0x4000] = {sop1(32, 0, 4)};
+    EXPECT_NE(cache_->get(key, none, why_), nullptr) << why_;
+}
+
+TEST_F(VkPipelineCache, AVsErrorIndependentOfTheFetchIsKeptOncePerProgram) {
+    PipelineKey bad = pair_;
+    bad.vs.key.pgm_rsrc2 = 17u << 1;
+    for (std::uint64_t pointer = 0x5000; pointer < 0x5004; ++pointer) {
+        bad.vs.fetch_address = pointer;  // a per-draw pointer in the user data
+        EXPECT_EQ(cache_->get(bad, color_, why_), nullptr);
+    }
+    EXPECT_EQ(cache_->size(), 1u);
+    EXPECT_EQ(cache_->translations(), 1u);
 }
 
 }  // namespace
