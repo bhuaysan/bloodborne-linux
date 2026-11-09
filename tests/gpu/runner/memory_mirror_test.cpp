@@ -30,7 +30,6 @@
 #include "gpu/gcn/programs.hpp"
 #include "gpu/gcn/translate.hpp"
 #include "gpu/vk/device.hpp"
-#include "../vk/test_device.hpp"
 
 namespace {
 
@@ -83,7 +82,7 @@ struct Window {
 
 struct MemoryMirror : testing::Test {
     void SetUp() override {
-        (void)bb::test::vk_test_device();  // limits the loader to lavapipe unless told otherwise
+        ::setenv("VK_LOADER_DRIVERS_SELECT", "*lvp*", 0);  // as the compute runner
         auto app = make<VkApplicationInfo>(VK_STRUCTURE_TYPE_APPLICATION_INFO);
         app.apiVersion = VK_API_VERSION_1_3;
         auto instance_info = make<VkInstanceCreateInfo>(VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO);

@@ -14,6 +14,7 @@
 
 #include "gpu/vk/device.hpp"
 #include "gpu/vk/memory_mirror.hpp"
+#include "test_device.hpp"
 #include "tools/mirror_observer.hpp"
 
 namespace {
@@ -31,15 +32,15 @@ std::uint32_t pattern(std::uint64_t offset) {
 class VkMemoryMirror : public ::testing::Test {
 protected:
     void SetUp() override {
-        ::setenv("VK_LOADER_DRIVERS_SELECT", "*lvp*", 0);
+        const std::string selector = bb::test::vk_test_device();
         std::string why;
         instance_ = Instance::create(why);
         if (!instance_) {
             GTEST_SKIP() << "no Vulkan instance: " << why;
         }
-        device_ = Device::create(*instance_, {.device = "llvmpipe"}, why);
+        device_ = Device::create(*instance_, {.device = selector}, why);
         if (!device_) {
-            GTEST_SKIP() << "no lavapipe device: " << why;
+            GTEST_SKIP() << "no Vulkan device: " << why;
         }
         // udmabuf needs a memfd sealed against shrinking.
         fd_ = ::memfd_create("mirror-test", MFD_ALLOW_SEALING);
