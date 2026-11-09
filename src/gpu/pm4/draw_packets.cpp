@@ -130,6 +130,18 @@ Parser::Step Parser::draw_packet(Stream& stream, const Packet& packet) {
         return Step::next;
     }
     const bool indexed = call.kind != DrawKind::index_auto && call.kind != DrawKind::indirect;
+    // An empty draw draws nothing and needs no index buffer; an indirect draw's counts are only
+    // known to the backend.
+    const bool empty = call.indirect == 0 && (call.index_count == 0 || call.instances == 0);
+    if (empty) {
+        return Step::next;
+    }
+    if (indexed && (stream.index_type_ & index_type_mask) > 1) {
+        // 8-bit (2) and the reserved value 3 are not supported; the backend would misread them.
+        common::log(common::LogLevel::error, channel, "packet {:#010x}: unsupported INDEX_TYPE {}",
+                    packet.header, stream.index_type_ & index_type_mask);
+        return Step::fail;
+    }
     if (call.kind == DrawKind::index_offset_2 || call.kind == DrawKind::index_2) {
         if (call.index_address == 0 ||
             !accessible(call.index_address + std::uint64_t{call.first_index} * call.index_bytes,
@@ -140,9 +152,7 @@ Parser::Step Parser::draw_packet(Stream& stream, const Packet& packet) {
         common::log(common::LogLevel::error, channel, "packet {:#010x}: no INDEX_BASE", packet.header);
         return Step::fail;
     }
-    // An empty draw draws nothing; an indirect draw's counts are only known to the backend.
-    const bool empty = call.indirect == 0 && (call.index_count == 0 || call.instances == 0);
-    if (draw_ && !empty) {
+    if (draw_) {
         draw_(regs_, call);
     }
     return Step::next;

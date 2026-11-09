@@ -292,28 +292,22 @@ TEST(Pm4Parser, DispatchesWithoutACallbackAreSkipped) {
     EXPECT_EQ(f.parser.run(stream), RunResult::done);
 }
 
-}  // namespace
-
-namespace {
-
 // Runs `dcb` with a draw callback and returns the draws.
 std::vector<bb::pm4::DrawCall> run_draws(const std::vector<std::uint32_t>& dcb,
                                          RunResult expect = RunResult::done,
-                                         std::vector<std::uint32_t>* viewport_x = nullptr) {
+                                         std::vector<std::uint32_t>* regs_seen = nullptr) {
     Fixture f;
     std::vector<bb::pm4::DrawCall> calls;
     f.parser.set_draw([&](const RegisterMirror& regs, const bb::pm4::DrawCall& call) {
         calls.push_back(call);
-        if (viewport_x != nullptr) {
-            viewport_x->push_back(regs.num_threads(0));
+        if (regs_seen != nullptr) {
+            regs_seen->push_back(regs.num_threads(0));
         }
     });
     Stream stream(dcb);
     EXPECT_EQ(f.parser.run(stream), expect);
     return calls;
 }
-
-}  // namespace
 
 TEST(Pm4Parser, DrawIndexAutoCarriesCountInstancesAndTheRegisters) {
     std::vector<std::uint32_t> dcb, regs_seen;
@@ -431,3 +425,61 @@ TEST(Pm4Parser, IndexStateBelongsToItsStream) {
     EXPECT_EQ(f.parser.run(b), RunResult::error);  // INDEX_BASE is not set in this stream
     EXPECT_EQ(calls, 0);
 }
+
+TEST(Pm4Parser, EmptyDrawsNeedNoIndexBufferAndAreNotReported) {
+    std::vector<std::uint32_t> dcb;
+    packet(dcb, IT_DRAW_INDEX_OFFSET_2, {10, 0, 0, 0});  // no indices, no INDEX_BASE
+    packet(dcb, IT_DRAW_INDEX_2, {10, 0, 0, 0, 0});      // no indices, no address
+    packet(dcb, IT_NUM_INSTANCES, {0});
+    packet(dcb, IT_DRAW_INDEX_2, {10, 0, 0, 3, 0});
+    EXPECT_TRUE(run_draws(dcb).empty());
+}
+
+TEST(Pm4Parser, UnreadableIndicesOrArgumentsFailTheStream) {
+    const std::uint64_t indices = 0x10000;
+    const std::uint64_t first_index_end = indices + 8 * 2 + 4 * 2;  // first index 8, 4 indices
+    std::vector<std::uint32_t> indexed, offset, indirect_dcb;
+    packet(indexed, IT_DRAW_INDEX_2, {10, static_cast<std::uint32_t>(indices), 0, 4, 0});
+    packet(offset, IT_INDEX_BASE, {static_cast<std::uint32_t>(indices), 0});
+    packet(offset, IT_DRAW_INDEX_OFFSET_2, {10, 8, 4, 0});
+    packet(indirect_dcb, IT_SET_BASE, {1, 0x2000, 0});
+    packet(indirect_dcb, IT_DRAW_INDIRECT, {0, 0x2C, 0x2D, 1});
+    for (const auto* dcb : {&indexed, &offset, &indirect_dcb}) {
+        Fixture f;
+        int calls = 0;
+        f.parser.set_draw([&](const RegisterMirror&, const bb::pm4::DrawCall&) { ++calls; });
+        f.parser.set_readable([](const void*, std::size_t) { return false; });
+        Stream stream(*dcb);
+        EXPECT_EQ(f.parser.run(stream), RunResult::error);
+        EXPECT_EQ(calls, 0);
+    }
+    // The checked range of DRAW_INDEX_OFFSET_2 starts at the first index and ends after the last.
+    Fixture f;
+    std::uint64_t begin = 0;
+    std::size_t size = 0;
+    f.parser.set_draw([](const RegisterMirror&, const bb::pm4::DrawCall&) {});
+    f.parser.set_readable([&](const void* p, std::size_t n) {
+        if (reinterpret_cast<std::uintptr_t>(p) >= indices) {
+            begin = reinterpret_cast<std::uintptr_t>(p);
+            size = n;
+        }
+        return true;
+    });
+    Stream stream(offset);
+    EXPECT_EQ(f.parser.run(stream), RunResult::done);
+    EXPECT_EQ(begin, indices + 16);
+    EXPECT_EQ(begin + size, first_index_end);
+}
+
+TEST(Pm4Parser, IndexedDrawsWithAnUnsupportedIndexTypeFail) {
+    std::vector<std::uint32_t> dcb;
+    packet(dcb, IT_INDEX_TYPE, {2});  // 8-bit
+    packet(dcb, IT_DRAW_INDEX_2, {10, 0x1000, 0, 3, 0});
+    EXPECT_TRUE(run_draws(dcb, RunResult::error).empty());
+    dcb.clear();
+    packet(dcb, IT_INDEX_TYPE, {2});
+    packet(dcb, IT_DRAW_INDEX_AUTO, {3, 0});  // not indexed: fine
+    EXPECT_EQ(run_draws(dcb).size(), 1u);
+}
+
+}  // namespace
