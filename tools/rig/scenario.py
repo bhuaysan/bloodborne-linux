@@ -9,7 +9,8 @@ A scenario is a list of steps, one per line, `#` starts a comment. Options are k
   stick LX|LY|RX|RY VALUE
   neutral
   sleep SECONDS
-  log REGEX [timeout=60]               a new line of the target's log matches
+  log REGEX [timeout=60]               a new complete line of the target's log matches (quote the
+                                       regex in single quotes when it has backslashes or a #)
   frames N [timeout=60]                N more presents happened
   nonblack [level=16] [timeout=60]     the picture's mean luma reaches level
   changed [delta=4] [timeout=60]       the picture differs from the one at the start of the step
@@ -23,6 +24,7 @@ presents frames. `log` needs only its log, so a target without a picture can run
 
 from __future__ import annotations
 
+import math
 import re
 import shlex
 import time
@@ -92,6 +94,13 @@ _SPEC: dict[str, tuple[int, set[str]]] = {
 }
 
 
+def _finite(text: str, what: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError(f"{what} must be a finite number")
+    return value
+
+
 def _check_step(step: Step) -> None:
     head = step.args[0] if step.args else ""
     if step.op == "tap" and head not in BUTTONS:
@@ -105,16 +114,16 @@ def _check_step(step: Step) -> None:
             raise ValueError(f"unknown axis {head}")
         if not -32768 <= int(step.args[1]) <= 32767:
             raise ValueError("stick value out of range")
-    if step.op == "sleep" and float(head) < 0:
+    if step.op == "sleep" and _finite(head, "sleep") < 0:
         raise ValueError("negative sleep")
     if step.op == "frames" and int(head) < 1:
         raise ValueError("frame count must be positive")
     if step.op == "log":
-        re.compile(head)
+        re.compile(head, re.MULTILINE)
     if step.op in ("shot", "mark") and not SHOT_NAME.fullmatch(head):
         raise ValueError(f"bad name {head!r}: 1 to 64 of [A-Za-z0-9_-]")
     for key in ("timeout", "delta", "level", "seconds", "gap"):
-        if key in step.opts and float(step.opts[key]) < 0:
+        if key in step.opts and _finite(step.opts[key], key) < 0:
             raise ValueError(f"negative {key}")
     if "ms" in step.opts and int(step.opts["ms"]) < 0:
         raise ValueError("negative ms")
@@ -124,33 +133,43 @@ def _check_step(step: Step) -> None:
 
 def parse(text: str) -> Scenario:
     scenario = Scenario()
+    marks: set[str] = set()
     for number, raw in enumerate(text.splitlines(), 1):
         try:
             tokens = shlex.split(raw, comments=True)
             if not tokens:
                 continue
             op, rest = tokens[0], tokens[1:]
-            opts = dict(t.split("=", 1) for t in rest if re.fullmatch(r"[a-z]+=.*", t))
-            args = [t for t in rest if not re.fullmatch(r"[a-z]+=.*", t)]
+            if op != "limit" and op not in _SPEC:
+                raise ValueError(f"unknown step {op}")
+            want, allowed = _SPEC.get(op, (0, {"time", "memory"}))
+            # Only this step's own option names are options, so a regex like "state=ready" is
+            # an argument.
+            options = [t for t in rest if t.partition("=")[0] in allowed and "=" in t]
+            opts = dict(t.split("=", 1) for t in options)
+            args = [t for t in rest if t not in options]
             if op == "limit":
                 if scenario.steps:
                     raise ValueError("limit must come before the first step")
-                if args or set(opts) - {"time", "memory"}:
+                if args:
                     raise ValueError("limit takes time= and memory=")
                 if "time" in opts:
                     scenario.time_limit = int(opts["time"])
+                    if scenario.time_limit <= 0:
+                        raise ValueError("limit time must be positive")
                 if "memory" in opts:
+                    if not re.fullmatch(r"\d+[KMGT]?", opts["memory"]):
+                        raise ValueError("limit memory must look like 12G")
                     scenario.memory_limit = opts["memory"]
                 continue
-            if op not in _SPEC:
-                raise ValueError(f"unknown step {op}")
-            want, allowed = _SPEC[op]
             if len(args) != want:
                 raise ValueError(f"{op} takes {want} argument(s), got {len(args)}")
-            if set(opts) - allowed:
-                raise ValueError(f"{op} does not take {sorted(set(opts) - allowed)}")
             step = Step(op, args, opts, number)
             _check_step(step)
+            if step.op == "mark":
+                if step.args[0] in marks:
+                    raise ValueError(f"mark {step.args[0]} is used twice")
+                marks.add(step.args[0])
             scenario.steps.append(step)
         except (ValueError, re.error) as e:
             raise ScenarioError(f"line {number}: {e}") from e
@@ -242,7 +261,7 @@ class Interpreter:
             case "sleep":
                 self._sleep_alive(float(head))
             case "log":
-                self._wait_log(re.compile(head), step)
+                self._wait_log(re.compile(head, re.MULTILINE), step)
             case "frames":
                 self._wait_frames(int(head), step)
             case "nonblack":
@@ -274,15 +293,20 @@ class Interpreter:
     def _wait_log(self, pattern: re.Pattern[str], step: Step) -> None:
         deadline = self._deadline(step)
         while True:
+            # Read before the liveness check in _tick, so a target that logs the line and then
+            # exits still counts.
+            alive = self.target.alive()
             self._log_buffer += self.target.log_tail()
-            match = pattern.search(self._log_buffer)
+            complete = self._log_buffer.rfind("\n") + 1
+            match = pattern.search(self._log_buffer, 0, complete)
             if match:
                 # Consume up to the end of the matching line, so the next wait starts after it.
-                newline = self._log_buffer.find("\n", match.end())
-                self._log_buffer = "" if newline < 0 else self._log_buffer[newline + 1:]
+                self._log_buffer = self._log_buffer[self._log_buffer.find("\n", match.end()) + 1:]
                 return
             # Keep only the unfinished last line, so the buffer stays small over a long run.
-            self._log_buffer = self._log_buffer[self._log_buffer.rfind("\n") + 1:]
+            self._log_buffer = self._log_buffer[complete:]
+            if not alive:
+                raise StepFailed("the target exited")
             self._tick(step, deadline)
 
     def _wait_frames(self, count: int, step: Step) -> None:

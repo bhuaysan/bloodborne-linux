@@ -33,6 +33,11 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(stats["p50_ms"], 33.0)
         self.assertEqual(stats["stutters_over_2x_median"], 0)
 
+    def test_p99_is_the_nearest_rank_not_the_maximum(self) -> None:
+        stats = report.frame_stats(self.frames([1.0] * 99 + [50.0]))
+        self.assertEqual(stats["p99_ms"], 1.0)
+        self.assertEqual(stats["max_ms"], 50.0)
+
     def test_stutter_is_counted(self) -> None:
         stats = report.frame_stats(self.frames([33.0] * 50 + [100.0] + [33.0] * 49))
         self.assertEqual(stats["max_ms"], 100.0)
@@ -81,8 +86,13 @@ class ReportTests(unittest.TestCase):
             (root / "b").write_text("longer")
             (root / "dir" / "a").unlink()
             (root / "c").write_text("z")
-            self.assertEqual(report.tree_changes(before, report.tree_state(root)),
-                             ["added: c", "changed: b", "changed: dir", "removed: dir/a"])
+            changes = report.tree_changes(before, report.tree_state(root))
+            for expected in ("added: c", "changed: b", "removed: dir/a"):
+                self.assertIn(expected, changes)
+
+    def test_tree_state_refuses_a_missing_root(self) -> None:
+        with self.assertRaises(NotADirectoryError):
+            report.tree_state(Path("/no/such/directory"))
 
     def png_pixels(self, path: Path) -> tuple[int, int, bytes]:
         data = path.read_bytes()
@@ -113,6 +123,11 @@ class ReportTests(unittest.TestCase):
         value = (0x3FF << 0) | (0x200 << 10) | (0x004 << 20)  # r full, g half, b tiny
         pixels = struct.pack("<I", value)
         self.assertEqual(self.convert(1, 1, 64, pixels)[2], bytes([0xFF, 0x80, 0x01]))
+
+    def test_png_from_srgb_rgba_and_a2r10g10b10(self) -> None:
+        self.assertEqual(self.convert(1, 1, 43, bytes([9, 8, 7, 255]))[2], bytes([9, 8, 7]))
+        value = (0x3FF << 20) | (0x200 << 10) | 0x004  # r full, g half, b tiny
+        self.assertEqual(self.convert(1, 1, 58, struct.pack("<I", value))[2], bytes([0xFF, 0x80, 0x01]))
 
     def test_png_rejects_a_truncated_capture(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

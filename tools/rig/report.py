@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import os
 import re
 import struct
@@ -16,6 +17,7 @@ RGBA8 = {37, 43}  # R8G8B8A8_UNORM, _SRGB
 A2B10G10R10 = 64
 A2R10G10B10 = 58
 
+# The reference machine has an AMD GPU, so these are the amdgpu driver's messages.
 KERNEL_FAULT = re.compile(r"amdgpu.*(fault|reset|recover|timeout|hang)|ring .* timeout", re.I)
 
 
@@ -23,14 +25,21 @@ def kernel_faults(journal: str) -> list[str]:
     return [line for line in journal.splitlines() if KERNEL_FAULT.search(line)]
 
 
-def tree_state(root: Path) -> dict[str, tuple[int, int, int]]:
-    """(size, mtime, mode) of every entry below root, keyed by relative path."""
-    state: dict[str, tuple[int, int, int]] = {}
-    for directory, dirs, files in os.walk(root):
+def tree_state(root: Path) -> dict[str, tuple[int, int, int, int]]:
+    """(size, mtime, ctime, mode) of every entry below root, keyed by relative path."""
+    if not root.is_dir():
+        raise NotADirectoryError(root)
+
+    def fail(error: OSError) -> None:
+        raise error
+
+    state: dict[str, tuple[int, int, int, int]] = {}
+    for directory, dirs, files in os.walk(root, onerror=fail):
         for name in [*dirs, *files]:
             path = Path(directory) / name
             info = path.lstat()
-            state[str(path.relative_to(root))] = (info.st_size, info.st_mtime_ns, info.st_mode)
+            state[str(path.relative_to(root))] = (info.st_size, info.st_mtime_ns, info.st_ctime_ns,
+                                                  info.st_mode)
     return state
 
 
@@ -112,7 +121,8 @@ def intervals_ms(frames: list[Frame]) -> list[float]:
 
 
 def _percentile(sorted_values: list[float], fraction: float) -> float:
-    return sorted_values[min(len(sorted_values) - 1, int(len(sorted_values) * fraction))]
+    """Nearest-rank percentile."""
+    return sorted_values[max(0, math.ceil(len(sorted_values) * fraction) - 1)]
 
 
 def frame_stats(frames: list[Frame]) -> dict | None:
