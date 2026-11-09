@@ -3,6 +3,7 @@
 // (docs/design/graphics.md, "Pipeline state (item 26, as built)").
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -11,6 +12,7 @@
 
 #include "gpu/gcn/translate.hpp"
 #include "gpu/pm4/registers.hpp"
+#include "gpu/pm4/targets.hpp"
 
 namespace bb::vk {
 
@@ -25,6 +27,18 @@ struct StageState {
     bool operator==(const StageState&) const = default;
 };
 
+// The blend state of one colour target (CB_BLEND<n>_CONTROL with CB_TARGET_MASK). Blend attachment
+// state isn't core dynamic state, so it is part of the key; a target that doesn't blend has the
+// default factors, so equal states compare equal.
+struct BlendAttachment {
+    bool enable = false;
+    std::uint8_t write_mask = 0xf;  // CB_TARGET_MASK nibble n: bit 0 red to bit 3 alpha
+    VkBlendFactor src_color = VK_BLEND_FACTOR_ONE, dst_color = VK_BLEND_FACTOR_ZERO;
+    VkBlendFactor src_alpha = VK_BLEND_FACTOR_ONE, dst_alpha = VK_BLEND_FACTOR_ZERO;
+    VkBlendOp color_op = VK_BLEND_OP_ADD, alpha_op = VK_BLEND_OP_ADD;
+    bool operator==(const BlendAttachment&) const = default;
+};
+
 // What a graphics pipeline is made from besides the targets' formats (RenderingInfo) and the
 // translated stages: the state that Vulkan 1.3 can't set dynamically, plus the topology.
 struct PipelineKey {
@@ -37,6 +51,9 @@ struct PipelineKey {
     // With depth clipping when DX_CLIP_SPACE_DEF is clear, without it when zoffset +- zscale lies
     // within 0-1 (the depth range then clamps as little as possible).
     bool negative_one_to_one = false;
+    // PA_SU_SC_MODE_CNTL.POLY_MODE: fill, or line or point when both polygon types agree.
+    VkPolygonMode polygon_mode = VK_POLYGON_MODE_FILL;
+    std::array<BlendAttachment, pm4::color_targets> blend;  // by colour target slot
     bool operator==(const PipelineKey&) const = default;
 };
 
@@ -50,6 +67,9 @@ struct ComputeState {
 // The state a draw sets on the command buffer (core dynamic state in Vulkan 1.3).
 struct DynamicState {
     VkViewport viewport{};
+    VkCullModeFlags cull_mode = VK_CULL_MODE_NONE;
+    VkFrontFace front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    std::array<float, 4> blend_constants{};  // CB_BLEND_RED to CB_BLEND_ALPHA
 };
 
 struct DrawState {
@@ -67,6 +87,12 @@ std::optional<DrawState> draw_state(const pm4::RegisterMirror& regs, bool quad_c
 // COMPUTE_PGM_RSRC1/2 and COMPUTE_NUM_THREAD_X/Y/Z (docs/design/graphics.md, item 25). The
 // push offset is 0. Nothing for a zero program address, with `why` saying so.
 std::optional<ComputeState> compute_state(const pm4::RegisterMirror& regs, std::string& why);
+
+// The hardware's blend factor (CB_BLENDn_CONTROL's 5-bit fields) and blend function as Vulkan's;
+// nothing for the values Vulkan lacks (unused factor numbers). Dual-source factors (15-18) are
+// returned too; `draw_state` rejects them.
+std::optional<VkBlendFactor> blend_factor(std::uint32_t factor);
+std::optional<VkBlendOp> blend_op(std::uint32_t function);
 
 // VGT_PRIMITIVE_TYPE (shadPS4's table); nothing for the types without an equivalent yet.
 std::optional<VkPrimitiveTopology> topology(std::uint32_t prim_type);

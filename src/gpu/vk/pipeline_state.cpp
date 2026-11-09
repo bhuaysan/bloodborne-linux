@@ -6,6 +6,9 @@
 // Source: shadPS4 src/video_core/amdgpu/regs_primitive.h @0d5f2739d2544d2a35c73e354cba7a32b7a81bea
 // Changed for bloodborne-linux, 2026-11-07: the topology table without fallbacks; the viewport of
 // UpdateViewportScissorState for viewport 0 of our register mirror, also when clipping is off.
+// Changed for bloodborne-linux, 2026-11-09: the blend factor and function tables as numbers to
+// optionals, without fallbacks; the raster and blend state in the pipeline key from our register
+// mirror.
 
 #include "gpu/vk/pipeline_state.hpp"
 
@@ -84,7 +87,130 @@ VkViewport viewport(const Transform& t, bool negative_one_to_one) {
             std::clamp(t.zoffset + t.zscale, 0.0f, 1.0f)};
 }
 
+// PA_SU_SC_MODE_CNTL: POLY_MODE (bit 3) with POLYMODE_FRONT_PTYPE (bits 5-7) and _BACK_PTYPE
+// (bits 8-10): 0 points, 1 lines, 2 triangles. The polygon mode, or nothing when the types differ.
+std::optional<VkPolygonMode> polygon_mode(std::uint32_t mode) {
+    if (field(mode, 3, 1) == 0) {
+        return VK_POLYGON_MODE_FILL;
+    }
+    const std::uint32_t front = field(mode, 5, 3), back = field(mode, 8, 3);
+    if (front != back || front > 2) {
+        return std::nullopt;
+    }
+    constexpr VkPolygonMode modes[] = {VK_POLYGON_MODE_POINT, VK_POLYGON_MODE_LINE,
+                                       VK_POLYGON_MODE_FILL};
+    return modes[front];
+}
+
+// CB_BLEND<n>_CONTROL: COLOR_SRCBLEND (0-4), COLOR_COMB_FCN (5-7), COLOR_DESTBLEND (8-12),
+// ALPHA_SRCBLEND (16-20), ALPHA_COMB_FCN (21-23), ALPHA_DESTBLEND (24-28), SEPARATE_ALPHA_BLEND
+// (29), ENABLE (30). Without SEPARATE_ALPHA_BLEND the colour setting also blends alpha.
+bool dual_source(std::uint32_t factor) { return factor >= 15 && factor <= 18; }
+
+std::optional<BlendAttachment> blend_attachment(std::uint32_t control, std::uint32_t mask,
+                                                bool bypass, std::string& why) {
+    BlendAttachment a{.write_mask = static_cast<std::uint8_t>(mask)};
+    if (field(control, 30, 1) == 0 || bypass) {
+        return a;
+    }
+    const bool separate = field(control, 29, 1) != 0;
+    const std::uint32_t color[] = {field(control, 0, 5), field(control, 5, 3), field(control, 8, 5)};
+    const std::uint32_t alpha[] = {separate ? field(control, 16, 5) : color[0],
+                                   separate ? field(control, 21, 3) : color[1],
+                                   separate ? field(control, 24, 5) : color[2]};
+    for (const std::uint32_t factor : {color[0], color[2], alpha[0], alpha[2]}) {
+        if (dual_source(factor)) {
+            why = std::format("dual-source blend factor {}", factor);
+            return std::nullopt;
+        }
+    }
+    const auto sc = blend_factor(color[0]), dc = blend_factor(color[2]);
+    const auto sa = blend_factor(alpha[0]), da = blend_factor(alpha[2]);
+    const auto oc = blend_op(color[1]), oa = blend_op(alpha[1]);
+    if (!sc || !dc || !sa || !da || !oc || !oa) {
+        why = std::format("CB_BLEND_CONTROL {:#x} is not supported", control);
+        return std::nullopt;
+    }
+    a.enable = true;
+    a.src_color = *sc, a.dst_color = *dc, a.src_alpha = *sa, a.dst_alpha = *da;
+    a.color_op = *oc, a.alpha_op = *oa;
+    return a;
+}
+
+bool raster_state(const pm4::RegisterMirror& regs, DrawState& s, std::string& why) {
+    // PA_SU_SC_MODE_CNTL: CULL_FRONT (bit 0) and CULL_BACK (bit 1) are VkCullModeFlagBits, FACE
+    // (bit 2) set is clockwise. The game's builders write these bits (tests/game).
+    const std::uint32_t mode = regs.get(amd::mmPA_SU_SC_MODE_CNTL);
+    const auto polygon = polygon_mode(mode);
+    if (!polygon) {
+        why = std::format("PA_SU_SC_MODE_CNTL {:#x}: polygon types differ or are not supported",
+                          mode);
+        return false;
+    }
+    s.key.polygon_mode = *polygon;
+    s.dynamic.cull_mode = field(mode, 0, 2);
+    s.dynamic.front_face = field(mode, 2, 1) != 0 ? VK_FRONT_FACE_CLOCKWISE
+                                                  : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    return true;
+}
+
+bool blend_state(const pm4::RegisterMirror& regs, DrawState& s, std::string& why) {
+    constexpr std::uint32_t color_stride = amd::mmCB_COLOR1_INFO - amd::mmCB_COLOR0_INFO;
+    const std::uint32_t target_mask = regs.get(amd::mmCB_TARGET_MASK);
+    for (unsigned n = 0; n < s.key.blend.size(); ++n) {
+        const std::uint32_t info = regs.get(amd::mmCB_COLOR0_INFO + n * color_stride);
+        // INFO.BLEND_BYPASS (bit 16) skips the blender, as a disabled blend does.
+        const auto a = blend_attachment(regs.get(amd::mmCB_BLEND0_CONTROL + n),
+                                        field(target_mask, n * 4, 4), field(info, 16, 1) != 0, why);
+        if (!a) {
+            why = std::format("target {}: {}", n, why);
+            return false;
+        }
+        s.key.blend[n] = *a;
+    }
+    for (unsigned c = 0; c < 4; ++c) {
+        s.dynamic.blend_constants[c] = std::bit_cast<float>(regs.get(amd::mmCB_BLEND_RED + c));
+    }
+    return true;
+}
+
 }  // namespace
+
+std::optional<VkBlendFactor> blend_factor(std::uint32_t factor) {
+    switch (factor) {
+    case 0: return VK_BLEND_FACTOR_ZERO;
+    case 1: return VK_BLEND_FACTOR_ONE;
+    case 2: return VK_BLEND_FACTOR_SRC_COLOR;
+    case 3: return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+    case 4: return VK_BLEND_FACTOR_SRC_ALPHA;
+    case 5: return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    case 6: return VK_BLEND_FACTOR_DST_ALPHA;
+    case 7: return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+    case 8: return VK_BLEND_FACTOR_DST_COLOR;
+    case 9: return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+    case 10: return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
+    case 13: return VK_BLEND_FACTOR_CONSTANT_COLOR;
+    case 14: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
+    case 15: return VK_BLEND_FACTOR_SRC1_COLOR;
+    case 16: return VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
+    case 17: return VK_BLEND_FACTOR_SRC1_ALPHA;
+    case 18: return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
+    case 19: return VK_BLEND_FACTOR_CONSTANT_ALPHA;
+    case 20: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+    default: return std::nullopt;  // 11 and 12 are not defined, and nothing above 20
+    }
+}
+
+std::optional<VkBlendOp> blend_op(std::uint32_t function) {
+    switch (function) {
+    case 0: return VK_BLEND_OP_ADD;
+    case 1: return VK_BLEND_OP_SUBTRACT;
+    case 2: return VK_BLEND_OP_MIN;
+    case 3: return VK_BLEND_OP_MAX;
+    case 4: return VK_BLEND_OP_REVERSE_SUBTRACT;
+    default: return std::nullopt;
+    }
+}
 
 std::optional<VkPrimitiveTopology> topology(std::uint32_t prim_type) {
     switch (prim_type) {
@@ -169,6 +295,9 @@ std::optional<DrawState> draw_state(const pm4::RegisterMirror& regs, bool quad_c
         k.negative_one_to_one = field(clip, 19, 1) == 0;
     }
     s.dynamic.viewport = viewport(t, k.negative_one_to_one);
+    if (!raster_state(regs, s, why) || !blend_state(regs, s, why)) {
+        return std::nullopt;
+    }
     return s;
 }
 

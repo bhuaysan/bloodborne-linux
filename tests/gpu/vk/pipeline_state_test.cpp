@@ -100,6 +100,99 @@ TEST(PipelineState, Stages) {
     EXPECT_EQ(failure(regs), "VGT_PRIMITIVE_TYPE 17 is not supported yet");
 }
 
+TEST(PipelineState, Tables) {
+    // CB_BLENDn_CONTROL's factors: 11 and 12 are undefined, 15-18 are the dual-source ones.
+    EXPECT_EQ(blend_factor(10), VK_BLEND_FACTOR_SRC_ALPHA_SATURATE);
+    EXPECT_EQ(blend_factor(13), VK_BLEND_FACTOR_CONSTANT_COLOR);
+    EXPECT_EQ(blend_factor(16), VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR);
+    EXPECT_EQ(blend_factor(19), VK_BLEND_FACTOR_CONSTANT_ALPHA);
+    EXPECT_EQ(blend_factor(20), VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA);
+    for (const std::uint32_t f : {11u, 12u, 21u, 31u}) {
+        EXPECT_EQ(blend_factor(f), std::nullopt) << f;
+    }
+    EXPECT_EQ(blend_op(2), VK_BLEND_OP_MIN);
+    EXPECT_EQ(blend_op(4), VK_BLEND_OP_REVERSE_SUBTRACT);
+    EXPECT_EQ(blend_op(5), std::nullopt);
+}
+
+TEST(PipelineState, Raster) {
+    RegisterMirror regs = draw_registers();
+    DrawState s = snapshot(regs);
+    EXPECT_EQ(s.dynamic.cull_mode, VK_CULL_MODE_NONE);
+    EXPECT_EQ(s.dynamic.front_face, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+    EXPECT_EQ(s.key.polygon_mode, VK_POLYGON_MODE_FILL);
+    const PipelineKey solid = s.key;
+
+    set(regs, amd::mmPA_SU_SC_MODE_CNTL, 1u | 4u | 2u << 5 | 2u << 8);  // cull front, clockwise
+    s = snapshot(regs);
+    EXPECT_EQ(s.dynamic.cull_mode, VK_CULL_MODE_FRONT_BIT);
+    EXPECT_EQ(s.dynamic.front_face, VK_FRONT_FACE_CLOCKWISE);
+    EXPECT_EQ(s.key, solid);  // cull and face are dynamic
+    set(regs, amd::mmPA_SU_SC_MODE_CNTL, 2u);
+    EXPECT_EQ(snapshot(regs).dynamic.cull_mode, VK_CULL_MODE_BACK_BIT);
+    set(regs, amd::mmPA_SU_SC_MODE_CNTL, 3u);
+    EXPECT_EQ(snapshot(regs).dynamic.cull_mode, VK_CULL_MODE_FRONT_AND_BACK);
+
+    // POLY_MODE with both types lines or points; the types are ignored without POLY_MODE.
+    set(regs, amd::mmPA_SU_SC_MODE_CNTL, 1u << 3 | 1u << 5 | 1u << 8);
+    EXPECT_EQ(snapshot(regs).key.polygon_mode, VK_POLYGON_MODE_LINE);
+    EXPECT_NE(snapshot(regs).key, solid);
+    set(regs, amd::mmPA_SU_SC_MODE_CNTL, 1u << 3);
+    EXPECT_EQ(snapshot(regs).key.polygon_mode, VK_POLYGON_MODE_POINT);
+    set(regs, amd::mmPA_SU_SC_MODE_CNTL, 1u << 5);
+    EXPECT_EQ(snapshot(regs).key.polygon_mode, VK_POLYGON_MODE_FILL);
+    set(regs, amd::mmPA_SU_SC_MODE_CNTL, 1u << 3 | 1u << 5 | 2u << 8);
+    EXPECT_NE(failure(regs).find("polygon types differ"), std::string::npos);
+    set(regs, amd::mmPA_SU_SC_MODE_CNTL, 1u << 3 | 3u << 5 | 3u << 8);
+    EXPECT_NE(failure(regs).find("polygon types differ"), std::string::npos);
+}
+
+TEST(PipelineState, Blend) {
+    RegisterMirror regs = draw_registers();
+    EXPECT_EQ(snapshot(regs).key.blend[0], BlendAttachment{.write_mask = 0});  // CB_TARGET_MASK 0
+    set(regs, amd::mmCB_TARGET_MASK, 0x000f0f07u);
+    set(regs, amd::mmCB_BLEND_RED, 0.25f);
+    set(regs, amd::mmCB_BLEND_ALPHA, 1.0f);
+    // Target 1: src alpha, one minus src alpha, add; alpha not separate, so the same.
+    const std::uint32_t alpha_blend = 4u | 0u << 5 | 5u << 8 | 1u << 30;
+    set(regs, amd::mmCB_BLEND0_CONTROL + 1, alpha_blend);
+    // Target 2: separate alpha; colour max of one and one, alpha reverse subtract of src colour and constant colour.
+    set(regs, amd::mmCB_BLEND0_CONTROL + 2,
+        1u | 3u << 5 | 1u << 8 | 2u << 16 | 4u << 21 | 13u << 24 | 1u << 29 | 1u << 30);
+    // Target 3: disabled, with factors set.
+    set(regs, amd::mmCB_BLEND0_CONTROL + 3, alpha_blend & ~(1u << 30));
+    // Target 4: enabled but bypassed by CB_COLOR4_INFO.BLEND_BYPASS.
+    set(regs, amd::mmCB_BLEND0_CONTROL + 4, alpha_blend);
+    set(regs, amd::mmCB_COLOR0_INFO + 4 * (amd::mmCB_COLOR1_INFO - amd::mmCB_COLOR0_INFO),
+        1u << 16);
+    const DrawState s = snapshot(regs);
+    const auto& b = s.key.blend;
+    EXPECT_EQ(b[0].write_mask, 7);
+    EXPECT_FALSE(b[0].enable);
+    EXPECT_EQ(b[1].write_mask, 0);
+    EXPECT_EQ(std::vector({b[1].src_color, b[1].dst_color, b[1].src_alpha, b[1].dst_alpha}),
+              std::vector({VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                           VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA}));
+    EXPECT_TRUE(b[1].enable);
+    EXPECT_EQ(b[2].write_mask, 0xf);
+    EXPECT_EQ(std::vector({b[2].src_color, b[2].dst_color, b[2].src_alpha, b[2].dst_alpha}),
+              std::vector({VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_SRC_COLOR,
+                           VK_BLEND_FACTOR_CONSTANT_COLOR}));
+    EXPECT_EQ(std::pair(b[2].color_op, b[2].alpha_op),
+              std::pair(VK_BLEND_OP_MAX, VK_BLEND_OP_REVERSE_SUBTRACT));
+    // Disabled and bypassed: the default factors, so equal keys, with the mask of the nibble.
+    EXPECT_EQ(b[3], (BlendAttachment{.write_mask = 0}));
+    EXPECT_EQ(b[4], BlendAttachment{});
+    EXPECT_EQ(s.dynamic.blend_constants, (std::array<float, 4>{0.25f, 0, 0, 1}));
+
+    set(regs, amd::mmCB_BLEND0_CONTROL + 5, 1u | 15u << 8 | 1u << 30);  // src1 colour
+    EXPECT_EQ(failure(regs), "target 5: dual-source blend factor 15");
+    set(regs, amd::mmCB_BLEND0_CONTROL + 5, 1u | 11u << 8 | 1u << 30);
+    EXPECT_NE(failure(regs).find("target 5: CB_BLEND_CONTROL"), std::string::npos);
+    set(regs, amd::mmCB_BLEND0_CONTROL + 5, 1u | 5u << 5 | 1u << 30);  // function 5
+    EXPECT_NE(failure(regs).find("not supported"), std::string::npos);
+}
+
 // The hardware's viewport transform. The game's own values are checked in
 // tests/game/clip_space_test.cpp.
 TEST(PipelineState, ClipSpace) {

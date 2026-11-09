@@ -100,6 +100,9 @@ struct Query {
             {&features.features.shaderInt64, "shaderInt64"},
             {&features.features.sparseBinding, "sparseBinding"},
             {&features.features.sparseResidencyBuffer, "sparseResidencyBuffer"},
+            // The draw snapshot's wireframe and point fill, and a blend state per colour target.
+            {&features.features.fillModeNonSolid, "fillModeNonSolid"},
+            {&features.features.independentBlend, "independentBlend"},
             // The draw snapshot's clip space: no depth clipping, and z from -w to w.
             {&features.features.depthClamp, "depthClamp"},
             {&clip_control.depthClipControl, "depthClipControl"},

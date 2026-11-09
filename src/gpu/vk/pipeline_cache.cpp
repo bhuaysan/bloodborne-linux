@@ -54,6 +54,9 @@ const GraphicsPipeline* PipelineCache::get(const PipelineKey& request,
                 {},
                 {}};
     PipelineKey& key = entry.key;
+    for (std::uint32_t n = targets.color_count; n < key.blend.size(); ++n) {
+        key.blend[n] = {};  // no such attachment: not part of the pipeline
+    }
     if (fetchless(key.vs)) {
         key.vs.fetch_address = 0;
     }
@@ -202,18 +205,19 @@ void PipelineCache::create(Entry& entry, const gcn::Translation& vs, const gcn::
     auto raster = make<VkPipelineRasterizationStateCreateInfo>(
         VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
     raster.depthClampEnable = key.depth_clamp;
-    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.polygonMode = key.polygon_mode;
     raster.lineWidth = 1;
     auto multisample = make<VkPipelineMultisampleStateCreateInfo>(
         VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
     multisample.rasterizationSamples = static_cast<VkSampleCountFlagBits>(f.samples);
     const auto depth_stencil = make<VkPipelineDepthStencilStateCreateInfo>(
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO);
-    // No blending and all components written until the snapshot has the blend state.
+    // The blend state of the key per colour target; the write mask nibble is VkColorComponentFlags.
     VkPipelineColorBlendAttachmentState attachments[pm4::color_targets] = {};
-    for (auto& a : attachments) {
-        a.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    for (std::uint32_t n = 0; n < pm4::color_targets; ++n) {
+        const BlendAttachment& b = key.blend[n];
+        attachments[n] = {b.enable,   b.src_color, b.dst_color, b.color_op,
+                          b.src_alpha, b.dst_alpha, b.alpha_op,  b.write_mask};
     }
     auto blend = make<VkPipelineColorBlendStateCreateInfo>(
         VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);

@@ -102,6 +102,27 @@ TEST_F(VkPipelineCache, ReusesThePipelineOfAnEqualKey) {
     EXPECT_EQ(cache_->get(pair_, color_, why_), first);
 }
 
+// The raster and blend state of the key (#281, part 2): another polygon mode or blend state is
+// another pipeline, and the state of a target that isn't bound is not part of the key.
+TEST_F(VkPipelineCache, ComparesThePolygonModeAndTheBlendState) {
+    const GraphicsPipeline* first = cache_->get(pair_, color_, why_);
+    ASSERT_NE(first, nullptr) << why_;
+    PipelineKey wire = pair_;
+    wire.polygon_mode = VK_POLYGON_MODE_LINE;
+    EXPECT_NE(cache_->get(wire, color_, why_), first);
+    PipelineKey blend = pair_;
+    blend.blend[0] = {.enable = true,
+                      .write_mask = 0x7,
+                      .src_color = VK_BLEND_FACTOR_SRC_ALPHA,
+                      .dst_color = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                      .color_op = VK_BLEND_OP_MAX};
+    EXPECT_NE(cache_->get(blend, color_, why_), first) << why_;
+    EXPECT_EQ(cache_->size(), 3u);
+    PipelineKey unbound = pair_;
+    unbound.blend[3].write_mask = 0;  // color_ binds target 0 only
+    EXPECT_EQ(cache_->get(unbound, color_, why_), first);
+}
+
 // A depth-only pipeline whose VS calls the fetch subroutine (fetch_test.cpp): the fetch address
 // is part of the key.
 TEST_F(VkPipelineCache, ComparesTheFetchAddressOfAProgramThatCallsIt) {
