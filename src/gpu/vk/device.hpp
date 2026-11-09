@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -25,7 +26,18 @@ T make(VkStructureType type, void* next = nullptr) {
     return value;
 }
 
-// Throws std::runtime_error naming `call` and the result unless `result` is VK_SUCCESS.
+// A Vulkan call that failed.
+class VulkanError : public std::runtime_error {
+public:
+    VulkanError(const std::string& what, VkResult result)
+        : std::runtime_error(what), result_(result) {}
+    VkResult result() const { return result_; }
+
+private:
+    VkResult result_;
+};
+
+// Throws VulkanError naming `call` and the result unless `result` is VK_SUCCESS.
 void check(VkResult result, const char* call);
 
 class Instance {

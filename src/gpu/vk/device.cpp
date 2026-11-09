@@ -251,8 +251,9 @@ std::optional<std::string> missing(VkPhysicalDevice device, VkSurfaceKHR surface
 
 void check(VkResult result, const char* call) {
     if (result != VK_SUCCESS) {
-        throw std::runtime_error(std::string(call) + " failed with VkResult " +
-                                 std::to_string(static_cast<int>(result)));
+        throw VulkanError(std::string(call) + " failed with VkResult " +
+                              std::to_string(static_cast<int>(result)),
+                          result);
     }
 }
 

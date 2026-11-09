@@ -23,6 +23,19 @@ constexpr std::uint64_t group_counts_bytes = 12;
 
 }  // namespace
 
+std::string describe(const RecentDispatch& d) {
+    std::string text = std::format("dispatch {}: program {:#x}, block {:#x}, ", d.number, d.program,
+                                   d.block);
+    text += d.indirect != 0
+                ? std::format("indirect {:#x}", d.indirect)
+                : std::format("groups {}x{}x{}", d.groups[0], d.groups[1], d.groups[2]);
+    text += ", user data";
+    for (const std::uint32_t word : d.user) {
+        text += std::format(" {:08x}", word);
+    }
+    return text;
+}
+
 Dispatcher::Dispatcher(Device& device, Scheduler& scheduler, ComputePipelineCache& pipelines,
                        const MemoryMirror& mirror)
     : device_(device), scheduler_(scheduler), pipelines_(pipelines), mirror_(mirror) {}
@@ -32,6 +45,7 @@ Dispatcher::~Dispatcher() {
         scheduler_.finish();
     } catch (const std::exception& e) {
         common::log(common::LogLevel::error, channel, "dispatcher: {}", e.what());
+        report(e);
     }
     if (chunk_.buffer != VK_NULL_HANDLE) {
         destroy(device_.handle(), chunk_);
@@ -121,6 +135,7 @@ void Dispatcher::sync(pm4::SyncPoint point) {
         }
     } catch (const std::exception& e) {
         common::log(common::LogLevel::error, channel, "dispatch sync: {}", e.what());
+        report(e);
     }
 }
 
@@ -130,6 +145,7 @@ void Dispatcher::dispatch(const pm4::RegisterMirror& regs, const pm4::DispatchCa
     } catch (const std::exception& e) {
         ++failed_;
         common::log(common::LogLevel::error, channel, "dispatch failed: {}", e.what());
+        report(e);
     }
 }
 
@@ -198,6 +214,48 @@ void Dispatcher::record(const pm4::RegisterMirror& regs, const pm4::DispatchCall
         vkCmdDispatch(commands, call.groups[0], call.groups[1], call.groups[2]);
     }
     ++recorded_;
+
+    RecentDispatch recent{.number = remembered_ + 1,
+                          .program = state->code_address,
+                          .block = address,
+                          .indirect = call.indirect,
+                          .groups = call.groups};
+    const auto user = regs.user_data(pm4::Stage::cs);
+    std::copy(user.begin(), user.end(), recent.user.begin());
+    remember(recent);
+}
+
+void Dispatcher::remember(const RecentDispatch& dispatch) {
+    recent_[remembered_++ % recent_.size()] = dispatch;
+    const bool first = std::ranges::find(seen_, dispatch.program) == seen_.end();
+    if (first) {
+        seen_.push_back(dispatch.program);
+    }
+    const common::LogLevel level = first ? common::LogLevel::info : common::LogLevel::trace;
+    if (common::log_enabled(level, channel)) {  // describe() only for a line that is written
+        common::log_message(level, channel, describe(dispatch));
+    }
+}
+
+std::vector<RecentDispatch> Dispatcher::recent() const {
+    const std::uint64_t count = std::min<std::uint64_t>(remembered_, recent_.size());
+    std::vector<RecentDispatch> list;
+    list.reserve(count);
+    for (std::uint64_t n = remembered_ - count; n < remembered_; ++n) {
+        list.push_back(recent_[n % recent_.size()]);
+    }
+    return list;
+}
+
+void Dispatcher::report(const std::exception& error) {
+    if (reported_ || dynamic_cast<const VulkanError*>(&error) == nullptr) {
+        return;
+    }
+    reported_ = true;
+    common::log(common::LogLevel::error, channel, "recent dispatches, oldest first:");
+    for (const RecentDispatch& dispatch : recent()) {
+        common::log_message(common::LogLevel::error, channel, describe(dispatch));
+    }
 }
 
 }  // namespace bb::vk

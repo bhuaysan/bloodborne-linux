@@ -164,6 +164,38 @@ TEST_F(VkDispatcher, DirectDispatchRunsTheGroups) {
     EXPECT_EQ(dispatcher_->stats().failed, 0u);
 }
 
+TEST_F(VkDispatcher, RecentKeepsTheLastDispatchesOldestFirst) {
+    std::vector<std::uint32_t> stream;
+    set_state(stream, code_at);
+    const std::uint32_t total = recent_dispatches + 3;
+    for (std::uint32_t i = 1; i <= total; ++i) {
+        packet(stream, IT_DISPATCH_DIRECT, {i, 1, 1, 1});
+    }
+    ASSERT_EQ(run(stream), RunResult::done);
+    const auto recent = dispatcher_->recent();
+    ASSERT_EQ(recent.size(), recent_dispatches);
+    const std::uint64_t out = guest_ + out_at;
+    EXPECT_EQ(recent.front().number, 4u);
+    EXPECT_EQ(recent.front().groups[0], 4u);
+    EXPECT_EQ(recent.back().number, total);
+    EXPECT_EQ(recent.back().groups[0], total);
+    EXPECT_EQ(recent.back().program, guest_ + code_at);
+    EXPECT_NE(recent.back().block, 0u);
+    EXPECT_EQ(recent.back().user[0], static_cast<std::uint32_t>(out));
+    EXPECT_EQ(recent.back().user[1], static_cast<std::uint32_t>(out >> 32));
+}
+
+TEST(RecentDispatch, DescribeNamesTheProgramTheCountsAndTheUserData) {
+    RecentDispatch d{.number = 7, .program = 0x80d1b00100, .block = 0xabc00, .groups = {2, 3, 4}};
+    d.user[0] = 0x12345678;
+    const std::string direct = describe(d);
+    EXPECT_NE(direct.find("dispatch 7: program 0x80d1b00100, block 0xabc00"), std::string::npos);
+    EXPECT_NE(direct.find("groups 2x3x4"), std::string::npos);
+    EXPECT_NE(direct.find("user data 12345678 00000000"), std::string::npos);
+    d.indirect = 0x8000000100;
+    EXPECT_NE(describe(d).find("indirect 0x8000000100"), std::string::npos);
+}
+
 TEST_F(VkDispatcher, IndirectDispatchReadsTheCountsAtBasePlusOffset) {
     const std::uint32_t counts[3] = {7, 1, 1};
     std::memcpy(bytes() + counts_at + 16, counts, sizeof counts);

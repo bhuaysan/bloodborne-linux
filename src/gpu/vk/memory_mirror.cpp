@@ -129,6 +129,15 @@ std::unique_ptr<MemoryMirror> MemoryMirror::create(Device& device, const MirrorO
     m->table_address_ = buffer_address(d, m->table_);
     common::log(LogLevel::info, channel, "memory mirror: {} GiB from {:#x}, blocks of {:#x}",
                 options.size >> 30, options.window_start, m->block_);
+    // What a GPU fault's device address stands for.
+    for (std::uint64_t k = 0; k < count; ++k) {
+        const std::uint64_t device_start = buffer_address(d, m->buffers_[k]);
+        const std::uint64_t guest_start = options.window_start + k * mirror_buffer_size;
+        common::log(LogLevel::info, channel,
+                    "memory mirror: device {:#x}-{:#x} is guest {:#x}-{:#x}", device_start,
+                    device_start + mirror_buffer_size, guest_start,
+                    guest_start + mirror_buffer_size);
+    }
     why.clear();
     return m;
 }
