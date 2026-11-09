@@ -2,6 +2,7 @@
 // item 25): the draw block, the compute pipeline, the push constant and the dispatch.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -43,7 +44,10 @@ public:
     // packets see what the dispatches wrote); before a wait, submits it.
     void sync(pm4::SyncPoint point);
 
-    const DispatchStats& stats() const { return stats_; }
+    // A snapshot; another thread may read it while the GPU thread dispatches.
+    DispatchStats stats() const {
+        return {recorded_.load(), untranslated_.load(), failed_.load()};
+    }
 
 private:
     // Draw blocks come from chunks of host-coherent memory, one block per 256 bytes.
@@ -67,7 +71,7 @@ private:
     ComputePipelineCache& pipelines_;
     const MemoryMirror& mirror_;
     Chunk chunk_;
-    DispatchStats stats_;
+    std::atomic<std::uint64_t> recorded_ = 0, untranslated_ = 0, failed_ = 0;
     std::vector<std::uint64_t> logged_;  // programs whose error was logged
 };
 

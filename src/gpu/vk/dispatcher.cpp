@@ -110,7 +110,7 @@ void Dispatcher::dispatch(const pm4::RegisterMirror& regs, const pm4::DispatchCa
     try {
         record(regs, call);
     } catch (const std::exception& e) {
-        ++stats_.failed;
+        ++failed_;
         common::log(common::LogLevel::error, channel, "dispatch failed: {}", e.what());
     }
 }
@@ -120,7 +120,7 @@ void Dispatcher::record(const pm4::RegisterMirror& regs, const pm4::DispatchCall
     const auto state = compute_state(regs, why);
     const ComputePipeline* pipeline = state ? pipelines_.get(*state, why) : nullptr;
     if (pipeline == nullptr) {
-        ++stats_.untranslated;
+        ++untranslated_;
         const std::uint64_t program = state ? state->code_address : 0;
         if (std::ranges::find(logged_, program) == logged_.end()) {
             logged_.push_back(program);
@@ -172,7 +172,7 @@ void Dispatcher::record(const pm4::RegisterMirror& regs, const pm4::DispatchCall
     } else {
         vkCmdDispatch(commands, call.groups[0], call.groups[1], call.groups[2]);
     }
-    ++stats_.recorded;
+    ++recorded_;
 }
 
 }  // namespace bb::vk
