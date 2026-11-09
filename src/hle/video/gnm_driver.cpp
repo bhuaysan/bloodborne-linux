@@ -125,17 +125,7 @@ void queue_buffers(std::string_view call, std::uint32_t count, const std::uint64
     }
 }
 
-std::atomic<std::uint64_t> bias_table_address{0};
-
 }  // namespace
-
-void set_bias_table(std::uint64_t address) {
-    bias_table_address.store(address, std::memory_order_release);
-}
-
-std::uint64_t bias_table() {
-    return bias_table_address.load(std::memory_order_acquire);
-}
 
 bool enable_gpu_trace(const std::filesystem::path& path) {
     if (gpu_trace != nullptr) {

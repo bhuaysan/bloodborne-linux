@@ -54,7 +54,6 @@ const ComputePipeline* ComputePipelineCache::get(const ComputeState& state, std:
     const auto node = entries_.emplace(state.code_address, std::move(entry));
     Entry& stored = node->second;
     if (!why.empty()) {
-        common::log(common::LogLevel::warn, "gpu.vk", "{}", why);
         return nullptr;
     }
     // A failing Vulkan call may be transient (out of memory): drop the entry and what it

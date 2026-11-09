@@ -344,7 +344,6 @@ void open_mirror(bb::vk::Device* device, const std::string& device_selector, uns
         return;
     }
     m->observer = std::make_unique<bb::tools::MirrorObserver>(*m->mirror);
-    bb::hle::video::set_bias_table(m->mirror->bias_table());
     bb::hle::kernel::vmem::set_direct_observer(m->observer.get());
     bb::common::log(LogLevel::info, channel, "GPU memory mirror of {} GiB, blocks of {:#x}", gib,
                     m->mirror->block());
