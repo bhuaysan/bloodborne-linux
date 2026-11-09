@@ -274,6 +274,27 @@ TEST(PipelineState, DepthStencil) {
     set(regs, amd::mmDB_DEPTH_CONTROL, 1u | 1u << 7);
     set(regs, amd::mmDB_STENCIL_CONTROL, 12u << 12);  // bitwise back face
     EXPECT_NE(failure(regs).find("unsupported operation"), std::string::npos);
+
+    // STENCIL_ENABLE clear: the stencil registers are ignored, stale errors and values included.
+    set(regs, amd::mmDB_DEPTH_CONTROL, 1u << 7);
+    EXPECT_EQ(snapshot(regs).dynamic.front, StencilFace{});
+    EXPECT_EQ(snapshot(regs).dynamic.back, StencilFace{});
+    EXPECT_FALSE(snapshot(regs).dynamic.stencil_test);
+    set(regs, amd::mmDB_STENCIL_CONTROL, 2u | 4u << 4);
+    set(regs, amd::mmDB_STENCILREFMASK, 0x12u | 0x13u << 24 | 0xffu << 16);
+    EXPECT_EQ(snapshot(regs).dynamic.front, StencilFace{});
+
+    // DEPTH_BOUNDS_ENABLE (bit 3) is ignored.
+    set(regs, amd::mmDB_DEPTH_CONTROL, 1u | 2u | 4u | 3u << 4);
+    set(regs, amd::mmDB_STENCIL_CONTROL, 0u);
+    set(regs, amd::mmDB_STENCILREFMASK, 0u);
+    const DrawState before = snapshot(regs);
+    set(regs, amd::mmDB_DEPTH_CONTROL, 1u | 2u | 4u | 3u << 4 | 8u);
+    const DrawState bounds = snapshot(regs);
+    EXPECT_EQ(bounds.key, before.key);
+    EXPECT_TRUE(bounds.dynamic.depth_test && bounds.dynamic.depth_write);
+    EXPECT_EQ(bounds.dynamic.depth_compare, before.dynamic.depth_compare);
+    EXPECT_EQ(bounds.dynamic.front, before.dynamic.front);
 }
 
 // The hardware's viewport transform. The game's own values are checked in

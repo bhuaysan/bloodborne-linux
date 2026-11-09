@@ -220,6 +220,12 @@ bool depth_stencil_state(const pm4::RegisterMirror& regs, DrawState& s, std::str
     d.depth_write = d.depth_test && field(depth, 2, 1) != 0 && field(render, 0, 1) == 0;
     d.depth_compare = compare_op(field(depth, 4, 3));
     d.stencil_test = field(depth, 0, 1) != 0;
+    if (!d.stencil_test) {
+        // The hardware ignores the stencil registers: a stale value neither rejects the draw nor
+        // splits the state, so both faces keep the default.
+        d.front = d.back = StencilFace{};
+        return true;
+    }
     const std::uint32_t control = regs.get(amd::mmDB_STENCIL_CONTROL);
     const bool clear = field(render, 1, 1) != 0, back = field(depth, 7, 1) != 0;
     const auto front = stencil_face(control, 0, field(depth, 8, 3),
