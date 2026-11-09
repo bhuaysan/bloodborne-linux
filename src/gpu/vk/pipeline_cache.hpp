@@ -74,11 +74,11 @@ public:
     // the fetch subroutine is unchanged (hashed on every request, see docs/design/graphics.md,
     // "Code hash of a cached pipeline"); changed code gets a pipeline of its own. The VS's fetch
     // address counts only for a program that calls the fetch subroutine. Nothing, with `why`
-    // saying what, when a
-    // stage's code isn't readable, doesn't translate or uses images or samplers (not yet); the
-    // error is kept and given again for an equal request, except unreadable code (also an
-    // unreadable fetch subroutine a VS needs). Throws std::runtime_error when a Vulkan call
-    // fails; nothing is kept then, so the next request tries again.
+    // saying what, when a stage's code isn't readable, doesn't translate or uses images or
+    // samplers (not yet); the error is kept and given again for an equal request, except
+    // unreadable code (also an unreadable fetch subroutine a VS needs). Throws
+    // std::runtime_error when a Vulkan call fails; nothing is kept then, so the next request
+    // tries again.
     const GraphicsPipeline* get(const PipelineKey& key, const RenderingInfo& targets,
                                 std::string& why);
 

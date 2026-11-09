@@ -98,8 +98,8 @@ const GraphicsPipeline* PipelineCache::get(const PipelineKey& request,
     }
 
     // Unreadable code isn't kept: the program may be mapped by the next request.
-    // A stage that fails to translate keeps the stamps of the code it read (the extent of a
-    // rejected program is unknown).
+    // A stage that fails to translate is stamped over the part of its code that was readable
+    // (gcn::readable_extent).
     const auto translate = [&](const StageState& s, std::span<const std::uint32_t> code,
                                std::span<const std::uint32_t> fetch, common::CodeStamp& stamp,
                                common::CodeStamp& fetch_stamp) -> std::optional<gcn::Translation> {
