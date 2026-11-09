@@ -52,6 +52,10 @@ constexpr SampleForm sample_forms[] = {{"image_sample", Lod::implicit},
 }  // namespace
 
 void ImageOps::translate(const Instruction& inst, std::uint32_t index) {
+    if (std::string_view(inst.name) == "image_load_mip") {
+        load_mip(inst, index);
+        return;
+    }
     const auto* form = std::ranges::find(sample_forms, inst.name, &SampleForm::name);
     if (form == std::end(sample_forms)) {
         regs_.fail(std::format("unsupported instruction {}", inst.name));
@@ -132,7 +136,11 @@ void ImageOps::translate(const Instruction& inst, std::uint32_t index) {
                                                       : Op::OpImageSampleExplicitLod,
                            b_.type_vector(component, 4), operands);
 
-    // dmask picks the components into consecutive VGPRs; with dmask 0 the one VGPR gets 0.
+    write_result(inst, c, component, texel);
+}
+
+// dmask picks the components into consecutive VGPRs; with dmask 0 the one VGPR gets 0.
+void ImageOps::write_result(const Instruction& inst, ImageClass c, Id component, Id texel) {
     unsigned dst = inst.dst[0].code;
     const unsigned dmask = inst.mem_offset;
     if (dmask == 0) {
@@ -147,6 +155,43 @@ void ImageOps::translate(const Instruction& inst, std::uint32_t index) {
             regs_.write_vgpr(dst++, value);
         }
     }
+}
+
+// image_load_mip takes no sampler and its address is integers (8.2.2): x and y, the slice with
+// da (which only an array uses, as for sampling), then the level. It reads a sampled image with
+// OpImageFetch, whose Lod is the level. The load runs in every lane, like sampling: a coordinate
+// or level out of range is the business of robust image access (docs/design/graphics.md, "Image
+// loads").
+void ImageOps::load_mip(const Instruction& inst, std::uint32_t index) {
+    if ((inst.flags & (flag::tfe | flag::lwe)) != 0) {
+        regs_.fail(std::format("{} with tfe or lwe is not supported yet", inst.name));
+    }
+    const auto use = sources_.uses.find(index);
+    if (use == sources_.uses.end()) {
+        regs_.fail(std::format("the image descriptor of {} can't be followed", inst.name));
+    }
+    const std::uint32_t i = use->second.image;
+    const ImageClass c = i < key_.images.size() ? key_.images[i] : ImageClass{};
+    if (c.type != type_2d && c.type != type_2d_array) {
+        regs_.fail(std::format("image type {} of {} is not supported yet", c.type, inst.name));
+    }
+
+    unsigned next = inst.src[0].code;
+    const auto take = [&] { return b_.op(Op::OpLoad, u32(), {regs_.vgpr(next++)}); };
+    const Id x = take(), y = take();
+    const Id slice = (inst.flags & flag::da) != 0 ? take() : b_.constant_u32(0);
+    const Id coords = c.type == type_2d_array
+                          ? b_.op(Op::OpCompositeConstruct, b_.type_vector(u32(), 3), {x, y, slice})
+                          : b_.op(Op::OpCompositeConstruct, b_.type_vector(u32(), 2), {x, y});
+
+    const Id component = c.number == ImageClass::Number::float_
+                             ? f32()
+                             : b_.type_int(32, c.number == ImageClass::Number::sint);
+    const Id image_t = b_.type_image(component, spv::Dim::Dim2D, 0, c.type != type_2d, false, 1);
+    const Id texel = b_.op(Op::OpImageFetch, b_.type_vector(component, 4),
+                           {b_.op(Op::OpLoad, image_t, {binding(image_t, i)}), coords,
+                            spirv_word(spv::ImageOperandsMask::Lod), take()});
+    write_result(inst, c, component, texel);
 }
 
 ImageOps::Id ImageOps::binding(Id type, std::uint32_t index) {

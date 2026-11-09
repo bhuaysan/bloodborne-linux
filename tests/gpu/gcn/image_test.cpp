@@ -84,6 +84,25 @@ std::string error(const std::vector<std::uint32_t>& code, const ShaderKey& key) 
     return "no error";
 }
 
+TEST(GcnImage, LoadMipValidates) {
+    constexpr std::uint32_t da = 1u << 14, unorm = 1u << 12;
+    for (const ImageClass c : {ImageClass{}, ImageClass{.type = 13},
+                               ImageClass{.type = 9, .number = ImageClass::Number::uint},
+                               ImageClass{.type = 13, .number = ImageClass::Number::sint}}) {
+        SCOPED_TRACE(testing::Message() << "type " << int{c.type} << " number "
+                                        << static_cast<int>(c.number));
+        const auto t = translate(program({mimg(1, unorm, 15), mimg(1, unorm | da, 3)}), {},
+                                 pixel_key({c}));
+        EXPECT_EQ(t.interface.images, std::vector{ResourceSource{{0}}});
+        EXPECT_TRUE(t.interface.samplers.empty());  // an image_load has no sampler
+        if (bb::test::gcn::have_spirv_val()) {
+            EXPECT_EQ(bb::test::gcn::validate(t.spirv), "");
+        }
+    }
+    // A 2D image reads and ignores the slice with da, like sampling.
+    EXPECT_NO_THROW(translate(program({mimg(1, da, 1)}), {}, pixel_key({ImageClass{}})));
+}
+
 TEST(GcnImage, ErrorsNameWhatIsUnsupported) {
     const ShaderKey pixel = pixel_key({});
     const ShaderKey compute{.pgm_rsrc2 = 12u << 1};
@@ -100,6 +119,10 @@ TEST(GcnImage, ErrorsNameWhatIsUnsupported) {
               "image_sample with tfe, lwe or unorm is not supported yet");
     EXPECT_EQ(error(program({mimg(32)}), pixel_key({{.type = 10}})),
               "image type 10 of image_sample is not supported yet");
+    EXPECT_EQ(error(program({mimg(1, 1u << 17, 1)}), pixel),
+              "image_load_mip with tfe or lwe is not supported yet");
+    EXPECT_EQ(error(program({mimg(1, 0, 1)}), pixel_key({{.type = 11}})),
+              "image type 11 of image_load_mip is not supported yet");
     ShaderKey few = pixel;  // only 8 user SGPRs: the S# can't be followed
     few.pgm_rsrc2 = 8u << 1;
     EXPECT_EQ(error(program({mimg(32)}), few),
