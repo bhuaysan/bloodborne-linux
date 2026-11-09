@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -45,6 +46,12 @@ public:
     // packets see what the dispatches wrote); before a wait, submits it.
     void sync(pm4::SyncPoint point);
 
+    // A draw block for a stage with user data `user` and the program at `code`: the bias table
+    // set, the rest zero. Returns its device address. The block lives until the work recorded so
+    // far has completed (also for DrawRecorder, which shares the blocks).
+    VkDeviceAddress draw_block(std::span<const std::uint32_t, pm4::user_data_dwords> user,
+                               std::uint64_t code);
+
     // A snapshot; another thread may read it while the GPU thread dispatches.
     DispatchStats stats() const {
         return {recorded_.load(), untranslated_.load(), failed_.load()};
@@ -61,8 +68,7 @@ private:
     };
 
     void record(const pm4::RegisterMirror& regs, const pm4::DispatchCall& call);
-    // A zeroed draw block with the bias table and `code` set; returns its device address and
-    // the host pointer through `block`.
+    // A zeroed block; returns its device address and the host pointer through `block`.
     VkDeviceAddress new_block(std::byte*& block);
     void make_chunk();
     static void destroy(VkDevice device, const Chunk& chunk);

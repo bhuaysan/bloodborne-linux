@@ -101,6 +101,17 @@ VkDeviceAddress Dispatcher::new_block(std::byte*& block) {
     return chunk_.address + offset;
 }
 
+VkDeviceAddress Dispatcher::draw_block(std::span<const std::uint32_t, pm4::user_data_dwords> user,
+                                       std::uint64_t code) {
+    std::byte* block = nullptr;
+    const VkDeviceAddress address = new_block(block);
+    std::memcpy(block, user.data(), user.size_bytes());
+    const std::uint64_t table = mirror_.bias_table();
+    std::memcpy(block + gcn::draw_address_bias_offset, &table, sizeof table);
+    std::memcpy(block + gcn::draw_code_address_offset, &code, sizeof code);
+    return address;
+}
+
 void Dispatcher::sync(pm4::SyncPoint point) {
     try {
         if (point == pm4::SyncPoint::before_wait) {
@@ -160,18 +171,15 @@ void Dispatcher::record(const pm4::RegisterMirror& regs, const pm4::DispatchCall
         }
     }
 
-    std::byte* block = nullptr;
-    const VkDeviceAddress address = new_block(block);
-    const auto user = regs.user_data(pm4::Stage::cs);
-    std::memcpy(block, user.data(), user.size_bytes());
-    const std::uint64_t table = mirror_.bias_table();
-    std::memcpy(block + gcn::draw_address_bias_offset, &table, sizeof table);
-    std::memcpy(block + gcn::draw_code_address_offset, &state->code_address, 8);
+    const VkDeviceAddress address =
+        draw_block(regs.user_data(pm4::Stage::cs), state->code_address);
 
     const VkCommandBuffer commands = scheduler_.commands();
     // A dispatch may read what the one before wrote: order them.
     auto barrier = make<VkMemoryBarrier2>(VK_STRUCTURE_TYPE_MEMORY_BARRIER_2);
-    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                           VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                           VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;  // and what draws wrote
     barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
     barrier.dstStageMask =
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;

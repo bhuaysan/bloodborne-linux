@@ -85,7 +85,8 @@ constexpr VkBufferCreateFlags mirror_buffer_flags =
 constexpr VkBufferUsageFlags mirror_buffer_usage =
     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
     VK_BUFFER_USAGE_TRANSFER_SRC_BIT |  // tests copy out of the mirror
-    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;  // DISPATCH_INDIRECT reads its counts from the mirror
+    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |  // DISPATCH_INDIRECT reads its counts from the mirror
+    VK_BUFFER_USAGE_INDEX_BUFFER_BIT;      // indexed draws read their indices from it
 
 // One VkQueue. Vulkan wants calls on a queue externally synchronized: hold `lock` around them.
 struct Queue {
