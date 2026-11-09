@@ -64,12 +64,26 @@ struct ComputeState {
     bool operator==(const ComputeState&) const = default;
 };
 
+// The stencil state of one face (DB_STENCIL_CONTROL, DB_STENCILREFMASK[_BF]).
+struct StencilFace {
+    VkStencilOp fail = VK_STENCIL_OP_KEEP, pass = VK_STENCIL_OP_KEEP,
+                depth_fail = VK_STENCIL_OP_KEEP;
+    VkCompareOp compare = VK_COMPARE_OP_ALWAYS;
+    std::uint32_t compare_mask = 0, write_mask = 0, reference = 0;
+    bool operator==(const StencilFace&) const = default;
+};
+
 // The state a draw sets on the command buffer (core dynamic state in Vulkan 1.3).
 struct DynamicState {
     VkViewport viewport{};
     VkCullModeFlags cull_mode = VK_CULL_MODE_NONE;
     VkFrontFace front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     std::array<float, 4> blend_constants{};  // CB_BLEND_RED to CB_BLEND_ALPHA
+    bool depth_test = false;
+    bool depth_write = false;  // off under DB_RENDER_CONTROL.DEPTH_CLEAR_ENABLE
+    VkCompareOp depth_compare = VK_COMPARE_OP_ALWAYS;
+    bool stencil_test = false;
+    StencilFace front, back;  // write masks 0 under STENCIL_CLEAR_ENABLE
 };
 
 struct DrawState {
@@ -88,11 +102,14 @@ std::optional<DrawState> draw_state(const pm4::RegisterMirror& regs, bool quad_c
 // push offset is 0. Nothing for a zero program address, with `why` saying so.
 std::optional<ComputeState> compute_state(const pm4::RegisterMirror& regs, std::string& why);
 
-// The hardware's blend factor (CB_BLENDn_CONTROL's 5-bit fields) and blend function as Vulkan's;
-// nothing for the values Vulkan lacks (unused factor numbers). Dual-source factors (15-18) are
-// returned too; `draw_state` rejects them.
+// The hardware's blend factor (CB_BLENDn_CONTROL's 5-bit fields), blend function and stencil
+// operation (DB_STENCIL_CONTROL's nibbles) as Vulkan's; nothing for the values Vulkan lacks
+// (unused factor numbers, the stencil operations 2 and 10-15). Dual-source factors (15-18) are
+// returned too; `draw_state` rejects them. `compare_op` takes the 3-bit DB_DEPTH_CONTROL function.
 std::optional<VkBlendFactor> blend_factor(std::uint32_t factor);
 std::optional<VkBlendOp> blend_op(std::uint32_t function);
+std::optional<VkStencilOp> stencil_op(std::uint32_t op);
+VkCompareOp compare_op(std::uint32_t function);
 
 // VGT_PRIMITIVE_TYPE (shadPS4's table); nothing for the types without an equivalent yet.
 std::optional<VkPrimitiveTopology> topology(std::uint32_t prim_type);

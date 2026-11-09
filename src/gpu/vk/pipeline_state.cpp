@@ -7,9 +7,9 @@
 // Source: shadPS4 src/video_core/amdgpu/regs_color.h @0d5f2739d2544d2a35c73e354cba7a32b7a81bea
 // Changed for bloodborne-linux, 2026-11-07: the topology table without fallbacks; the viewport of
 // UpdateViewportScissorState for viewport 0 of our register mirror, also when clipping is off.
-// Changed for bloodborne-linux, 2026-11-09: the blend factor and function tables as numbers to
-// optionals, without fallbacks; the raster and blend state in the pipeline key from our register
-// mirror.
+// Changed for bloodborne-linux, 2026-11-09: the blend factor and function, stencil operation and
+// compare tables as numbers to optionals, without fallbacks; the raster, blend and depth-stencil
+// state of UpdateDepthStencilState and the pipeline key from our register mirror.
 
 #include "gpu/vk/pipeline_state.hpp"
 
@@ -145,6 +145,31 @@ std::optional<BlendAttachment> blend_attachment(std::uint32_t control, std::uint
     return a;
 }
 
+// One face from the three DB_STENCIL_CONTROL nibbles at `shift` and the REFMASK register:
+// TEST_VAL (0-7), MASK (8-15), WRITE_MASK (16-23), OP_VAL (24-31).
+std::optional<StencilFace> stencil_face(std::uint32_t control, unsigned shift, std::uint32_t func,
+                                        std::uint32_t refmask, bool clear, std::string& why) {
+    const std::uint32_t ops[] = {field(control, shift, 4), field(control, shift + 4, 4),
+                                 field(control, shift + 8, 4)};
+    StencilFace f;
+    const auto fail = stencil_op(ops[0]), pass = stencil_op(ops[1]), depth_fail = stencil_op(ops[2]);
+    if (!fail || !pass || !depth_fail) {
+        why = std::format("DB_STENCIL_CONTROL {:#x} has an unsupported operation", control);
+        return std::nullopt;
+    }
+    // REPLACE_OP writes OP_VAL where Vulkan has the one reference, which the test also uses.
+    if ((ops[0] == 4 || ops[1] == 4 || ops[2] == 4) && field(refmask, 24, 8) != field(refmask, 0, 8)) {
+        why = std::format("DB_STENCILREFMASK {:#x}: REPLACE_OP with another OP_VAL", refmask);
+        return std::nullopt;
+    }
+    f.fail = *fail, f.pass = *pass, f.depth_fail = *depth_fail;
+    f.compare = compare_op(func);
+    f.reference = field(refmask, 0, 8);
+    f.compare_mask = field(refmask, 8, 8);
+    f.write_mask = clear ? 0 : field(refmask, 16, 8);
+    return f;
+}
+
 bool raster_state(const pm4::RegisterMirror& regs, DrawState& s, std::string& why) {
     // PA_SU_SC_MODE_CNTL: CULL_FRONT (bit 0) and CULL_BACK (bit 1) are VkCullModeFlagBits, FACE
     // (bit 2) set is clockwise. The game's builders write these bits (tests/game).
@@ -184,6 +209,31 @@ bool blend_state(const pm4::RegisterMirror& regs, DrawState& s, std::string& why
     return true;
 }
 
+bool depth_stencil_state(const pm4::RegisterMirror& regs, DrawState& s, std::string& why) {
+    // DB_DEPTH_CONTROL: STENCIL_ENABLE (0), Z_ENABLE (1), Z_WRITE_ENABLE (2), ZFUNC (4-6),
+    // BACKFACE_ENABLE (7), STENCILFUNC (8-10), STENCILFUNC_BF (20-22). DEPTH_BOUNDS_ENABLE (3) is
+    // ignored. Without BACKFACE_ENABLE the back face uses the front face's state.
+    const std::uint32_t depth = regs.get(amd::mmDB_DEPTH_CONTROL);
+    const std::uint32_t render = regs.get(amd::mmDB_RENDER_CONTROL);  // the clears (bits 0 and 1)
+    DynamicState& d = s.dynamic;
+    d.depth_test = field(depth, 1, 1) != 0;
+    d.depth_write = d.depth_test && field(depth, 2, 1) != 0 && field(render, 0, 1) == 0;
+    d.depth_compare = compare_op(field(depth, 4, 3));
+    d.stencil_test = field(depth, 0, 1) != 0;
+    const std::uint32_t control = regs.get(amd::mmDB_STENCIL_CONTROL);
+    const bool clear = field(render, 1, 1) != 0, back = field(depth, 7, 1) != 0;
+    const auto front = stencil_face(control, 0, field(depth, 8, 3),
+                                    regs.get(amd::mmDB_STENCILREFMASK), clear, why);
+    const auto rear = !front || !back ? front
+                                      : stencil_face(control, 12, field(depth, 20, 3),
+                                                     regs.get(amd::mmDB_STENCILREFMASK_BF), clear, why);
+    if (!front || !rear) {
+        return false;
+    }
+    d.front = *front, d.back = *rear;
+    return true;
+}
+
 }  // namespace
 
 std::optional<VkBlendFactor> blend_factor(std::uint32_t factor) {
@@ -220,6 +270,29 @@ std::optional<VkBlendOp> blend_op(std::uint32_t function) {
     case 4: return VK_BLEND_OP_REVERSE_SUBTRACT;
     default: return std::nullopt;
     }
+}
+
+// 3 (REPLACE_TEST) and 4 (REPLACE_OP) both replace; 2 (ones) and the bitwise 10-15 have no
+// Vulkan operation.
+std::optional<VkStencilOp> stencil_op(std::uint32_t op) {
+    switch (op) {
+    case 0: return VK_STENCIL_OP_KEEP;
+    case 1: return VK_STENCIL_OP_ZERO;
+    case 3:
+    case 4: return VK_STENCIL_OP_REPLACE;
+    case 5: return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+    case 6: return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
+    case 7: return VK_STENCIL_OP_INVERT;
+    case 8: return VK_STENCIL_OP_INCREMENT_AND_WRAP;
+    case 9: return VK_STENCIL_OP_DECREMENT_AND_WRAP;
+    default: return std::nullopt;
+    }
+}
+
+// The hardware's functions 0-7 (never, less, equal, less or equal, greater, not equal, greater or
+// equal, always) are in the order of VkCompareOp.
+VkCompareOp compare_op(std::uint32_t function) {
+    return static_cast<VkCompareOp>(function & 7);
 }
 
 std::optional<VkPrimitiveTopology> topology(std::uint32_t prim_type) {
@@ -305,7 +378,8 @@ std::optional<DrawState> draw_state(const pm4::RegisterMirror& regs, bool quad_c
         k.negative_one_to_one = field(clip, 19, 1) == 0;
     }
     s.dynamic.viewport = viewport(t, k.negative_one_to_one);
-    if (!raster_state(regs, s, why) || !blend_state(regs, s, why)) {
+    if (!raster_state(regs, s, why) || !blend_state(regs, s, why) ||
+        !depth_stencil_state(regs, s, why)) {
         return std::nullopt;
     }
     return s;

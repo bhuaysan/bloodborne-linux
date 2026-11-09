@@ -1,7 +1,7 @@
 // The clip space of the pipeline state against the eboot's own state code (docs/design/graphics.md,
 // "Pipeline state (item 26, as built)"): the clip control of a full-screen pass and the screen
 // viewport, written by the game's GNM writers on the mapped eboot and run through our parser into
-// the register mirror. The raster and blend state (#281, part 2) is built by the
+// the register mirror. The raster, blend and depth-stencil state (#281, part 2) is built by the
 // game's register value builders and written by its writers the same way (class RasterState).
 #include <array>
 #include <cstddef>
@@ -69,7 +69,7 @@ TEST_F(ClipSpace, FullScreenPass) {
     EXPECT_FALSE(s.key.negative_one_to_one);
 }
 
-// The game's register value builders and writers for the raster and blend state, run on the
+// The game's register value builders and writers for part 2 of the pipeline state, run on the
 // mapped eboot; the snapshot has to read back what the game put in.
 class RasterState : public bb::test::EbootTest {
 protected:
@@ -149,6 +149,20 @@ TEST_F(RasterState, BlendControl) {
                            VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_CONSTANT_COLOR}));
     EXPECT_EQ(std::pair(b.color_op, b.alpha_op),
               std::pair(VK_BLEND_OP_ADD, VK_BLEND_OP_REVERSE_SUBTRACT));
+}
+
+// DB_DEPTH_CONTROL (writer 0x10733a0, which masks the value with 0xc07007ff) and
+// DB_STENCIL_CONTROL (0x1073400, 0xffffff): the masks are the fields the snapshot reads.
+TEST_F(RasterState, DepthAndStencilControl) {
+    const bb::vk::DrawState s = draw({{0x10733a0, 1u | 2u | 4u | 3u << 4 | 1u << 7 | 6u << 20},
+                                      {0x1073400, 6u | 5u << 4 | 8u << 12 | 9u << 20}});
+    EXPECT_TRUE(s.dynamic.depth_test && s.dynamic.depth_write && s.dynamic.stencil_test);
+    EXPECT_EQ(s.dynamic.depth_compare, VK_COMPARE_OP_LESS_OR_EQUAL);
+    EXPECT_EQ(s.dynamic.front.fail, VK_STENCIL_OP_DECREMENT_AND_CLAMP);
+    EXPECT_EQ(s.dynamic.front.pass, VK_STENCIL_OP_INCREMENT_AND_CLAMP);
+    EXPECT_EQ(s.dynamic.back.fail, VK_STENCIL_OP_INCREMENT_AND_WRAP);
+    EXPECT_EQ(s.dynamic.back.depth_fail, VK_STENCIL_OP_DECREMENT_AND_WRAP);
+    EXPECT_EQ(s.dynamic.back.compare, VK_COMPARE_OP_GREATER_OR_EQUAL);
 }
 
 }  // namespace

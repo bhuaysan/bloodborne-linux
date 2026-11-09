@@ -113,6 +113,24 @@ TEST(PipelineState, Tables) {
     EXPECT_EQ(blend_op(2), VK_BLEND_OP_MIN);
     EXPECT_EQ(blend_op(4), VK_BLEND_OP_REVERSE_SUBTRACT);
     EXPECT_EQ(blend_op(5), std::nullopt);
+    // Stencil: keep, zero, (ones), replace-test, replace-op, add and sub clamped, invert, add and
+    // sub wrapped, then the bitwise ones.
+    const std::optional<VkStencilOp> ops[] = {
+        VK_STENCIL_OP_KEEP, VK_STENCIL_OP_ZERO, std::nullopt, VK_STENCIL_OP_REPLACE,
+        VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_INCREMENT_AND_CLAMP, VK_STENCIL_OP_DECREMENT_AND_CLAMP,
+        VK_STENCIL_OP_INVERT, VK_STENCIL_OP_INCREMENT_AND_WRAP, VK_STENCIL_OP_DECREMENT_AND_WRAP,
+        std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt};
+    for (std::uint32_t i = 0; i < 16; ++i) {
+        EXPECT_EQ(stencil_op(i), ops[i]) << i;
+    }
+    // Never, less, equal, less or equal, greater, not equal, greater or equal, always.
+    const VkCompareOp compare[] = {
+        VK_COMPARE_OP_NEVER,   VK_COMPARE_OP_LESS,        VK_COMPARE_OP_EQUAL,
+        VK_COMPARE_OP_LESS_OR_EQUAL, VK_COMPARE_OP_GREATER, VK_COMPARE_OP_NOT_EQUAL,
+        VK_COMPARE_OP_GREATER_OR_EQUAL, VK_COMPARE_OP_ALWAYS};
+    for (std::uint32_t i = 0; i < 8; ++i) {
+        EXPECT_EQ(compare_op(i), compare[i]) << i;
+    }
 }
 
 TEST(PipelineState, Raster) {
@@ -196,6 +214,66 @@ TEST(PipelineState, Blend) {
     EXPECT_NE(failure(regs).find("target 5: CB_BLEND_CONTROL"), std::string::npos);
     set(regs, amd::mmCB_BLEND0_CONTROL + 5, 1u | 5u << 5 | 1u << 30);  // function 5
     EXPECT_NE(failure(regs).find("not supported"), std::string::npos);
+}
+
+TEST(PipelineState, DepthStencil) {
+    RegisterMirror regs = draw_registers();
+    DynamicState d = snapshot(regs).dynamic;
+    EXPECT_FALSE(d.depth_test || d.depth_write || d.stencil_test);
+    // Depth test and write, less or equal; stencil test with greater, ops and a reference.
+    set(regs, amd::mmDB_DEPTH_CONTROL, 1u | 2u | 4u | 3u << 4 | 4u << 8);
+    set(regs, amd::mmDB_STENCIL_CONTROL, 3u | 5u << 4 | 7u << 8);  // fail, pass, depth fail
+    set(regs, amd::mmDB_STENCILREFMASK, 0x12u | 0xf0u << 8 | 0x0fu << 16 | 0x12u << 24);
+    const PipelineKey key = snapshot(regs).key;
+    d = snapshot(regs).dynamic;
+    EXPECT_TRUE(d.depth_test && d.depth_write && d.stencil_test);
+    EXPECT_EQ(d.depth_compare, VK_COMPARE_OP_LESS_OR_EQUAL);
+    const StencilFace expected{VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_INCREMENT_AND_CLAMP,
+                               VK_STENCIL_OP_INVERT, VK_COMPARE_OP_GREATER, 0xf0, 0x0f, 0x12};
+    EXPECT_EQ(d.front, expected);
+    EXPECT_EQ(d.back, expected);  // no BACKFACE_ENABLE: the front state
+    EXPECT_EQ(key, snapshot(regs).key);
+
+    // BACKFACE_ENABLE: the _BF function, operations and register.
+    set(regs, amd::mmDB_DEPTH_CONTROL, 1u | 2u | 4u | 3u << 4 | 4u << 8 | 1u << 7 | 1u << 20);
+    set(regs, amd::mmDB_STENCIL_CONTROL, 3u | 5u << 4 | 7u << 8 | 1u << 12 | 9u << 16 | 8u << 20);
+    set(regs, amd::mmDB_STENCILREFMASK_BF, 0x34u | 0xaau << 8 | 0x55u << 16);
+    d = snapshot(regs).dynamic;
+    EXPECT_EQ(d.front, expected);
+    EXPECT_EQ(d.back, (StencilFace{VK_STENCIL_OP_ZERO, VK_STENCIL_OP_DECREMENT_AND_WRAP,
+                                   VK_STENCIL_OP_INCREMENT_AND_WRAP, VK_COMPARE_OP_LESS, 0xaa,
+                                   0x55, 0x34}));
+
+    // The clears of DB_RENDER_CONTROL: no depth writes, stencil write masks 0.
+    set(regs, amd::mmDB_RENDER_CONTROL, 1u);
+    d = snapshot(regs).dynamic;
+    EXPECT_TRUE(d.depth_test);
+    EXPECT_FALSE(d.depth_write);
+    EXPECT_EQ(d.front.write_mask, 0x0fu);
+    set(regs, amd::mmDB_RENDER_CONTROL, 2u);
+    d = snapshot(regs).dynamic;
+    EXPECT_TRUE(d.depth_write);
+    EXPECT_EQ(std::pair(d.front.write_mask, d.back.write_mask), std::pair(0u, 0u));
+    EXPECT_EQ(d.front.reference, 0x12u);
+    set(regs, amd::mmDB_RENDER_CONTROL, 0u);
+
+    // Z_WRITE_ENABLE without Z_ENABLE writes nothing.
+    set(regs, amd::mmDB_DEPTH_CONTROL, 4u);
+    EXPECT_FALSE(snapshot(regs).dynamic.depth_write);
+
+    // The operations Vulkan lacks, and REPLACE_OP with an OP_VAL other than the reference.
+    set(regs, amd::mmDB_DEPTH_CONTROL, 1u);
+    set(regs, amd::mmDB_STENCIL_CONTROL, 2u);  // ones
+    EXPECT_NE(failure(regs).find("unsupported operation"), std::string::npos);
+    set(regs, amd::mmDB_STENCIL_CONTROL, 4u << 4);  // replace-op
+    set(regs, amd::mmDB_STENCILREFMASK, 0x12u | 0x13u << 24);
+    EXPECT_NE(failure(regs).find("REPLACE_OP"), std::string::npos);
+    set(regs, amd::mmDB_STENCILREFMASK, 0x12u | 0x12u << 24);
+    EXPECT_EQ(snapshot(regs).dynamic.front.pass, VK_STENCIL_OP_REPLACE);
+    set(regs, amd::mmDB_STENCIL_CONTROL, 0u);
+    set(regs, amd::mmDB_DEPTH_CONTROL, 1u | 1u << 7);
+    set(regs, amd::mmDB_STENCIL_CONTROL, 12u << 12);  // bitwise back face
+    EXPECT_NE(failure(regs).find("unsupported operation"), std::string::npos);
 }
 
 // The hardware's viewport transform. The game's own values are checked in
