@@ -12,6 +12,7 @@ namespace bb::test::shadps4 {
 
 namespace {
 
+// What the reference GPU (RADV on an RX 7800 XT) reports through vulkaninfo.
 Shader::Profile reference_profile() {
     return Shader::Profile{
         .max_viewport_width = 16384,
@@ -24,9 +25,31 @@ Shader::Profile reference_profile() {
         .support_int64 = true,
         .support_float16 = true,
         .support_float64 = true,
+        .supports_denorm_behavior_independence = true,
+        .supports_rounding_mode_independence = true,
+        .support_fp16_denorm_preserve = true,
+        .support_fp16_denorm_flush = true,
+        .support_fp16_round_to_zero = true,
+        .support_fp32_denorm_preserve = true,
+        .support_fp32_denorm_flush = true,
+        .support_fp32_round_to_zero = true,
+        .support_fp64_denorm_preserve = true,
+        .support_fp64_denorm_flush = true,
+        .support_fp64_round_to_zero = true,
+        .support_fp16_signed_zero_inf_nan_preserve = true,
+        .support_fp32_signed_zero_inf_nan_preserve = true,
+        .support_fp64_signed_zero_inf_nan_preserve = true,
         .supports_image_load_store_lod = true,
+        .supports_native_cube_calc = true,
         .supports_trinary_minmax = true,
+        .supports_buffer_fp32_atomic_min_max = true,
+        .supports_image_fp32_atomic_min_max = true,
+        .supports_buffer_int64_atomics = true,
+        .supports_shared_int64_atomics = true,
+        .supports_amd_shader_explicit_vertex_parameter = true,
         .supports_fragment_shader_barycentric = true,
+        .supports_shader_subgroup_clock = true,
+        .supports_shader_stencil_export = true,
     };
 }
 
@@ -62,8 +85,8 @@ Shader::RuntimeInfo fragment_runtime_info(const std::array<std::uint32_t, 16>& b
 }
 
 std::vector<std::uint32_t> translate(std::span<const std::uint32_t> code,
-                                     Shader::RuntimeInfo runtime_info, Shader::Pools& pools) {
-    static const std::array<std::uint32_t, Shader::ShaderParams::NumShaderUserData> user_data{};
+                                     Shader::RuntimeInfo runtime_info, Shader::Pools& pools,
+                                     const UserData& user_data) {
     const Shader::ShaderParams params{.user_data = user_data, .code = code, .hash = 0};
     Shader::Info info(runtime_info.hw_stage, runtime_info.sw_stage, params);
     const Shader::Profile profile = reference_profile();
@@ -71,6 +94,12 @@ std::vector<std::uint32_t> translate(std::span<const std::uint32_t> code,
         Shader::TranslateProgram(code, pools, info, runtime_info, profile);
     Shader::Backend::Bindings bindings{};
     return Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, program, bindings);
+}
+
+std::vector<std::uint32_t> translate(std::span<const std::uint32_t> code,
+                                     Shader::RuntimeInfo runtime_info, const UserData& user_data) {
+    Shader::Pools pools;
+    return translate(code, runtime_info, pools, user_data);
 }
 
 std::vector<std::uint32_t> translate(std::span<const std::uint32_t> code,

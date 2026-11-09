@@ -1,6 +1,6 @@
 // The piece of shadPS4's signal dispatcher that the translator touches. It registers a fault
-// handler for its SRT walker code. Nothing runs a walker before the renderer does (R4), which
-// connects this to the runtime's fault handling, so for now the registration is only kept.
+// handler for its SRT walker code, which runs while translating and on bad guest pointers. Whoever
+// owns the process's SIGSEGV handling (the corpus test, the runtime from R4) calls Dispatch.
 #pragma once
 
 #include "common/singleton.h"
@@ -16,6 +16,13 @@ public:
         access_violation_handler = handler;
     }
 
+    // Whether the registered handler took care of the fault, so the instruction can be retried.
+    bool DispatchAccessViolation(void* context, void* fault_address) const {
+        return access_violation_handler != nullptr &&
+               access_violation_handler(context, fault_address);
+    }
+
+private:
     AccessViolationHandler access_violation_handler = nullptr;
 };
 
