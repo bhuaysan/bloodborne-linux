@@ -4,6 +4,7 @@
 // Source: shadPS4 src/video_core/renderer_vulkan/liverpool_to_vk.cpp @0d5f2739d2544d2a35c73e354cba7a32b7a81bea
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_rasterizer.cpp @0d5f2739d2544d2a35c73e354cba7a32b7a81bea
 // Source: shadPS4 src/video_core/amdgpu/regs_primitive.h @0d5f2739d2544d2a35c73e354cba7a32b7a81bea
+// Source: shadPS4 src/video_core/amdgpu/regs_color.h @0d5f2739d2544d2a35c73e354cba7a32b7a81bea
 // Changed for bloodborne-linux, 2026-11-07: the topology table without fallbacks; the viewport of
 // UpdateViewportScissorState for viewport 0 of our register mirror, also when clipping is off.
 // Changed for bloodborne-linux, 2026-11-09: the blend factor and function tables as numbers to
@@ -87,10 +88,14 @@ VkViewport viewport(const Transform& t, bool negative_one_to_one) {
             std::clamp(t.zoffset + t.zscale, 0.0f, 1.0f)};
 }
 
-// PA_SU_SC_MODE_CNTL: POLY_MODE (bit 3) with POLYMODE_FRONT_PTYPE (bits 5-7) and _BACK_PTYPE
+// PA_SU_SC_MODE_CNTL: POLY_MODE (bits 3-4, 1 enables, 2 and 3 reserved) with POLYMODE_FRONT_PTYPE (bits 5-7) and _BACK_PTYPE
 // (bits 8-10): 0 points, 1 lines, 2 triangles. The polygon mode, or nothing when the types differ.
 std::optional<VkPolygonMode> polygon_mode(std::uint32_t mode) {
-    if (field(mode, 3, 1) == 0) {
+    const std::uint32_t poly_mode = field(mode, 3, 2);
+    if (poly_mode > 1) {
+        return std::nullopt;  // 2 and 3 are reserved
+    }
+    if (poly_mode == 0) {
         return VK_POLYGON_MODE_FILL;
     }
     const std::uint32_t front = field(mode, 5, 3), back = field(mode, 8, 3);
@@ -110,7 +115,9 @@ bool dual_source(std::uint32_t factor) { return factor >= 15 && factor <= 18; }
 std::optional<BlendAttachment> blend_attachment(std::uint32_t control, std::uint32_t mask,
                                                 bool bypass, std::string& why) {
     BlendAttachment a{.write_mask = static_cast<std::uint8_t>(mask)};
-    if (field(control, 30, 1) == 0 || bypass) {
+    // A target whose CB_TARGET_MASK nibble is 0 is not bound (the rendering setup skips it), so
+    // its stale blend register is not decoded and cannot reject the draw or split the key.
+    if (mask == 0 || field(control, 30, 1) == 0 || bypass) {
         return a;
     }
     const bool separate = field(control, 29, 1) != 0;
@@ -143,7 +150,7 @@ bool raster_state(const pm4::RegisterMirror& regs, DrawState& s, std::string& wh
     const std::uint32_t mode = regs.get(amd::mmPA_SU_SC_MODE_CNTL);
     const auto polygon = polygon_mode(mode);
     if (!polygon) {
-        why = std::format("PA_SU_SC_MODE_CNTL {:#x}: polygon types differ or are not supported",
+        why = std::format("PA_SU_SC_MODE_CNTL {:#x}: polygon types differ or are not supported, or POLY_MODE is reserved",
                           mode);
         return false;
     }

@@ -145,6 +145,8 @@ TEST(PipelineState, Raster) {
     EXPECT_NE(failure(regs).find("polygon types differ"), std::string::npos);
     set(regs, amd::mmPA_SU_SC_MODE_CNTL, 1u << 3 | 3u << 5 | 3u << 8);
     EXPECT_NE(failure(regs).find("polygon types differ"), std::string::npos);
+    set(regs, amd::mmPA_SU_SC_MODE_CNTL, 2u << 3 | 2u << 5 | 2u << 8);  // reserved POLY_MODE
+    EXPECT_NE(failure(regs).find("POLY_MODE is reserved"), std::string::npos);
 }
 
 TEST(PipelineState, Blend) {
@@ -186,6 +188,9 @@ TEST(PipelineState, Blend) {
     EXPECT_EQ(s.dynamic.blend_constants, (std::array<float, 4>{0.25f, 0, 0, 1}));
 
     set(regs, amd::mmCB_BLEND0_CONTROL + 5, 1u | 15u << 8 | 1u << 30);  // src1 colour
+    // Slot 5 is unbound (mask nibble 0): its stale control is not decoded and the key is unchanged.
+    EXPECT_EQ(snapshot(regs).key.blend[5], BlendAttachment{.write_mask = 0});
+    set(regs, amd::mmCB_TARGET_MASK, 0x00ff0f07u);
     EXPECT_EQ(failure(regs), "target 5: dual-source blend factor 15");
     set(regs, amd::mmCB_BLEND0_CONTROL + 5, 1u | 11u << 8 | 1u << 30);
     EXPECT_NE(failure(regs).find("target 5: CB_BLEND_CONTROL"), std::string::npos);
