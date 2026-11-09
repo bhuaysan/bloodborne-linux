@@ -151,8 +151,13 @@ class InterpreterTests(unittest.TestCase):
     def test_log_wait_sees_a_line_logged_just_before_exit(self) -> None:
         clock = FakeClock()
         target = FakeTarget(clock, logs=["last words\n"], alive_until=0.0)
-        target.alive = lambda: False
-        interpreter(target, clock)._wait_log(scn.re.compile("last"), scn.parse("log last\n").steps[0])
+        run("log last timeout=1\n", target, clock)
+
+    def test_log_match_ending_at_the_newline_consumes_the_line(self) -> None:
+        clock = FakeClock()
+        target = FakeTarget(clock, logs=["foo\n"])
+        with self.assertRaises(scn.StepFailed):
+            run("log 'foo\\n' timeout=1\nlog foo timeout=1\n", target, clock)
 
     def test_log_anchors_apply_per_line(self) -> None:
         clock = FakeClock()
