@@ -126,6 +126,10 @@ public:
     // it): the pixel shaders' ShaderKey::quad_control.
     bool quad_control() const { return quad_control_; }
 
+    // Whether robustImageAccess2 is enabled (where the device has it): image loads out of range
+    // read 0; with only robustImageAccess a load's value is undefined.
+    bool robust_image_access2() const { return robust_image_access2_; }
+
 private:
     Device() = default;
     VkPhysicalDevice physical_ = VK_NULL_HANDLE;
@@ -135,6 +139,7 @@ private:
     Queue graphics_;
     std::optional<Queue> sparse_;
     bool quad_control_ = false;
+    bool robust_image_access2_ = false;
 };
 
 }  // namespace bb::vk

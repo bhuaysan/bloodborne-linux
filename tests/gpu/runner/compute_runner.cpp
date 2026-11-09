@@ -61,7 +61,8 @@ std::string DeviceInfo::describe() const {
         << "\nf32 round toward zero: " << round_rtz_f32
         << "\nf32 signed zero, inf and NaN preserved: " << signed_zero_inf_nan_f32
         << "\nquad subgroup operations: " << subgroup_quad
-        << "\nshader quad control: " << quad_control << '\n';
+        << "\nshader quad control: " << quad_control
+        << "\nrobust image access 2: " << robust_image_access2 << '\n';
     return out.str();
 }
 
@@ -153,6 +154,7 @@ struct ComputeRunner::State {
         ::dlopen("libvulkan_lvp.so", RTLD_LAZY | RTLD_NOLOAD | RTLD_NODELETE);
         info = device_info(vk->properties());
         info.quad_control = vk->quad_control();
+        info.robust_image_access2 = vk->robust_image_access2();
         device = vk->handle();
         constexpr VkMemoryPropertyFlags host =
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;

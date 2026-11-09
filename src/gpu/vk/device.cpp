@@ -117,6 +117,8 @@ struct Query {
             {&f12.subgroupBroadcastDynamicId, "subgroupBroadcastDynamicId"},
             // A translated pixel shader discards with OpDemoteToHelperInvocation.
             {&f13.shaderDemoteToHelperInvocation, "shaderDemoteToHelperInvocation"},
+            // Image loads run in every lane and may be out of range (docs/design/graphics.md).
+            {&f13.robustImageAccess, "robustImageAccess"},
             {&f13.synchronization2, "synchronization2"},
             {&f13.dynamicRendering, "dynamicRendering"},
             {&f13.subgroupSizeControl, "subgroupSizeControl"},
@@ -181,6 +183,26 @@ bool has_quad_control(VkPhysicalDevice device) {
                                                     &quad);
     vkGetPhysicalDeviceFeatures2(device, &features);
     return quad.shaderQuadControl;
+}
+
+// The extension that offers robustImageAccess2 on `device`, VK_KHR_robustness2 or the older
+// VK_EXT_robustness2, or nullptr when it has neither or the feature is off (optional: out-of-range
+// image loads then read undefined values instead of 0, docs/design/graphics.md).
+const char* robust_image_extension(VkPhysicalDevice device) {
+    const char* name = has_extension(device, VK_KHR_ROBUSTNESS_2_EXTENSION_NAME)
+                           ? VK_KHR_ROBUSTNESS_2_EXTENSION_NAME
+                       : has_extension(device, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME)
+                           ? VK_EXT_ROBUSTNESS_2_EXTENSION_NAME
+                           : nullptr;
+    if (name == nullptr) {
+        return nullptr;
+    }
+    auto robust = make<VkPhysicalDeviceRobustness2FeaturesKHR>(
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_KHR);
+    auto features = make<VkPhysicalDeviceFeatures2>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                                                    &robust);
+    vkGetPhysicalDeviceFeatures2(device, &features);
+    return robust.robustImageAccess2 ? name : nullptr;
 }
 
 // What `device` lacks of the requirements of Device::create, or nothing.
@@ -328,6 +350,15 @@ std::unique_ptr<Device> Device::create(const Instance& instance, const DeviceOpt
         quad.shaderQuadControl = VK_TRUE;
         quad.pNext = std::exchange(enable.features.pNext, &quad);
     }
+    // And robustImageAccess2 where the device has it.
+    auto robust = make<VkPhysicalDeviceRobustness2FeaturesKHR>(
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_KHR);
+    if (const char* name = robust_image_extension(device->physical_)) {
+        device->robust_image_access2_ = true;
+        extensions.push_back(name);
+        robust.robustImageAccess2 = VK_TRUE;
+        robust.pNext = std::exchange(enable.features.pNext, &robust);
+    }
     if (options.surface != VK_NULL_HANDLE) {
         extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     }
@@ -346,9 +377,10 @@ std::unique_ptr<Device> Device::create(const Instance& instance, const DeviceOpt
         vkGetDeviceQueue(device->device_, *families.sparse, 0, &device->sparse_->handle);
     }
     common::log(common::LogLevel::info, "gpu.vk",
-                "device {} ({} {}), sparse queue family {}, quad control {}", p.core.deviceName,
-                p.v12.driverName, p.v12.driverInfo, device->sparse().family,
-                device->quad_control_);
+                "device {} ({} {}), sparse queue family {}, quad control {}, robust image "
+                "access 2 {}",
+                p.core.deviceName, p.v12.driverName, p.v12.driverInfo, device->sparse().family,
+                device->quad_control_, device->robust_image_access2_);
     return device;
 }
 

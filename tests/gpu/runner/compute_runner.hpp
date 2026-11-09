@@ -34,6 +34,7 @@ struct DeviceInfo {
     bool signed_zero_inf_nan_f32 = false;
     bool subgroup_quad = false;  // the quad subgroup operations in compute, for s_wqm_b64
     bool quad_control = false;   // bbvk enabled shaderQuadControl (ShaderKey::quad_control)
+    bool robust_image_access2 = false;  // bbvk enabled robustImageAccess2
 
     std::string describe() const;  // one line per property
 };
