@@ -79,6 +79,25 @@ TEST(GpuThread, BackendGetsDispatchesAndSyncPointsOnTheGpuThread) {
     EXPECT_NE(dispatch_thread.load(), std::this_thread::get_id());
 }
 
+TEST(GpuThread, BackendGetsDrawsAndTheExtentHintsOfEarlierPackets) {
+    GpuThread gpu;
+    std::atomic<int> draws = 0;
+    bb::pm4::Extent seen;
+    gpu.set_backend({}, {}, [&](const bb::pm4::RegisterMirror&, const bb::pm4::DrawCall&) {
+        seen = gpu.extent_hints().color(0);
+        ++draws;
+    });
+    std::vector<std::uint32_t> stream;
+    packet(stream, IT_SET_CONTEXT_REG, {0x318 - 0x0, 1});  // CB_COLOR0_BASE
+    packet(stream, IT_NOP, {40u | 30u << 16});              // the setup's size hint
+    packet(stream, IT_DRAW_INDEX_AUTO, {3, 2});
+    submit(gpu, {stream});
+    ASSERT_TRUE(gpu.wait_idle(5s));
+    EXPECT_EQ(draws, 1);
+    EXPECT_EQ(seen.width, 40u);
+    EXPECT_EQ(seen.height, 30u);
+}
+
 TEST(GpuThread, RunsStreamsInSubmissionOrder) {
     GpuThread gpu;
     const auto first = set_context(0x202, 1);

@@ -4,6 +4,7 @@
 // interpolated attribute (x, y, 0.25, 1), the others are discarded and keep the cleared value.
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -17,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "gpu/gcn/programs.hpp"
+#include "gpu/pm4/gpu_thread.hpp"
 #include "gpu/pm4/packet.hpp"
 #include "gpu/pm4/parser.hpp"
 #include "gpu/vk/device.hpp"
@@ -130,9 +132,14 @@ protected:
     std::byte* bytes() const { return static_cast<std::byte*>(memory_); }
     void sh(std::uint32_t reg, std::initializer_list<std::uint32_t> values) {
         regs_.write(RegSpace::sh, reg - sh_base, std::span(values.begin(), values.size()));
+        setup_.push_back(bb::pm4::type3_header(IT_SET_SH_REG,
+                                               static_cast<std::uint32_t>(values.size()) + 1));
+        setup_.push_back(reg - sh_base);
+        setup_.insert(setup_.end(), values);
     }
     void context(std::uint32_t reg, std::uint32_t value) {
         regs_.write(RegSpace::context, reg - context_base, std::span(&value, 1));
+        packet(setup_, IT_SET_CONTEXT_REG, {reg - context_base, value});
     }
 
     // The registers of the render test's pair drawing into colour target 0: 16 x 8 8_8_8_8
@@ -151,6 +158,8 @@ protected:
         const std::uint32_t triangle_list = 4;  // a uconfig register
         regs_.write(RegSpace::uconfig, amd::mmVGT_PRIMITIVE_TYPE__CI__VI - 0xC000,
                     std::span(&triangle_list, 1));
+        packet(setup_, IT_SET_UCONFIG_REG__CI__VI,
+               {amd::mmVGT_PRIMITIVE_TYPE__CI__VI - 0xC000, triangle_list});
         context(amd::mmPA_CL_VTE_CNTL, 0x43F);
         for (const auto [reg, value] : {std::pair{amd::mmPA_CL_VPORT_XSCALE, 8.0f},
                                         {amd::mmPA_CL_VPORT_XOFFSET, 8.0f},
@@ -265,6 +274,7 @@ protected:
     bb::pm4::ExtentHints hints_;
     std::unique_ptr<DrawRecorder> recorder_;
     RegisterMirror regs_;
+    std::vector<std::uint32_t> setup_;  // the packets that write setup_registers() into a stream
     std::unique_ptr<Parser> parser_;
     void* memory_ = nullptr;
     std::uint64_t offset_ = 0;
@@ -410,6 +420,32 @@ TEST_F(VkDrawRecorder, UnsupportedDrawsAreCountedAndTheStreamGoesOn) {
     EXPECT_EQ(recorder_->stats().unsupported, 2u);
     EXPECT_EQ(recorder_->stats().recorded, 1u);
     EXPECT_EQ(recorder_->stats().failed, 0u);
+    EXPECT_TRUE(triangle_in(0, width));
+}
+
+// The GPU thread routes the draws of a stream to the recorder, as bb-run wires it (the game's
+// own draws are not run: no real GPU is used), with the thread's own extent hints.
+TEST_F(VkDrawRecorder, TheGpuThreadRoutesDrawsToTheRecorder) {
+    bb::pm4::GpuThread gpu;
+    DrawRecorder recorder(*device_, *scheduler_, *dispatcher_, *pipelines_, *targets_, *mirror_,
+                          gpu.extent_hints());
+    gpu.set_backend(
+        [](const RegisterMirror&, const bb::pm4::DispatchCall&) {},
+        [this](bb::pm4::SyncPoint p) { dispatcher_->sync(p); },
+        [&recorder](const RegisterMirror& r, const bb::pm4::DrawCall& c) { recorder.draw(r, c); });
+    std::vector<std::uint32_t> stream = setup_;
+    packet(stream, IT_DRAW_INDEX_AUTO, {3, 2});
+    // A draw without a colour target is counted and the stream goes on.
+    packet(stream, IT_SET_CONTEXT_REG, {amd::mmCB_TARGET_MASK - context_base, 0});
+    packet(stream, IT_DRAW_INDEX_AUTO, {3, 2});
+    const std::span<const std::uint32_t> buffer(stream);
+    targets_->mark_cleared(0x200000);
+    gpu.submit(bb::pm4::Queue::graphics, std::span(&buffer, 1));
+    ASSERT_TRUE(gpu.wait_idle(std::chrono::seconds(10)));
+    dispatcher_->sync(bb::pm4::SyncPoint::before_write);
+    EXPECT_EQ(recorder.stats().recorded, 1u);
+    EXPECT_EQ(recorder.stats().unsupported, 1u);
+    EXPECT_EQ(recorder.stats().failed, 0u);
     EXPECT_TRUE(triangle_in(0, width));
 }
 

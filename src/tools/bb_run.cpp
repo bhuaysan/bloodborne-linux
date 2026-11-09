@@ -52,6 +52,10 @@
 #include "gpu/vk/compute_pipeline.hpp"
 #include "gpu/vk/device.hpp"
 #include "gpu/vk/dispatcher.hpp"
+#include "gpu/vk/draw_recorder.hpp"
+#include "gpu/vk/image_cache.hpp"
+#include "gpu/vk/pipeline_cache.hpp"
+#include "gpu/vk/rendering.hpp"
 #include "gpu/vk/memory_mirror.hpp"
 #include "gpu/vk/scheduler.hpp"
 #include "hle/kernel/dmem.hpp"
@@ -93,6 +97,10 @@ struct Mirror {
     std::unique_ptr<bb::vk::Scheduler> scheduler;
     std::unique_ptr<bb::vk::ComputePipelineCache> pipelines;
     std::unique_ptr<bb::vk::Dispatcher> dispatcher;
+    std::unique_ptr<bb::vk::ImageCache> images;
+    std::unique_ptr<bb::vk::TargetRenderer> targets;
+    std::unique_ptr<bb::vk::PipelineCache> draw_pipelines;
+    std::unique_ptr<bb::vk::DrawRecorder> recorder;
 };
 Mirror* mirror = nullptr;
 #endif
@@ -111,6 +119,11 @@ Mirror* mirror = nullptr;
         bb::common::log(LogLevel::info, channel,
                         "dispatches: {} recorded, {} untranslated, {} failed", stats.recorded,
                         stats.untranslated, stats.failed);
+    }
+    if (mirror != nullptr && mirror->recorder) {
+        const auto stats = mirror->recorder->stats();
+        bb::common::log(LogLevel::info, channel, "draws: {} recorded, {} unsupported, {} failed",
+                        stats.recorded, stats.unsupported, stats.failed);
     }
 #endif
     std::fflush(nullptr);
@@ -353,14 +366,24 @@ void open_mirror(bb::vk::Device* device, const std::string& device_selector, uns
         m->pipelines = std::make_unique<bb::vk::ComputePipelineCache>(*device, read_guest_code);
         m->dispatcher = std::make_unique<bb::vk::Dispatcher>(*device, *m->scheduler,
                                                              *m->pipelines, *m->mirror);
+        m->images = std::make_unique<bb::vk::ImageCache>(*device);
+        m->targets = std::make_unique<bb::vk::TargetRenderer>(*device, *m->images);
+        m->draw_pipelines = std::make_unique<bb::vk::PipelineCache>(*device, read_guest_code);
+        auto& gpu = bb::hle::video::gpu_thread();
+        m->recorder = std::make_unique<bb::vk::DrawRecorder>(
+            *device, *m->scheduler, *m->dispatcher, *m->draw_pipelines, *m->targets, *m->mirror,
+            gpu.extent_hints());
         Mirror* const raw = m.get();
-        bb::hle::video::gpu_thread().set_backend(
+        gpu.set_backend(
             [raw](const bb::pm4::RegisterMirror& regs, const bb::pm4::DispatchCall& call) {
                 raw->dispatcher->dispatch(regs, call);
             },
-            [raw](bb::pm4::SyncPoint point) { raw->dispatcher->sync(point); });
+            [raw](bb::pm4::SyncPoint point) { raw->dispatcher->sync(point); },
+            [raw](const bb::pm4::RegisterMirror& regs, const bb::pm4::DrawCall& call) {
+                raw->recorder->draw(regs, call);
+            });
     } catch (const std::runtime_error& e) {
-        bb::common::log(LogLevel::warn, channel, "no GPU dispatches: {}", e.what());
+        bb::common::log(LogLevel::warn, channel, "no GPU dispatches or draws: {}", e.what());
     }
     mirror = m.release();
 }

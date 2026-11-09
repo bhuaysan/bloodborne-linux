@@ -28,6 +28,7 @@ GpuThread::GpuThread(Parser::Readable readable, Parser::Interrupt interrupt, Gpu
     parser_.set_interrupt(std::move(interrupt));
     parser_.set_trace([this](const Packet& packet) {
         packets_.fetch_add(1, std::memory_order_relaxed);
+        hints_.observe(packet);
         common::log(common::LogLevel::trace, channel, "packet {:#04x}, {} dwords",
                     packet.opcode(), packet.body.size());
         if (trace_ != nullptr) {

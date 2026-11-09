@@ -27,6 +27,7 @@
 #include "gpu/pm4/gpu_trace.hpp"
 #include "gpu/pm4/parser.hpp"
 #include "gpu/pm4/registers.hpp"
+#include "gpu/pm4/targets.hpp"
 
 namespace bb::pm4 {
 
@@ -66,15 +67,17 @@ public:
     void submit(Queue queue, std::span<const std::span<const std::uint32_t>> buffers,
                 bool ends_frame = false);
 
-    // Hands dispatches and the parser's sync points to a backend (Parser::set_dispatch and
-    // set_sync). Both run on the GPU thread, which reads them without a lock: call it only while
-    // nothing is submitted (before the first submit_* or map_ring); it asserts the queues are idle.
-    void set_backend(Parser::Dispatch dispatch, Parser::Sync sync) {
+    // Hands dispatches, the parser's sync points and draws to a backend (Parser::set_dispatch,
+    // set_sync and set_draw; without `draw`, draws are skipped). All run on the GPU thread, which
+    // reads them without a lock: call it only while nothing is submitted (before the first
+    // submit_* or map_ring); it asserts the queues are idle.
+    void set_backend(Parser::Dispatch dispatch, Parser::Sync sync, Parser::Draw draw = {}) {
         const std::lock_guard lock(mutex_);
         assert(std::ranges::all_of(queues_, [](const auto& q) { return q.empty(); }) &&
                "set_backend while streams are queued");
         parser_.set_dispatch(std::move(dispatch));
         parser_.set_sync(std::move(sync));
+        parser_.set_draw(std::move(draw));
     }
 
     // Waits until every queue is empty. False if `timeout` passed first.
@@ -95,6 +98,10 @@ public:
     bool ring_doorbell(int ring, std::uint32_t write_offset);
 
     Stats stats() const;
+
+    // The target size hints of the packets that ran. The draw callback reads them on the GPU
+    // thread; anything else reads them only after wait_idle returned true, before the next submit.
+    const ExtentHints& extent_hints() const { return hints_; }
 
     // The register mirror. Read it only after wait_idle returned true and before the next submit.
     const RegisterMirror& registers() const { return regs_; }
@@ -118,6 +125,7 @@ private:
     void drop_streams(std::deque<Stream>& queue);
 
     RegisterMirror regs_;
+    ExtentHints hints_;  // fed by the trace callback, in stream order
     Parser parser_{regs_};
 
     mutable std::mutex mutex_;
