@@ -2,7 +2,8 @@
 // loads 17 formats from a table, and each result is worked out here from the element's bytes with
 // the usual conversions of normalized, scaled and integer formats; mem_tstore stores 14 formats,
 // and the output is worked out from the conversions back (docs/design/graphics.md, "Typed buffer
-// formats"). FormattedBuffer runs mem_fmt, the formatted MUBUF forms, for each V# format pair.
+// formats"). FormattedBuffer runs mem_fmt, the formatted MUBUF forms, for each V# format pair, and
+// mem_fmt_narrow, the forms of fewer than four components.
 
 #include <algorithm>
 #include <array>
@@ -12,6 +13,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <span>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -375,7 +377,8 @@ TEST_F(TypedStore, Range) {
 }
 
 // mem_fmt: the formatted MUBUF loads and stores take the format and dst_sel from the V#'s dword 3,
-// at run time. The loads read TypedStore's floats, and the stores write its inputs.
+// at run time. The loads read TypedStore's floats, and the stores write its inputs. mem_fmt_narrow
+// does the same with the forms of fewer than four components.
 class FormattedBuffer : public TypedStore {
 protected:
     void SetUp() override {
@@ -389,82 +392,172 @@ protected:
         spirv_ = bb::gcn::translate(
                      program_, {}, {.pgm_rsrc2 = bb::test::gcn::program_pgm_rsrc2("mem_fmt")})
                      .spirv;
+        narrow_spirv_ = bb::gcn::translate(
+                            bb::test::gcn::program_words("mem_fmt_narrow"), {},
+                            {.pgm_rsrc2 = bb::test::gcn::program_pgm_rsrc2("mem_fmt_narrow")})
+                            .spirv;
     }
 
-    // Runs mem_fmt with the V# format (dfmt, nfmt), dst_sel `sel` and size `size`, and checks the
-    // loads, the tfe VGPRs and every byte of the store region. A pair that is not one of
-    // formatted_pairs reads 0 whatever dst_sel says and writes nothing. A load returns the
-    // components through dst_sel (1 as 1.0, or 1 in UINT and SINT); a store gives memory
-    // component k the first input component whose dst_sel is 4 + k, or 0. The stores' lane stride
-    // is the element's size, so the 1-byte elements of adjacent lanes share a dword.
-    void check(unsigned dfmt, unsigned nfmt, std::uint32_t sel, std::uint32_t size) {
-        SCOPED_TRACE(testing::Message() << "dfmt " << dfmt << " nfmt " << nfmt);
-        const bool reads = std::ranges::count(bb::gcn::formatted_pairs,
-                                              std::array<unsigned, 2>{dfmt, nfmt}) != 0;
-        const std::vector<Field> layout = reads ? fields(dfmt) : std::vector<Field>{};
-        const unsigned bytes =
-            reads ? (layout.back().offset + layout.back().width + 7) / 8 : 16;
-        const unsigned shift = std::bit_width(bytes - 1);  // the lane stride: 2^shift >= bytes
-        const bool integer = nfmt == nf::uint_ || nfmt == nf::sint;
-        auto memory = runner_->guest_memory(base, 0x10000);
-        std::memset(memory.data(), 0xa5, 0x800);
-        const auto* table = reinterpret_cast<const std::uint8_t*>(input_.data());
-        std::memcpy(memory.data() + table_offset, table, 0x400);
-        std::memset(memory.data() + table_offset + 0xc00, 0xa5, 0x400);
-        std::memcpy(memory.data() + table_offset + 0x800, input_.data() + (integer ? 256 : 0),
+    // A V# format as the tests see it. A pair that is not one of formatted_pairs has no layout:
+    // it reads 0 whatever dst_sel says and writes nothing. The stores' lane stride is 1 << shift,
+    // the element's size, so the 1-byte elements of adjacent lanes share a dword.
+    struct Pair {
+        bool reads, integer;
+        std::vector<Field> layout;
+        unsigned bytes, shift;
+    };
+    static Pair pair_of(unsigned dfmt, unsigned nfmt) {
+        Pair p;
+        p.reads = std::ranges::count(bb::gcn::formatted_pairs,
+                                     std::array<unsigned, 2>{dfmt, nfmt}) != 0;
+        p.integer = nfmt == nf::uint_ || nfmt == nf::sint;
+        if (p.reads) {
+            p.layout = fields(dfmt);
+        }
+        p.bytes = p.reads ? (p.layout.back().offset + p.layout.back().width + 7) / 8 : 16;
+        p.shift = std::bit_width(p.bytes - 1);  // 2^shift >= bytes
+        return p;
+    }
+
+    static std::uint32_t word(const void* p) {
+        std::uint32_t v;
+        std::memcpy(&v, p, 4);
+        return v;
+    }
+
+    const std::uint8_t* table() const {
+        return reinterpret_cast<const std::uint8_t*>(input_.data());
+    }
+
+    // Fills the output and the store region with 0xa5, the loads' table with TypedStore's floats
+    // and the stores' inputs (+0x800) with its floats or integers, and runs the program with the
+    // V# format (dfmt, nfmt), dst_sel `sel` and size `size`. Returns the 4 KB of the V#'s buffer
+    // as they were before the run.
+    std::vector<std::uint8_t> run(const std::vector<std::uint32_t>& spirv, unsigned dfmt,
+                                  unsigned nfmt, std::uint32_t sel, std::uint32_t size,
+                                  const Pair& p) {
+        memory_ = runner_->guest_memory(base, 0x10000);
+        std::memset(memory_.data(), 0xa5, 0x800);
+        std::memcpy(memory_.data() + table_offset, table(), 0x400);
+        std::memset(memory_.data() + table_offset + 0xc00, 0xa5, 0x400);
+        std::memcpy(memory_.data() + table_offset + 0x800, input_.data() + (p.integer ? 256 : 0),
                     0x400);
         std::vector<std::uint8_t> region(0x1000);
-        std::memcpy(region.data(), memory.data() + table_offset, region.size());
+        std::memcpy(region.data(), memory_.data() + table_offset, region.size());
         const auto lo = [](std::uint64_t v) { return static_cast<std::uint32_t>(v); };
         DrawBlock draw;  // s[4:7] the formatted V#, s[8:11] the output's, s12 the stride's log2
         draw.user_data = {0, 0, 0, 0, lo(base + table_offset), lo(base >> 32), size,
                           sel | nfmt << 12 | dfmt << 15, lo(base), lo(base >> 32), 0x800,
-                          identity, shift};
-        runner_->run(spirv_, draw, {1, 1, 1});
-        const auto word = [&](const void* p) {
-            std::uint32_t v;
-            std::memcpy(&v, p, 4);
-            return v;
-        };
-        for (std::uint32_t lane = 0; lane < lanes; ++lane) {
-            SCOPED_TRACE(testing::Message() << "lane " << lane);
-            const bool inside = 16 * lane < size;
-            std::array<std::uint32_t, 6> value = {0, integer ? 1u : 0x3f800000u};
-            const std::vector<std::uint8_t> loaded(table + 16 * lane, table + 16 * lane + bytes);
-            for (unsigned c = 0; c < layout.size() && inside; ++c) {
-                value[2 + c] = component(loaded, layout[c], nfmt);
-            }
-            for (unsigned c = 0; c < 4; ++c) {
-                const unsigned s = sel >> (3 * c) & 7;
-                const std::uint32_t want = reads ? value[s >= 4 ? s - 2 : s == 1] : 0;
-                ASSERT_EQ(word(&memory[16 * lane + 4 * c]), want) << "component " << c;
-            }
-            EXPECT_EQ(word(&memory[0x400 + 4 * lane]), 0u);  // tfe: no fetch fails
-            EXPECT_EQ(word(&memory[0x600 + 8 * lane]), inside ? word(table + 16 * lane) : 0);
-            EXPECT_EQ(word(&memory[0x604 + 8 * lane]), 0u);
-            const std::uint32_t at = 0xc00 + (lane << shift);
-            if (!reads || at >= size) {
-                continue;
-            }
-            std::uint64_t element[2] = {};
-            for (unsigned k = 0; k < layout.size(); ++k) {
-                std::uint32_t chosen = 0;
-                for (unsigned c = 4; c-- > 0;) {  // the first component that selects k
-                    const std::uint32_t d = 0x800 + 16 * lane + 4 * c;
-                    const std::uint32_t v = d < size ? word(&region[d]) : 0;
-                    chosen = (sel >> (3 * c) & 7) == 4 + k ? v : chosen;
-                }
-                const std::uint64_t encoded = encode(chosen, layout[k].width, nfmt);
-                element[layout[k].offset / 64] |= encoded << (layout[k].offset % 64);
-            }
-            std::memcpy(region.data() + at, element, bytes);
+                          identity, p.shift};
+        runner_->run(spirv, draw, {1, 1, 1});
+        return region;
+    }
+
+    // What dst_sel can pick for a load of `lane`: [0] is 0, [1] the format's 1 (1.0 in the float
+    // formats, the integer 1 in UINT and SINT), [2] to [5] the components of the element, 0 for
+    // an element outside the V#.
+    std::array<std::uint32_t, 6> picks(std::uint32_t lane, bool inside, const Pair& p,
+                                       unsigned nfmt) const {
+        std::array<std::uint32_t, 6> value = {0, p.integer ? 1u : 0x3f800000u};
+        const std::vector<std::uint8_t> loaded(table() + 16 * lane, table() + 16 * lane + p.bytes);
+        for (unsigned c = 0; c < p.layout.size() && inside; ++c) {
+            value[2 + c] = component(loaded, p.layout[c], nfmt);
         }
+        return value;
+    }
+
+    // Component c of a load: what its dst_sel picks, or 0 for a pair without a case.
+    static std::uint32_t loaded_component(const std::array<std::uint32_t, 6>& value,
+                                          std::uint32_t sel, unsigned c, const Pair& p) {
+        const unsigned s = sel >> (3 * c) & 7;
+        return p.reads ? value[s >= 4 ? s - 2 : s == 1] : 0;
+    }
+
+    // Writes to `region` the element a store of the VGPR components `vgpr` leaves at `at`: memory
+    // component k takes the first component whose dst_sel is 4 + k, or 0.
+    static void store_element(std::vector<std::uint8_t>& region, std::uint32_t at,
+                              const std::array<std::uint32_t, 4>& vgpr, std::uint32_t sel,
+                              unsigned nfmt, const Pair& p) {
+        std::uint64_t element[2] = {};
+        for (unsigned k = 0; k < p.layout.size(); ++k) {
+            std::uint32_t chosen = 0;
+            for (unsigned c = 4; c-- > 0;) {  // the first component that selects k
+                chosen = (sel >> (3 * c) & 7) == 4 + k ? vgpr[c] : chosen;
+            }
+            const std::uint64_t encoded = encode(chosen, p.layout[k].width, nfmt);
+            element[p.layout[k].offset / 64] |= encoded << (p.layout[k].offset % 64);
+        }
+        std::memcpy(region.data() + at, element, p.bytes);
+    }
+
+    // Checks every byte of the store region against the expected one.
+    void expect_store_region(const std::vector<std::uint8_t>& region) {
         for (std::uint32_t i = 0xc00; i < 0x1000; ++i) {
-            ASSERT_EQ(static_cast<unsigned>(memory[table_offset + i]), region[i]) << "byte " << i;
+            ASSERT_EQ(static_cast<unsigned>(memory_[table_offset + i]), region[i]) << "byte " << i;
         }
     }
 
-    std::vector<std::uint32_t> program_, spirv_;
+    // Runs mem_fmt with the V# format (dfmt, nfmt), dst_sel `sel` and size `size`, and checks the
+    // loads, the tfe VGPRs and every byte of the store region.
+    void check(unsigned dfmt, unsigned nfmt, std::uint32_t sel, std::uint32_t size) {
+        SCOPED_TRACE(testing::Message() << "dfmt " << dfmt << " nfmt " << nfmt);
+        const Pair p = pair_of(dfmt, nfmt);
+        std::vector<std::uint8_t> region = run(spirv_, dfmt, nfmt, sel, size, p);
+        for (std::uint32_t lane = 0; lane < lanes; ++lane) {
+            SCOPED_TRACE(testing::Message() << "lane " << lane);
+            const bool inside = 16 * lane < size;
+            const auto value = picks(lane, inside, p, nfmt);
+            for (unsigned c = 0; c < 4; ++c) {
+                ASSERT_EQ(word(&memory_[16 * lane + 4 * c]), loaded_component(value, sel, c, p))
+                    << "component " << c;
+            }
+            EXPECT_EQ(word(&memory_[0x400 + 4 * lane]), 0u);  // tfe: no fetch fails
+            EXPECT_EQ(word(&memory_[0x600 + 8 * lane]), inside ? word(table() + 16 * lane) : 0);
+            EXPECT_EQ(word(&memory_[0x604 + 8 * lane]), 0u);
+            const std::uint32_t at = 0xc00 + (lane << p.shift);
+            if (!p.reads || at >= size) {
+                continue;
+            }
+            std::array<std::uint32_t, 4> vgpr;
+            for (unsigned c = 0; c < 4; ++c) {
+                const std::uint32_t d = 0x800 + 16 * lane + 4 * c;
+                vgpr[c] = d < size ? word(&region[d]) : 0;
+            }
+            store_element(region, at, vgpr, sel, nfmt, p);
+        }
+        expect_store_region(region);
+    }
+
+    // Runs mem_fmt_narrow with the V# format (dfmt, nfmt) and dst_sel `sel`, on a whole 4 KB V#.
+    // buffer_load_format_x and _xyz write only their 1 and 3 VGPRs, the ones above keep the -1
+    // the program preset. buffer_store_format_x treats the three components it lacks as 0 before
+    // the inverse of dst_sel, whatever the VGPRs after its data register hold.
+    void check_narrow(unsigned dfmt, unsigned nfmt, std::uint32_t sel) {
+        SCOPED_TRACE(testing::Message() << "dfmt " << dfmt << " nfmt " << nfmt << " sel " << sel);
+        constexpr std::uint32_t preset = 0xffffffff;
+        const Pair p = pair_of(dfmt, nfmt);
+        std::vector<std::uint8_t> region = run(narrow_spirv_, dfmt, nfmt, sel, 0x1000, p);
+        for (std::uint32_t lane = 0; lane < lanes; ++lane) {
+            SCOPED_TRACE(testing::Message() << "lane " << lane);
+            const auto value = picks(lane, true, p, nfmt);
+            for (const auto [start, count] : {std::pair{0u, 1u}, {0x400u, 3u}}) {
+                for (unsigned c = 0; c < 4; ++c) {
+                    const std::uint32_t want =
+                        c < count ? loaded_component(value, sel, c, p) : preset;
+                    ASSERT_EQ(word(&memory_[start + 16 * lane + 4 * c]), want)
+                        << "form of " << count << " component " << c;
+                }
+            }
+            if (p.reads) {
+                store_element(region, 0xc00 + (lane << p.shift),
+                              {word(&region[0x800 + 16 * lane]), 0, 0, 0}, sel, nfmt, p);
+            }
+        }
+        expect_store_region(region);
+    }
+
+    std::vector<std::uint32_t> program_, spirv_, narrow_spirv_;
+    std::span<std::byte> memory_;  // the last run's; guest_memory() replaces the buffer
 };
 
 // Every pair of the 16 data and 8 number formats, with the identity dst_sel: those of
@@ -486,10 +579,12 @@ TEST_F(FormattedBuffer, DstSel) {
 
 // The dst_sel and format pairs of the game's compute programs (measured, see the design note):
 // BGRA and RGBA on 8_8_8_8 UNORM, 000R and R001 on 8 UNORM, R001 on 32 FLOAT, RG01 on 32_32
-// FLOAT, XYZ0 on 32_32_32 UINT, RGBA on 32_32_32_32 FLOAT and UINT.
+// FLOAT, X000 on 32 UINT, XYZ0 on 32_32_32 UINT, RGBA on 32_32_32_32 FLOAT and UINT.
 TEST_F(FormattedBuffer, GameDstSels) {
     constexpr std::uint32_t bgra = 6 | 5 << 3 | 4 << 6 | 7 << 9, r001 = 4 | 1 << 9;
     constexpr std::uint32_t r_in_w = 4 << 9, rg01 = 4 | 5 << 3 | 1 << 9, xyz0 = 4 | 5 << 3 | 6 << 6;
+    constexpr std::uint32_t x000 = 4;
+    check(4, nf::uint_, x000, 0x1000);
     check(10, nf::unorm, bgra, 0x1000);
     check(10, nf::unorm, identity, 0x1000);
     check(1, nf::unorm, r_in_w, 0x1000);
@@ -499,6 +594,23 @@ TEST_F(FormattedBuffer, GameDstSels) {
     check(13, nf::uint_, xyz0, 0x1000);
     check(14, 7, identity, 0x1000);
     check(14, nf::uint_, identity, 0x1000);
+}
+
+// buffer_load_format_x and _xyz and buffer_store_format_x, on V# formats with more components than
+// the instruction (32_32_32_32, 8_8_8_8, 32_32_32 and 32_32) and on those with as many or fewer
+// (32, 8), including a pair without a case; with the identity and a reversing dst_sel, whose X of
+// the store goes to memory's W and the others take 0. X000 on 32 UINT and XYZ0 on 32_32_32 UINT
+// are the forms and dst_sels of the game's program 100.
+TEST_F(FormattedBuffer, NarrowForms) {
+    constexpr std::uint32_t reversed = 7 | 6 << 3 | 5 << 6 | 4 << 9;
+    for (const auto [dfmt, nfmt] : {std::pair{14u, 7u}, {14u, nf::uint_}, {10u, nf::unorm},
+                                    {13u, nf::uint_}, {11u, 7u}, {4u, nf::uint_}, {1u, nf::unorm},
+                                    {0u, nf::uint_}}) {
+        check_narrow(dfmt, nfmt, identity);
+        check_narrow(dfmt, nfmt, reversed);
+    }
+    check_narrow(4, nf::uint_, 4);
+    check_narrow(13, nf::uint_, 4 | 5 << 3 | 6 << 6);
 }
 
 // A V# of 648 bytes: lane 40's element is read whole, the lanes above load 0, and no store is
