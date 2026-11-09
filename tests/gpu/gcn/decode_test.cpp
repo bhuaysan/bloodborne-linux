@@ -290,12 +290,15 @@ TEST(GcnDecode, StopsAtTheFinalEndpgm) {
 }
 
 // The dwords that decide how a program decodes: all of it, or up to the failing instruction.
-TEST(Decode, ReadableExtent) {
+TEST(GcnDecode, ReadableExtent) {
     const std::uint32_t endpgm = 0xbf810000u;
     EXPECT_EQ(readable_extent(std::vector<std::uint32_t>{endpgm, 0, 0}, Until::program_end), 1u);
-    EXPECT_EQ(readable_extent(std::vector<std::uint32_t>{0xffffffffu, 0, 0, 0, 0}, Until::program_end), 2u);
+    EXPECT_EQ(readable_extent(std::vector<std::uint32_t>{0xffffffffu, 0, 0, 0, 0},
+                              Until::program_end),
+              2u);
     EXPECT_EQ(readable_extent(std::vector<std::uint32_t>{0xffffffffu}, Until::program_end), 1u);
-    EXPECT_EQ(readable_extent(std::vector<std::uint32_t>{endpgm}, Until::subroutine_end), 1u);  // runs out of code
+    // Runs out of code.
+    EXPECT_EQ(readable_extent(std::vector<std::uint32_t>{endpgm}, Until::subroutine_end), 1u);
 }
 
 }  // namespace
