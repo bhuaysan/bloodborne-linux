@@ -1,6 +1,6 @@
 # bloodborne-linux
 
-An independent reverse engineering project with one goal: make the complete game of Bloodborne (PS4) playable natively on Linux, without emulation, with the best performance and quality we can reach.
+An independent reverse engineering project with one goal: make the complete game of Bloodborne (PS4) playable natively on Linux, with no CPU emulation and the best performance and quality we can reach.
 
 The PS4 runs x86-64 code, so the game's own machine code can run directly on a Linux PC. This project builds what is missing around it:
 
@@ -10,11 +10,11 @@ The PS4 runs x86-64 code, so the game's own machine code can run directly on a L
 
 Game functions are decompiled into readable C++ only where that helps: to fix a bug, remove a bottleneck or lift a limit such as the frame rate. A complete decompilation is not a goal, so the game's own machine code keeps running for everything else.
 
-The port builds on existing work, such as PS4 emulators and community research, under the rules in [docs/source-policy.md](docs/source-policy.md). Every source is credited in [docs/references.md](docs/references.md).
+The renderer, the shader translator and some system libraries are derived from the shadPS4 emulator, under the rules in [docs/source-policy.md](docs/source-policy.md). Every source is credited in [docs/references.md](docs/references.md).
 
 ## Status
 
-Executable analysis (M1) and the loader with its test harness (M2) are done. `bb-load` maps and relocates the game executable in a Linux process, imports resolve to logging stubs, and the first game functions are decompiled to C++ and pass differential tests against the original. No game code runs on its own yet; reaching the main loop is next (M3). See [docs/roadmap.md](docs/roadmap.md).
+Our loader and OS layer carry the game to its main loop, but our program doesn't show a frame of the game yet. On 2026-11-09 we decided to derive the renderer and the shader translator from shadPS4 instead of finishing our own. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Requirements
 

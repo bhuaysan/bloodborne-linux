@@ -2,6 +2,8 @@
 
 ## Overview
 
+The game's machine code runs directly on the CPU. Around it sits a compatibility layer, close to what Wine and DXVK are for a Windows game: our runtime replaces the PS4 system libraries, and the game's GPU commands are translated to Vulkan at run time.
+
 ```
  ┌──────────────────────────────────────────────────────────┐
  │                      game process (Linux)                │
@@ -14,6 +16,7 @@
  │          ▼                        │                      │
  │   HLE system libraries (ours)  ◄──┘                      │
  │   kernel · file I/O · system · video · GNM · net · …     │
+ │   renderer + translator (derived from shadPS4)           │
  │          │                                               │
  │          ▼                                               │
  │   Linux: pthreads · mmap · files · SDL/evdev · Vulkan    │
@@ -39,18 +42,18 @@ Starting the game is split over three parts (M3, see [design/m3-core-os.md](desi
 - `bb-run` (`src/tools/bb_run.cpp`) does the rest: it maps the load set and calls `link`, applies the hooks, creates the game's main thread with its stack, and on that thread calls `run_prx_init` and then the eboot's entry point.
 
 ### HLE system libraries
-Each imported Sony library becomes a module in our runtime. Every function is identified by its NID. Unimplemented functions resolve to a stub that logs the call, which shows us what to implement next. Two of the game's bundled PRX files, `libc.prx` and `libSceFios2.prx`, are needed at startup and are loaded the same way as the eboot (or later replaced by our code). The other five bundled PRXs are camera-image libraries that the game most likely never loads (see `docs/formats/imports.md`).
+Each imported Sony library becomes a module in our runtime. Every function is identified by its NID. Unimplemented functions resolve to a stub that logs the call, which shows us what to implement next. Two of the game's bundled PRX files, `libc.prx` and `libSceFios2.prx`, are needed at startup and are loaded the same way as the eboot (or later replaced by our code). The other five bundled PRXs are camera-image libraries that the game most likely never loads (see `docs/formats/imports.md`). Kernel, memory, threads and files are ours. Pad, audio with ATRAC9, video playback and dialogs are derived from shadPS4.
 
 The PS4 OS is FreeBSD-based and uses the System V x86-64 ABI, the same as Linux. That makes most calls a direct translation. TLS layout and signal and exception behavior need care.
 
 ### Graphics
-GNM builds AMD GCN command buffers (PM4 packets). The plan:
-1. Parse the command buffers the game submits.
-2. Track GPU state and resources (buffers, textures, render targets).
-3. Translate GCN shader binaries to SPIR-V with our own translator.
+GNM builds AMD GCN command buffers (PM4 packets). The game still produces those, so at run time we:
+1. Process the command buffers the game submits.
+2. Track GPU state and resources (buffers, textures, render targets) and the CPU's writes to guest memory.
+3. Translate GCN shader binaries to SPIR-V.
 4. Record and submit the equivalent Vulkan work.
 
-The translator, its offline tests and the shader extraction are designed in [design/graphics.md](design/graphics.md).
+Since 2026-11-09 all four steps are derived from shadPS4 (`video_core` and `shader_recompiler`). They go in nearly unchanged first and get rewritten later where that measurably helps. A thin host layer connects them to our runtime: guest memory, write tracking, flips and the window. [design/graphics.md](design/graphics.md) describes the GPU path we built before that decision, which R3 and R4 replace.
 
 ### Function replacement
 Decompiled functions are compiled into the runtime. At startup, a table of `{original_address, replacement}` pairs is applied. Each original function entry is patched to jump to the replacement. Replacements call other game functions through their original addresses. Only functions that serve playability, performance or quality are replaced, and the rest of the game keeps running as original machine code.
@@ -83,6 +86,7 @@ standard ELF ──Ghidra import──► Ghidra project ◄──ghidra-sync─
 
 ## Non-goals
 - CPU emulation or instruction translation.
+- A strict port, where the engine itself calls Vulkan. That may come later for single render functions, where it measurably helps.
 - Byte-matching decompilation.
 - A complete decompilation of the game.
 - Supporting other games or other game versions.
