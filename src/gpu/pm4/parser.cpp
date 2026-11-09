@@ -222,6 +222,21 @@ Parser::Step Parser::execute(Stream& stream, const Packet& packet) {
         }
         break;
     }
+    case IT_INDEX_BASE:
+    case IT_INDEX_BUFFER_SIZE:
+    case IT_INDEX_TYPE:
+    case IT_NUM_INSTANCES:
+    case IT_DRAW_INDEX_2:
+    case IT_DRAW_INDEX_AUTO:
+    case IT_DRAW_INDEX_OFFSET_2:
+    case IT_DRAW_INDEX_INDIRECT:
+    case IT_DRAW_INDIRECT: {
+        const Step step = draw_packet(stream, packet);
+        if (step != Step::next) {
+            return step;
+        }
+        break;
+    }
     case IT_WRITE_DATA:
     case IT_COPY_DATA:
     case IT_DMA_DATA__CI__VI:

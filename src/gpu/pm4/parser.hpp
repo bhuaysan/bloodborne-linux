@@ -48,6 +48,36 @@ struct DispatchCall {
     std::uint32_t initiator = 0;
 };
 
+// A draw packet that ran. `kind` is the packet. `index_address` is the guest address of the index
+// buffer (INDEX_BASE, or the packet's own base for DRAW_INDEX_2), 0 without one; `index_bytes` is
+// 2 or 4 from INDEX_TYPE; `first_index` and `index_count` select the indices; `max_indices` is
+// the buffer's size in indices (the packet's, or INDEX_BUFFER_SIZE). `index_count` is the vertex
+// count of DRAW_INDEX_AUTO. `instances` is NUM_INSTANCES. An indirect draw has `indirect`, the
+// guest address of its arguments (SET_BASE address + the packet's offset: four dwords for
+// DRAW_INDIRECT, five for DRAW_INDEX_INDIRECT; docs/formats/gnm.md) and the user data registers
+// `base_vertex_reg` and `start_instance_reg` that the CP writes two of them to; counts are then
+// not known and stay 0. `initiator` is VGT_DRAW_INITIATOR.
+enum class DrawKind : std::uint8_t {
+    index_2,
+    index_auto,
+    index_offset_2,
+    index_indirect,
+    indirect,
+};
+struct DrawCall {
+    DrawKind kind = DrawKind::index_auto;
+    std::uint64_t index_address = 0;
+    std::uint32_t index_bytes = 0;
+    std::uint32_t first_index = 0;
+    std::uint32_t index_count = 0;
+    std::uint32_t max_indices = 0;
+    std::uint32_t instances = 1;
+    std::uint64_t indirect = 0;
+    std::uint32_t base_vertex_reg = 0;
+    std::uint32_t start_instance_reg = 0;
+    std::uint32_t initiator = 0;
+};
+
 class Stream {
 public:
     // The submitted buffer plus three nested INDIRECT_BUFFERs.
@@ -87,6 +117,12 @@ private:
     std::uint32_t interrupt_source_;
     bool ends_frame_ = false;
     std::uint64_t indirect_base_ = 0;  // SET_BASE, base index 1; per stream
+    // The index state, per stream: INDEX_BASE, INDEX_BUFFER_SIZE, INDEX_TYPE (VGT_INDEX_TYPE) and
+    // NUM_INSTANCES, which the game's default state sets to 1.
+    std::uint64_t index_base_ = 0;
+    std::uint32_t index_buffer_size_ = 0;
+    std::uint32_t index_type_ = 0;
+    std::uint32_t num_instances_ = 1;
 };
 
 class Parser {
@@ -101,6 +137,9 @@ public:
     // Called for each dispatch with the registers it runs with; without one, dispatches are
     // skipped. The backend records it and does not wait for it.
     using Dispatch = std::function<void(const RegisterMirror&, const DispatchCall&)>;
+    // Called for each draw with the registers it runs with, which are the snapshot of the draw
+    // (the backend builds it with vk::draw_state); without one, draws are skipped.
+    using Draw = std::function<void(const RegisterMirror&, const DrawCall&)>;
     // Called with the source of each interrupt that an EVENT_WRITE_EOP or RELEASE_MEM asks for,
     // after its memory write.
     using Interrupt = std::function<void(std::uint32_t source)>;
@@ -111,6 +150,7 @@ public:
     void set_readable(Readable readable) { readable_ = std::move(readable); }
     void set_sync(Sync sync) { sync_ = std::move(sync); }
     void set_dispatch(Dispatch dispatch) { dispatch_ = std::move(dispatch); }
+    void set_draw(Draw draw) { draw_ = std::move(draw); }
     void set_interrupt(Interrupt interrupt) { interrupt_ = std::move(interrupt); }
 
     RunResult run(Stream& stream);
@@ -135,6 +175,9 @@ private:
     // A packet of a constant engine stream. `handled` is false for the packets both engines run.
     Step execute_constant(Stream& stream, const Packet& packet, bool& handled);
     Step dump_const_ram(const Packet& packet);
+    // The index state and draw packets (draw_packets.cpp). On `next` the caller moves past it.
+    Step draw_packet(Stream& stream, const Packet& packet);
+    Step indirect_draw(Stream& stream, const Packet& packet, DrawCall& call);
     Step indirect_buffer(Stream& stream, const Packet& packet);
     void set_registers(RegSpace space, const Packet& packet);
 
@@ -162,6 +205,7 @@ private:
     Sync sync_;
     Interrupt interrupt_;
     Dispatch dispatch_;
+    Draw draw_;
     std::uint32_t interrupt_source_ = gfx_eop_interrupt;  // of the running stream
     std::unordered_set<std::uint32_t> logged_variants_;
     std::array<std::uint32_t, 2> context_control_{};

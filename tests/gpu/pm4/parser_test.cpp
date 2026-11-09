@@ -293,3 +293,141 @@ TEST(Pm4Parser, DispatchesWithoutACallbackAreSkipped) {
 }
 
 }  // namespace
+
+namespace {
+
+// Runs `dcb` with a draw callback and returns the draws.
+std::vector<bb::pm4::DrawCall> run_draws(const std::vector<std::uint32_t>& dcb,
+                                         RunResult expect = RunResult::done,
+                                         std::vector<std::uint32_t>* viewport_x = nullptr) {
+    Fixture f;
+    std::vector<bb::pm4::DrawCall> calls;
+    f.parser.set_draw([&](const RegisterMirror& regs, const bb::pm4::DrawCall& call) {
+        calls.push_back(call);
+        if (viewport_x != nullptr) {
+            viewport_x->push_back(regs.num_threads(0));
+        }
+    });
+    Stream stream(dcb);
+    EXPECT_EQ(f.parser.run(stream), expect);
+    return calls;
+}
+
+}  // namespace
+
+TEST(Pm4Parser, DrawIndexAutoCarriesCountInstancesAndTheRegisters) {
+    std::vector<std::uint32_t> dcb, regs_seen;
+    packet(dcb, IT_SET_SH_REG, {0x207, 16});
+    packet(dcb, IT_DRAW_INDEX_AUTO, {3, 2});
+    packet(dcb, IT_NUM_INSTANCES, {5});
+    packet(dcb, IT_SET_SH_REG, {0x207, 8});
+    packet(dcb, IT_DRAW_INDEX_AUTO, {6, 2});
+    packet(dcb, IT_DRAW_INDEX_AUTO, {0, 2});  // no vertices: nothing to draw
+    packet(dcb, IT_NUM_INSTANCES, {0});
+    packet(dcb, IT_DRAW_INDEX_AUTO, {6, 2});  // no instances: nothing to draw
+    const auto calls = run_draws(dcb, RunResult::done, &regs_seen);
+    ASSERT_EQ(calls.size(), 2u);
+    EXPECT_EQ(calls[0].kind, bb::pm4::DrawKind::index_auto);
+    EXPECT_EQ(calls[0].index_count, 3u);
+    EXPECT_EQ(calls[0].instances, 1u);  // the default
+    EXPECT_EQ(calls[0].initiator, 2u);
+    EXPECT_EQ(calls[1].index_count, 6u);
+    EXPECT_EQ(calls[1].instances, 5u);
+    EXPECT_EQ(regs_seen, (std::vector<std::uint32_t>{16, 8}));
+}
+
+TEST(Pm4Parser, DrawIndex2UsesItsOwnBaseAndTheIndexType) {
+    const std::vector<std::uint16_t> indices(8, 0);
+    const auto address = reinterpret_cast<std::uint64_t>(indices.data());
+    std::vector<std::uint32_t> dcb;
+    const std::uint32_t lo = static_cast<std::uint32_t>(address);
+    const std::uint32_t hi = static_cast<std::uint32_t>(address >> 32);
+    packet(dcb, IT_DRAW_INDEX_2, {8, lo, hi, 6, 0});
+    packet(dcb, IT_INDEX_TYPE, {1});
+    packet(dcb, IT_DRAW_INDEX_2, {8, lo, hi, 4, 0});  // 4 indices of 4 bytes: 16 bytes, readable
+    const auto calls = run_draws(dcb);
+    ASSERT_EQ(calls.size(), 2u);
+    EXPECT_EQ(calls[0].kind, bb::pm4::DrawKind::index_2);
+    EXPECT_EQ(calls[0].index_address, address);
+    EXPECT_EQ(calls[0].index_bytes, 2u);
+    EXPECT_EQ(calls[0].index_count, 6u);
+    EXPECT_EQ(calls[0].max_indices, 8u);
+    EXPECT_EQ(calls[1].index_bytes, 4u);
+}
+
+TEST(Pm4Parser, DrawIndexOffset2ReadsIndexBaseAndFailsWithoutOne) {
+    std::vector<std::uint32_t> dcb;
+    packet(dcb, IT_DRAW_INDEX_OFFSET_2, {100, 0, 3, 0});
+    EXPECT_TRUE(run_draws(dcb, RunResult::error).empty());  // no INDEX_BASE
+    dcb.clear();
+    packet(dcb, IT_INDEX_BASE, {0xAAAA0000u, 0x12345});  // the address keeps 48 bits
+    packet(dcb, IT_NUM_INSTANCES, {2});
+    packet(dcb, IT_DRAW_INDEX_OFFSET_2, {100, 7, 3, 0});
+    const auto calls = run_draws(dcb);
+    ASSERT_EQ(calls.size(), 1u);
+    EXPECT_EQ(calls[0].kind, bb::pm4::DrawKind::index_offset_2);
+    EXPECT_EQ(calls[0].index_address, 0x2345AAAA0000u);
+    EXPECT_EQ(calls[0].first_index, 7u);
+    EXPECT_EQ(calls[0].index_count, 3u);
+    EXPECT_EQ(calls[0].max_indices, 100u);
+    EXPECT_EQ(calls[0].instances, 2u);
+}
+
+TEST(Pm4Parser, IndirectDrawsReadSetBasePlusOffsetAndTheIndexState) {
+    const std::vector<std::uint32_t> args(5, 0);
+    const auto address = reinterpret_cast<std::uint64_t>(args.data());
+    std::vector<std::uint32_t> dcb;
+    packet(dcb, IT_DRAW_INDIRECT, {0, 0x2C, 0x2D, 1});
+    EXPECT_TRUE(run_draws(dcb, RunResult::error).empty());  // no SET_BASE
+    dcb.clear();
+    packet(dcb, IT_SET_BASE, {1, static_cast<std::uint32_t>(address - 4),
+                              static_cast<std::uint32_t>(address >> 32)});
+    packet(dcb, IT_DRAW_INDIRECT, {4, 0x2C, 0x2D, 1});
+    packet(dcb, IT_INDEX_BASE, {0x1000, 0});
+    packet(dcb, IT_INDEX_BUFFER_SIZE, {64});
+    packet(dcb, IT_INDEX_TYPE, {1});
+    packet(dcb, IT_DRAW_INDEX_INDIRECT, {4, 0x2E, 0x2F, 3});
+    const auto calls = run_draws(dcb);
+    ASSERT_EQ(calls.size(), 2u);
+    EXPECT_EQ(calls[0].kind, bb::pm4::DrawKind::indirect);
+    EXPECT_EQ(calls[0].indirect, address);
+    EXPECT_EQ(calls[0].base_vertex_reg, 0x2Cu);
+    EXPECT_EQ(calls[0].start_instance_reg, 0x2Du);
+    EXPECT_EQ(calls[0].initiator, 1u);
+    EXPECT_EQ(calls[0].index_address, 0u);
+    EXPECT_EQ(calls[1].kind, bb::pm4::DrawKind::index_indirect);
+    EXPECT_EQ(calls[1].indirect, address);
+    EXPECT_EQ(calls[1].index_address, 0x1000u);
+    EXPECT_EQ(calls[1].max_indices, 64u);
+    EXPECT_EQ(calls[1].index_bytes, 4u);
+    EXPECT_EQ(calls[1].base_vertex_reg, 0x2Eu);
+}
+
+TEST(Pm4Parser, ShortDrawPacketsFailAndDrawsWithoutACallbackAreSkipped) {
+    for (const std::uint8_t opcode : {IT_DRAW_INDEX_2, IT_DRAW_INDEX_AUTO, IT_DRAW_INDEX_OFFSET_2,
+                                      IT_DRAW_INDEX_INDIRECT, IT_DRAW_INDIRECT, IT_INDEX_BASE,
+                                      IT_INDEX_BUFFER_SIZE, IT_INDEX_TYPE, IT_NUM_INSTANCES}) {
+        std::vector<std::uint32_t> dcb;
+        packet(dcb, opcode, {});
+        EXPECT_TRUE(run_draws(dcb, RunResult::error).empty()) << int{opcode};
+    }
+    Fixture f;
+    std::vector<std::uint32_t> dcb;
+    packet(dcb, IT_DRAW_INDEX_AUTO, {3, 2});
+    Stream stream(dcb);
+    EXPECT_EQ(f.parser.run(stream), RunResult::done);
+}
+
+TEST(Pm4Parser, IndexStateBelongsToItsStream) {
+    std::vector<std::uint32_t> first, second;
+    packet(first, IT_INDEX_BASE, {0x1000, 0});
+    packet(first, IT_NUM_INSTANCES, {4});
+    packet(second, IT_DRAW_INDEX_OFFSET_2, {10, 0, 3, 0});
+    Fixture f;
+    int calls = 0;
+    f.parser.set_draw([&](const RegisterMirror&, const bb::pm4::DrawCall&) { ++calls; });
+    Stream a(first), b(second);
+    EXPECT_EQ(f.parser.run(a), RunResult::done);
+    EXPECT_EQ(f.parser.run(b), RunResult::error);  // INDEX_BASE is not set in this stream
+    EXPECT_EQ(calls, 0);
+}
