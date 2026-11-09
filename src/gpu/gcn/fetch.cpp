@@ -65,9 +65,12 @@ FetchSite inline_fetch(std::vector<Instruction>& program, std::span<const std::u
     if (back.kind != OperandKind::scalar || back.code != call->dst[0].code) {
         throw error("the fetch subroutine doesn't return through the call's destination");
     }
+    const std::uint32_t dwords = (body.back().offset >> 2) + body.back().size;
     body.pop_back();
 
-    FetchSite site{.call = static_cast<std::uint32_t>(call - program.begin()), .offsets = {}};
+    FetchSite site{.call = static_cast<std::uint32_t>(call - program.begin()),
+                   .offsets = {},
+                   .dwords = dwords};
     for (Instruction& inst : body) {
         if (changes_control(inst)) {
             throw error(std::format("fetch subroutine: {} at offset {:#x} is not supported",

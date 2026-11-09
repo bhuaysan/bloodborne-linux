@@ -136,6 +136,10 @@ struct ShaderInterface {
 struct Translation {
     std::vector<std::uint32_t> spirv;
     ShaderInterface interface;
+    // The extent of the guest code the result depends on: the dwords of the program up to its
+    // last instruction, and of the fetch subroutine up to its s_setpc_b64 (0 without a call). A
+    // cache notices changed code by hashing these.
+    std::uint32_t code_dwords = 0, fetch_dwords = 0;
 };
 
 // Translates the program at the start of `code` into a SPIR-V 1.6 module with the entry point
