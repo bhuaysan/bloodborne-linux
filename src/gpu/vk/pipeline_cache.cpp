@@ -36,7 +36,7 @@ constexpr std::string_view missing_fetch = "without a fetch subroutine";  // gcn
 }  // namespace
 
 PipelineCache::PipelineCache(const Device& device, CodeReader read)
-    : device_(device), read_(std::move(read)) {}
+    : device_(device), layouts_(device), read_(std::move(read)) {}
 
 PipelineCache::~PipelineCache() {
     for (auto& [hash, entry] : entries_) {
@@ -143,9 +143,11 @@ const GraphicsPipeline* PipelineCache::get(const PipelineKey& request,
         if (key.ps && !(ps = translate(*key.ps, ps_now, {}, entry.ps_code, no_fetch))) {
             return nullptr;
         }
-        // An MIMG instruction takes a T#, so a stage with samplers has images too.
-        if (!vs->interface.images.empty() || (ps && !ps->interface.images.empty())) {
-            entry.error = "images and samplers are not supported yet";
+        const auto stores = [](const gcn::ShaderInterface& i) {
+            return std::ranges::any_of(i.stored_images, [](bool stored) { return stored; });
+        };
+        if (stores(vs->interface) || (ps && stores(ps->interface))) {
+            entry.error = "images written by a shader are not supported yet";
         }
     } catch (const gcn::GcnError& e) {
         entry.error = std::format("the {} at {:#x} doesn't translate: {}", vs ? "PS" : "VS",
@@ -204,6 +206,9 @@ void PipelineCache::create(Entry& entry, const gcn::Translation& vs, const gcn::
     auto layout = make<VkPipelineLayoutCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
     layout.pushConstantRangeCount = 1;
     layout.pPushConstantRanges = &range;
+    const VkDescriptorSetLayout sets[] = {layouts_.get(p.vs), layouts_.get(p.ps)};
+    layout.setLayoutCount = ps ? 2 : 1;  // set 0: the VS's, set 1: the PS's (gcn::descriptor_set)
+    layout.pSetLayouts = sets;
     check(vkCreatePipelineLayout(device, &layout, nullptr, &p.layout), "vkCreatePipelineLayout");
     if (create_hook_) create_hook_();
 

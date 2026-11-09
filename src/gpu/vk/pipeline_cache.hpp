@@ -15,6 +15,7 @@
 
 #include "common/code_hash.hpp"
 #include "gpu/gcn/translate.hpp"
+#include "gpu/vk/descriptor_layouts.hpp"
 #include "gpu/vk/pipeline_state.hpp"
 #include "gpu/vk/rendering.hpp"
 
@@ -52,8 +53,9 @@ inline constexpr VkDynamicState graphics_dynamic_states[] = {
 struct GraphicsPipeline {
     VkPipeline pipeline = VK_NULL_HANDLE;
     // One push-constant range of gcn::graphics_push_size bytes for both stages (the VS's draw
-    // block address at gcn::vertex_push_offset, the PS's at gcn::pixel_push_offset). No
-    // descriptor sets yet: they come with the textures item (28).
+    // block address at gcn::vertex_push_offset, the PS's at gcn::pixel_push_offset), and the
+    // descriptor sets of the stages' images and samplers: set 0 for the VS, set 1 for the PS
+    // (gcn::descriptor_set), with the layouts of DescriptorLayouts.
     VkPipelineLayout layout = VK_NULL_HANDLE;
     gcn::ShaderInterface vs, ps;  // ps is empty without a pixel stage
 };
@@ -72,8 +74,9 @@ public:
     // the fetch subroutine is unchanged (hashed on every request, see docs/design/graphics.md,
     // "Code hash of a cached pipeline"); changed code gets a pipeline of its own. The VS's fetch
     // address counts only for a program that calls the fetch subroutine. Nothing, with `why`
-    // saying what, when a stage's code isn't readable, doesn't translate or uses images or
-    // samplers (not yet); the error is kept and given again for an equal request, except
+    // saying what, when a stage's code isn't readable, doesn't translate or writes an image (not
+    // yet). A stage's images are 2D float images in the key unless its ShaderKey::images says
+    // otherwise (the caller compares them with the T#s, see TextureBinder::classes); the error is kept and given again for an equal request, except
     // unreadable code (also an unreadable fetch subroutine a VS needs). Throws
     // std::runtime_error when a Vulkan call fails; nothing is kept then, so the next request
     // tries again.
@@ -115,6 +118,7 @@ private:
     void create(Entry& entry, const gcn::Translation& vs, const gcn::Translation* ps);
 
     const Device& device_;
+    DescriptorLayouts layouts_;
     CodeReader read_;
     std::function<void()> create_hook_;
     // By the stages' code addresses (hash_stages), so the nodes, and the pipelines handed out,
