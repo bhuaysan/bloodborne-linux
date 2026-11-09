@@ -58,6 +58,8 @@
 #include "gpu/vk/rendering.hpp"
 #include "gpu/vk/memory_mirror.hpp"
 #include "gpu/vk/scheduler.hpp"
+#include "gpu/vk/texture_binder.hpp"
+#include "gpu/vk/texture_cache.hpp"
 #include "hle/kernel/dmem.hpp"
 #include "hle/kernel/vmem.hpp"
 #include "tools/mirror_observer.hpp"
@@ -100,6 +102,8 @@ struct Mirror {
     std::unique_ptr<bb::vk::ImageCache> images;
     std::unique_ptr<bb::vk::TargetRenderer> targets;
     std::unique_ptr<bb::vk::PipelineCache> draw_pipelines;
+    std::unique_ptr<bb::vk::TextureCache> textures;
+    std::unique_ptr<bb::vk::TextureBinder> binder;
     std::unique_ptr<bb::vk::DrawRecorder> recorder;
 };
 Mirror* mirror = nullptr;
@@ -322,6 +326,14 @@ std::span<const std::uint32_t> read_guest_code(std::uint64_t address) {
     return {reinterpret_cast<const std::uint32_t*>(address), bytes / 4};
 }
 
+// The guest bytes [address, address + bytes) when they are all readable.
+std::span<const std::byte> read_guest_bytes(std::uint64_t address, std::uint64_t bytes) {
+    if (address + bytes < address || !bb::hle::kernel::vmem::readable(address, address + bytes)) {
+        return {};
+    }
+    return {reinterpret_cast<const std::byte*>(address), bytes};
+}
+
 // Makes the GPU memory mirror over the first `gib` GiB of the guest window and hooks it to direct
 // memory, on `device` or, without one, on a device of its own. Logs why and goes on without a
 // mirror when it can't.
@@ -369,10 +381,13 @@ void open_mirror(bb::vk::Device* device, const std::string& device_selector, uns
         m->images = std::make_unique<bb::vk::ImageCache>(*device);
         m->targets = std::make_unique<bb::vk::TargetRenderer>(*device, *m->images);
         m->draw_pipelines = std::make_unique<bb::vk::PipelineCache>(*device, read_guest_code);
+        m->textures = std::make_unique<bb::vk::TextureCache>(*device, *m->scheduler);
+        m->binder = std::make_unique<bb::vk::TextureBinder>(*device, *m->scheduler, *m->textures,
+                                                            read_guest_bytes);
         auto& gpu = bb::hle::video::gpu_thread();
         m->recorder = std::make_unique<bb::vk::DrawRecorder>(
             *device, *m->scheduler, *m->dispatcher, *m->draw_pipelines, *m->targets, *m->mirror,
-            gpu.extent_hints());
+            gpu.extent_hints(), m->binder.get());
         Mirror* const raw = m.get();
         gpu.set_backend(
             [raw](const bb::pm4::RegisterMirror& regs, const bb::pm4::DispatchCall& call) {

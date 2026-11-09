@@ -21,6 +21,7 @@ class MemoryMirror;
 class PipelineCache;
 class Scheduler;
 class TargetRenderer;
+class TextureBinder;
 
 // Draws by outcome: recorded, not recorded because the state or a shader isn't supported yet (or
 // no target is bound), or not recorded because of an error (a Vulkan failure, an index buffer
@@ -32,14 +33,15 @@ struct DrawStats {
 };
 
 // Used by one thread (the GPU thread), with the scheduler and the dispatcher, whose draw blocks
-// and sync points it shares. Everything it is given must outlive it.
+// and sync points it shares. Everything it is given must outlive it. `textures` binds the images
+// and samplers of the stages; without it a draw whose shaders sample counts as unsupported.
 class DrawRecorder {
 public:
     DrawRecorder(const Device& device, Scheduler& scheduler, Dispatcher& dispatcher,
                  PipelineCache& pipelines, TargetRenderer& targets, const MemoryMirror& mirror,
-                 const pm4::ExtentHints& hints)
+                 const pm4::ExtentHints& hints, TextureBinder* textures = nullptr)
         : device_(device), scheduler_(scheduler), dispatcher_(dispatcher), pipelines_(pipelines),
-          targets_(targets), mirror_(mirror), hints_(hints) {}
+          targets_(targets), mirror_(mirror), hints_(hints), textures_(textures) {}
 
     // Records one draw with the registers `regs`. Never throws: a draw that can't be recorded is
     // counted and logged (reasons once each). Indirect draws are not supported yet.
@@ -59,6 +61,7 @@ private:
     TargetRenderer& targets_;
     const MemoryMirror& mirror_;
     const pm4::ExtentHints& hints_;
+    TextureBinder* textures_;
     std::atomic<std::uint64_t> recorded_ = 0, unsupported_ = 0, failed_ = 0;
     std::set<std::string> logged_;  // the reasons already logged
 };

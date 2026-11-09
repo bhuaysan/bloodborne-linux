@@ -1,10 +1,13 @@
 #include "gpu/vk/draw_recorder.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <exception>
 #include <format>
+#include <optional>
 #include <stdexcept>
+#include <tuple>
 
 #include "common/log.hpp"
 #include "si_ci_vi_merged_offset.h"
@@ -15,6 +18,7 @@
 #include "gpu/vk/pipeline_cache.hpp"
 #include "gpu/vk/rendering.hpp"
 #include "gpu/vk/scheduler.hpp"
+#include "gpu/vk/texture_binder.hpp"
 
 namespace amd = Pal::Gfx6::Chip;
 
@@ -61,6 +65,24 @@ void set_dynamic_state(VkCommandBuffer commands, const DynamicState& d, VkExtent
     vkCmdSetDepthBias(commands, d.bias_constant, 0, d.bias_slope);
     vkCmdSetBlendConstants(commands, d.blend_constants.data());
     vkCmdSetPrimitiveRestartEnable(commands, d.primitive_restart);
+}
+
+// Sets `key.images` to the classes of the T#s that `interface` reads now (empty when all are 2D
+// float, the key's default). Returns whether that changed the key, or nothing, with `why`, when a
+// T# can't be read.
+std::optional<bool> set_classes(TextureBinder& binder, const gcn::ShaderInterface& interface,
+                                std::span<const std::uint32_t, pm4::user_data_dwords> user,
+                                gcn::ShaderKey& key, std::string& why) {
+    auto classes = binder.classes(interface, user, why);
+    if (!classes) {
+        return std::nullopt;
+    }
+    if (std::ranges::all_of(*classes, [](const gcn::ImageClass& c) { return c == gcn::ImageClass{}; })) {
+        classes->clear();
+    }
+    const bool changed = key.images != *classes;
+    key.images = std::move(*classes);
+    return changed;
 }
 
 }  // namespace
@@ -155,6 +177,44 @@ bool DrawRecorder::record(const pm4::RegisterMirror& regs, const pm4::DrawCall& 
     if (pipeline == nullptr) {
         return false;
     }
+    // The textures: a pipeline translated for other image classes than the T#s have is replaced,
+    // then their descriptor sets are made. That uploads them, which a rendering can't contain, so
+    // it is ended and begun again.
+    std::array<VkDescriptorSet, 2> sets{};  // set 0 for the VS, set 1 for the PS
+    if (!pipeline->vs.images.empty() || !pipeline->ps.images.empty()) {
+        if (textures_ == nullptr) {
+            why = "the shaders sample images, and there are no textures to bind";
+            return false;
+        }
+        PipelineKey keyed = state->key;
+        const auto vs_user = regs.user_data(pm4::Stage::vs);
+        const auto ps_user = regs.user_data(pm4::Stage::ps);
+        const auto vs_changed = set_classes(*textures_, pipeline->vs, vs_user, keyed.vs.key, why);
+        const auto ps_changed = keyed.ps ? set_classes(*textures_, pipeline->ps, ps_user,
+                                                       keyed.ps->key, why)
+                                         : std::optional<bool>(false);
+        if (!vs_changed || !ps_changed) {
+            return false;
+        }
+        if ((*vs_changed || *ps_changed) &&
+            (pipeline = pipelines_.get(keyed, *targets, why)) == nullptr) {
+            return false;
+        }
+        TargetRenderer::end(commands);
+        rendering.done = true;
+        for (const auto& [set, interface, user] :
+             {std::tuple{0, &pipeline->vs, vs_user}, {1, &pipeline->ps, ps_user}}) {
+            if (!interface->images.empty() &&
+                (sets[set] = textures_->bind(*interface, user, why)) == VK_NULL_HANDLE) {
+                return false;
+            }
+        }
+        if (!targets_.begin(commands, regs, hints_)) {
+            why = "no render target is bound";
+            return false;
+        }
+        rendering.done = false;
+    }
     std::uint64_t blocks[2] = {};  // the VS's and the PS's draw block, as the push constants
     blocks[0] = dispatcher_.draw_block(regs.user_data(pm4::Stage::vs), state->key.vs.code_address);
     if (state->key.ps) {
@@ -167,6 +227,12 @@ bool DrawRecorder::record(const pm4::RegisterMirror& regs, const pm4::DrawCall& 
     vkCmdPushConstants(commands, pipeline->layout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        gcn::graphics_push_size, blocks);
+    for (std::uint32_t set = 0; set < sets.size(); ++set) {
+        if (sets[set] != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->layout,
+                                    set, 1, &sets[set], 0, nullptr);
+        }
+    }
     set_dynamic_state(commands, state->dynamic, targets->extent);
     if (indexed) {
         vkCmdBindIndexBuffer(commands, indices, indices_offset,

@@ -3,6 +3,7 @@
 // draw one triangle over the whole 16 x 8 target; the pixels with x of at least 0.5 get the
 // interpolated attribute (x, y, 0.25, 1), the others are discarded and keep the cleared value.
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <chrono>
 #include <cmath>
@@ -28,7 +29,11 @@
 #include "gpu/vk/memory_mirror.hpp"
 #include "gpu/vk/pipeline_cache.hpp"
 #include "gpu/vk/rendering.hpp"
+#include "gpu/tile/tiling.hpp"
 #include "gpu/vk/scheduler.hpp"
+#include "gpu/vk/texture_binder.hpp"
+#include "gpu/vk/texture_cache.hpp"
+#include "gpu/vk/texture_desc.hpp"
 #include "hle/kernel/dmem.hpp"
 #include "hle/kernel/vmem.hpp"
 #include "si_ci_vi_merged_offset.h"
@@ -103,8 +108,18 @@ protected:
         images_ = std::make_unique<ImageCache>(*device_);
         targets_ = std::make_unique<TargetRenderer>(*device_, *images_);
         pipelines_ = std::make_unique<PipelineCache>(*device_, reader());
+        textures_ = std::make_unique<TextureCache>(*device_, *scheduler_);
+        binder_ = std::make_unique<TextureBinder>(
+            *device_, *scheduler_, *textures_,
+            [this](std::uint64_t address, std::uint64_t bytes) -> std::span<const std::byte> {
+                if (address < guest_ || address + bytes > guest_ + 256 * kib) {
+                    return {};
+                }
+                return {reinterpret_cast<const std::byte*>(address), bytes};
+            });
         recorder_ = std::make_unique<DrawRecorder>(*device_, *scheduler_, *dispatcher_,
-                                                   *pipelines_, *targets_, *mirror_, hints_);
+                                                   *pipelines_, *targets_, *mirror_, hints_,
+                                                   binder_.get());
         parser_ = std::make_unique<Parser>(regs_);
         parser_->set_draw([this](const RegisterMirror& r, const bb::pm4::DrawCall& c) {
             recorder_->draw(r, c);
@@ -115,6 +130,8 @@ protected:
 
     void TearDown() override {
         recorder_.reset();
+        binder_.reset();
+        textures_.reset();
         dispatcher_.reset();  // waits for the GPU before the memory goes
         if (memory_ != nullptr) {
             EXPECT_EQ(sceKernelMunmap(memory_, 256 * kib), 0);
@@ -271,6 +288,8 @@ protected:
     std::unique_ptr<ImageCache> images_;
     std::unique_ptr<TargetRenderer> targets_;
     std::unique_ptr<PipelineCache> pipelines_;
+    std::unique_ptr<TextureCache> textures_;
+    std::unique_ptr<TextureBinder> binder_;
     bb::pm4::ExtentHints hints_;
     std::unique_ptr<DrawRecorder> recorder_;
     RegisterMirror regs_;
@@ -533,3 +552,151 @@ TEST_F(VkDrawRecorder, BlendingIntoATargetThatCanBlendKeepsBlendEnable) {
 }
 
 }  // namespace
+
+// Textured draws: ps_sample samples an 8 x 8 R8G8B8A8 texture at the pixel's position (its
+// attribute 0 is (x, y) over the target, point sampling, one component per sample), so the
+// target's pixel (x, y) holds the texel (x / 2, y).
+constexpr std::uint64_t texture_at = 0x3000;
+constexpr std::uint32_t texture_size = 8;
+
+class VkTexturedDraw : public VkDrawRecorder {
+protected:
+    void SetUp() override {
+        VkDrawRecorder::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
+        code_[ps_code] = bb::test::gcn::program_words("ps_sample");
+        set_texture(image_type_2d);
+        fill(0);
+    }
+
+    // The PS's user data: the T# at texture_at (type `type`) and an all-zero S# (point filter).
+    void set_texture(std::uint32_t type, std::uint32_t sampler0 = 0) {
+        const std::uint64_t at = guest_ + texture_at;
+        const std::uint32_t t[8] = {static_cast<std::uint32_t>(at >> 8),
+                                    static_cast<std::uint32_t>(at >> 40) | 10u << 20,  // 8_8_8_8 UNORM
+                                    (texture_size - 1) | (texture_size - 1) << 14,
+                                    4u | 5u << 3 | 6u << 6 | 7u << 9 | 8u << 20 | type << 28,
+                                    (texture_size - 1) << 13,
+                                    0, 0, 0};
+        sh(amd::mmSPI_SHADER_PGM_LO_PS, {ps_code >> 8, 0, 0, 12u << 1});
+        sh(amd::mmSPI_SHADER_USER_DATA_PS_0,
+           {t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], sampler0, 0, 0, 0});
+    }
+
+    // The texture's texels (x * 32, y * 32, 128 + blue, 255), tiled as its mode says.
+    void fill(std::uint32_t blue) {
+        const auto desc = decode_texture(texture_dwords());
+        const auto layout = TextureCache::guest_layout(*desc);
+        ASSERT_TRUE(layout.has_value());
+        std::vector<std::byte> linear(layout->size);
+        for (std::uint32_t y = 0; y < texture_size; ++y) {
+            for (std::uint32_t x = 0; x < texture_size; ++x) {
+                std::byte* t = &linear[(y * layout->levels[0].pitch + x) * 4];
+                t[0] = std::byte(x * 32);
+                t[1] = std::byte(y * 32);
+                t[2] = std::byte(128 + blue);
+                t[3] = std::byte(255);
+            }
+        }
+        std::vector<std::byte> tiled(layout->size);
+        bb::tile::tile(*layout, linear, tiled);
+        std::memcpy(bytes() + texture_at, tiled.data(), tiled.size());
+    }
+
+    std::array<std::uint32_t, 8> texture_dwords() {
+        const auto user = regs_.user_data(bb::pm4::Stage::ps);
+        std::array<std::uint32_t, 8> t;
+        std::copy_n(user.begin(), 8, t.begin());
+        return t;
+    }
+
+    ::testing::AssertionResult sampled(std::uint32_t blue) {
+        const auto texels = read();
+        for (std::uint32_t y = 0; y < height; ++y) {
+            for (std::uint32_t x = 0; x < width; ++x) {
+                const std::uint8_t* t = &texels[(y * width + x) * 4];
+                const int expect[4] = {int(x / 2 * 32), int(y * 32), int(128 + blue), 255};
+                for (int c = 0; c < 4; ++c) {
+                    if (std::abs(t[c] - expect[c]) > 1) {
+                        return ::testing::AssertionFailure()
+                               << "texel (" << x << ", " << y << ") channel " << c << " is "
+                               << int(t[c]) << ", expected " << expect[c];
+                    }
+                }
+            }
+        }
+        return ::testing::AssertionSuccess();
+    }
+
+    RunResult draw_once() {
+        std::vector<std::uint32_t> stream;
+        packet(stream, IT_DRAW_INDEX_AUTO, {3, 2});
+        return run(stream);
+    }
+};
+
+TEST_F(VkTexturedDraw, TheDrawSamplesTheTexture) {
+    ASSERT_EQ(draw_once(), RunResult::done);
+    EXPECT_TRUE(sampled(0));
+    EXPECT_EQ(recorder_->stats().recorded, 1u);
+    EXPECT_EQ(recorder_->stats().unsupported, 0u);
+    EXPECT_EQ(textures_->uploads(), 1u);
+}
+
+TEST_F(VkTexturedDraw, AChangedTextureIsUploadedAgainInTheNextSubmission) {
+    ASSERT_EQ(draw_once(), RunResult::done);
+    EXPECT_TRUE(sampled(0));
+    // Unchanged guest memory is not uploaded again; changed memory is, in the next submission.
+    ASSERT_EQ(draw_once(), RunResult::done);
+    EXPECT_TRUE(sampled(0));
+    EXPECT_EQ(textures_->uploads(), 1u);
+    fill(40);
+    ASSERT_EQ(draw_once(), RunResult::done);
+    EXPECT_TRUE(sampled(40));
+    EXPECT_EQ(textures_->uploads(), 2u);
+    EXPECT_EQ(recorder_->stats().recorded, 3u);
+}
+
+TEST_F(VkTexturedDraw, AnArrayTextureTranslatesTheShaderAgainForItsClass) {
+    set_texture(image_type_2d_array);  // one layer; the program was first made for a 2D image
+    ASSERT_EQ(draw_once(), RunResult::done);
+    EXPECT_TRUE(sampled(0));
+    EXPECT_EQ(recorder_->stats().recorded, 1u);
+    EXPECT_EQ(pipelines_->size(), 2u);  // for 2D float images, and for the array
+    ASSERT_EQ(draw_once(), RunResult::done);
+    EXPECT_EQ(pipelines_->size(), 2u);
+    EXPECT_EQ(recorder_->stats().recorded, 2u);
+}
+
+TEST_F(VkTexturedDraw, ABadDescriptorIsAnUnsupportedDrawNotAFailure) {
+    set_texture(image_type_2d, 1u << 15);  // a force-unnormalized S#
+    ASSERT_EQ(draw_once(), RunResult::done);
+    EXPECT_EQ(recorder_->stats().unsupported, 1u);
+    EXPECT_EQ(recorder_->stats().failed, 0u);
+    // A T# that points outside readable memory.
+    set_texture(image_type_2d);
+    const std::uint32_t far_away[2] = {0xfffff, 0x3f};
+    sh(amd::mmSPI_SHADER_USER_DATA_PS_0, {far_away[0], far_away[1]});
+    ASSERT_EQ(draw_once(), RunResult::done);
+    EXPECT_EQ(recorder_->stats().unsupported, 2u);
+    EXPECT_EQ(recorder_->stats().recorded, 0u);
+}
+
+TEST_F(VkTexturedDraw, ManyDrawsInSeveralSubmissionsKeepWorking) {
+    // 300 draws take 300 sets, more than a pool holds; the pools come back when their work is done.
+    std::vector<std::uint32_t> stream;
+    for (int i = 0; i < 300; ++i) {
+        packet(stream, IT_DRAW_INDEX_AUTO, {3, 2});
+    }
+    ASSERT_EQ(run(stream), RunResult::done);
+    EXPECT_EQ(recorder_->stats().recorded, 300u);
+    EXPECT_TRUE(sampled(0));
+    const std::size_t pools = binder_->pools();
+    ASSERT_EQ(run(stream), RunResult::done);
+    EXPECT_EQ(recorder_->stats().recorded, 600u);
+    EXPECT_TRUE(sampled(0));
+    EXPECT_EQ(binder_->pools(), pools);
+    EXPECT_EQ(textures_->uploads(), 1u);
+}
