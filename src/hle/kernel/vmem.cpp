@@ -111,9 +111,10 @@ void erase_range(std::uintptr_t start, std::uintptr_t end) {
     table.erase(table.lower_bound(start), table.lower_bound(end));
 }
 
-// Whether guest mappings cover [start, end) without a hole; with `reserved`, only regions whose
-// `reserved` equals it. Needs table_mutex.
-bool covered(std::uintptr_t start, std::uintptr_t end, std::optional<bool> reserved = {}) {
+// Whether guest mappings cover [start, end) without a hole and every region satisfies `accept`.
+// Needs table_mutex.
+template <typename Accept>
+bool covered_by(std::uintptr_t start, std::uintptr_t end, Accept accept) {
     auto it = table.upper_bound(start);
     if (it == table.begin()) {
         return false;
@@ -122,7 +123,7 @@ bool covered(std::uintptr_t start, std::uintptr_t end, std::optional<bool> reser
     std::uintptr_t at = start;
     for (; it != table.end() && it->second.start <= at; ++it) {
         if (it->second.end > at) {
-            if (reserved && it->second.reserved != *reserved) {
+            if (!accept(it->second)) {
                 return false;
             }
             at = it->second.end;
@@ -132,6 +133,12 @@ bool covered(std::uintptr_t start, std::uintptr_t end, std::optional<bool> reser
         }
     }
     return false;
+}
+
+// As covered_by; with `reserved`, only regions whose `reserved` equals it.
+bool covered(std::uintptr_t start, std::uintptr_t end, std::optional<bool> reserved = {}) {
+    return covered_by(start, end,
+                      [&](const Region& r) { return !reserved || r.reserved == *reserved; });
 }
 
 // Reserves [start, end) again over the guest mappings there. A failed MAP_FIXED may already have
@@ -510,27 +517,9 @@ bool mapped(std::uintptr_t start, std::uintptr_t end) {
 
 bool readable(std::uintptr_t start, std::uintptr_t end) {
     const std::scoped_lock lock(table_mutex);
-    if (start >= end) {
-        return false;
-    }
-    auto it = table.upper_bound(start);
-    if (it == table.begin()) {
-        return false;
-    }
-    --it;
-    std::uintptr_t at = start;
-    for (; it != table.end() && it->second.start <= at; ++it) {
-        if (it->second.end > at) {
-            if (it->second.reserved || (it->second.prot & PROT_READ) == 0) {
-                return false;
-            }
-            at = it->second.end;
-        }
-        if (at >= end) {
-            return true;
-        }
-    }
-    return false;
+    return start < end && covered_by(start, end, [](const Region& r) {
+        return !r.reserved && (r.prot & PROT_READ) != 0;
+    });
 }
 
 std::optional<Region> find(std::uintptr_t address) {
