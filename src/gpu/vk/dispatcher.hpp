@@ -3,6 +3,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -19,7 +20,7 @@ class Scheduler;
 
 // Dispatches by outcome: recorded on the scheduler, not recorded because the shader doesn't
 // translate (or has no code or program), or not recorded because of an error (a Vulkan failure,
-// indirect counts outside the mirror).
+// indirect counts outside the mirror or unaligned, group counts over the device limit).
 struct DispatchStats {
     std::uint64_t recorded = 0;
     std::uint64_t untranslated = 0;
@@ -38,7 +39,7 @@ public:
     Dispatcher& operator=(const Dispatcher&) = delete;
 
     // Records one dispatch with the CS registers `regs`. Never throws: a dispatch that can't be
-    // recorded is counted and logged (once per reason and program for translation errors).
+    // recorded is counted and logged (translation errors once per program).
     void dispatch(const pm4::RegisterMirror& regs, const pm4::DispatchCall& call);
     // The parser's sync points: before a write, waits for the recorded work (so that memory
     // packets see what the dispatches wrote); before a wait, submits it.

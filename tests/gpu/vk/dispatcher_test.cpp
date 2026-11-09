@@ -227,4 +227,56 @@ TEST_F(VkDispatcher, CountsOutsideTheMirrorFailTheDispatchOnly) {
     EXPECT_EQ(word(out_at, 0), 1u);
 }
 
+TEST_F(VkDispatcher, UnalignedCountsFailTheDispatchOnly) {
+    std::vector<std::uint32_t> stream;
+    set_state(stream, code_at);
+    const std::uint64_t base = guest_ + counts_at;
+    packet(stream, IT_SET_BASE,
+           {1, static_cast<std::uint32_t>(base), static_cast<std::uint32_t>(base >> 32)});
+    packet(stream, IT_DISPATCH_INDIRECT, {2, 1});
+    packet(stream, IT_DISPATCH_DIRECT, {1, 1, 1, 1});
+    ASSERT_EQ(run(stream), RunResult::done);
+    EXPECT_EQ(dispatcher_->stats().failed, 1u);
+    EXPECT_EQ(dispatcher_->stats().recorded, 1u);
+    EXPECT_EQ(word(out_at, 0), 1u);
+}
+
+TEST_F(VkDispatcher, GroupCountsOverTheDeviceLimitFailTheDispatchOnly) {
+    const std::uint32_t over = device_->properties().core.limits.maxComputeWorkGroupCount[0] + 1;
+    std::vector<std::uint32_t> stream;
+    set_state(stream, code_at);
+    packet(stream, IT_DISPATCH_DIRECT, {over, 1, 1, 1});
+    packet(stream, IT_DISPATCH_DIRECT, {1, 1, 1, 1});
+    ASSERT_EQ(run(stream), RunResult::done);
+    EXPECT_EQ(dispatcher_->stats().failed, 1u);
+    EXPECT_EQ(dispatcher_->stats().recorded, 1u);
+    EXPECT_EQ(word(out_at, 0), 1u);
+}
+
+TEST_F(VkDispatcher, ManyDispatchesRollOverTheDrawBlockChunks) {
+    // 256 blocks per chunk: 600 dispatches use three chunks and defer the first two.
+    constexpr unsigned count = 600;
+    std::vector<std::uint32_t> stream;
+    set_state(stream, code_at);
+    for (unsigned i = 0; i < count; ++i) packet(stream, IT_DISPATCH_DIRECT, {1, 1, 1, 1});
+    ASSERT_EQ(run(stream), RunResult::done);
+    EXPECT_EQ(word(out_at, 0), count);
+    EXPECT_EQ(dispatcher_->stats().recorded, count);
+    EXPECT_EQ(dispatcher_->stats().failed, 0u);
+}
+
+TEST_F(VkDispatcher, SyncBeforeWaitSubmitsWithoutWaiting) {
+    std::vector<std::uint32_t> stream;
+    set_state(stream, code_at);
+    packet(stream, IT_DISPATCH_DIRECT, {4, 1, 1, 1});
+    Stream s(stream);
+    ASSERT_EQ(parser_->run(s), RunResult::done);
+    ASSERT_TRUE(scheduler_->recording());
+    dispatcher_->sync(bb::pm4::SyncPoint::before_wait);
+    EXPECT_FALSE(scheduler_->recording());
+    EXPECT_GE(scheduler_->submitted(), 1u);
+    dispatcher_->sync(bb::pm4::SyncPoint::before_write);
+    EXPECT_EQ(word(out_at, 0), 4u);
+}
+
 }  // namespace

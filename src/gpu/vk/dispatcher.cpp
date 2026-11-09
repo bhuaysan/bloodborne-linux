@@ -78,8 +78,15 @@ void Dispatcher::make_chunk() {
         throw;
     }
     if (chunk_.buffer != VK_NULL_HANDLE) {
-        // The recorded dispatches still read the full chunk; free it once they completed.
-        scheduler_.defer([d, old = chunk_] { destroy(d, old); });
+        // The recorded dispatches still read the full chunk; free it once they completed. A full
+        // chunk lives until the next flush, which is far below the allocation count limit
+        // (4096 chunks are over a million dispatches).
+        try {
+            scheduler_.defer([d, old = chunk_] { destroy(d, old); });
+        } catch (...) {
+            destroy(d, chunk);
+            throw;
+        }
     }
     chunk_ = chunk;
 }
@@ -136,12 +143,21 @@ void Dispatcher::record(const pm4::RegisterMirror& regs, const pm4::DispatchCall
         const std::uint64_t window = call.indirect - mirror_.window_start();
         const std::uint64_t k = window / mirror_buffer_size;
         counts_offset = window % mirror_buffer_size;
+        // vkCmdDispatchIndirect wants a multiple of 4 (VUID-vkCmdDispatchIndirect-offset-02710).
         if (call.indirect < mirror_.window_start() || k >= mirror_.size() / mirror_buffer_size ||
-            counts_offset + group_counts_bytes > mirror_buffer_size) {
-            throw std::runtime_error(
-                std::format("indirect counts at {:#x} are outside the mirror", call.indirect));
+            counts_offset % 4 != 0 || counts_offset + group_counts_bytes > mirror_buffer_size) {
+            throw std::runtime_error(std::format(
+                "indirect counts at {:#x} are outside the mirror or unaligned", call.indirect));
         }
         counts = mirror_.buffer(k);
+    } else {
+        const auto& limit = device_.properties().core.limits.maxComputeWorkGroupCount;
+        for (int axis = 0; axis < 3; ++axis) {
+            if (call.groups[axis] > limit[axis]) {
+                throw std::runtime_error(std::format("{} groups on axis {} exceed the limit {}",
+                                                     call.groups[axis], axis, limit[axis]));
+            }
+        }
     }
 
     std::byte* block = nullptr;
@@ -157,7 +173,8 @@ void Dispatcher::record(const pm4::RegisterMirror& regs, const pm4::DispatchCall
     auto barrier = make<VkMemoryBarrier2>(VK_STRUCTURE_TYPE_MEMORY_BARRIER_2);
     barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    barrier.dstStageMask =
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
     barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT |
                             VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
     auto dependency = make<VkDependencyInfo>(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
