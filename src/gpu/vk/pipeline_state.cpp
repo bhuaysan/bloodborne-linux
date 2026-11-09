@@ -226,7 +226,7 @@ Rect scissor_rect(std::uint32_t top_left, std::uint32_t bottom_right) {
 }
 
 // Scissor, depth bias and primitive restart: the dynamic state that doesn't change the pipeline.
-void window_state(const pm4::RegisterMirror& regs, DrawState& s) {
+bool window_state(const pm4::RegisterMirror& regs, DrawState& s, std::string& why) {
     Rect r = scissor_rect(regs.get(amd::mmPA_SC_SCREEN_SCISSOR_TL),
                           regs.get(amd::mmPA_SC_SCREEN_SCISSOR_BR));
     const auto intersect = [&r](const Rect& o) {
@@ -263,6 +263,14 @@ void window_state(const pm4::RegisterMirror& regs, DrawState& s) {
          t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ||
          t == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY ||
          t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY);
+    // Vulkan restarts only on the all-ones index of the index type, so another reset index would
+    // draw the wrong geometry.
+    const std::uint32_t reset_index = regs.get(amd::mmVGT_MULTI_PRIM_IB_RESET_INDX);
+    if (s.dynamic.primitive_restart && reset_index != 0xffffu && reset_index != 0xffffffffu) {
+        why = "primitive restart with an index other than all ones";
+        return false;
+    }
+    return true;
 }
 
 bool depth_stencil_state(const pm4::RegisterMirror& regs, DrawState& s, std::string& why) {
@@ -453,7 +461,9 @@ std::optional<DrawState> draw_state(const pm4::RegisterMirror& regs, bool quad_c
         !depth_stencil_state(regs, s, why)) {
         return std::nullopt;
     }
-    window_state(regs, s);
+    if (!window_state(regs, s, why)) {
+        return std::nullopt;
+    }
     return s;
 }
 

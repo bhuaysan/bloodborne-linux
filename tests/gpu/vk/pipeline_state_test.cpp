@@ -112,9 +112,40 @@ TEST(PipelineState, DepthBiasAndPrimitiveRestart) {
 
     // Restart counts on strips and fans only: lists would need primitiveTopologyListRestart.
     set(regs, amd::mmVGT_MULTI_PRIM_IB_RESET_EN, 1u);
-    EXPECT_FALSE(snapshot(regs).dynamic.primitive_restart);  // triangle list
+    EXPECT_FALSE(snapshot(regs).dynamic.primitive_restart);  // triangle list, any reset index
+    set(regs, amd::mmVGT_MULTI_PRIM_IB_RESET_INDX, 0xffffffffu);
     set(regs, amd::mmVGT_PRIMITIVE_TYPE__CI__VI, 6u);        // triangle strip
     EXPECT_TRUE(snapshot(regs).dynamic.primitive_restart);
+    set(regs, amd::mmVGT_MULTI_PRIM_IB_RESET_INDX, 0xffffu);
+    EXPECT_TRUE(snapshot(regs).dynamic.primitive_restart);
+    set(regs, amd::mmVGT_MULTI_PRIM_IB_RESET_INDX, 0x1234u);
+    EXPECT_NE(failure(regs).find("primitive restart"), std::string::npos);
+    set(regs, amd::mmVGT_PRIMITIVE_TYPE__CI__VI, 4u);  // a list ignores the reset index
+    EXPECT_FALSE(snapshot(regs).dynamic.primitive_restart);
+}
+
+TEST(PipelineState, ScissorCornersAreSigned) {
+    RegisterMirror regs = draw_registers();
+    set(regs, amd::mmPA_SC_SCREEN_SCISSOR_TL, 0x7ff0u);  // x = -16, a 15-bit negative
+    set(regs, amd::mmPA_SC_SCREEN_SCISSOR_BR, 1080u << 16 | 100u);
+    set(regs, amd::mmPA_SC_GENERIC_SCISSOR_BR, 1080u << 16 | 1920u);
+    set(regs, amd::mmPA_SC_WINDOW_SCISSOR_BR, 1080u << 16 | 1920u);
+    VkRect2D r = snapshot(regs).dynamic.scissor;
+    EXPECT_EQ(r.offset.x, 0);  // clamped to 0, the extent shrinks with it
+    EXPECT_EQ(r.extent.width, 100u);
+    set(regs, amd::mmPA_SC_SCREEN_SCISSOR_TL, 200u);  // left of 200, right of 100: empty
+    r = snapshot(regs).dynamic.scissor;
+    EXPECT_EQ(r.extent.width, 0u);
+}
+
+TEST(PipelineState, PolyOffsetParaAloneTakesTheBackFace) {
+    RegisterMirror regs = draw_registers();
+    set(regs, amd::mmPA_SU_SC_MODE_CNTL, 1u << 13);
+    set(regs, amd::mmPA_SU_POLY_OFFSET_FRONT_OFFSET, 1.0f);
+    set(regs, amd::mmPA_SU_POLY_OFFSET_BACK_OFFSET, 3.0f);
+    const DrawState s = snapshot(regs);
+    EXPECT_TRUE(s.dynamic.depth_bias);
+    EXPECT_EQ(s.dynamic.bias_constant, 3.0f);
 }
 
 TEST(PipelineState, Stages) {
