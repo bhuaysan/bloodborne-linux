@@ -1,6 +1,10 @@
-// Facts: the fourth vertex of a rectangle primitive and the way to find it follow shadPS4's
-// emit_spirv_quad_rect.cpp (a bary-weight of -1 for the corner, +1 for the others); the code is
-// our own (docs/references.md).
+// SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Source: shadPS4 src/shader_recompiler/backend/spirv/emit_spirv_quad_rect.cpp (EmitRectListTCS),
+// commit 0d5f2739d2544d2a35c73e354cba7a32b7a81bea (docs/references.md).
+// Changed for bloodborne-linux, 2026-11-09: a geometry stage written with our SPIR-V builder
+// instead of a tessellation control shader in sirit; it emits a four-vertex triangle strip.
 
 #include "gpu/gcn/rect_list.hpp"
 

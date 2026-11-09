@@ -296,18 +296,28 @@ TEST_F(VkDrawRecorder, ARectangleListDrawsItsFourthCorner) {
     // Three corners of the rectangle that covers the target, the right-angle one in the middle:
     // the triangle alone would cover the lower-left half. The fourth corner (1, 1) with
     // attribute (1, 1) is derived by the geometry stage, so every texel is drawn.
-    const float vertices[3][8] = {{1, -1, 0, 1, 1, 0, 0.25f, 1},
-                                  {-1, -1, 0, 1, 0, 0, 0.25f, 1},
-                                  {-1, 1, 0, 1, 0, 1, 0.25f, 1}};
-    std::memcpy(bytes() + vertices_at, vertices, sizeof vertices);
-    const std::uint32_t rect_list = 17;
-    regs_.write(RegSpace::uconfig, amd::mmVGT_PRIMITIVE_TYPE__CI__VI - 0xC000,
-                std::span(&rect_list, 1));
-    std::vector<std::uint32_t> stream;
-    packet(stream, IT_DRAW_INDEX_AUTO, {3, 2});
-    ASSERT_EQ(run(stream), RunResult::done);
-    EXPECT_TRUE(triangle_in(0, width));
-    EXPECT_EQ(recorder_->stats().recorded, 1u);
+    const float corner[8] = {-1, -1, 0, 1, 0, 0, 0.25f, 1};
+    const float next[8] = {-1, 1, 0, 1, 0, 1, 0.25f, 1};
+    const float previous[8] = {1, -1, 0, 1, 1, 0, 0.25f, 1};
+    // The right-angle corner at index 0, 1 and 2 of the primitive, keeping the cyclic order.
+    const float* const orders[3][3] = {{corner, next, previous},
+                                       {previous, corner, next},
+                                       {next, previous, corner}};
+    for (int at = 0; at < 3; ++at) {
+        float vertices[3][8];
+        for (int i = 0; i < 3; ++i) {
+            std::memcpy(vertices[i], orders[at][i], sizeof vertices[i]);
+        }
+        std::memcpy(bytes() + vertices_at, vertices, sizeof vertices);
+        const std::uint32_t rect_list = 17;
+        regs_.write(RegSpace::uconfig, amd::mmVGT_PRIMITIVE_TYPE__CI__VI - 0xC000,
+                    std::span(&rect_list, 1));
+        std::vector<std::uint32_t> stream;
+        packet(stream, IT_DRAW_INDEX_AUTO, {3, 2});
+        ASSERT_EQ(run(stream), RunResult::done);
+        EXPECT_TRUE(triangle_in(0, width)) << "corner at index " << at;
+    }
+    EXPECT_EQ(recorder_->stats().recorded, 3u);
     EXPECT_EQ(recorder_->stats().unsupported, 0u);
     EXPECT_EQ(recorder_->stats().failed, 0u);
 }

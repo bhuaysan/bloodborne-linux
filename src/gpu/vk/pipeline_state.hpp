@@ -126,9 +126,9 @@ std::optional<VkBlendOp> blend_op(std::uint32_t function);
 std::optional<VkStencilOp> stencil_op(std::uint32_t op);
 VkCompareOp compare_op(std::uint32_t function);
 
-// VGT_PRIMITIVE_TYPE (shadPS4's table); nothing for the types without an equivalent yet.
 // VGT_PRIMITIVE_TYPE of a rectangle list, which topology() does not map.
 constexpr std::uint32_t rect_list_primitive = 17;
+// VGT_PRIMITIVE_TYPE (shadPS4's table); nothing for the types without an equivalent yet.
 std::optional<VkPrimitiveTopology> topology(std::uint32_t prim_type);
 
 }  // namespace bb::vk
