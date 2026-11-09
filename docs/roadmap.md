@@ -6,7 +6,7 @@ The work runs on three tracks that overlap after M2:
 
 - **Runtime:** loader and OS layer, until the game boots.
 - **Decomp:** game functions, verified with differential tests. Can start as soon as the loader can map the executable.
-- **Graphics:** GNM→Vulkan and GCN→SPIR-V. A long-running track. Nothing else waits for it.
+- **Graphics:** GNM→Vulkan and GCN→SPIR-V. A long-running track. The first frame (M4.5) and playtesting wait for it.
 
 | Milestone | Goal | Done when |
 |---|---|---|

@@ -61,7 +61,7 @@ esac
 # Paths whose changes always go to the maintainer (pathspecs).
 # A .gitattributes can hide files from diffs, so any of them is protected.
 PROTECTED="AGENTS.md docs/source-policy.md .gitignore :(glob)**/.gitattributes .github tools/githooks tools/merge-pr.sh tools/privacy-check.sh tools/run-tests.sh tools/common/toolenv.py"
-MAX_CODE_LINES=500
+MAX_CODE_LINES=800
 
 repo_root="$(git rev-parse --show-toplevel)"
 want_email="$(git -C "$repo_root" config user.email)"
@@ -118,8 +118,8 @@ count="$(git rev-list --count "$main_base..HEAD")"
 
 # shellcheck disable=SC2086  # PROTECTED is a list of pathspecs
 touched="$(git diff --name-only "$main_base" HEAD -- $PROTECTED)"
-# changed lines of code: everything except docs/ and symbols/. Copied third_party/ code
-# doesn't count either, but only in a PR that changes nothing else.
+# changed lines of code: everything except docs/, symbols/ and tests. Copied third_party/
+# code doesn't count either, but only in a PR that changes nothing else.
 skip_tp=yes
 if [ -n "$(git diff --name-only "$main_base" HEAD -- . ':!docs' ':!symbols' ':!third_party')" ]; then
     skip_tp=
@@ -127,7 +127,7 @@ fi
 # Counted from the patch with --text: --numstat shows a file marked -diff
 # in a .gitattributes as "-" and so would not count it. Real binaries
 # count by their line breaks, which sends large ones to the maintainer.
-lines="$(git diff -U0 --text --no-textconv --no-ext-diff --no-color "$main_base" HEAD -- . ':!docs' ':!symbols' ${skip_tp:+':!third_party'} |
+lines="$(git diff -U0 --text --no-textconv --no-ext-diff --no-color "$main_base" HEAD -- . ':!docs' ':!symbols' ':!tests' ':(exclude,glob)tools/**/test_*.py' ${skip_tp:+':!third_party'} |
     awk '/^diff --git / { h = 0; next } /^@@/ { h = 1; next } h && /^[-+]/ { n++ } END { print n + 0 }')"
 if [ "$maintainer" -eq 0 ]; then
     [ -z "$touched" ] || {

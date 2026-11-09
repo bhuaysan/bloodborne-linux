@@ -48,11 +48,11 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 
 ## Task tracking
 
-- Work is tracked in GitHub issues on this repo, grouped by milestones M0–M6 (see `docs/roadmap.md`).
+- Work is tracked in GitHub issues on this repo, grouped by the milestones in `docs/roadmap.md`.
 - Labels: `loader`, `hle:kernel`, `hle:gnm`, `formats`, `decomp`, `tooling`, `research`, `review`.
 - At the end of every work session, post a handoff comment on the issue: done, open, next step, gotchas.
 - If an issue can only start after another one is merged, add a line `Depends on #N` to its body. An issue starts only once every issue it depends on is merged into `main`. If a dependency goes to the maintainer instead of merging, the issues that depend on it wait as well.
-- One issue per task of about a day or more. Per-function progress goes in `symbols/functions.csv`, not in issues.
+- One issue per task with one checkable result, normally one PR. Per-function progress goes in `symbols/functions.csv`, not in issues.
 - Agents may create and comment on issues in this repository. Close issues through commits (`Fixes #N`).
 - Issue text follows the same privacy rules as commits.
 
@@ -65,23 +65,34 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 5. Register the replacement hook.
 6. Update `symbols/functions.csv` (status `decompiled` once tests pass, `replaced` once hooked in).
 
+## Decisions and efficiency
+
+Work effectively at optimal efficiency: choose the cheapest way (models, effort, number of agents, review rounds) that still delivers correct, tested work. There is no fixed token budget.
+
+Agents decide on their own how to cut and bundle issues and PRs, which models and effort to use, design questions inside a milestone, and when to start the next milestone or part. These go to the maintainer: anything that fails the merge gate, guardrail changes, license questions `docs/source-policy.md` doesn't answer, changes to the goal or architecture above, and milestone tags.
+
 ## Reviews
 
-Code is never reviewed only in the session that wrote it.
+Risky code is never reviewed only in the session that wrote it.
 
 1. **Automatic:** git hooks on every commit. From M2, CI (build with sanitizers, unit and differential tests, privacy check, and formatting and lint once there is code).
-2. **Per decompiled function:** a differential test, plus an independent review that compares the C++ against the original disassembly without seeing the author's reasoning.
-3. **Per PR:** every change goes through a PR. Before merging, an independent review runs on the PR diff in a fresh context. Use high effort for loader, ABI and graphics code. Fix review findings in the same PR unless they need their own design work. Keep PRs to at most 500 changed lines of code and tests (docs and `symbols/` don't count), and put generated data and copied `third_party/` files in a PR of their own (they don't count either).
+2. **Per decompiled function:** a differential test. Non-trivial functions also get an independent review that compares the C++ against the original disassembly without seeing the author's reasoning. Trivial means a leaf function of a few instructions that only reads or writes fields or returns a constant.
+3. **Per PR:** every change goes through a PR. The session that opens it picks the review class and names it in the PR body:
+   - **Core** (shader translator, loader, ABI, memory mirror, decompiled functions, interfaces other issues build on): an independent review of the PR diff in a fresh context at high effort, up to two fix rounds.
+   - **Normal** (all other code): one independent review in a fresh context, one fix round.
+   - **Small** (only docs, `symbols/` or tests, or at most 50 changed lines outside core code): no independent review. A PR that adds a source to `docs/references.md` is never Small.
+
+   Findings about correctness, security or licenses block the merge. Style findings are optional. Fix blocking findings in the same PR unless they need their own design work. Keep PRs to at most 800 changed lines of non-test code (docs, `symbols/`, `tests/` and `tools/**/test_*.py` don't count), and put generated data and copied `third_party/` files in a PR of their own (they don't count either). Never remove or weaken a test to meet the limit.
    **Merging:** an agent may merge a PR once it passes every part of the gate:
    - `tools/run-tests.sh` passes, locally with the game where tests need it, and in CI once it exists. `tools/merge-pr.sh` runs it again on the rebased commits, so what lands on `main` is what was tested.
    - `tools/privacy-check.sh` is clean. `tools/merge-pr.sh` runs it too.
-   - Every finding of the independent review is fixed, or moved to a linked issue because it needs its own design work, or withdrawn by the reviewer in a re-review. The PR's author can't dismiss a finding on its own. A finding it disagrees with goes to the maintainer.
-   - Every function the PR marks `replaced` in `symbols/functions.csv` passed its differential test and its disassembly review (item 2).
-   - The PR stays within the 500-line limit above.
+   - Every blocking finding of the independent review is fixed, or moved to a linked issue because it needs its own design work, or withdrawn by the reviewer in a re-review. The PR's author can't dismiss a blocking finding on its own. If it disagrees, a second independent reviewer decides from the code and the finding. If that reviewer can't decide, the finding goes to the maintainer.
+   - Every function the PR marks `replaced` in `symbols/functions.csv` passed its differential test and, unless trivial, its disassembly review (item 2).
+   - The PR stays within the 800-line limit above.
    - The PR doesn't change the guardrails: `AGENTS.md`, `docs/source-policy.md`, `.gitignore`, any `.gitattributes`, `.github/`, `tools/githooks/`, `tools/merge-pr.sh`, `tools/privacy-check.sh`, `tools/run-tests.sh` or `tools/common/toolenv.py` (it finds the game for the tests).
    - Each new source in `docs/references.md` is allowed by `docs/source-policy.md` (no leaked SDK material), as checked by the independent review. For code sources the review also checks that the license column matches the files, that copied or adapted code keeps its notices, that nothing was copied from a file whose license is not on the allow-list in `docs/source-policy.md` (it keeps the program GPL-2.0-or-later), and that `third_party/` holds only unchanged copies plus their license files.
 
-   Anything that fails the gate goes to the maintainer. `tools/merge-pr.sh` refuses guardrail changes and oversized PRs unless the maintainer runs it with `--maintainer`. Agents never pass that flag. Agents always pass `--sha <commit>`, the PR head the independent review saw; the script refuses the merge if the branch has moved since.
+   Anything that fails the gate goes to the maintainer. `tools/merge-pr.sh` refuses guardrail changes and oversized PRs unless the maintainer runs it with `--maintainer`. Agents never pass that flag. Agents always pass `--sha <commit>`, the PR head the independent review saw (for a Small PR, the head that was tested); the script refuses the merge if the branch has moved since.
    **Never use GitHub's merge button or `gh pr merge`**: GitHub writes the account's display name into the commit. Merge with `tools/merge-pr.sh --sha <reviewed head> <N>` instead. It rebases locally, runs the tests and the privacy check (which includes authorship) on the rebased commits, and fast-forwards `main`.
 4. **Per milestone:** a dedicated review session over the milestone's range covers:
    - a walkthrough of the new code

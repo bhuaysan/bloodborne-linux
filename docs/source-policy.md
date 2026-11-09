@@ -1,6 +1,6 @@
 # Source and license policy
 
-The file keeps its old name for links and tools. Since 2026-11-06 the project builds on existing work: any public source may be read and used, and code may be reused under the license rules below. The only off-limits material is listed in [Off-limits](#off-limits).
+Since 2026-11-06 the project builds on existing work: any public source may be read and used, and code may be reused under the license rules below. The only off-limits material is listed in [Off-limits](#off-limits).
 
 ## Off-limits
 
@@ -52,6 +52,7 @@ Commit a NID only together with what we know about it: a matched name in `symbol
 
 | Date | Change |
 |---|---|
+| 2026-11-09 | File renamed from `clean-room.md`. The policy itself is unchanged. |
 | 2026-11-06 | Maintainer decision: the clean-room approach is dropped. Every public source is allowed except leaked Sony SDK material and copies of game data. NID names may come from public NID lists and emulator code. The project moves from MIT to GPL-2.0-or-later, so GPL-2.0-or-later code (for example from PS4 emulators) may be reused with its notices. |
 | 2026-11-05 | Maintainer decision: the four code source categories are allowed under license rules. Previously, emulator source and FromSoftware format material were off-limits, and driver source was not allowed. Modding material about the games stays off-limits but is now named in detail. NID name tables are off-limits from any source, and reading an emulator's HLE code for a library puts that library under the exposure-log handling. Tools run as programs are allowed, except tools from off-limits projects. AMD's Sea Islands documentation is named explicitly. |
 
