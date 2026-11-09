@@ -48,9 +48,7 @@ TEST(VkMirrorWiring, MapsUnmapsAndReleasesKeepTheMirrorConsistent) {
 
     auto allocate = [] {
         std::uint64_t offset = ~std::uint64_t{0};
-        EXPECT_EQ(allocate_direct(0, direct_memory_size(), 256 * kib, 64 * kib, 0,
-                                        &offset),
-                  0);
+        EXPECT_EQ(allocate_direct(0, direct_memory_size(), 256 * kib, 64 * kib, 0, &offset), 0);
         return offset;
     };
     auto map = [](std::uint64_t offset) {
@@ -80,6 +78,26 @@ TEST(VkMirrorWiring, MapsUnmapsAndReleasesKeepTheMirrorConsistent) {
     EXPECT_EQ(sceKernelMunmap(view, 256 * kib), 0);
     EXPECT_EQ(observer.unbinds(), 1u);
     EXPECT_EQ(mirror->imports(), 0u);
+
+    // Two views in one 64 KiB block: releasing the memory of one drops the block, and the observer
+    // forgets the neighbour's pages in it, so the neighbour's unmap has nothing left to unbind.
+    const std::uint64_t shared = allocate();
+    void* left = nullptr;
+    void* right = nullptr;
+    ASSERT_EQ(map_direct(&left, 16 * kib, 3, 0, shared, 16 * kib), 0);
+    ASSERT_EQ(map_direct(&right, 16 * kib, 3, 0, shared + 16 * kib, 16 * kib), 0);
+    ASSERT_EQ(reinterpret_cast<std::uintptr_t>(left) / (64 * kib),
+              reinterpret_cast<std::uintptr_t>(right) / (64 * kib));
+    EXPECT_EQ(observer.binds(), 4u);
+    EXPECT_EQ(observer.ranges(), 2u);
+    EXPECT_EQ(release_direct(shared, 16 * kib), 0);
+    EXPECT_EQ(observer.releases(), 2u);
+    EXPECT_EQ(observer.ranges(), 0u);
+    EXPECT_EQ(mirror->imports(), 0u);
+    EXPECT_EQ(sceKernelMunmap(right, 16 * kib), 0);
+    EXPECT_EQ(sceKernelMunmap(left, 16 * kib), 0);
+    EXPECT_EQ(observer.unbinds(), 1u);
+    EXPECT_EQ(release_direct(shared + 16 * kib, 240 * kib), 0);
 
     vmem::set_direct_observer(nullptr);
 }
