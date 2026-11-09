@@ -130,6 +130,10 @@ int protect(std::uintptr_t start, std::uint64_t length, int prot);
 // Whether guest mappings cover [start, end) without a hole. False for an empty range.
 bool mapped(std::uintptr_t start, std::uintptr_t end);
 
+// Whether [start, end) is covered without a hole by mappings that the guest can read: no
+// reservation and no region without PROT_READ. False for an empty range.
+bool readable(std::uintptr_t start, std::uintptr_t end);
+
 // The region that holds `address`.
 std::optional<Region> find(std::uintptr_t address);
 

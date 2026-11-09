@@ -301,7 +301,7 @@ std::span<const std::uint32_t> read_guest_code(std::uint64_t address) {
     std::uint64_t bytes = 0;
     while (bytes < limit) {
         const std::uint64_t next = std::min(limit, ((address + bytes) / page + 1) * page - address);
-        if (!bb::hle::kernel::vmem::mapped(address, address + next)) {
+        if (!bb::hle::kernel::vmem::readable(address, address + next)) {
             break;
         }
         bytes = next;

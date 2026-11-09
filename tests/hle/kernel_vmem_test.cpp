@@ -197,6 +197,24 @@ TEST(KernelVmem, MappingsWithoutAFixedAddressGoToTheGuestWindow) {
     }
 }
 
+// readable() is false for a hole, a reservation and a mapping without PROT_READ, unlike mapped().
+TEST(KernelVmem, ReadableExcludesReservationsAndUnreadablePages) {
+    const std::uintptr_t p = map_pages(4);
+    EXPECT_TRUE(vmem::readable(p, p + 4 * page_size));
+    EXPECT_FALSE(vmem::readable(p, p));
+    ASSERT_EQ(vmem::protect(p + page_size, page_size, 0), 0);
+    EXPECT_TRUE(vmem::mapped(p, p + 4 * page_size));
+    EXPECT_FALSE(vmem::readable(p, p + 4 * page_size));
+    EXPECT_TRUE(vmem::readable(p + 2 * page_size, p + 4 * page_size));
+    ASSERT_EQ(sceKernelMunmap(ptr(p + 3 * page_size), page_size), 0);
+    EXPECT_FALSE(vmem::readable(p + 2 * page_size, p + 4 * page_size));
+    EXPECT_TRUE(vmem::readable(p + 2 * page_size, p + 3 * page_size));
+    std::uintptr_t r = 0;
+    ASSERT_EQ(vmem::reserve(0, 2 * page_size, page_size, r), 0);
+    EXPECT_TRUE(vmem::mapped(r, r + 2 * page_size));
+    EXPECT_FALSE(vmem::readable(r, r + 2 * page_size));
+}
+
 // An unmapped range in the window is reserved again, not returned to the host.
 TEST(KernelVmem, AnUnmappedRangeInTheWindowStaysReserved) {
     const std::uintptr_t p = map_pages(4);

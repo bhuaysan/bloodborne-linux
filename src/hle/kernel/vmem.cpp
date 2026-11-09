@@ -508,6 +508,31 @@ bool mapped(std::uintptr_t start, std::uintptr_t end) {
     return start < end && covered(start, end);
 }
 
+bool readable(std::uintptr_t start, std::uintptr_t end) {
+    const std::scoped_lock lock(table_mutex);
+    if (start >= end) {
+        return false;
+    }
+    auto it = table.upper_bound(start);
+    if (it == table.begin()) {
+        return false;
+    }
+    --it;
+    std::uintptr_t at = start;
+    for (; it != table.end() && it->second.start <= at; ++it) {
+        if (it->second.end > at) {
+            if (it->second.reserved || (it->second.prot & PROT_READ) == 0) {
+                return false;
+            }
+            at = it->second.end;
+        }
+        if (at >= end) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::optional<Region> find(std::uintptr_t address) {
     const std::scoped_lock lock(table_mutex);
     auto it = table.upper_bound(address);
