@@ -199,4 +199,54 @@ TEST(Pm4Parser, MalformedPacketsStopTheStream) {
     }
 }
 
+TEST(Pm4Parser, DispatchesReachTheCallbackWithTheRegistersTheyRunWith) {
+    Fixture f;
+    std::vector<bb::pm4::DispatchCall> calls;
+    std::vector<std::uint32_t> counts;  // COMPUTE_NUM_THREAD_X at each call
+    f.parser.set_dispatch([&](const RegisterMirror& regs, const bb::pm4::DispatchCall& call) {
+        calls.push_back(call);
+        counts.push_back(regs.num_threads(0));
+    });
+    std::vector<std::uint32_t> dcb;
+    packet(dcb, IT_SET_SH_REG, {0x207, 64});  // COMPUTE_NUM_THREAD_X
+    packet(dcb, IT_DISPATCH_DIRECT, {4, 5, 6, 1});
+    packet(dcb, IT_DISPATCH_DIRECT, {1, 1, 1, 0});  // COMPUTE_SHADER_EN clear: skipped
+    packet(dcb, IT_SET_SH_REG, {0x207, 32});
+    packet(dcb, IT_SET_BASE, {0, 0x1111, 0});  // another base index: ignored
+    packet(dcb, IT_SET_BASE, {1, 0xAAAA0000u, 0x12345});  // the address keeps 48 bits
+    packet(dcb, IT_DISPATCH_INDIRECT, {0x10, 1});
+    Stream stream(dcb);
+    EXPECT_EQ(f.parser.run(stream), RunResult::done);
+    ASSERT_EQ(calls.size(), 2u);
+    EXPECT_EQ(calls[0].groups, (std::array<std::uint32_t, 3>{4, 5, 6}));
+    EXPECT_EQ(calls[0].indirect, 0u);
+    EXPECT_EQ(calls[1].indirect, 0x2345AAAA0010u);
+    EXPECT_EQ(counts, (std::vector<std::uint32_t>{64, 32}));
+}
+
+TEST(Pm4Parser, IndirectDispatchNeedsABaseAndShortPacketsFail) {
+    const std::vector<std::vector<std::uint32_t>> cases = {
+        {type3_header(IT_DISPATCH_INDIRECT, 2), 0, 1},  // no SET_BASE yet
+        {type3_header(IT_DISPATCH_DIRECT, 3), 1, 1, 1},  // no initiator
+        {type3_header(IT_DISPATCH_INDIRECT, 1), 0},      // no initiator
+        {type3_header(IT_SET_BASE, 2), 1, 0},            // no address high
+    };
+    for (const auto& body : cases) {
+        Fixture f;
+        int calls = 0;
+        f.parser.set_dispatch([&](const RegisterMirror&, const bb::pm4::DispatchCall&) { ++calls; });
+        Stream stream(body);
+        EXPECT_EQ(f.parser.run(stream), RunResult::error) << std::hex << body[0];
+        EXPECT_EQ(calls, 0);
+    }
+}
+
+TEST(Pm4Parser, DispatchesWithoutACallbackAreSkipped) {
+    Fixture f;
+    std::vector<std::uint32_t> dcb;
+    packet(dcb, IT_DISPATCH_DIRECT, {1, 1, 1, 1});
+    Stream stream(dcb);
+    EXPECT_EQ(f.parser.run(stream), RunResult::done);
+}
+
 }  // namespace

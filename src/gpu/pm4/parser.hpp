@@ -39,6 +39,15 @@ enum class SyncPoint : std::uint8_t { before_write, before_wait };
 // The interrupt source of an end-of-pipe interrupt from the graphics queue (shadPS4's GfxEop).
 inline constexpr std::uint32_t gfx_eop_interrupt = 0x40;
 
+// A DISPATCH_DIRECT or DISPATCH_INDIRECT that ran. `indirect` is the guest address of the three
+// dwords of group counts (SET_BASE address + the packet's offset), or 0 for a direct dispatch,
+// which has `groups`. `initiator` is COMPUTE_DISPATCH_INITIATOR (bit 0 is COMPUTE_SHADER_EN).
+struct DispatchCall {
+    std::array<std::uint32_t, 3> groups{};
+    std::uint64_t indirect = 0;
+    std::uint32_t initiator = 0;
+};
+
 class Stream {
 public:
     // The submitted buffer plus three nested INDIRECT_BUFFERs.
@@ -88,6 +97,9 @@ public:
     using Readable = std::function<bool(const void* address, std::size_t bytes)>;
     // Called at each SyncPoint; without one the parser goes ahead at once.
     using Sync = std::function<void(SyncPoint point)>;
+    // Called for each dispatch with the registers it runs with; without one, dispatches are
+    // skipped. The backend records it and does not wait for it.
+    using Dispatch = std::function<void(const RegisterMirror&, const DispatchCall&)>;
     // Called with the source of each interrupt that an EVENT_WRITE_EOP or RELEASE_MEM asks for,
     // after its memory write.
     using Interrupt = std::function<void(std::uint32_t source)>;
@@ -97,6 +109,7 @@ public:
     void set_trace(Trace trace) { trace_ = std::move(trace); }
     void set_readable(Readable readable) { readable_ = std::move(readable); }
     void set_sync(Sync sync) { sync_ = std::move(sync); }
+    void set_dispatch(Dispatch dispatch) { dispatch_ = std::move(dispatch); }
     void set_interrupt(Interrupt interrupt) { interrupt_ = std::move(interrupt); }
 
     RunResult run(Stream& stream);
@@ -147,6 +160,8 @@ private:
     Readable readable_;
     Sync sync_;
     Interrupt interrupt_;
+    Dispatch dispatch_;
+    std::uint64_t indirect_base_ = 0;  // SET_BASE, base index 1
     std::uint32_t interrupt_source_ = gfx_eop_interrupt;  // of the running stream
     std::unordered_set<std::uint32_t> logged_variants_;
     std::array<std::uint32_t, 2> context_control_{};

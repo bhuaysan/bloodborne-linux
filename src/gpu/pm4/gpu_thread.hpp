@@ -64,6 +64,13 @@ public:
     void submit(Queue queue, std::span<const std::span<const std::uint32_t>> buffers,
                 bool ends_frame = false);
 
+    // Hands dispatches and the parser's sync points to a backend (Parser::set_dispatch and
+    // set_sync). Both run on the GPU thread. Call it before the first submit.
+    void set_backend(Parser::Dispatch dispatch, Parser::Sync sync) {
+        parser_.set_dispatch(std::move(dispatch));
+        parser_.set_sync(std::move(sync));
+    }
+
     // Waits until every queue is empty. False if `timeout` passed first.
     bool wait_idle(std::chrono::milliseconds timeout);
 

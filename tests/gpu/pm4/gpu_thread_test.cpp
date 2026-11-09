@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <span>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -51,6 +52,31 @@ TEST(GpuThread, StartsWithTheClearStateDefaults) {
     submit(gpu, {clear});
     ASSERT_TRUE(gpu.wait_idle(5s));
     EXPECT_EQ(gpu.registers().get(0xA317), 0x10u);
+}
+
+TEST(GpuThread, BackendGetsDispatchesAndSyncPointsOnTheGpuThread) {
+    GpuThread gpu;
+    std::atomic<int> dispatches = 0, syncs = 0;
+    std::atomic<std::thread::id> dispatch_thread;
+    gpu.set_backend(
+        [&](const bb::pm4::RegisterMirror&, const bb::pm4::DispatchCall& call) {
+            EXPECT_EQ(call.groups[0], 3u);
+            dispatch_thread = std::this_thread::get_id();
+            ++dispatches;
+        },
+        [&](bb::pm4::SyncPoint) { ++syncs; });
+    std::uint32_t label = 0;
+    const auto address = reinterpret_cast<std::uint64_t>(&label);
+    std::vector<std::uint32_t> stream;
+    packet(stream, IT_DISPATCH_DIRECT, {3, 1, 1, 1});
+    packet(stream, IT_WRITE_DATA, {0x00000500, static_cast<std::uint32_t>(address),
+                                   static_cast<std::uint32_t>(address >> 32), 9});
+    submit(gpu, {stream});
+    ASSERT_TRUE(gpu.wait_idle(5s));
+    EXPECT_EQ(dispatches, 1);
+    EXPECT_EQ(syncs, 1);  // before the WRITE_DATA
+    EXPECT_EQ(label, 9u);
+    EXPECT_NE(dispatch_thread.load(), std::this_thread::get_id());
 }
 
 TEST(GpuThread, RunsStreamsInSubmissionOrder) {

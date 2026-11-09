@@ -184,6 +184,37 @@ Parser::Step Parser::execute(Stream& stream, const Packet& packet) {
     case IT_CLEAR_STATE:
         regs_.clear_context();
         break;
+    case IT_SET_BASE:
+        // BASE_INDEX 1 is the base of the indirect arguments (DISPATCH_INDIRECT, DRAW_INDIRECT).
+        if (too_short(3)) {
+            return Step::fail;
+        }
+        if ((packet.body[0] & 0xF) == 1) {
+            indirect_base_ = packet.body[1] | std::uint64_t{packet.body[2] & 0xFFFF} << 32;
+        }
+        break;
+    case IT_DISPATCH_DIRECT:
+    case IT_DISPATCH_INDIRECT: {
+        const bool direct = packet.opcode() == IT_DISPATCH_DIRECT;
+        if (too_short(direct ? 4 : 2)) {
+            return Step::fail;
+        }
+        DispatchCall call;
+        call.initiator = packet.body[direct ? 3 : 1];
+        if (direct) {
+            call.groups = {packet.body[0], packet.body[1], packet.body[2]};
+        } else {
+            call.indirect = indirect_base_ + packet.body[0];
+            if (indirect_base_ == 0 || !accessible(call.indirect, 12)) {
+                return Step::fail;
+            }
+        }
+        // COMPUTE_SHADER_EN (bit 0) off: the packet dispatches nothing.
+        if (dispatch_ && (call.initiator & 1) != 0) {
+            dispatch_(regs_, call);
+        }
+        break;
+    }
     case IT_WRITE_DATA:
     case IT_COPY_DATA:
     case IT_DMA_DATA__CI__VI:
