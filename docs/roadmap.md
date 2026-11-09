@@ -24,13 +24,15 @@ Each step is a GitHub milestone, and tasks are tracked as issues.
 |---|---|---|
 | **R1 Rules** | The new plan is written down | `AGENTS.md`, this roadmap, `docs/source-policy.md` and `docs/architecture.md` describe it. The open issues of the old milestones are closed or moved |
 | **R2 Test rig** | Compare our program with the reference | One command runs the reference or our program with scripted input, a time limit, a memory limit and a read-only game directory, and writes logs, screenshots and per-frame times to `analysis/`. The reference run from the main menu through character creation and the intro to the clinic can be repeated |
-| **R3 Shader translator** | Translate every shader | `shader_recompiler` from shadPS4 v.0.21.0 runs in our tree. Each of the 3,832 distinct programs in the corpus translates and passes `spirv-val`, or is listed with a reason. `src/gpu/gcn` is gone |
-| **R4 Renderer** | Our program draws the game | `video_core` runs behind a thin host layer (guest memory, write tracking, flips, window). `bb-run` shows the main menu, and its frame matches the reference. `src/gpu/pm4` and the memory mirror are gone |
+| **R3 Shader translator** | Translate every shader | `shader_recompiler` from shadPS4 v.0.21.0 runs in our tree. Each of the 3,832 distinct programs in the corpus translates and passes `spirv-val`, or is listed with a reason |
+| **R4 Renderer** | Our program draws the game | `video_core` runs behind a thin host layer (guest memory, write tracking, flips, window). `bb-run` shows the main menu, and its frame matches the reference. `src/gpu/gcn`, `src/gpu/pm4` and the memory mirror are gone |
 | **R5 OS gaps** | The game is playable in our program | Pad, audio with ATRAC9, video playback and dialogs work. Under scripted input our program goes from the menu through a new game to the clinic, saves and continues, and runs 25 minutes without a crash, like the reference |
 | **R6 Rewrite** | Fit the derived code to this port | Emulator structure a single-game port doesn't need is gone: settings objects, debug state, singletons, paths for other games. Each rewrite is checked against reference frames, frame times and the shader corpus. Whatever stays in shadPS4's shape stays on purpose, and the reason is written down. Can overlap R7 |
 | **R7 Playthrough** | The complete game is playable | The game can be played from the start to an ending on the reference machine, without a crash or a rendering fault that blocks play. The work goes area by area, and every fault found gets an issue |
 | **R8 Performance and quality** | The best version of the game | Frame times stay even at the game's original frame rate on the reference machine. Shaders are translated ahead of time and pipelines are cached on disk, so a second visit to an area doesn't stutter. A resolution and a frame rate above the PS4's can be set and run without gameplay faults. Engine render functions are replaced with hooks where that measurably helps |
 | **Decomp** (continuous, as needed) | Replace game code where that helps | No end state of its own. A function is decompiled when an issue needs it for a bug, a crash, a bottleneck or a limit such as the frame rate. It passes its differential test and is hooked in. Progress is tracked in `symbols/functions.csv` |
+
+`src/gpu/gcn` stays through R3 because `src/gpu/vk` and tests still depend on it, so it goes in R4 (maintainer decision, 2026-11-09).
 
 The maintainer tags each completed milestone after its review.
 
