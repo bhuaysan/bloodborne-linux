@@ -152,7 +152,7 @@ TEST(PipelineState, Raster) {
 TEST(PipelineState, Blend) {
     RegisterMirror regs = draw_registers();
     EXPECT_EQ(snapshot(regs).key.blend[0], BlendAttachment{.write_mask = 0});  // CB_TARGET_MASK 0
-    set(regs, amd::mmCB_TARGET_MASK, 0x000f0f07u);
+    set(regs, amd::mmCB_TARGET_MASK, 0x000ffff7u);
     set(regs, amd::mmCB_BLEND_RED, 0.25f);
     set(regs, amd::mmCB_BLEND_ALPHA, 1.0f);
     // Target 1: src alpha, one minus src alpha, add; alpha not separate, so the same.
@@ -171,7 +171,7 @@ TEST(PipelineState, Blend) {
     const auto& b = s.key.blend;
     EXPECT_EQ(b[0].write_mask, 7);
     EXPECT_FALSE(b[0].enable);
-    EXPECT_EQ(b[1].write_mask, 0);
+    EXPECT_EQ(b[1].write_mask, 0xf);
     EXPECT_EQ(std::vector({b[1].src_color, b[1].dst_color, b[1].src_alpha, b[1].dst_alpha}),
               std::vector({VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
                            VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA}));
@@ -183,14 +183,14 @@ TEST(PipelineState, Blend) {
     EXPECT_EQ(std::pair(b[2].color_op, b[2].alpha_op),
               std::pair(VK_BLEND_OP_MAX, VK_BLEND_OP_REVERSE_SUBTRACT));
     // Disabled and bypassed: the default factors, so equal keys, with the mask of the nibble.
-    EXPECT_EQ(b[3], (BlendAttachment{.write_mask = 0}));
+    EXPECT_EQ(b[3], BlendAttachment{});
     EXPECT_EQ(b[4], BlendAttachment{});
     EXPECT_EQ(s.dynamic.blend_constants, (std::array<float, 4>{0.25f, 0, 0, 1}));
 
     set(regs, amd::mmCB_BLEND0_CONTROL + 5, 1u | 15u << 8 | 1u << 30);  // src1 colour
     // Slot 5 is unbound (mask nibble 0): its stale control is not decoded and the key is unchanged.
     EXPECT_EQ(snapshot(regs).key.blend[5], BlendAttachment{.write_mask = 0});
-    set(regs, amd::mmCB_TARGET_MASK, 0x00ff0f07u);
+    set(regs, amd::mmCB_TARGET_MASK, 0x00fffff7u);
     EXPECT_EQ(failure(regs), "target 5: dual-source blend factor 15");
     set(regs, amd::mmCB_BLEND0_CONTROL + 5, 1u | 11u << 8 | 1u << 30);
     EXPECT_NE(failure(regs).find("target 5: CB_BLEND_CONTROL"), std::string::npos);

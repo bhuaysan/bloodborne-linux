@@ -74,7 +74,7 @@ TEST_F(ClipSpace, FullScreenPass) {
 class RasterState : public bb::test::EbootTest {
 protected:
     // `sets` are (writer address, value); a non-zero `blend0` is written to CB_BLEND0_CONTROL
-    // (SET_CONTEXT_REG 0xa1e0) as a raw packet.
+    // (SET_CONTEXT_REG 0xa1e0) as a raw packet, with CB_TARGET_MASK (0xa08e) 0xf to bind target 0.
     bb::vk::DrawState draw(const std::vector<std::pair<std::uint32_t, std::uint32_t>>& sets,
                            std::uint32_t blend0 = 0) {
         std::array<std::uint32_t, 256> buffer{};
@@ -89,7 +89,7 @@ protected:
             image().fn<Writer>(writer)(&cb, value);
         }
         if (blend0 != 0) {
-            for (const std::uint32_t word : {0xc0016900u, 0x1e0u, blend0}) {
+            for (const std::uint32_t word : {0xc0016900u, 0x1e0u, blend0, 0xc0016900u, 0x8eu, 0xfu}) {
                 *cb.cursor++ = word;
             }
         }
