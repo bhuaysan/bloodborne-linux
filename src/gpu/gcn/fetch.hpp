@@ -18,6 +18,7 @@ struct FetchSite {
     // The byte offset in the fetch code of each inlined instruction: program[call + 1 + i] is the
     // instruction at offsets[i].
     std::vector<std::uint32_t> offsets;
+    std::uint32_t dwords = 0;  // the subroutine's size including its s_setpc_b64
 
     // Whether program[index] came from the fetch subroutine.
     bool inlined(std::uint32_t index) const {

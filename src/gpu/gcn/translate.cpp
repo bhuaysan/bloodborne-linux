@@ -234,6 +234,7 @@ public:
         : code_(code),
           key_(key),
           program_(decode(code)),
+          code_dwords_((program_.back().offset >> 2) + program_.back().size),
           fetch_(key.stage == Stage::vertex ? detail::inline_fetch(program_, fetch)
                                             : detail::FetchSite{}),
           cfg_(build_cfg(program_)),
@@ -289,7 +290,9 @@ public:
                  .stored_images = image_sources_.stored,
                  .wave_size_dependent = wave_size_dependent_,
                  .mask_round_trip = round_trip(),
-                 .calls_fetch = fetch_.call != detail::FetchSite::none}};
+                 .calls_fetch = fetch_.call != detail::FetchSite::none},
+                code_dwords_,
+                fetch_.dwords};
     }
 
 private:
@@ -2515,6 +2518,7 @@ private:
     std::span<const std::uint32_t> code_;
     const ShaderKey& key_;
     std::vector<Instruction> program_;
+    std::uint32_t code_dwords_;  // before fetch_ inlines into program_
     detail::FetchSite fetch_;
     Cfg cfg_;
     ImageSources image_sources_;
