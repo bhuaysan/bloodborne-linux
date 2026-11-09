@@ -86,6 +86,7 @@ private:
     Engine engine_;
     std::uint32_t interrupt_source_;
     bool ends_frame_ = false;
+    std::uint64_t indirect_base_ = 0;  // SET_BASE, base index 1; per stream
 };
 
 class Parser {
@@ -161,7 +162,6 @@ private:
     Sync sync_;
     Interrupt interrupt_;
     Dispatch dispatch_;
-    std::uint64_t indirect_base_ = 0;  // SET_BASE, base index 1
     std::uint32_t interrupt_source_ = gfx_eop_interrupt;  // of the running stream
     std::unordered_set<std::uint32_t> logged_variants_;
     std::array<std::uint32_t, 2> context_control_{};

@@ -241,6 +241,49 @@ TEST(Pm4Parser, IndirectDispatchNeedsABaseAndShortPacketsFail) {
     }
 }
 
+TEST(Pm4Parser, ComputeRingIndirectDispatchCarriesItsAddress) {
+    Fixture f;
+    std::vector<bb::pm4::DispatchCall> calls;
+    f.parser.set_dispatch(
+        [&](const RegisterMirror&, const bb::pm4::DispatchCall& call) { calls.push_back(call); });
+    std::vector<std::uint32_t> ring;
+    packet(ring, IT_DISPATCH_INDIRECT, {0xAAAA0010u, 0x12345, 1});  // no SET_BASE
+    packet(ring, IT_DISPATCH_INDIRECT, {0x1000, 0, 0});  // COMPUTE_SHADER_EN clear
+    Stream stream(ring, bb::pm4::Engine::compute);
+    EXPECT_EQ(f.parser.run(stream), RunResult::done);
+    ASSERT_EQ(calls.size(), 1u);
+    EXPECT_EQ(calls[0].indirect, 0x2345AAAA0010u);
+}
+
+TEST(Pm4Parser, IndirectBaseBelongsToItsStream) {
+    Fixture f;
+    int calls = 0;
+    f.parser.set_dispatch([&](const RegisterMirror&, const bb::pm4::DispatchCall&) { ++calls; });
+    std::vector<std::uint32_t> first;
+    packet(first, IT_SET_BASE, {1, 0x1000, 0});
+    packet(first, IT_DISPATCH_INDIRECT, {0, 1});
+    std::vector<std::uint32_t> second;
+    packet(second, IT_DISPATCH_INDIRECT, {0, 1});
+    Stream a(first);
+    EXPECT_EQ(f.parser.run(a), RunResult::done);
+    Stream b(second);
+    EXPECT_EQ(f.parser.run(b), RunResult::error);
+    EXPECT_EQ(calls, 1);
+}
+
+TEST(Pm4Parser, IndirectDispatchWithUnreadableCountsFails) {
+    Fixture f;
+    int calls = 0;
+    f.parser.set_dispatch([&](const RegisterMirror&, const bb::pm4::DispatchCall&) { ++calls; });
+    f.parser.set_readable([](const void*, std::size_t) { return false; });
+    std::vector<std::uint32_t> dcb;
+    packet(dcb, IT_SET_BASE, {1, 0x1000, 0});
+    packet(dcb, IT_DISPATCH_INDIRECT, {0, 1});
+    Stream stream(dcb);
+    EXPECT_EQ(f.parser.run(stream), RunResult::error);
+    EXPECT_EQ(calls, 0);
+}
+
 TEST(Pm4Parser, DispatchesWithoutACallbackAreSkipped) {
     Fixture f;
     std::vector<std::uint32_t> dcb;

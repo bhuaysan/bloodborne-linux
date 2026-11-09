@@ -12,8 +12,10 @@
 // offset back to the game after each run (docs/design/graphics.md, second-wave item 20).
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -65,8 +67,12 @@ public:
                 bool ends_frame = false);
 
     // Hands dispatches and the parser's sync points to a backend (Parser::set_dispatch and
-    // set_sync). Both run on the GPU thread. Call it before the first submit.
+    // set_sync). Both run on the GPU thread, which reads them without a lock: call it only while
+    // nothing is submitted (before the first submit_* or map_ring); it asserts the queues are idle.
     void set_backend(Parser::Dispatch dispatch, Parser::Sync sync) {
+        const std::lock_guard lock(mutex_);
+        assert(std::ranges::all_of(queues_, [](const auto& q) { return q.empty(); }) &&
+               "set_backend while streams are queued");
         parser_.set_dispatch(std::move(dispatch));
         parser_.set_sync(std::move(sync));
     }
