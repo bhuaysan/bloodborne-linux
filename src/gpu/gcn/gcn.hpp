@@ -131,6 +131,12 @@ enum class Until {
     subroutine_end,  // the first s_setpc_b64, the return of a subroutine (the fetch subroutine)
 };
 
+// The dwords at the start of `code` that decide how the program there decodes: all of the
+// program (or subroutine) when it decodes, else up to and including the instruction that fails.
+// For a cache that keeps a rejected program: what it must still match to give the same error.
+// At most the whole of `code`.
+std::uint32_t readable_extent(std::span<const std::uint32_t> code, Until until);
+
 // Decodes the program at the start of `code`. With Until::program_end and Until::subroutine_end,
 // `code` may extend past the program, and running out of code before the end is an error. Throws
 // GcnError.

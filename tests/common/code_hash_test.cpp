@@ -29,4 +29,24 @@ TEST(CodeHash, EveryDwordAndTheLengthCount) {
     EXPECT_NE(hash_code({}), hash_code(std::vector<std::uint32_t>{0}));
 }
 
+// The probe answers as CodeStamp::matches does, for stamps of several lengths.
+TEST(CodeHash, ProbeMatchesLikeTheStamp) {
+    std::vector<std::uint32_t> code(40);
+    for (std::size_t i = 0; i < code.size(); ++i) code[i] = static_cast<std::uint32_t>(i * 77 + 1);
+    bb::common::CodeProbe probe(code);
+    const auto a = bb::common::CodeStamp::of(code, 10);
+    const auto b = bb::common::CodeStamp::of(code, 30);
+    EXPECT_TRUE(probe.matches(a));
+    EXPECT_TRUE(probe.matches(b));
+    EXPECT_TRUE(probe.matches(a));
+    EXPECT_TRUE(probe.matches({}));
+    auto longer = bb::common::CodeStamp::of(code, 40);
+    longer.dwords = 41;  // more than is readable
+    EXPECT_FALSE(probe.matches(longer));
+    auto other = a;
+    other.hash ^= 1;
+    EXPECT_FALSE(probe.matches(other));
+    EXPECT_TRUE(probe.matches(a));
+}
+
 }  // namespace

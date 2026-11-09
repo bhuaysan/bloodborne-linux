@@ -154,6 +154,21 @@ TEST_F(VkComputePipeline, CodeFixedAtTheSameAddressLeavesTheKeptError) {
     EXPECT_NE(cache_->get(*state, why_), nullptr) << why_;
 }
 
+// A rejected program is stamped with the dwords that decide the error, not the mapping after it.
+TEST_F(VkComputePipeline, KeptErrorIgnoresDataAfterTheRejectedInstruction) {
+    set_cs(regs_, program, 2u << 1, 128);
+    const auto state = compute_state(regs_, why_);
+    ASSERT_TRUE(state) << why_;
+    code_[program] = {0xffffffffu, 0, 0, 0, 0, 0};  // no instruction
+    EXPECT_EQ(cache_->get(*state, why_), nullptr);
+    const std::string first = why_;
+    code_[program][5] = 0x1234;  // a neighbour's data
+    EXPECT_EQ(cache_->get(*state, why_), nullptr);
+    EXPECT_EQ(why_, first);
+    EXPECT_EQ(cache_->translations(), 1u);
+    EXPECT_EQ(cache_->size(), 1u);
+}
+
 TEST_F(VkComputePipeline, KeepsTranslationErrorsButNotUnreadableCode) {
     ComputeState state;
     state.code_address = 0x99900;
