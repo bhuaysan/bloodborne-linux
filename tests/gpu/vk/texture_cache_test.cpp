@@ -232,3 +232,31 @@ TEST_F(VkTextureCache, SamplersAreCachedByState) {
 }
 
 }  // namespace
+
+TEST_F(VkTextureCache, SamplersFollowTheImagesFormat) {
+    // An integer image: no linear filter, and an integer border colour. The views say so.
+    TextureDesc desc;
+    desc.address = 0x4000;
+    desc.data_format = 4;  // 32
+    desc.num_format = 4;   // UINT
+    desc.width = desc.height = desc.pitch = 8;
+    desc.type = image_type_2d;
+    desc.tile_mode = 8;
+    const Guest g = make_guest(desc, 4);
+    const TextureView* view = cache_->get(desc, g.tiled);
+    ASSERT_NE(view, nullptr);
+    EXPECT_TRUE(view->integer);
+    EXPECT_FALSE(view->filter_linear);
+
+    SamplerDesc linear;
+    linear.mag_filter = linear.min_filter = 1;
+    linear.mip_filter = 2;
+    linear.border_color = 2;
+    const VkSampler plain = cache_->sampler(linear);
+    const VkSampler limited = cache_->sampler(linear, false, {view->filter_linear, view->integer});
+    EXPECT_NE(plain, VK_NULL_HANDLE);
+    EXPECT_NE(limited, VK_NULL_HANDLE);
+    EXPECT_NE(plain, limited);
+    EXPECT_EQ(cache_->sampler(linear, false, {view->filter_linear, view->integer}), limited);
+    EXPECT_EQ(cache_->samplers(), 2u);
+}

@@ -27,8 +27,18 @@ struct TextureView {
     VkImage image = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     VkFormat format = VK_FORMAT_UNDEFINED;
+    bool filter_linear = true;  // the format supports a linear filter when sampled
+    bool integer = false;       // an integer number format (UINT or SINT)
     // The layout of the image and the view: always SHADER_READ_ONLY_OPTIMAL once get() returns.
     static constexpr VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+};
+
+// What the images that a sampler is used with allow of it (a sampler is paired with an image only
+// in the shader).
+struct SamplerLimits {
+    bool linear = true;     // every image's format supports linear filters
+    bool integer = false;   // some image has an integer format: integer border colours
+    bool operator==(const SamplerLimits&) const = default;
 };
 
 class TextureCache {
@@ -59,9 +69,11 @@ public:
     const TextureView* get(const TextureDesc& desc, std::span<const std::byte> guest);
 
     // The sampler for `sampler`. With `compare` the sampler compares with its depth compare
-    // function (for the image_sample_c forms). A null handle, logged once, when
-    // unsupported_sampler(sampler) says so. The cache owns it.
-    VkSampler sampler(const SamplerDesc& sampler, bool compare = false);
+    // function (for the image_sample_c forms). `limits` turns the linear filters into nearest ones
+    // and picks integer border colours, as a Vulkan sampler used with such an image needs. A null
+    // handle, logged once, when unsupported_sampler(sampler) says so. The cache owns it.
+    VkSampler sampler(const SamplerDesc& sampler, bool compare = false,
+                      const SamplerLimits& limits = {});
 
     // Counts, for tests.
     std::size_t images() const { return images_.size(); }
@@ -96,6 +108,7 @@ private:
     struct SamplerKey {
         SamplerDesc desc;
         bool compare;
+        SamplerLimits limits;
         bool operator==(const SamplerKey&) const = default;
     };
     struct SamplerKeyHash {

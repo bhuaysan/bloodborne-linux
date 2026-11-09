@@ -124,7 +124,7 @@ std::size_t TextureCache::ImageKeyHash::operator()(const ImageKey& k) const {
 
 std::size_t TextureCache::SamplerKeyHash::operator()(const SamplerKey& k) const {
     const SamplerDesc& s = k.desc;
-    std::size_t h = k.compare;
+    std::size_t h = k.compare * 4 + k.limits.linear * 2 + k.limits.integer;
     for (const std::uint32_t v :
          {s.clamp_x, s.clamp_y, s.clamp_z, s.max_aniso, s.depth_compare, s.mag_filter,
           s.min_filter, s.mip_filter, s.border_color, std::bit_cast<std::uint32_t>(s.min_lod),
@@ -342,6 +342,11 @@ const TextureView* TextureCache::get(const TextureDesc& d, std::span<const std::
         auto view = std::make_unique<TextureView>();
         view->image = image->handle;
         view->format = image->format;
+        VkFormatProperties properties;
+        vkGetPhysicalDeviceFormatProperties(device_.physical(), image->format, &properties);
+        view->filter_linear = (properties.optimalTilingFeatures &
+                               VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0;
+        view->integer = d.num_format == 4 || d.num_format == 5;  // UINT, SINT
         check(vkCreateImageView(device_.handle(), &info, nullptr, &view->view),
               "vkCreateImageView");
         slot = std::move(view);
@@ -349,8 +354,8 @@ const TextureView* TextureCache::get(const TextureDesc& d, std::span<const std::
     return slot.get();
 }
 
-VkSampler TextureCache::sampler(const SamplerDesc& s, bool compare) {
-    const SamplerKey key{s, compare};
+VkSampler TextureCache::sampler(const SamplerDesc& s, bool compare, const SamplerLimits& limits) {
+    const SamplerKey key{s, compare, limits};
     const auto it = samplers_.find(key);
     if (it != samplers_.end()) {
         return it->second;
@@ -361,15 +366,15 @@ VkSampler TextureCache::sampler(const SamplerDesc& s, bool compare) {
     } else {
         // Anisotropic filtering is not enabled on the device (samplerAnisotropy): the
         // anisotropic filters (2 and 3) filter as point and bilinear.
-        const auto filter = [](std::uint32_t f) {
-            return (f & 1) != 0 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        const auto filter = [&](std::uint32_t f) {
+            return (f & 1) != 0 && limits.linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
         };
         const float bias_limit = device_.properties().core.limits.maxSamplerLodBias;
         auto info = make<VkSamplerCreateInfo>(VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
         info.magFilter = filter(s.mag_filter);
         info.minFilter = filter(s.min_filter);
-        info.mipmapMode = s.mip_filter == 2 ? VK_SAMPLER_MIPMAP_MODE_LINEAR
-                                            : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        info.mipmapMode = s.mip_filter == 2 && limits.linear ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+                                                             : VK_SAMPLER_MIPMAP_MODE_NEAREST;
         info.addressModeU = address_mode(s.clamp_x);
         info.addressModeV = address_mode(s.clamp_y);
         info.addressModeW = address_mode(s.clamp_z);
@@ -382,7 +387,11 @@ VkSampler TextureCache::sampler(const SamplerDesc& s, bool compare) {
         constexpr VkBorderColor borders[] = {
             VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK, VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK,
             VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE, VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK};
-        info.borderColor = borders[s.border_color & 3];  // 3: a border colour register
+        constexpr VkBorderColor int_borders[] = {
+            VK_BORDER_COLOR_INT_TRANSPARENT_BLACK, VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+            VK_BORDER_COLOR_INT_OPAQUE_WHITE, VK_BORDER_COLOR_INT_TRANSPARENT_BLACK};
+        // 3: a border colour register. A float border colour on an integer image is invalid.
+        info.borderColor = (limits.integer ? int_borders : borders)[s.border_color & 3];
         check(vkCreateSampler(device_.handle(), &info, nullptr, &handle), "vkCreateSampler");
     }
     samplers_.emplace(key, handle);
