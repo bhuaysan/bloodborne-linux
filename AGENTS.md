@@ -4,7 +4,7 @@ Guidance for coding agents working on this repository. Humans should start with 
 
 ## Goal
 
-Reverse engineer Bloodborne (PS4, CUSA03173, patch 1.09) and run it **natively on Linux x86-64**, with **no emulation**, as an optimized port. Build on existing work (emulators, community research, open-source code) wherever that is faster, with credit and under compatible licenses.
+Reverse engineer Bloodborne (PS4, CUSA03173, patch 1.09) and run it **natively on Linux x86-64**, with **no emulation**, as an optimized port. The main goal is the complete game, playable from start to end, with the best performance and quality we can reach. Build on existing work (emulators, community research, open-source code) wherever that is faster, with credit and under compatible licenses.
 
 ## Architecture: incremental hybrid
 
@@ -13,7 +13,7 @@ The PS4 CPU is x86-64, so the game's machine code can run directly on a Linux PC
 1. **Loader.** Our own Linux program extracts the ELF from `eboot.bin` (an unencrypted fSELF), maps its segments, applies relocations and resolves imports. It then jumps to the entry point. There is no CPU emulation and no instruction translation.
 2. **HLE system libraries.** Every Sony library the game imports (libkernel, libc, file I/O, pad, audio, GNM, …) is reimplemented by us on top of Linux APIs. Imports are matched by NID. Unknown imports resolve to logging stubs.
 3. **Graphics.** GNM command buffers are translated to Vulkan. GCN shader binaries are translated to SPIR-V by our own translator.
-4. **Function replacement.** Game functions are decompiled into readable C++ one at a time. Each one replaces the original through a hook or trampoline at its address. Over time the original binary becomes unnecessary.
+4. **Targeted function replacement.** Game functions are decompiled into readable C++ where that serves playability, performance or quality: bugs, crashes, bottlenecks, limits such as the frame rate. Each one replaces the original through a hook or trampoline at its address. A complete decompilation is not a goal, so the original machine code keeps running for everything else.
 
 The goal is **functional equivalence**, not byte-matching. Sony's compiler is not available to us.
 
@@ -58,7 +58,7 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 
 ## Workflow: decompiling one function
 
-1. Pick a function, preferably from an open issue or a leaf function that a replaced function calls.
+1. Pick a function that an open issue needs for playability, performance or quality.
 2. Analyze it in Ghidra. Record names, signatures and structs there, then export them to `symbols/`. The text files in `symbols/` are the source of truth, and the Ghidra project is a disposable local cache.
 3. Write the C++ version in the matching source file. Name it after what it does and add a comment with the original address: `// 0x00XXXXXX`.
 4. Write a differential test. The harness calls the original function (mapped from the executable) and the replacement with the same inputs and compares return values and touched memory.

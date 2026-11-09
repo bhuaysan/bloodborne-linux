@@ -1,6 +1,6 @@
 # bloodborne-linux
 
-An independent reverse engineering project with one goal: run Bloodborne (PS4) natively on Linux, without emulation.
+An independent reverse engineering project with one goal: make the complete game of Bloodborne (PS4) playable natively on Linux, without emulation, with the best performance and quality we can reach.
 
 The PS4 runs x86-64 code, so the game's own machine code can run directly on a Linux PC. This project builds what is missing around it:
 
@@ -8,7 +8,7 @@ The PS4 runs x86-64 code, so the game's own machine code can run directly on a L
 - reimplementations of the PS4 system libraries
 - a translation layer from the PS4 graphics API to Vulkan
 
-On top of that, game functions are gradually decompiled into readable C++ until the original executable is no longer needed.
+Game functions are decompiled into readable C++ only where that helps: to fix a bug, remove a bottleneck or lift a limit such as the frame rate. A complete decompilation is not a goal, so the game's own machine code keeps running for everything else.
 
 The port builds on existing work, such as PS4 emulators and community research, under the rules in [docs/source-policy.md](docs/source-policy.md). Every source is credited in [docs/references.md](docs/references.md).
 

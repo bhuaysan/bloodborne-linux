@@ -1,11 +1,13 @@
 # Roadmap
 
+The main goal is the complete game, playable from start to end, with the best performance and quality we can reach. A complete decompilation is not a goal.
+
 Each milestone matches a GitHub milestone. Tasks are tracked as issues.
 
 The work runs on three tracks that overlap after M2:
 
 - **Runtime:** loader and OS layer, until the game boots.
-- **Decomp:** game functions, verified with differential tests. Can start as soon as the loader can map the executable.
+- **Decomp:** game functions, verified with differential tests, only where they serve playability, performance or quality. Can start as soon as the loader can map the executable.
 - **Graphics:** GNM→Vulkan and GCN→SPIR-V. A long-running track. The first frame (M4.5) and playtesting wait for it.
 
 | Milestone | Goal | Done when |
@@ -22,7 +24,9 @@ The work runs on three tracks that overlap after M2:
 | **M4.5 First frame** | Show something on screen | The first frame of the game appears in the window |
 | **M4.6 Remaining shader stages** | The rest of the shader corpus | ES, GS, LS, HS and domain shaders, scratch memory and the shader features the first frame did not need |
 | **M5 Input & audio** | Playable basics | Controller input and audio output work |
-| **Decomp** (continuous from M2) | Replace game code | Functions are decompiled, pass differential tests and are hooked in. Progress tracked in `symbols/functions.csv` |
+| **M6 Playthrough** | The complete game is playable | The game can be played from the start to an ending on the reference machine, without a crash or a rendering fault that blocks play. The work goes area by area, and every fault found gets an issue |
+| **M7 Performance and quality** | The best version of the game | Frame times stay even at the game's original frame rate on the reference machine. Shaders and pipelines are cached on disk, so a second visit to an area doesn't stutter. A resolution and a frame rate above the PS4's can be set and run without gameplay faults |
+| **Decomp** (continuous from M2, as needed) | Replace game code where that helps | No end state of its own. A function is decompiled when an issue needs it for a bug, a crash, a bottleneck or a limit such as the frame rate. It passes its differential test and is hooked in. Progress tracked in `symbols/functions.csv` |
 
 The maintainer tags each completed milestone (`m1`, `m2`, …) after its review.
 

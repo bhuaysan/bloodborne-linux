@@ -53,7 +53,7 @@ GNM builds AMD GCN command buffers (PM4 packets). The plan:
 The translator, its offline tests and the shader extraction are designed in [design/graphics.md](design/graphics.md).
 
 ### Function replacement
-Decompiled functions are compiled into the runtime. At startup, a table of `{original_address, replacement}` pairs is applied. Each original function entry is patched to jump to the replacement. Replacements call other game functions through their original addresses until those are replaced too.
+Decompiled functions are compiled into the runtime. At startup, a table of `{original_address, replacement}` pairs is applied. Each original function entry is patched to jump to the replacement. Replacements call other game functions through their original addresses. Only functions that serve playability, performance or quality are replaced, and the rest of the game keeps running as original machine code.
 
 ### Differential test harness
 Decompiled functions are verified before the game boots. A test process maps the original executable through the loader. It then calls the original function and the C++ replacement with the same inputs, in the same initial memory state, and compares return values and touched memory. With the eboot alone (`EbootTest`), imports without an HLE implementation go to stubs whose calls are recorded and compared. Functions that need the OS layer, such as those that allocate, run with the full load set (`LoadSetTest`): the libkernel HLE modules and the game's own bundled PRXs (`libc.prx`, whose `malloc` the game uses, and `libSceFios2.prx`), with the game's heap and the thread's TLS in the snapshot. See [design/runtime.md](design/runtime.md#differential-test-harness).
@@ -84,4 +84,5 @@ standard ELF ──Ghidra import──► Ghidra project ◄──ghidra-sync─
 ## Non-goals
 - CPU emulation or instruction translation.
 - Byte-matching decompilation.
+- A complete decompilation of the game.
 - Supporting other games or other game versions.
