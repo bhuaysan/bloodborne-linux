@@ -22,6 +22,7 @@
 #include "gpu/vk/scheduler.hpp"
 #include "hle/kernel/dmem.hpp"
 #include "hle/kernel/vmem.hpp"
+#include "test_device.hpp"
 #include "gpu/gcn/encode.hpp"
 #include "tools/mirror_observer.hpp"
 
@@ -49,15 +50,15 @@ void packet(std::vector<std::uint32_t>& out, std::uint8_t opcode,
 class VkDispatcher : public testing::Test {
 protected:
     void SetUp() override {
-        ::setenv("VK_LOADER_DRIVERS_SELECT", "*lvp*", 0);
+        const std::string selector = bb::test::vk_test_device();
         std::string why;
         instance_ = Instance::create(why);
         if (!instance_) {
             GTEST_SKIP() << "no Vulkan instance: " << why;
         }
-        device_ = Device::create(*instance_, {.device = "llvmpipe"}, why);
+        device_ = Device::create(*instance_, {.device = selector}, why);
         if (!device_) {
-            GTEST_SKIP() << "no lavapipe device: " << why;
+            GTEST_SKIP() << "no Vulkan device: " << why;
         }
         ASSERT_GE(dmem::fd(), 0);
         mirror_ = MemoryMirror::create(*device_,
@@ -242,7 +243,11 @@ TEST_F(VkDispatcher, UnalignedCountsFailTheDispatchOnly) {
 }
 
 TEST_F(VkDispatcher, GroupCountsOverTheDeviceLimitFailTheDispatchOnly) {
-    const std::uint32_t over = device_->properties().core.limits.maxComputeWorkGroupCount[0] + 1;
+    const std::uint32_t limit = device_->properties().core.limits.maxComputeWorkGroupCount[0];
+    if (limit == UINT32_MAX) {
+        GTEST_SKIP() << "the group count limit is the largest u32, so no count is over it";
+    }
+    const std::uint32_t over = limit + 1;
     std::vector<std::uint32_t> stream;
     set_state(stream, code_at);
     packet(stream, IT_DISPATCH_DIRECT, {over, 1, 1, 1});

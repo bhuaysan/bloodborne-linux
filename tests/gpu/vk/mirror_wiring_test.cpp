@@ -11,6 +11,7 @@
 #include "gpu/vk/memory_mirror.hpp"
 #include "hle/kernel/dmem.hpp"
 #include "hle/kernel/vmem.hpp"
+#include "test_device.hpp"
 #include "tools/mirror_observer.hpp"
 
 namespace {
@@ -23,15 +24,15 @@ using bb::vk::MemoryMirror;
 constexpr std::uint64_t kib = 1024;
 
 TEST(VkMirrorWiring, MapsUnmapsAndReleasesKeepTheMirrorConsistent) {
-    ::setenv("VK_LOADER_DRIVERS_SELECT", "*lvp*", 0);
+    const std::string selector = bb::test::vk_test_device();
     std::string why;
     auto instance = Instance::create(why);
     if (!instance) {
         GTEST_SKIP() << "no Vulkan instance: " << why;
     }
-    auto device = Device::create(*instance, {.device = "llvmpipe"}, why);
+    auto device = Device::create(*instance, {.device = selector}, why);
     if (!device) {
-        GTEST_SKIP() << "no lavapipe device: " << why;
+        GTEST_SKIP() << "no Vulkan device: " << why;
     }
     ASSERT_GE(dmem::fd(), 0);
     auto mirror = MemoryMirror::create(*device,
