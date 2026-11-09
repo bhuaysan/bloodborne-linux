@@ -45,6 +45,10 @@ TEST(VkMirrorWiring, MapsUnmapsAndReleasesKeepTheMirrorConsistent) {
     }
     bb::tools::MirrorObserver observer(*mirror);
     vmem::set_direct_observer(&observer);
+    // Runs before observer and mirror go away, also when an ASSERT below returns early.
+    struct ClearObserver {
+        ~ClearObserver() { vmem::set_direct_observer(nullptr); }
+    } clear_observer;
 
     auto allocate = [] {
         std::uint64_t offset = ~std::uint64_t{0};
@@ -98,8 +102,6 @@ TEST(VkMirrorWiring, MapsUnmapsAndReleasesKeepTheMirrorConsistent) {
     EXPECT_EQ(sceKernelMunmap(left, 16 * kib), 0);
     EXPECT_EQ(observer.unbinds(), 1u);
     EXPECT_EQ(release_direct(shared + 16 * kib, 240 * kib), 0);
-
-    vmem::set_direct_observer(nullptr);
 }
 
 }  // namespace
