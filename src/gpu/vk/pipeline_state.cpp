@@ -88,8 +88,9 @@ VkViewport viewport(const Transform& t, bool negative_one_to_one) {
             std::clamp(t.zoffset + t.zscale, 0.0f, 1.0f)};
 }
 
-// PA_SU_SC_MODE_CNTL: POLY_MODE (bits 3-4, 1 enables, 2 and 3 reserved) with POLYMODE_FRONT_PTYPE (bits 5-7) and _BACK_PTYPE
-// (bits 8-10): 0 points, 1 lines, 2 triangles. The polygon mode, or nothing when the types differ.
+// PA_SU_SC_MODE_CNTL: POLY_MODE (bits 3-4, 1 enables, 2 and 3 reserved) with
+// POLYMODE_FRONT_PTYPE (bits 5-7) and _BACK_PTYPE (bits 8-10): 0 points, 1 lines, 2 triangles.
+// The polygon mode, or nothing when the types differ.
 std::optional<VkPolygonMode> polygon_mode(std::uint32_t mode) {
     const std::uint32_t poly_mode = field(mode, 3, 2);
     if (poly_mode > 1) {
@@ -150,8 +151,10 @@ bool raster_state(const pm4::RegisterMirror& regs, DrawState& s, std::string& wh
     const std::uint32_t mode = regs.get(amd::mmPA_SU_SC_MODE_CNTL);
     const auto polygon = polygon_mode(mode);
     if (!polygon) {
-        why = std::format("PA_SU_SC_MODE_CNTL {:#x}: polygon types differ or are not supported, or POLY_MODE is reserved",
-                          mode);
+        why = std::format(
+            "PA_SU_SC_MODE_CNTL {:#x}: polygon types differ or are not supported, or POLY_MODE "
+            "is reserved",
+            mode);
         return false;
     }
     s.key.polygon_mode = *polygon;
