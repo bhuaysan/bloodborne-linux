@@ -395,14 +395,16 @@ protected:
     // loads, the tfe VGPRs and every byte of the store region. A pair that is not one of
     // formatted_pairs reads 0 whatever dst_sel says and writes nothing. A load returns the
     // components through dst_sel (1 as 1.0, or 1 in UINT and SINT); a store gives memory
-    // component k the first input component whose dst_sel is 4 + k, or 0.
+    // component k the first input component whose dst_sel is 4 + k, or 0. The stores' lane stride
+    // is the element's size, so the 1-byte elements of adjacent lanes share a dword.
     void check(unsigned dfmt, unsigned nfmt, std::uint32_t sel, std::uint32_t size) {
         SCOPED_TRACE(testing::Message() << "dfmt " << dfmt << " nfmt " << nfmt);
         const bool reads = std::ranges::count(bb::gcn::formatted_pairs,
                                               std::array<unsigned, 2>{dfmt, nfmt}) != 0;
-        // The pairs' components have 32 bits and convert as they are: the element is n dwords.
-        const unsigned n = reads ? static_cast<unsigned>(fields(dfmt).size()) : 4;
-        const unsigned shift = std::bit_width(4 * n - 1);  // the lane stride: 2^shift >= 4n bytes
+        const std::vector<Field> layout = reads ? fields(dfmt) : std::vector<Field>{};
+        const unsigned bytes =
+            reads ? (layout.back().offset + layout.back().width + 7) / 8 : 16;
+        const unsigned shift = std::bit_width(bytes - 1);  // the lane stride: 2^shift >= bytes
         const bool integer = nfmt == nf::uint_ || nfmt == nf::sint;
         auto memory = runner_->guest_memory(base, 0x10000);
         std::memset(memory.data(), 0xa5, 0x800);
@@ -428,8 +430,9 @@ protected:
             SCOPED_TRACE(testing::Message() << "lane " << lane);
             const bool inside = 16 * lane < size;
             std::array<std::uint32_t, 6> value = {0, integer ? 1u : 0x3f800000u};
-            for (unsigned c = 0; c < n && inside; ++c) {
-                value[2 + c] = word(table + 16 * lane + 4 * c);
+            const std::vector<std::uint8_t> loaded(table + 16 * lane, table + 16 * lane + bytes);
+            for (unsigned c = 0; c < layout.size() && inside; ++c) {
+                value[2 + c] = component(loaded, layout[c], nfmt);
             }
             for (unsigned c = 0; c < 4; ++c) {
                 const unsigned s = sel >> (3 * c) & 7;
@@ -443,15 +446,18 @@ protected:
             if (!reads || at >= size) {
                 continue;
             }
-            std::array<std::uint32_t, 4> element = {};
-            for (unsigned k = 0; k < n; ++k) {
+            std::uint64_t element[2] = {};
+            for (unsigned k = 0; k < layout.size(); ++k) {
+                std::uint32_t chosen = 0;
                 for (unsigned c = 4; c-- > 0;) {  // the first component that selects k
                     const std::uint32_t d = 0x800 + 16 * lane + 4 * c;
                     const std::uint32_t v = d < size ? word(&region[d]) : 0;
-                    element[k] = (sel >> (3 * c) & 7) == 4 + k ? v : element[k];
+                    chosen = (sel >> (3 * c) & 7) == 4 + k ? v : chosen;
                 }
+                const std::uint64_t encoded = encode(chosen, layout[k].width, nfmt);
+                element[layout[k].offset / 64] |= encoded << (layout[k].offset % 64);
             }
-            std::memcpy(region.data() + at, element.data(), 4 * n);
+            std::memcpy(region.data() + at, element, bytes);
         }
         for (std::uint32_t i = 0xc00; i < 0x1000; ++i) {
             ASSERT_EQ(static_cast<unsigned>(memory[table_offset + i]), region[i]) << "byte " << i;
@@ -478,13 +484,32 @@ TEST_F(FormattedBuffer, DstSel) {
     }
 }
 
+// The dst_sel and format pairs of the game's compute programs (measured, see the design note):
+// BGRA and RGBA on 8_8_8_8 UNORM, 000R and R001 on 8 UNORM, R001 on 32 FLOAT, RG01 on 32_32
+// FLOAT, XYZ0 on 32_32_32 UINT, RGBA on 32_32_32_32 FLOAT and UINT.
+TEST_F(FormattedBuffer, GameDstSels) {
+    constexpr std::uint32_t bgra = 6 | 5 << 3 | 4 << 6 | 7 << 9, r001 = 4 | 1 << 9;
+    constexpr std::uint32_t r_in_w = 4 << 9, rg01 = 4 | 5 << 3 | 1 << 9, xyz0 = 4 | 5 << 3 | 6 << 6;
+    check(10, nf::unorm, bgra, 0x1000);
+    check(10, nf::unorm, identity, 0x1000);
+    check(1, nf::unorm, r_in_w, 0x1000);
+    check(1, nf::unorm, r001, 0x1000);
+    check(4, 7, r001, 0x1000);
+    check(11, 7, rg01, 0x1000);
+    check(13, nf::uint_, xyz0, 0x1000);
+    check(14, 7, identity, 0x1000);
+    check(14, nf::uint_, identity, 0x1000);
+}
+
 // A V# of 648 bytes: lane 40's element is read whole, the lanes above load 0, and no store is
 // inside. One that ends 1 byte into lane 20's stored element: that element is written whole, the
-// later ones not at all.
+// later ones not at all, also for the 1-byte elements, whose adjacent lanes share a dword.
 TEST_F(FormattedBuffer, Range) {
     check(14, 7, identity, 16 * 40 + 8);
     check(4, nf::sint, identity, 0xc00 + 20 * 4 + 1);
     check(13, 7, identity, 0xc00 + 20 * 16 + 1);
+    check(10, nf::unorm, identity, 0xc00 + 20 * 4 + 1);
+    check(1, nf::unorm, identity, 0xc00 + 20 + 1);
 }
 
 }  // namespace

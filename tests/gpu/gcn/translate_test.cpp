@@ -487,11 +487,11 @@ TEST(GcnTranslate, FloatModes) {
     EXPECT_EQ(typed(10, 4, 4), std::vector<std::uint32_t>{});  // 8_8_8_8, UINT
     EXPECT_EQ(typed(6, 7, 4), std::vector<std::uint32_t>{});  // 10_11_11 FLOAT store
     // The format of a formatted MUBUF access is only known at run time: a load may convert a
-    // FLOAT pair, a store of formatted_pairs converts nothing.
+    // FLOAT or UNORM pair of formatted_pairs, and a store a UNORM pair.
     for (const unsigned op : {0u, 4u}) {  // buffer_load_format_x, buffer_store_format_x
         auto code = mubuf(op, 3, 1, 4, 128, 0, buf::idxen);
         code.push_back(s_endpgm);
-        EXPECT_EQ(build(0, code), op == 0 ? float_modes : std::vector<std::uint32_t>{});
+        EXPECT_EQ(build(0, code), float_modes);
     }
     for (const std::uint32_t rsrc1 : {1u << 12, 2u << 12, 1u << 16, 2u << 16}) {
         EXPECT_EQ(error(add, {.pgm_rsrc1 = rsrc1, .pgm_rsrc2 = 5u << 1}),

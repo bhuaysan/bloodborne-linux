@@ -38,11 +38,12 @@ const FormatLayout* format_layout(unsigned dfmt);
 std::string format_error(unsigned dfmt, unsigned nfmt, bool store = false);
 
 // The pairs (data format, number format) that a formatted MUBUF access converts, from the V# at
-// run time; any other reads 0 and writes nothing. Measured on the corpus, see docs/design/
+// run time; any other reads 0 and writes nothing. Measured on a game run, see docs/design/
 // graphics.md, "Typed buffer formats". Each converts both ways.
-inline constexpr std::array<std::array<unsigned, 2>, 6> formatted_pairs = {{
+inline constexpr std::array<std::array<unsigned, 2>, 10> formatted_pairs = {{
     {4, nfmt::float_}, {11, nfmt::float_}, {13, nfmt::float_}, {14, nfmt::float_},
-    {4, nfmt::uint_}, {4, nfmt::sint},
+    {4, nfmt::uint_}, {4, nfmt::sint}, {13, nfmt::uint_}, {14, nfmt::uint_},
+    {1, nfmt::unorm}, {10, nfmt::unorm},
 }};
 
 // Emits the conversions. Values are u32 ids whatever their type: floats as their bit patterns.
