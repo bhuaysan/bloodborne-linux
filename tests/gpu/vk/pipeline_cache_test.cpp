@@ -217,6 +217,22 @@ TEST_F(VkPipelineCache, KeepsTranslationErrorsButNotUnreadableCode) {
     EXPECT_NE(cache_->get(unmapped, color_, why_), nullptr) << why_;
 }
 
+// A rejected program is stamped with the dwords that decide the error, not the mapping after it.
+TEST_F(VkPipelineCache, KeptErrorIgnoresDataAfterTheRejectedInstruction) {
+    code_[vs_address] = {0xffffffffu, 0, 0, 0, 0, 0};  // no instruction
+    EXPECT_EQ(cache_->get(pair_, color_, why_), nullptr);
+    const std::string first = why_;
+    EXPECT_NE(first.find("doesn't translate"), std::string::npos);
+    code_[vs_address][5] = 0x1234;  // a neighbour's data
+    EXPECT_EQ(cache_->get(pair_, color_, why_), nullptr);
+    EXPECT_EQ(why_, first);
+    EXPECT_EQ(cache_->translations(), 1u);
+    EXPECT_EQ(cache_->size(), 1u);
+    code_[vs_address][0] = sopp(1);  // the instruction itself changes: translated again
+    EXPECT_NE(cache_->get(pair_, color_, why_), nullptr) << why_;
+    EXPECT_EQ(cache_->translations(), 3u);  // the VS and the PS
+}
+
 TEST_F(VkPipelineCache, ADeviceFailureIsNotKept) {
     bool fail = true;
     cache_->set_create_hook([&] {

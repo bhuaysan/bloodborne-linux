@@ -28,8 +28,9 @@ using CodeReader = std::function<std::span<const std::uint32_t>(std::uint64_t ad
 
 // The dynamic state of every pipeline of the cache, which a draw sets before it draws: Vulkan
 // 1.3's core dynamic state for what the draw snapshot leaves out of the pipeline key. The
-// snapshot (DynamicState) has the viewport, cull mode, front face and blend constants; the draw must
-// still set the others (depth and stencil, scissor, depth bias and primitive restart: not done).
+// snapshot (DynamicState) has the viewport, cull mode, front face and blend constants; the draw
+// must still set the others (depth and stencil, scissor, depth bias and primitive restart: not
+// done).
 inline constexpr VkDynamicState graphics_dynamic_states[] = {
     VK_DYNAMIC_STATE_VIEWPORT,
     VK_DYNAMIC_STATE_SCISSOR,
@@ -71,8 +72,9 @@ public:
     // The pipeline for `key` drawing into `targets` (their formats and sample count). Made on the
     // first request; an equal request returns the same pipeline while the code of its stages and
     // the fetch subroutine is unchanged (hashed on every request, see docs/design/graphics.md,
-    // "Code hash of a cached pipeline"); changed code gets a pipeline of its own. The VS's fetch address counts
-    // only for a program that calls the fetch subroutine. Nothing, with `why` saying what, when a
+    // "Code hash of a cached pipeline"); changed code gets a pipeline of its own. The VS's fetch
+    // address counts only for a program that calls the fetch subroutine. Nothing, with `why`
+    // saying what, when a
     // stage's code isn't readable, doesn't translate or uses images or samplers (not yet); the
     // error is kept and given again for an equal request, except unreadable code (also an
     // unreadable fetch subroutine a VS needs). Throws std::runtime_error when a Vulkan call
@@ -109,7 +111,7 @@ private:
         common::CodeStamp code;  // of the VS program, which must still be that one
     };
 
-    bool fetchless(const StageState& vs, std::span<const std::uint32_t> code) const;
+    bool fetchless(const StageState& vs, common::CodeProbe& code) const;
     void create(Entry& entry, const gcn::Translation& vs, const gcn::Translation* ps);
 
     const Device& device_;

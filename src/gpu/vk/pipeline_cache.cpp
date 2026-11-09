@@ -1,5 +1,6 @@
 #include "gpu/vk/pipeline_cache.hpp"
 
+#include <algorithm>
 #include <format>
 #include <optional>
 #include <string_view>
@@ -23,6 +24,11 @@ void destroy(VkDevice device, GraphicsPipeline& p) {
     vkDestroyPipelineLayout(device, p.layout, nullptr);
 }
 
+// The extent a rejected program is stamped with: what decodes, at most error_stamp_dwords.
+std::size_t error_extent(std::span<const std::uint32_t> code, gcn::Until until) {
+    return std::min<std::size_t>(gcn::readable_extent(code, until), common::error_stamp_dwords);
+}
+
 constexpr std::string_view missing_fetch = "without a fetch subroutine";  // gcn/fetch.cpp
 
 }  // namespace
@@ -36,10 +42,10 @@ PipelineCache::~PipelineCache() {
     }
 }
 
-bool PipelineCache::fetchless(const StageState& vs, std::span<const std::uint32_t> code) const {
+bool PipelineCache::fetchless(const StageState& vs, common::CodeProbe& code) const {
     const auto [first, last] = fetchless_.equal_range(vs.code_address);
     for (auto it = first; it != last; ++it) {
-        if (it->second.key == vs.key && it->second.code.matches(code)) {
+        if (it->second.key == vs.key && code.matches(it->second.code)) {
             return true;
         }
     }
@@ -63,19 +69,24 @@ const GraphicsPipeline* PipelineCache::get(const PipelineKey& request,
     // The code is read again on every request: an entry counts only while the code it was made
     // from is still there. Older entries stay (the GPU may still use their pipelines) and
     // match again if their code returns.
-    const auto vs_now = read_(key.vs.code_address);
-    if (fetchless(key.vs, vs_now)) {
+    common::CodeProbe vs_probe(read_(key.vs.code_address));
+    if (fetchless(key.vs, vs_probe)) {
         key.vs.fetch_address = 0;
     }
-    const auto ps_now = key.ps ? read_(key.ps->code_address) : std::span<const std::uint32_t>{};
-    const auto fetch_now = key.vs.fetch_address != 0 ? read_(key.vs.fetch_address)
-                                                      : std::span<const std::uint32_t>{};
+    common::CodeProbe ps_probe(key.ps ? read_(key.ps->code_address)
+                                      : std::span<const std::uint32_t>{});
+    common::CodeProbe fetch_probe(key.vs.fetch_address != 0
+                                      ? read_(key.vs.fetch_address)
+                                      : std::span<const std::uint32_t>{});
+    const auto vs_now = vs_probe.code();
+    const auto ps_now = ps_probe.code();
+    const auto fetch_now = fetch_probe.code();
     const auto found = [&]() -> std::optional<const GraphicsPipeline*> {
         const auto [first, last] = entries_.equal_range(hash_stages(key));
         for (auto it = first; it != last; ++it) {
             const Entry& e = it->second;
-            if (e.key == key && e.formats == entry.formats && e.vs_code.matches(vs_now) &&
-                e.ps_code.matches(ps_now) && e.fetch_code.matches(fetch_now)) {
+            if (e.key == key && e.formats == entry.formats && vs_probe.matches(e.vs_code) &&
+                ps_probe.matches(e.ps_code) && fetch_probe.matches(e.fetch_code)) {
                 why = e.error;
                 return e.pipeline.pipeline != VK_NULL_HANDLE ? &e.pipeline : nullptr;
             }
@@ -97,8 +108,9 @@ const GraphicsPipeline* PipelineCache::get(const PipelineKey& request,
             return std::nullopt;
         }
         ++translations_;
-        stamp = common::CodeStamp::of(code, common::error_stamp_dwords);
-        fetch_stamp = common::CodeStamp::of(fetch, common::error_stamp_dwords);
+        // Until the translation succeeds, stamp what decides a rejection: the decodable prefix.
+        stamp = common::CodeStamp::of(code, error_extent(code, gcn::Until::program_end));
+        fetch_stamp = common::CodeStamp::of(fetch, error_extent(fetch, gcn::Until::subroutine_end));
         try {
             auto t = gcn::translate(code, fetch, s.key);
             stamp = common::CodeStamp::of(code, t.code_dwords);
@@ -122,7 +134,7 @@ const GraphicsPipeline* PipelineCache::get(const PipelineKey& request,
         }
         // Before the first translation of this VS no entry holds it, so no entry has to be
         // looked up again without the fetch address.
-        if (!vs->interface.calls_fetch && !fetchless(key.vs, vs_now)) {
+        if (!vs->interface.calls_fetch && !fetchless(key.vs, vs_probe)) {
             fetchless_.emplace(key.vs.code_address, Fetchless{key.vs.key, entry.vs_code});
             key.vs.fetch_address = 0;
         }

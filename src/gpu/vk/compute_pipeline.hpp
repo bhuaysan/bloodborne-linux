@@ -46,10 +46,10 @@ public:
     // The pipeline for `state`, made on the first request; an equal state returns the same
     // pipeline while the code at its address is unchanged (hashed on every request, see
     // docs/design/graphics.md, "Code hash of a cached pipeline"); other code at the address gets
-    // a pipeline of its own. Nothing, with `why` saying what, when the code isn't readable, doesn't translate
-    // or uses images or samplers (not yet). A translation error is kept and given again for an
-    // equal request, unreadable code is not. Throws std::runtime_error when a Vulkan call
-    // fails; nothing is kept then, so the next request for the state tries again.
+    // a pipeline of its own. Nothing, with `why` saying what, when the code isn't readable,
+    // doesn't translate or uses images or samplers (not yet). A translation error is kept and
+    // given again for an equal request, unreadable code is not. Throws std::runtime_error when a
+    // Vulkan call fails; nothing is kept then, so the next request for the state tries again.
     const ComputePipeline* get(const ComputeState& state, std::string& why);
 
     std::size_t size() const { return entries_.size(); }  // pipelines and kept errors

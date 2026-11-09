@@ -269,6 +269,18 @@ Operand detail::scalar_operand(std::span<const std::uint32_t> code, std::size_t 
     return Decoder(code, index).scalar(c, dwords);
 }
 
+std::uint32_t readable_extent(std::span<const std::uint32_t> code, Until until) {
+    try {
+        const auto program = decode(code, until);
+        return program.empty() ? 0 : (program.back().offset >> 2) + program.back().size;
+    } catch (const GcnError& e) {
+        // The failing instruction is at most two dwords (with a literal). Running out of code
+        // reports the end of the code.
+        const std::size_t at = (e.offset() >> 2) + 2;
+        return static_cast<std::uint32_t>(at < code.size() ? at : code.size());
+    }
+}
+
 std::vector<Instruction> decode(std::span<const std::uint32_t> code, Until until) {
     std::vector<Instruction> out;
     std::uint32_t furthest = 0;  // furthest branch target so far

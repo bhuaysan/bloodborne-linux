@@ -1,5 +1,6 @@
 #include "gpu/vk/compute_pipeline.hpp"
 
+#include <algorithm>
 #include <format>
 #include <utility>
 
@@ -27,10 +28,11 @@ const ComputePipeline* ComputePipelineCache::get(const ComputeState& state, std:
     // The code is read again on every request: an entry counts only while the code at the
     // address is what it was made from. An older entry stays (the GPU may still use its pipeline)
     // and matches again if the code returns.
-    const auto code = read_(state.code_address);
+    common::CodeProbe probe(read_(state.code_address));
+    const auto code = probe.code();
     const auto [first, last] = entries_.equal_range(state.code_address);
     for (auto it = first; it != last; ++it) {
-        if (it->second.state == state && it->second.stamp.matches(code)) {
+        if (it->second.state == state && probe.matches(it->second.stamp)) {
             why = it->second.error;
             return it->second.pipeline.pipeline != VK_NULL_HANDLE ? &it->second.pipeline : nullptr;
         }
@@ -41,7 +43,10 @@ const ComputePipeline* ComputePipelineCache::get(const ComputeState& state, std:
         why = std::format("no readable code at {:#x}", state.code_address);
         return nullptr;
     }
-    Entry entry{state, {}, {}, common::CodeStamp::of(code, common::error_stamp_dwords)};
+    // Until the translation succeeds, stamp what decides a rejection: the decodable prefix.
+    const std::size_t decodable = std::min<std::size_t>(
+        gcn::readable_extent(code, gcn::Until::program_end), common::error_stamp_dwords);
+    Entry entry{state, {}, {}, common::CodeStamp::of(code, decodable)};
     std::optional<gcn::Translation> translation;
     try {
         ++translations_;
