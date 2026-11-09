@@ -1500,13 +1500,14 @@ private:
         }
     }
 
-    // The fields of a V#: its 48-bit base address, its stride and num_records (all u64).
+    // The fields of a V#: its base address, its stride and num_records (all u64). The base is 40
+    // bits: the game's V#s have 0x80 or 0xb0 in bits 40-47, which are no part of the address.
     struct Vsharp {
         Id base = 0, stride = 0, records = 0;
     };
     Vsharp vsharp(const Operand& o) {
         const Id dw1 = read(o, 1);
-        const Id high = b_.op(Op::OpBitwiseAnd, u32_, {dw1, b_.constant_u32(0xffff)});
+        const Id high = b_.op(Op::OpBitwiseAnd, u32_, {dw1, b_.constant_u32(0xff)});
         Vsharp v;
         v.base = b_.op(Op::OpBitwiseOr, u64_,
                        {b_.op(Op::OpShiftLeftLogical, u64_,

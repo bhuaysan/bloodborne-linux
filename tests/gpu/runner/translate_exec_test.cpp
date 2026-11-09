@@ -728,6 +728,7 @@ struct VMode {
     std::uint32_t stride, records, soffset;
     bool swizzle = false, add_tid = false, heap = false;
     std::uint32_t element = 0, index_stride = 0;  // the 2-bit fields: 2 << e bytes, 8 << i indices
+    std::uint32_t base_high = 0;                  // V# bits 40-47, which are no part of the base
 
     struct Access {
         std::uint64_t address;
@@ -748,7 +749,7 @@ struct VMode {
     // The four V# dwords at `address`.
     std::vector<std::uint32_t> vsharp(std::uint64_t address) const {
         return {static_cast<std::uint32_t>(address),
-                static_cast<std::uint32_t>(address >> 32) | stride << 16 |
+                static_cast<std::uint32_t>(address >> 32) | base_high << 8 | stride << 16 |
                     std::uint32_t{swizzle} << 31,
                 records,
                 element << 19 | index_stride << 21 | std::uint32_t{add_tid} << 23 |
@@ -763,6 +764,8 @@ struct VMode {
 TEST_F(TranslateExec, BufferModes) {
     const VMode modes[] = {
         {.stride = 0, .records = 0x2b0, .soffset = 0x200},
+        // The game's V#s have bits set above the 40-bit base (dword 1 bits 8-15).
+        {.stride = 0, .records = 0x2b0, .soffset = 0x200, .base_high = 0x80},
         {.stride = 8, .records = 64, .soffset = 0x200, .swizzle = true, .element = 1},
         {.stride = 16, .records = 100, .soffset = 0x40, .add_tid = true},
         {.stride = 16, .records = 20, .soffset = 0x40, .heap = true},
@@ -771,7 +774,8 @@ TEST_F(TranslateExec, BufferModes) {
     };
     static constexpr std::uint32_t table_bytes = 0x800, store_bytes = 0x1400;
     for (const VMode& c : modes) {
-        SCOPED_TRACE(testing::Message() << "stride " << c.stride << " swizzle " << c.swizzle
+        SCOPED_TRACE(testing::Message() << "base_high " << c.base_high << " stride " << c.stride
+                                        << " swizzle " << c.swizzle
                                         << " add_tid " << c.add_tid << " heap " << c.heap);
         const auto byte = [](std::uint64_t a) -> std::uint32_t {
             EXPECT_LT(a, table_bytes);
