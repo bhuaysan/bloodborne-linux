@@ -2,6 +2,7 @@
 // scheduler and the memory mirror on lavapipe (docs/design/graphics.md, item 25). The shader
 // adds 1 to word 0 of the buffer that user data 0-3 describe (the shader uses no group ID), so
 // the word counts the groups that ran, with a workgroup of one thread.
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
@@ -21,6 +22,9 @@
 #include "gpu/vk/dispatcher.hpp"
 #include "gpu/vk/memory_mirror.hpp"
 #include "gpu/vk/scheduler.hpp"
+#include "gpu/vk/texture_desc.hpp"
+#include "gpu/vk/texture_binder.hpp"
+#include "gpu/vk/texture_cache.hpp"
 #include "hle/kernel/dmem.hpp"
 #include "hle/kernel/vmem.hpp"
 #include "test_device.hpp"
@@ -35,12 +39,14 @@ using bb::pm4::Parser;
 using bb::pm4::RegisterMirror;
 using bb::pm4::RunResult;
 using bb::pm4::Stream;
+using bb::test::gcn::mimg;
 using bb::test::gcn::mubuf;
 using bb::test::gcn::sopp;
 using bb::test::gcn::vop1;
 
 constexpr std::uint64_t kib = 1024;
-constexpr std::uint64_t code_at = 0, out_at = 0x1000, counts_at = 0x2000, bad_at = 0x3000;
+constexpr std::uint64_t code_at = 0, out_at = 0x1000, counts_at = 0x2000, bad_at = 0x3000,
+                         image_code_at = 0x400, image_at = 0x4000;
 
 void packet(std::vector<std::uint32_t>& out, std::uint8_t opcode,
             std::initializer_list<std::uint32_t> body) {
@@ -94,7 +100,15 @@ protected:
                 return {reinterpret_cast<const std::uint32_t*>(address),
                         (guest_ + 256 * kib - address) / 4};
             });
-        dispatcher_ = std::make_unique<Dispatcher>(*device_, *scheduler_, *pipelines_, *mirror_);
+        textures_ = std::make_unique<TextureCache>(*device_, *scheduler_);
+        binder_ = std::make_unique<TextureBinder>(
+            *device_, *scheduler_, *textures_,
+            [this](std::uint64_t address, std::uint64_t bytes) -> std::span<const std::byte> {
+                if (address < guest_ || address + bytes > guest_ + 256 * kib) return {};
+                return {reinterpret_cast<const std::byte*>(address), bytes};
+            });
+        dispatcher_ = std::make_unique<Dispatcher>(*device_, *scheduler_, *pipelines_, *mirror_,
+                                                   binder_.get());
         parser_ = std::make_unique<Parser>(regs_);
         parser_->set_dispatch([this](const RegisterMirror& r, const bb::pm4::DispatchCall& c) {
             dispatcher_->dispatch(r, c);
@@ -104,6 +118,8 @@ protected:
 
     void TearDown() override {
         dispatcher_.reset();  // before the memory it dispatches over goes
+        binder_.reset();
+        textures_.reset();
         if (memory_ != nullptr) {
             EXPECT_EQ(sceKernelMunmap(memory_, 256 * kib), 0);
             EXPECT_EQ(release_direct(offset_, 256 * kib), 0);
@@ -145,6 +161,8 @@ protected:
     std::unique_ptr<bb::tools::MirrorObserver> observer_;
     std::unique_ptr<Scheduler> scheduler_;
     std::unique_ptr<ComputePipelineCache> pipelines_;
+    std::unique_ptr<TextureCache> textures_;
+    std::unique_ptr<TextureBinder> binder_;
     std::unique_ptr<Dispatcher> dispatcher_;
     RegisterMirror regs_;
     std::unique_ptr<Parser> parser_;
@@ -357,3 +375,146 @@ TEST_F(VkDispatcher, SyncBeforeWaitSubmitsWithoutWaiting) {
 }
 
 }  // namespace
+
+// Dispatches with images (docs/design/graphics.md, "Textures and samplers (item 28)"). The T# is
+// in user data 0-7, the S# in 8-11 and the output buffer's V# in 12-15.
+constexpr std::uint32_t image_side = 8;
+
+// An 8_8_8_8 image of `image_side` square texels at image_at, linear, with the number format
+// `nfmt`, as the T# the user data holds.
+std::array<std::uint32_t, 8> image_descriptor(std::uint64_t guest, std::uint32_t nfmt) {
+    const std::uint64_t at = guest + image_at;
+    return {static_cast<std::uint32_t>(at >> 8),
+            static_cast<std::uint32_t>(at >> 40) | 10u << 20 | nfmt << 26,
+            (image_side - 1) | (image_side - 1) << 14,
+            4u | 5u << 3 | 6u << 6 | 7u << 9 | 8u << 20 | 9u << 28,  // XYZW, linear, 2D
+            (image_side - 1) << 13,
+            0, 0, 0};
+}
+
+class VkDispatchImages : public VkDispatcher {
+protected:
+    // The CS registers for the program at image_code_at with the 16 user SGPRs `user`.
+    void set_image_state(std::vector<std::uint32_t>& stream, const std::vector<std::uint32_t>& code,
+                         const std::array<std::uint32_t, 16>& user) {
+        std::memcpy(bytes() + image_code_at, code.data(), code.size() * 4);
+        packet(stream, IT_SET_SH_REG, {0x207, 1, 1, 1});
+        const std::uint64_t pgm = guest_ + image_code_at;
+        packet(stream, IT_SET_SH_REG,
+               {0x20C, static_cast<std::uint32_t>(pgm >> 8), static_cast<std::uint32_t>(pgm >> 40)});
+        packet(stream, IT_SET_SH_REG, {0x213, 16u << 1});
+        std::vector<std::uint32_t> body = {0x240};
+        body.insert(body.end(), user.begin(), user.end());
+        stream.push_back(bb::pm4::type3_header(IT_SET_SH_REG, static_cast<std::uint32_t>(body.size())));
+        stream.insert(stream.end(), body.begin(), body.end());
+    }
+
+    std::array<std::uint32_t, 16> user_data(std::uint32_t nfmt) {
+        const std::uint64_t out = guest_ + out_at;
+        const auto t = image_descriptor(guest_, nfmt);
+        std::array<std::uint32_t, 16> user{};
+        std::ranges::copy(t, user.begin());
+        user[12] = static_cast<std::uint32_t>(out);
+        user[13] = static_cast<std::uint32_t>(out >> 32);
+        user[14] = 0x1000;
+        return user;
+    }
+
+    // The 8_8_8_8 texels of the image (4 bytes each), copied out of the Vulkan image. The image
+    // is moved to the sampled layout first, as a draw reading it would.
+    std::vector<std::uint8_t> read_back(std::uint32_t nfmt) {
+        const auto desc = decode_texture(image_descriptor(guest_, nfmt));
+        const TextureView* view = textures_->get(*desc, {bytes() + image_at, 4 * kib});
+        EXPECT_NE(view, nullptr);
+        std::vector<std::uint8_t> out(4 * image_side * image_side);
+        if (view == nullptr) return out;
+        const VkDevice d = device_->handle();
+        auto info = make<VkBufferCreateInfo>(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
+        info.size = out.size();
+        info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        VkBuffer buffer;
+        check(vkCreateBuffer(d, &info, nullptr, &buffer), "vkCreateBuffer");
+        VkMemoryRequirements needs;
+        vkGetBufferMemoryRequirements(d, buffer, &needs);
+        auto alloc = make<VkMemoryAllocateInfo>(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
+        alloc.allocationSize = needs.size;
+        alloc.memoryTypeIndex = *device_->memory_type(
+            needs.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        VkDeviceMemory memory;
+        check(vkAllocateMemory(d, &alloc, nullptr, &memory), "vkAllocateMemory");
+        check(vkBindBufferMemory(d, buffer, memory, 0), "vkBindBufferMemory");
+        void* map;
+        check(vkMapMemory(d, memory, 0, VK_WHOLE_SIZE, 0, &map), "vkMapMemory");
+        const VkBufferImageCopy region{0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
+                                       {image_side, image_side, 1}};
+        vkCmdCopyImageToBuffer(scheduler_->commands(), view->image, TextureView::layout, buffer, 1,
+                               &region);
+        scheduler_->finish();  // ends with a barrier to host reads
+        std::memcpy(out.data(), map, out.size());
+        vkDestroyBuffer(d, buffer, nullptr);
+        vkFreeMemory(d, memory, nullptr);
+        return out;
+    }
+};
+
+TEST_F(VkDispatchImages, ImageStoreWritesAStorageImage) {
+    constexpr std::uint32_t uint_format = 4;
+    std::memset(bytes() + image_at, 0xee, 4 * kib);
+    // v0 = x = 1, v1 = y = 2, v2..v5 = 10, 20, 30, 40; image_store v[2:5], v[0:1], s[0:7]
+    std::vector<std::uint32_t> code = {vop1(1, 0, 129), vop1(1, 1, 130), vop1(1, 2, 138),
+                                       vop1(1, 3, 148), vop1(1, 4, 158), vop1(1, 5, 168)};
+    for (const auto w : mimg(8, 2, 0, 0, 0, 0xf, bb::test::gcn::img::unorm)) code.push_back(w);
+    code.push_back(sopp(1));
+    std::vector<std::uint32_t> stream;
+    set_image_state(stream, code, user_data(uint_format));
+    packet(stream, IT_DISPATCH_DIRECT, {1, 1, 1, 1});
+    ASSERT_EQ(run(stream), RunResult::done);
+    EXPECT_EQ(dispatcher_->stats().recorded, 1u);
+    EXPECT_EQ(dispatcher_->stats().untranslated, 0u);
+    EXPECT_EQ(dispatcher_->stats().failed, 0u);
+
+    // Texel (1, 2) holds the stored components and the rest what the guest memory held.
+    const auto texels = read_back(uint_format);
+    for (std::uint32_t y = 0; y < image_side; ++y) {
+        for (std::uint32_t x = 0; x < image_side; ++x) {
+            const std::uint8_t* t = &texels[(y * image_side + x) * 4];
+            const std::array<std::uint8_t, 4> expected =
+                x == 1 && y == 2 ? std::array<std::uint8_t, 4>{10, 20, 30, 40}
+                                 : std::array<std::uint8_t, 4>{0xee, 0xee, 0xee, 0xee};
+            EXPECT_TRUE(std::equal(expected.begin(), expected.end(), t)) << x << ", " << y;
+        }
+    }
+    // The stores stay in the image: the unchanged guest bytes do not upload it again.
+    EXPECT_EQ(textures_->uploads(), 1u);
+}
+
+TEST_F(VkDispatchImages, SampledImageIsReadByTheDispatch) {
+    // Red is the texel's index, tiled as the T#'s mode says.
+    const auto layout = TextureCache::guest_layout(*decode_texture(image_descriptor(guest_, 0)));
+    ASSERT_TRUE(layout.has_value());
+    std::vector<std::byte> linear(layout->size), tiled(layout->size);
+    for (std::uint32_t i = 0; i < image_side; ++i) {
+        for (std::uint32_t x = 0; x < image_side; ++x) {
+            linear[(i * layout->levels[0].pitch + x) * 4] = static_cast<std::byte>(i * image_side + x);
+        }
+    }
+    bb::tile::tile(*layout, linear, tiled);
+    std::memcpy(bytes() + image_at, tiled.data(), tiled.size());
+    // v0 = 3.5 / 8, v1 = 5.5 / 8; image_sample_lz v2, v[0:1], s[0:7], s[8:11] dmask 1;
+    // buffer_store_dword v2 to the V# in s[12:15].
+    std::vector<std::uint32_t> code = {vop1(1, 0, 255), 0x3ee00000, vop1(1, 1, 255), 0x3f300000};
+    for (const auto w : mimg(39, 2, 0, 0, 8, 1)) code.push_back(w);
+    for (const auto w : mubuf(28, 2, 0, 12, 128)) code.push_back(w);
+    code.push_back(sopp(1));
+    std::vector<std::uint32_t> stream;
+    set_image_state(stream, code, user_data(0));
+    packet(stream, IT_DISPATCH_DIRECT, {1, 1, 1, 1});
+    ASSERT_EQ(run(stream), RunResult::done);
+    EXPECT_EQ(dispatcher_->stats().recorded, 1u);
+    EXPECT_EQ(dispatcher_->stats().untranslated, 0u);
+    EXPECT_EQ(dispatcher_->stats().failed, 0u);
+    float red;
+    std::memcpy(&red, bytes() + out_at, 4);
+    EXPECT_NEAR(red, (5 * image_side + 3) / 255.0f, 1e-6f);
+}

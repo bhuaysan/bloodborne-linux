@@ -1,11 +1,13 @@
 // Descriptor set layouts of the translator's image and sampler bindings (docs/design/graphics.md,
 // "Image sampling" and "Textures and samplers (item 28)"): image i of a stage's interface is
-// binding i (a sampled image), sampler j is binding images.size() + j (a sampler).
+// binding i (a sampled image, or a storage image when the program writes it), sampler j is
+// binding images.size() + j (a sampler).
 #pragma once
 
 #include <cstdint>
 #include <map>
 #include <utility>
+#include <vector>
 
 #include <vulkan/vulkan.h>
 
@@ -31,7 +33,10 @@ public:
 
 private:
     const Device& device_;
-    std::map<std::pair<std::uint32_t, std::uint32_t>, VkDescriptorSetLayout> layouts_;
+    // By the image count, the sampler count and which images are storage images.
+    std::map<std::pair<std::pair<std::uint32_t, std::uint32_t>, std::vector<bool>>,
+             VkDescriptorSetLayout>
+        layouts_;
 };
 
 }  // namespace bb::vk

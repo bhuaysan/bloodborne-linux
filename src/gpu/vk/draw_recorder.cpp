@@ -68,24 +68,6 @@ void set_dynamic_state(VkCommandBuffer commands, const DynamicState& d, VkExtent
     vkCmdSetPrimitiveRestartEnable(commands, d.primitive_restart);
 }
 
-// Sets `key.images` to the classes of the T#s that `interface` reads now (empty when all are 2D
-// float, the key's default). Returns whether that changed the key, or nothing, with `why`, when a
-// T# can't be read.
-std::optional<bool> set_classes(TextureBinder& binder, const gcn::ShaderInterface& interface,
-                                std::span<const std::uint32_t, pm4::user_data_dwords> user,
-                                gcn::ShaderKey& key, std::string& why) {
-    auto classes = binder.classes(interface, user, why);
-    if (!classes) {
-        return std::nullopt;
-    }
-    if (std::ranges::all_of(*classes, [](const gcn::ImageClass& c) { return c == gcn::ImageClass{}; })) {
-        classes->clear();
-    }
-    const bool changed = key.images != *classes;
-    key.images = std::move(*classes);
-    return changed;
-}
-
 }  // namespace
 
 void DrawRecorder::draw(const pm4::RegisterMirror& regs, const pm4::DrawCall& call) {
@@ -200,10 +182,10 @@ bool DrawRecorder::record(const pm4::RegisterMirror& regs, const pm4::DrawCall& 
         PipelineKey keyed = state->key;
         const auto vs_user = regs.user_data(pm4::Stage::vs);
         const auto ps_user = regs.user_data(pm4::Stage::ps);
-        const auto vs_changed = set_classes(*textures_, pipeline->vs, vs_user, keyed.vs.key, why);
-        const auto ps_changed = keyed.ps ? set_classes(*textures_, pipeline->ps, ps_user,
-                                                       keyed.ps->key, why)
-                                         : std::optional<bool>(false);
+        const auto vs_changed = textures_->set_classes(pipeline->vs, vs_user, keyed.vs.key, why);
+        const auto ps_changed =
+            keyed.ps ? textures_->set_classes(pipeline->ps, ps_user, keyed.ps->key, why)
+                     : std::optional<bool>(false);
         if (!vs_changed || !ps_changed) {
             return false;
         }

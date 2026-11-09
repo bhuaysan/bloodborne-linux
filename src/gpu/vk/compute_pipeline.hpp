@@ -14,6 +14,7 @@
 
 #include "common/code_hash.hpp"
 #include "gpu/gcn/translate.hpp"
+#include "gpu/vk/descriptor_layouts.hpp"
 #include "gpu/vk/pipeline_state.hpp"
 
 namespace bb::vk {
@@ -30,7 +31,7 @@ inline constexpr std::uint32_t compute_push_size = 8;
 
 struct ComputePipeline {
     VkPipeline pipeline = VK_NULL_HANDLE;
-    VkPipelineLayout layout = VK_NULL_HANDLE;  // no descriptor sets yet (textures item, 28)
+    VkPipelineLayout layout = VK_NULL_HANDLE;  // set 0: the images and samplers, if any
     gcn::ShaderInterface interface;
 };
 
@@ -47,7 +48,8 @@ public:
     // pipeline while the code at its address is unchanged (hashed on every request, see
     // docs/design/graphics.md, "Code hash of a cached pipeline"); other code at the address gets
     // a pipeline of its own. Nothing, with `why` saying what, when the code isn't readable,
-    // doesn't translate or uses images or samplers (not yet). A translation error is kept and
+    // doesn't translate. The layout has set 0 for the program's images and samplers (the
+    // caller sets the key's image classes first, TextureBinder::set_classes). A translation error is kept and
     // given again for an equal request, unreadable code is not. Throws std::runtime_error when a
     // Vulkan call fails; nothing is kept then, so the next request for the state tries again.
     const ComputePipeline* get(const ComputeState& state, std::string& why);
@@ -72,6 +74,7 @@ private:
 
     const Device& device_;
     CodeReader read_;
+    DescriptorLayouts layouts_;
     std::function<void()> create_hook_;
     // By the code address; nodes stay where they are, so handed-out pipelines do too.
     std::unordered_multimap<std::uint64_t, Entry> entries_;

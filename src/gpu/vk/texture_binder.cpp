@@ -79,23 +79,39 @@ std::optional<std::vector<gcn::ImageClass>> TextureBinder::classes(
     return out;
 }
 
+std::optional<bool> TextureBinder::set_classes(
+    const gcn::ShaderInterface& interface,
+    std::span<const std::uint32_t, pm4::user_data_dwords> user, gcn::ShaderKey& key,
+    std::string& why) {
+    auto found = classes(interface, user, why);
+    if (!found) {
+        return std::nullopt;
+    }
+    if (std::ranges::all_of(*found, [](const gcn::ImageClass& c) { return c == gcn::ImageClass{}; })) {
+        found->clear();
+    }
+    const bool changed = key.images != *found;
+    key.images = std::move(*found);
+    return changed;
+}
+
 VkDescriptorSet TextureBinder::bind(const gcn::ShaderInterface& interface,
                                     std::span<const std::uint32_t, pm4::user_data_dwords> user,
                                     std::string& why) {
-    if (std::ranges::any_of(interface.stored_images, [](bool stored) { return stored; })) {
-        why = "images written by a shader aren't supported yet";
-        return VK_NULL_HANDLE;
-    }
     // Textures are checked against guest memory once per submission.
     if (scheduler_.submitted() != submission_) {
         submission_ = scheduler_.submitted();
         textures_.begin_submission();
     }
+    const auto stored = [&](std::size_t i) {
+        return i < interface.stored_images.size() && interface.stored_images[i];
+    };
     std::vector<VkDescriptorImageInfo> infos;
     infos.reserve(interface.images.size() + interface.samplers.size());
     SamplerLimits limits;
     std::array<std::uint32_t, 8> dwords{};
-    for (const gcn::ResourceSource& source : interface.images) {
+    for (std::size_t i = 0; i < interface.images.size(); ++i) {
+        const gcn::ResourceSource& source = interface.images[i];
         if (!read(source, user, 8, dwords, why)) {
             return VK_NULL_HANDLE;
         }
@@ -117,14 +133,15 @@ VkDescriptorSet TextureBinder::bind(const gcn::ShaderInterface& interface,
             why = std::format("the texture at {:#x} isn't readable", desc->address);
             return VK_NULL_HANDLE;
         }
-        const TextureView* view = textures_.get(*desc, guest);
+        const TextureView* view = textures_.get(*desc, guest, stored(i));
         if (view == nullptr) {
             why = std::format("the texture at {:#x} can't be made", desc->address);
             return VK_NULL_HANDLE;
         }
         limits.linear &= view->filter_linear;
         limits.integer |= view->integer;
-        infos.push_back({VK_NULL_HANDLE, view->view, TextureView::layout});
+        infos.push_back({VK_NULL_HANDLE, view->view,
+                         stored(i) ? TextureView::storage_layout : TextureView::layout});
     }
     for (const gcn::ResourceSource& source : interface.samplers) {
         if (!read(source, user, 4, dwords, why)) {
@@ -149,8 +166,9 @@ VkDescriptorSet TextureBinder::bind(const gcn::ShaderInterface& interface,
         write.dstSet = set;
         write.dstBinding = i;
         write.descriptorCount = 1;
-        write.descriptorType = i < interface.images.size() ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
-                                                           : VK_DESCRIPTOR_TYPE_SAMPLER;
+        write.descriptorType = i >= interface.images.size() ? VK_DESCRIPTOR_TYPE_SAMPLER
+                               : stored(i)                  ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                                                            : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         write.pImageInfo = &infos[i];
         writes.push_back(write);
     }
@@ -201,10 +219,11 @@ TextureBinder::Pool& TextureBinder::next_pool() {
     }
     const VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, pool_sets * pool_images},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, pool_sets * pool_images},
         {VK_DESCRIPTOR_TYPE_SAMPLER, pool_sets * pool_samplers}};
     auto info = make<VkDescriptorPoolCreateInfo>(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
     info.maxSets = pool_sets;
-    info.poolSizeCount = 2;
+    info.poolSizeCount = 3;
     info.pPoolSizes = sizes;
     VkDescriptorPool handle = VK_NULL_HANDLE;
     check(vkCreateDescriptorPool(device_.handle(), &info, nullptr, &handle),

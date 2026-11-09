@@ -29,8 +29,10 @@ struct TextureView {
     VkFormat format = VK_FORMAT_UNDEFINED;
     bool filter_linear = true;  // the format supports a linear filter when sampled
     bool integer = false;       // an integer number format (UINT or SINT)
-    // The layout of the image and the view: always SHADER_READ_ONLY_OPTIMAL once get() returns.
+    // The layout of the image once get() returns: SHADER_READ_ONLY_OPTIMAL, or storage_layout
+    // when get() was asked for a storage view.
     static constexpr VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    static constexpr VkImageLayout storage_layout = VK_IMAGE_LAYOUT_GENERAL;
 };
 
 // What the images that a sampler is used with allow of it (a sampler is paired with an image only
@@ -66,7 +68,14 @@ public:
     // outside a render pass. The view covers the T#'s mip levels from base_level to last_level
     // and layers base_array to last_array, with dst_sel as its component swizzle. Nothing, logged
     // once per descriptor, when the cache can't make it or `guest` is too short.
-    const TextureView* get(const TextureDesc& desc, std::span<const std::byte> guest);
+    // With `storage` the view is for image_store (a storage image in the GENERAL layout): it has
+    // the base level only and the identity swizzle (a storage view needs it), and the image must
+    // support storage writes without a format; nothing otherwise. The layout of an image changes
+    // between the two uses by a barrier that waits for all earlier commands (a dispatch's stores
+    // are visible to the next draw's samples), so the stored texels stay in the image until the
+    // guest memory under it changes. They are not written back to guest memory.
+    const TextureView* get(const TextureDesc& desc, std::span<const std::byte> guest,
+                           bool storage = false);
 
     // The sampler for `sampler`. With `compare` the sampler compares with its depth compare
     // function (for the image_sample_c forms). `limits` turns the linear filters into nearest ones
@@ -103,6 +112,7 @@ private:
         std::uint64_t hash = 0;
         std::uint64_t checked = 0;  // the epoch of the last hash
         VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        bool storage = false;  // made with STORAGE usage
         std::map<ViewKey, std::unique_ptr<TextureView>> views;
     };
     struct SamplerKey {
@@ -119,6 +129,8 @@ private:
                                   const tile::Layout& layout) const;
     void upload(Image& image, const ImageKey& key, const tile::Layout& layout,
                 std::span<const std::byte> guest);
+    // Moves the whole image to `to` after all earlier commands, for all later ones.
+    void change_layout(Image& image, VkImageLayout to);
     void destroy(Image& image);
 
     Device& device_;

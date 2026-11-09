@@ -13,8 +13,13 @@ DescriptorLayouts::~DescriptorLayouts() {
 }
 
 VkDescriptorSetLayout DescriptorLayouts::get(const gcn::ShaderInterface& interface) {
-    const std::pair key{static_cast<std::uint32_t>(interface.images.size()),
-                        static_cast<std::uint32_t>(interface.samplers.size())};
+    std::vector<bool> stored(interface.images.size());
+    for (std::size_t i = 0; i < stored.size() && i < interface.stored_images.size(); ++i) {
+        stored[i] = interface.stored_images[i];
+    }
+    const std::pair key{std::pair{static_cast<std::uint32_t>(interface.images.size()),
+                                  static_cast<std::uint32_t>(interface.samplers.size())},
+                        stored};
     const auto it = layouts_.find(key);
     if (it != layouts_.end()) {
         return it->second;
@@ -24,10 +29,12 @@ VkDescriptorSetLayout DescriptorLayouts::get(const gcn::ShaderInterface& interfa
                                           VK_SHADER_STAGE_FRAGMENT_BIT |
                                           VK_SHADER_STAGE_COMPUTE_BIT;
     std::vector<VkDescriptorSetLayoutBinding> bindings;
-    for (std::uint32_t i = 0; i < key.first + key.second; ++i) {
+    const auto [image_count, sampler_count] = key.first;
+    for (std::uint32_t i = 0; i < image_count + sampler_count; ++i) {
         bindings.push_back({i,
-                            i < key.first ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
-                                          : VK_DESCRIPTOR_TYPE_SAMPLER,
+                            i >= image_count ? VK_DESCRIPTOR_TYPE_SAMPLER
+                            : stored[i]      ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                                             : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
                             1, stages, nullptr});
     }
     auto info = make<VkDescriptorSetLayoutCreateInfo>(

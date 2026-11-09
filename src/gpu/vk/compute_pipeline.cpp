@@ -11,7 +11,7 @@
 namespace bb::vk {
 
 ComputePipelineCache::ComputePipelineCache(const Device& device, CodeReader read)
-    : device_(device), read_(std::move(read)) {}
+    : device_(device), read_(std::move(read)), layouts_(device) {}
 
 ComputePipelineCache::~ComputePipelineCache() {
     for (auto& [hash, entry] : entries_) destroy(entry);
@@ -52,9 +52,6 @@ const ComputePipeline* ComputePipelineCache::get(const ComputeState& state, std:
         ++translations_;
         translation = gcn::translate(code, {}, state.key);
         entry.stamp = common::CodeStamp::of(code, translation->code_dwords);
-        if (!translation->interface.images.empty()) {
-            entry.error = "images and samplers are not supported yet";
-        }
     } catch (const gcn::GcnError& e) {
         entry.error = std::format("the CS at {:#x} doesn't translate: {}", state.code_address,
                                   e.what());
@@ -83,6 +80,10 @@ void ComputePipelineCache::create(Entry& entry, const gcn::Translation& translat
     p.interface = translation.interface;
     const VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, compute_push_size};
     auto layout = make<VkPipelineLayoutCreateInfo>(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+    const bool sets = !p.interface.images.empty() || !p.interface.samplers.empty();
+    const VkDescriptorSetLayout set0 = sets ? layouts_.get(p.interface) : VK_NULL_HANDLE;
+    layout.setLayoutCount = sets ? 1 : 0;
+    layout.pSetLayouts = &set0;
     layout.pushConstantRangeCount = 1;
     layout.pPushConstantRanges = &range;
     check(vkCreatePipelineLayout(device, &layout, nullptr, &p.layout), "vkCreatePipelineLayout");

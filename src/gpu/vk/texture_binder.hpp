@@ -44,12 +44,20 @@ public:
         const gcn::ShaderInterface& interface,
         std::span<const std::uint32_t, pm4::user_data_dwords> user, std::string& why);
 
+    // Sets `key.images` to the classes of the T#s that `interface` reads now (empty when all are
+    // 2D float, the key's default). Returns whether that changed the key, or nothing, with `why`,
+    // when a T# can't be read.
+    std::optional<bool> set_classes(const gcn::ShaderInterface& interface,
+                                    std::span<const std::uint32_t, pm4::user_data_dwords> user,
+                                    gcn::ShaderKey& key, std::string& why);
+
     // A descriptor set (layout from DescriptorLayouts for the interface) with the interface's
     // images and samplers, valid until the work recorded so far completes. The textures are
     // uploaded by commands recorded into the scheduler's current command buffer when new or
     // changed since the last submission began (once per submission), so call it outside a render
-    // pass. A null set, with `why`, when a descriptor can't be read, a texture or sampler can't
-    // be made, or the program writes an image (not yet). Throws std::runtime_error when a Vulkan
+    // pass. An image the program writes (interface.stored_images) is a storage image in the GENERAL
+    // layout. A null set, with `why`, when a descriptor can't be read or a texture or sampler
+    // can't be made (a stored image also when its format can't be written). Throws std::runtime_error when a Vulkan
     // call fails.
     VkDescriptorSet bind(const gcn::ShaderInterface& interface,
                          std::span<const std::uint32_t, pm4::user_data_dwords> user,

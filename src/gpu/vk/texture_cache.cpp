@@ -177,8 +177,26 @@ std::optional<tile::Layout> TextureCache::guest_layout(const TextureDesc& d) {
 std::unique_ptr<TextureCache::Image> TextureCache::create(const ImageKey& key,
                                                           const TextureFormat& format,
                                                           const tile::Layout& layout) const {
-    const VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    // Storage usage where the format allows stores without a format (image_store), else sampled
+    // only.
+    constexpr VkImageUsageFlags base = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    auto features = make<VkFormatProperties3>(VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3);
+    auto properties = make<VkFormatProperties2>(VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, &features);
+    vkGetPhysicalDeviceFormatProperties2(device_.physical(), format.format, &properties);
+    VkImageUsageFlags usage = base | VK_IMAGE_USAGE_STORAGE_BIT;
     VkImageFormatProperties p{};
+    const bool storage =
+        (features.optimalTilingFeatures &
+         (VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT |
+          VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT)) ==
+            (VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT |
+             VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT) &&
+        vkGetPhysicalDeviceImageFormatProperties(device_.physical(), format.format,
+                                                 VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, usage,
+                                                 0, &p) == VK_SUCCESS;
+    if (!storage) {
+        usage = base;
+    }
     if (vkGetPhysicalDeviceImageFormatProperties(device_.physical(), format.format,
                                                  VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, usage,
                                                  0, &p) != VK_SUCCESS ||
@@ -195,6 +213,7 @@ std::unique_ptr<TextureCache::Image> TextureCache::create(const ImageKey& key,
     }
     auto image = std::make_unique<Image>();
     image->format = format.format;
+    image->storage = storage;
     auto info = make<VkImageCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
     info.imageType = VK_IMAGE_TYPE_2D;
     info.format = format.format;
@@ -286,7 +305,25 @@ void TextureCache::upload(Image& image, const ImageKey& key, const tile::Layout&
     });
 }
 
-const TextureView* TextureCache::get(const TextureDesc& d, std::span<const std::byte> guest) {
+void TextureCache::change_layout(Image& image, VkImageLayout to) {
+    auto b = make<VkImageMemoryBarrier2>(VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2);
+    b.srcStageMask = b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    b.srcAccessMask = b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    b.oldLayout = image.layout;
+    b.newLayout = to;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = image.handle;
+    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0,
+                          VK_REMAINING_ARRAY_LAYERS};
+    auto dependency = make<VkDependencyInfo>(VK_STRUCTURE_TYPE_DEPENDENCY_INFO);
+    dependency.imageMemoryBarrierCount = 1;
+    dependency.pImageMemoryBarriers = &b;
+    vkCmdPipelineBarrier2(scheduler_.commands(), &dependency);
+    image.layout = to;
+}
+
+const TextureView* TextureCache::get(const TextureDesc& d, std::span<const std::byte> guest,
+                                     bool storage) {
     const auto format = texture_format(d.data_format, d.num_format);
     const auto layout = guest_layout(d);
     const ImageKey key{d.address, d.data_format, d.num_format, d.width,     d.height,
@@ -313,6 +350,12 @@ const TextureView* TextureCache::get(const TextureDesc& d, std::span<const std::
                     layout->size);
         return nullptr;
     }
+    if (storage && !image->storage) {
+        common::log(common::LogLevel::warn, "gpu.vk",
+                    "texture at {:#x}: format {}/{} can't be written by a shader", d.address,
+                    d.data_format, d.num_format);
+        return nullptr;
+    }
     if (image->checked != epoch_) {
         const std::uint64_t hash = hash_bytes(guest.first(layout->size));
         if (image->layout == VK_IMAGE_LAYOUT_UNDEFINED || hash != image->hash) {
@@ -321,13 +364,18 @@ const TextureView* TextureCache::get(const TextureDesc& d, std::span<const std::
         image->hash = hash;
         image->checked = epoch_;
     }
+    const VkImageLayout wanted = storage ? TextureView::storage_layout : TextureView::layout;
+    if (image->layout != wanted) {
+        change_layout(*image, wanted);
+    }
 
     const std::uint32_t base_level = std::min(d.base_level, key.levels - 1);
     const std::uint32_t base_layer = std::min(d.base_array, key.layers - 1);
     const std::uint32_t last_layer = std::clamp(d.last_array, base_layer, key.layers - 1);
-    const ViewKey view_key{base_level, key.levels - base_level, base_layer,
+    // A storage view has one level and the identity swizzle.
+    const ViewKey view_key{base_level, storage ? 1 : key.levels - base_level, base_layer,
                            key.type == image_type_2d_array ? last_layer - base_layer + 1 : 1,
-                           d.dst_sel};
+                           storage ? std::array<std::uint32_t, 4>{4, 5, 6, 7} : d.dst_sel};
     auto& slot = image->views[view_key];
     if (!slot) {
         auto info = make<VkImageViewCreateInfo>(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
@@ -335,8 +383,8 @@ const TextureView* TextureCache::get(const TextureDesc& d, std::span<const std::
         info.viewType = key.type == image_type_2d_array ? VK_IMAGE_VIEW_TYPE_2D_ARRAY
                                                         : VK_IMAGE_VIEW_TYPE_2D;
         info.format = image->format;
-        info.components = {swizzle(d.dst_sel[0]), swizzle(d.dst_sel[1]), swizzle(d.dst_sel[2]),
-                           swizzle(d.dst_sel[3])};
+        info.components = {swizzle(view_key.dst_sel[0]), swizzle(view_key.dst_sel[1]),
+                           swizzle(view_key.dst_sel[2]), swizzle(view_key.dst_sel[3])};
         info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, view_key.base_level, view_key.levels,
                                  view_key.base_array, view_key.layers};
         auto view = std::make_unique<TextureView>();

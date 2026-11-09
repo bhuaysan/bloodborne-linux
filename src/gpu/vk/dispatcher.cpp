@@ -13,6 +13,7 @@
 #include "gpu/vk/device.hpp"
 #include "gpu/vk/memory_mirror.hpp"
 #include "gpu/vk/scheduler.hpp"
+#include "gpu/vk/texture_binder.hpp"
 
 namespace bb::vk {
 namespace {
@@ -38,8 +39,9 @@ std::string describe(const RecentDispatch& d) {
 }
 
 Dispatcher::Dispatcher(Device& device, Scheduler& scheduler, ComputePipelineCache& pipelines,
-                       const MemoryMirror& mirror)
-    : device_(device), scheduler_(scheduler), pipelines_(pipelines), mirror_(mirror) {}
+                       const MemoryMirror& mirror, TextureBinder* textures)
+    : device_(device), scheduler_(scheduler), pipelines_(pipelines), mirror_(mirror),
+      textures_(textures) {}
 
 Dispatcher::~Dispatcher() {
     try {
@@ -155,8 +157,26 @@ void Dispatcher::dispatch(const pm4::RegisterMirror& regs, const pm4::DispatchCa
 
 void Dispatcher::record(const pm4::RegisterMirror& regs, const pm4::DispatchCall& call) {
     std::string why;
-    const auto state = compute_state(regs, why);
+    auto state = compute_state(regs, why);
     const ComputePipeline* pipeline = state ? pipelines_.get(*state, why) : nullptr;
+    // The textures: a pipeline translated for other image classes than the T#s have is replaced,
+    // then the descriptor set is made. That uploads the textures (outside any render pass: a
+    // dispatch isn't in one).
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    const auto user = regs.user_data(pm4::Stage::cs);
+    if (pipeline != nullptr && !pipeline->interface.images.empty()) {
+        if (textures_ == nullptr) {
+            why = "the CS uses images, and there are no textures to bind";
+            pipeline = nullptr;
+        } else if (const auto changed =
+                       textures_->set_classes(pipeline->interface, user, state->key, why);
+                   !changed || (*changed && (pipeline = pipelines_.get(*state, why)) == nullptr)) {
+            pipeline = nullptr;
+        } else if (!pipeline->interface.images.empty() || !pipeline->interface.samplers.empty()) {
+            set = textures_->bind(pipeline->interface, user, why);
+            pipeline = set != VK_NULL_HANDLE ? pipeline : nullptr;
+        }
+    }
     if (pipeline == nullptr) {
         ++untranslated_;
         const std::uint64_t program = state ? state->code_address : 0;
@@ -191,8 +211,7 @@ void Dispatcher::record(const pm4::RegisterMirror& regs, const pm4::DispatchCall
         }
     }
 
-    const VkDeviceAddress address =
-        draw_block(regs.user_data(pm4::Stage::cs), state->code_address);
+    const VkDeviceAddress address = draw_block(user, state->code_address);
 
     const VkCommandBuffer commands = scheduler_.commands();
     // A dispatch may read what the one before wrote: order them.
@@ -210,6 +229,10 @@ void Dispatcher::record(const pm4::RegisterMirror& regs, const pm4::DispatchCall
     dependency.pMemoryBarriers = &barrier;
     vkCmdPipelineBarrier2(commands, &dependency);
     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline);
+    if (set != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->layout, 0, 1,
+                                &set, 0, nullptr);
+    }
     vkCmdPushConstants(commands, pipeline->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                        compute_push_size, &address);
     if (counts != VK_NULL_HANDLE) {
@@ -224,7 +247,6 @@ void Dispatcher::record(const pm4::RegisterMirror& regs, const pm4::DispatchCall
                           .block = address,
                           .indirect = call.indirect,
                           .groups = call.groups};
-    const auto user = regs.user_data(pm4::Stage::cs);
     std::copy(user.begin(), user.end(), recent.user.begin());
     remember(recent);
 }

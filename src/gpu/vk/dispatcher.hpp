@@ -22,6 +22,7 @@ namespace bb::vk {
 class Device;
 class MemoryMirror;
 class Scheduler;
+class TextureBinder;
 
 // Dispatches by outcome: recorded on the scheduler, not recorded because the shader doesn't
 // translate (or has no code or program), or not recorded because of an error (a Vulkan failure,
@@ -50,18 +51,20 @@ std::string describe(const RecentDispatch& dispatch);
 // How many recorded dispatches the Dispatcher keeps for a lost device.
 inline constexpr std::size_t recent_dispatches = 32;
 
-// Used by one thread (the GPU thread), like the scheduler. The device, scheduler, pipeline cache
-// and mirror must outlive it.
+// Used by one thread (the GPU thread), like the scheduler. The device, scheduler, pipeline cache,
+// mirror and binder must outlive it.
 class Dispatcher {
 public:
     Dispatcher(Device& device, Scheduler& scheduler, ComputePipelineCache& pipelines,
-               const MemoryMirror& mirror);
+               const MemoryMirror& mirror, TextureBinder* textures = nullptr);
     // Waits for the scheduler's work, then frees the draw block memory.
     ~Dispatcher();
     Dispatcher(const Dispatcher&) = delete;
     Dispatcher& operator=(const Dispatcher&) = delete;
 
-    // Records one dispatch with the CS registers `regs`. Never throws: a dispatch that can't be
+    // Records one dispatch with the CS registers `regs`. A program with images or samplers gets
+    // its descriptor set from the binder (set 0; without a binder, or when the binder can't make
+    // it, the dispatch is skipped and logged like an untranslated one). Never throws: a dispatch that can't be
     // recorded is counted and logged (translation errors once per program). The first recording
     // of a program is logged at info, every recording at trace. Below trace, a repeat costs one
     // hash lookup, one log filter check and a copy to the list of recent dispatches; the first
@@ -113,6 +116,7 @@ private:
     Scheduler& scheduler_;
     ComputePipelineCache& pipelines_;
     const MemoryMirror& mirror_;
+    TextureBinder* textures_;
     Chunk chunk_;
     std::atomic<std::uint64_t> recorded_ = 0, untranslated_ = 0, failed_ = 0;
     std::vector<std::uint64_t> logged_;  // programs whose error was logged

@@ -376,14 +376,14 @@ void open_mirror(bb::vk::Device* device, const std::string& device_selector, uns
     try {
         m->scheduler = std::make_unique<bb::vk::Scheduler>(*device);
         m->pipelines = std::make_unique<bb::vk::ComputePipelineCache>(*device, read_guest_code);
-        m->dispatcher = std::make_unique<bb::vk::Dispatcher>(*device, *m->scheduler,
-                                                             *m->pipelines, *m->mirror);
         m->images = std::make_unique<bb::vk::ImageCache>(*device);
         m->targets = std::make_unique<bb::vk::TargetRenderer>(*device, *m->images);
         m->draw_pipelines = std::make_unique<bb::vk::PipelineCache>(*device, read_guest_code);
         m->textures = std::make_unique<bb::vk::TextureCache>(*device, *m->scheduler);
         m->binder = std::make_unique<bb::vk::TextureBinder>(*device, *m->scheduler, *m->textures,
                                                             read_guest_bytes);
+        m->dispatcher = std::make_unique<bb::vk::Dispatcher>(
+            *device, *m->scheduler, *m->pipelines, *m->mirror, m->binder.get());
         auto& gpu = bb::hle::video::gpu_thread();
         m->recorder = std::make_unique<bb::vk::DrawRecorder>(
             *device, *m->scheduler, *m->dispatcher, *m->draw_pipelines, *m->targets, *m->mirror,
