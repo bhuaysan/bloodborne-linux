@@ -40,7 +40,7 @@ jobs:
         run: |
           dnf -y --setopt=install_weak_deps=False install git cmake ninja-build gcc-c++ \
               libasan libubsan gtest-devel python3 spirv-headers-devel spirv-tools \
-              vulkan-headers vulkan-loader-devel mesa-vulkan-drivers llvm SDL3-devel
+              vulkan-headers glslang vulkan-loader-devel mesa-vulkan-drivers llvm SDL3-devel
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
