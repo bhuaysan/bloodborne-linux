@@ -80,8 +80,9 @@ class Dependency:
     name: str  # directory under third_party/
     submodule: str  # path of the gitlink in shadPS4
     url: str
-    license_file: str
+    license_file: str | None  # None: the license text is inside the files
     files: tuple[str, ...]  # files or directories, relative to the repository
+    in_shadps4: bool = False  # a directory of shadPS4's own repository, not a submodule
 
 
 def boost_headers() -> tuple[str, ...]:
@@ -101,6 +102,19 @@ def dependencies() -> list[Dependency]:
                    "LICENSE", ("include/magic_enum/magic_enum.hpp",)),
         Dependency("xbyak", "externals/xbyak", "https://github.com/herumi/xbyak.git", "COPYRIGHT",
                    ("xbyak/xbyak.h", "xbyak/xbyak_mnemonic.h", "xbyak/xbyak_util.h")),
+        # The libraries video_core needs (R4, issue #427).
+        Dependency("vma", "externals/vma",
+                   "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git",
+                   "LICENSE.txt", ("include/vk_mem_alloc.h",)),
+        Dependency("xxhash", "externals/xxhash", "https://github.com/Cyan4973/xxHash.git", "LICENSE",
+                   ("xxhash.c", "xxhash.h")),
+        Dependency("robin-map", "externals/robin-map", "https://github.com/Tessil/robin-map.git",
+                   "LICENSE", ("include/tsl",)),
+        # Dear ImGui is fetched by CMake at build time instead (src/shadps4_host/CMakeLists.txt):
+        # its sources hold the text "Home/End", which the privacy hook reads as a home path.
+        # Only what the presenter includes (PNG writing for screenshots). The header ends with its
+        # license text, under the MIT option.
+        Dependency("stb", "externals/stb", SHADPS4_URL, None, ("stb_image_write.h",), in_shadps4=True),
     ]
 
 
@@ -219,9 +233,13 @@ def generate(cache: Path, output: Path) -> None:
         write(output / "third_party/shadps4/LICENSES" / name, (shadps4 / "LICENSES" / name).read_bytes())
 
     for dep in dependencies():
-        repo = fetch(dep.url, submodule_commit(shadps4, dep.submodule), cache / dep.name)
+        if dep.in_shadps4:
+            repo = shadps4 / dep.submodule
+        else:
+            repo = fetch(dep.url, submodule_commit(shadps4, dep.submodule), cache / dep.name)
         destination = output / "third_party" / dep.name
-        write(destination / dep.license_file, (repo / dep.license_file).read_bytes())
+        if dep.license_file:
+            write(destination / dep.license_file, (repo / dep.license_file).read_bytes())
         for item in dep.files:
             path = repo / item
             if path.is_dir():

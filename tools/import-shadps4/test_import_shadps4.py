@@ -56,6 +56,26 @@ class Includes(unittest.TestCase):
         self.assertEqual(tool.rewrite_includes(text), '#include "common/types.h"\n#include "common/assert.h"\n')
 
 
+class Dependencies(unittest.TestCase):
+    def test_video_core_libraries_are_listed_with_their_license_files(self):
+        found = {d.name: d for d in tool.dependencies()}
+        expected = {"vma": "LICENSE.txt", "xxhash": "LICENSE", "robin-map": "LICENSE",
+                    "stb": None}
+        for name, license_file in expected.items():
+            self.assertEqual(found[name].license_file, license_file, name)
+
+    def test_only_stb_comes_from_shadps4_itself(self):
+        self.assertEqual([d.name for d in tool.dependencies() if d.in_shadps4], ["stb"])
+
+    def test_stb_takes_only_the_header_the_presenter_includes(self):
+        stb = next(d for d in tool.dependencies() if d.name == "stb")
+        self.assertEqual(stb.files, ("stb_image_write.h",))
+
+    def test_every_dependency_directory_is_owned(self):
+        for dep in tool.dependencies():
+            self.assertIn(f"third_party/{dep.name}", tool.owned_roots())
+
+
 class Compare(unittest.TestCase):
     def test_reports_missing_extra_and_changed_files(self):
         with tempfile.TemporaryDirectory() as temp:

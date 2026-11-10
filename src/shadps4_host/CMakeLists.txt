@@ -41,3 +41,46 @@ set_source_files_properties(${BB_SHADPS4_SOURCES} PROPERTIES COMPILE_OPTIONS -w)
 # x86-64 allows, and only decode.cpp calls it.
 set_source_files_properties(${BB_SHADPS4_DIR}/shader_recompiler/frontend/decode.cpp PROPERTIES
     COMPILE_OPTIONS "-w;$<$<BOOL:${BB_SANITIZE}>:-fno-sanitize=alignment>")
+
+# Libraries video_core needs (issue #427), unchanged copies in third_party/ at shadPS4's submodule
+# commits. Nothing uses them yet. All are SYSTEM so that their warnings stay out of our builds.
+set(BB_3P ${PROJECT_SOURCE_DIR}/third_party)
+
+add_library(bb_vma INTERFACE)
+target_include_directories(bb_vma SYSTEM INTERFACE ${BB_3P}/vma/include)
+
+add_library(bb_robin_map INTERFACE)
+target_include_directories(bb_robin_map SYSTEM INTERFACE ${BB_3P}/robin-map/include)
+
+add_library(bb_stb INTERFACE)
+target_include_directories(bb_stb SYSTEM INTERFACE ${BB_3P}/stb)
+
+enable_language(C)
+add_library(bb_xxhash STATIC ${BB_3P}/xxhash/xxhash.c)
+target_include_directories(bb_xxhash SYSTEM PUBLIC ${BB_3P}/xxhash)
+set_target_properties(bb_xxhash PROPERTIES C_STANDARD 99)
+target_compile_options(bb_xxhash PRIVATE -w)
+
+# Dear ImGui at shadPS4's submodule commit, fetched like Zydis: its sources hold the text "Home/End",
+# which the privacy hook reads as a home path, so they can't be committed unchanged.
+FetchContent_Declare(imgui_src
+    GIT_REPOSITORY https://github.com/shadexternals/imgui.git
+    GIT_TAG 7e1b65d26d52e9dd199d889c148c72184de647b4
+    SOURCE_SUBDIR bb_no_cmake)
+FetchContent_MakeAvailable(imgui_src)
+set(BB_IMGUI_DIR ${imgui_src_SOURCE_DIR})
+add_library(bb_imgui STATIC ${BB_IMGUI_DIR}/imgui.cpp ${BB_IMGUI_DIR}/imgui_draw.cpp
+    ${BB_IMGUI_DIR}/imgui_tables.cpp ${BB_IMGUI_DIR}/imgui_widgets.cpp)
+target_include_directories(bb_imgui SYSTEM PUBLIC ${BB_IMGUI_DIR})
+target_compile_options(bb_imgui PRIVATE -w)
+# The Vulkan backend needs the Vulkan headers and is left out without them.
+find_package(Vulkan QUIET)
+if(Vulkan_FOUND)
+    add_library(bb_imgui_vulkan STATIC ${BB_IMGUI_DIR}/backends/imgui_impl_vulkan.cpp)
+    target_include_directories(bb_imgui_vulkan SYSTEM PUBLIC ${BB_IMGUI_DIR}/backends)
+    target_link_libraries(bb_imgui_vulkan PUBLIC bb_imgui Vulkan::Headers)
+    target_compile_options(bb_imgui_vulkan PRIVATE -w)
+endif()
+
+add_library(bb_third_party_check STATIC third_party_check.cpp)
+target_link_libraries(bb_third_party_check PUBLIC bb_vma bb_robin_map bb_stb bb_xxhash bb_imgui)
