@@ -1,4 +1,4 @@
-#include "gpu/gcn/corpus.hpp"
+#include "support/corpus.hpp"
 
 #include <algorithm>
 #include <cstring>

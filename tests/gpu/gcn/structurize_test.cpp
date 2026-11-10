@@ -12,7 +12,7 @@
 
 #include "gpu/gcn/structurize.hpp"
 #include "gpu/gcn/encode.hpp"
-#include "gpu/gcn/spirv_val.hpp"
+#include "support/spirv_val.hpp"
 
 namespace {
 

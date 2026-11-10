@@ -6,7 +6,7 @@
 #include <span>
 #include <string_view>
 
-#include "gpu/gcn/corpus.hpp"
+#include "support/corpus.hpp"
 #include "shader_recompiler/runtime_info.h"
 #include "shadps4/translate.hpp"
 

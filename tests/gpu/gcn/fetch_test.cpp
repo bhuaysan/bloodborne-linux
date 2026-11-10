@@ -16,7 +16,7 @@
 #include "gpu/gcn/fetch.hpp"
 #include "gpu/gcn/gcn.hpp"
 #include "gpu/gcn/spirv_module.hpp"
-#include "gpu/gcn/spirv_val.hpp"
+#include "support/spirv_val.hpp"
 #include "gpu/gcn/translate.hpp"
 
 namespace {

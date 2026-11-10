@@ -23,6 +23,17 @@ target_include_directories(bbtestsupport PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(bbtestsupport PRIVATE BB_MAIN_CHECKOUT="${BB_MAIN_CHECKOUT}")
 target_link_libraries(bbtestsupport PUBLIC bbcommon GTest::gtest PRIVATE bb_warnings)
 
+# The shader corpus reader and the spirv-val wrapper, shared by tests/shadps4 and tests/gpu. The
+# tests that need spirv-val skip without it.
+find_program(BB_SPIRV_VAL spirv-val)
+if(NOT BB_SPIRV_VAL)
+    set(BB_SPIRV_VAL "")
+endif()
+add_library(bbcorpus STATIC support/corpus.cpp support/spirv_val.cpp)
+target_include_directories(bbcorpus PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(bbcorpus PRIVATE BB_SPIRV_VAL="${BB_SPIRV_VAL}")
+target_link_libraries(bbcorpus PRIVATE bb_warnings bbcommon)
+
 # Linked into the test binaries whose tests map guest memory (support/guest_window_asan.cpp). An
 # OBJECT library, so that the linker keeps its __asan_default_options.
 add_library(bbtestguestwindow OBJECT support/guest_window_asan.cpp)

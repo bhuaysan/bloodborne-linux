@@ -11,7 +11,7 @@
 
 #include <gtest/gtest.h>
 
-#include "gpu/gcn/spirv_val.hpp"
+#include "support/spirv_val.hpp"
 #include "gpu/tile/tiling.hpp"
 #include "gpu/vk/device.hpp"
 #include "gpu/vk/scheduler.hpp"

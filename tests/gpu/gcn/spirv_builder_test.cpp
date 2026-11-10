@@ -12,7 +12,7 @@
 #include <spirv/unified1/GLSL.std.450.h>
 
 #include "gpu/gcn/spirv_builder.hpp"
-#include "gpu/gcn/spirv_val.hpp"
+#include "support/spirv_val.hpp"
 
 namespace {
 

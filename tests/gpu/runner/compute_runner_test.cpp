@@ -16,7 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "gpu/gcn/spirv_builder.hpp"
-#include "gpu/gcn/spirv_val.hpp"
+#include "support/spirv_val.hpp"
 #include "gpu/runner/compute_runner.hpp"
 
 namespace {

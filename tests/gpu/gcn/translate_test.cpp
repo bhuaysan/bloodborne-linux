@@ -16,7 +16,7 @@
 #include "gpu/gcn/encode.hpp"
 #include "gpu/gcn/gcn.hpp"
 #include "gpu/gcn/programs.hpp"
-#include "gpu/gcn/spirv_val.hpp"
+#include "support/spirv_val.hpp"
 #include "gpu/gcn/translate.hpp"
 
 namespace {

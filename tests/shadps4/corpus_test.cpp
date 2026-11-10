@@ -27,8 +27,8 @@
 #include <gtest/gtest.h>
 
 #include "common/sha256.hpp"
-#include "gpu/gcn/corpus.hpp"
-#include "gpu/gcn/spirv_val.hpp"
+#include "support/corpus.hpp"
+#include "support/spirv_val.hpp"
 #include "shader_recompiler/frontend/copy_shader.h"
 #include "shadps4/program_state.hpp"
 #include "shadps4_host/failure.hpp"

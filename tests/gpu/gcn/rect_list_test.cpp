@@ -2,7 +2,7 @@
 #include <gtest/gtest.h>
 
 #include "gpu/gcn/rect_list.hpp"
-#include "gpu/gcn/spirv_val.hpp"
+#include "support/spirv_val.hpp"
 
 namespace {
 

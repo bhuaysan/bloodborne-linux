@@ -10,8 +10,8 @@
 
 #include <gtest/gtest.h>
 
-#include "gpu/gcn/corpus.hpp"
-#include "gpu/gcn/spirv_val.hpp"
+#include "support/corpus.hpp"
+#include "support/spirv_val.hpp"
 #include "shadps4/translate.hpp"
 #include "shadps4_host/failure.hpp"
 #include "support/game.hpp"

@@ -1,4 +1,4 @@
-#include "gpu/gcn/spirv_val.hpp"
+#include "support/spirv_val.hpp"
 
 #include <cstdio>
 #include <filesystem>

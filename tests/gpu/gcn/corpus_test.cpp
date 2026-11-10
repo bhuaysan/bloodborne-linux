@@ -20,7 +20,7 @@
 #include <gtest/gtest.h>
 
 #include "common/sha256.hpp"
-#include "gpu/gcn/corpus.hpp"
+#include "support/corpus.hpp"
 #include "gpu/gcn/gcn.hpp"
 #include "gpu/gcn/llvm_mc.hpp"
 #include "support/game.hpp"
