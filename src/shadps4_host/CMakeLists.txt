@@ -21,6 +21,10 @@ add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/sirit/src ${CMAKE_CURRENT_BIN
 # The set of files is the import script's dependency closure, so it is taken as it stands.
 set(BB_SHADPS4_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../shadps4)
 file(GLOB_RECURSE BB_SHADPS4_SOURCES CONFIGURE_DEPENDS ${BB_SHADPS4_DIR}/*.cpp)
+# The rest of video_core and the ImGui renderer core are imported (#428) and not built yet. #429
+# builds them on the host layer and removes this filter.
+list(FILTER BB_SHADPS4_SOURCES EXCLUDE REGEX
+    "/(imgui|video_core/(amdgpu/(liverpool|regs)|buffer_cache|texture_cache|renderer_vulkan|cache_storage|page_manager|renderdoc))")
 
 add_library(bbshadps4 STATIC ${BB_SHADPS4_SOURCES} host.cpp)
 target_include_directories(bbshadps4 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Reproduce the bulk import of shadPS4's shader_recompiler (R3, issue #415).
+"""Reproduce the bulk import of shadPS4's shader_recompiler and video_core (R3 #415, R4 #428).
 
 Fetches shadPS4 at the pinned release and the submodules it records there, and writes:
 
-    src/shadps4/                    shader_recompiler and the part of common/ and video_core/
-                                    it needs, changed only by add_notice() and rewrite_includes()
+    src/shadps4/                    shader_recompiler, video_core, core/platform.h, the ImGui
+                                    renderer core and the part of common/ they need, changed only
+                                    by add_notice() and rewrite_includes()
     third_party/shadps4/LICENSES/   the license texts those files refer to by SPDX tag
     third_party/<dependency>/       unchanged copies, with their license files
 
-The set of files is the measured dependency closure of src/shader_recompiler: an #include walk
-for shadPS4's own files, and the preprocessor over every translated source for the third-party
+The set of files is the measured dependency closure of src/shader_recompiler and src/video_core:
+an #include walk over common/ for shadPS4's own files (common_closure()), and the preprocessor over every translated source for the third-party
 headers (boost-headers.txt). Files outside the closure, or under a license that is not allowed
 by docs/source-policy.md, stay out. HOST_PROVIDED lists what the host layer writes instead.
 
@@ -48,15 +49,72 @@ AMDGPU_FILES = """
 pixel_format.cpp pixel_format.h regs_shader.h regs_vertex.h resource.h tiling.cpp tiling.h
 """.split()
 
-# Quoted includes of the imported files that deliberately have no imported target. Issue #416
-# provides them. common/alignment.h is CC0-1.0, which is not on the allow-list; the others are
-# emulator code that would pull in the rest of the emulator.
+# The renderer core of the ImGui presenter (R4). The overlay layers are host classes instead.
+IMGUI_FILES = """
+imgui/imgui_texture.h
+imgui/renderer/imgui_core.cpp imgui/renderer/imgui_core.h imgui/renderer/imgui_impl_vulkan.cpp
+imgui/renderer/imgui_impl_vulkan.h imgui/renderer/texture_manager.cpp
+imgui/renderer/texture_manager.h
+""".split()
+
+# Files outside src/shader_recompiler and src/common that are imported whole, besides all of
+# video_core.
+EXTRA_FILES = ["core/platform.h"] + IMGUI_FILES
+
+# Files with no SPDX tag whose text carries the license itself (AMD FidelityFX, MIT). They are
+# copied byte for byte, without a notice. The value is the license they are allowed under.
+LICENSE_IN_FILE = {
+    "video_core/host_shaders/fsr/ffx_a.h": "MIT",
+    "video_core/host_shaders/fsr/ffx_fsr1.h": "MIT",
+}
+
+# Quoted includes of the imported files that deliberately have no imported target. The host layer
+# (#416, #429) provides them. common/alignment.h is CC0-1.0, which is not on the allow-list; the
+# others are emulator code that would pull in the rest of the emulator, or devtools, overlay
+# layers, debug state and the like that become empty or fixed host classes.
 HOST_PROVIDED = {
     "common/alignment.h",
+    "common/debug.h",
+    "common/elf_info.h",
+    "common/error.h",
+    "common/stb.h",
+    "core/debug_state.h",
+    "core/devtools/layer.h",
+    "core/devtools/widget/gpu_memory.h",
     "core/emulator_settings.h",
+    "core/libraries/gnmdriver/gnmdriver.h",
     "core/libraries/kernel/process.h",
+    "core/libraries/kernel/time.h",
+    "core/libraries/system/systemservice.h",
+    "core/libraries/videoout/buffer.h",
+    "core/libraries/videoout/driver.h",
+    "core/memory.h",
     "core/signals.h",
+    "imgui/friends_layer.h",
+    "imgui/imgui_layer.h",
+    "imgui/invitation_prompt_layer.h",
+    "imgui/notifications_layer.h",
+    "font_data.h",
+    "font_stack.h",
+    "imgui_impl_sdl3.h",
+    "imgui/shadnet_notifications_layer.h",
+    "sdl_window.h",
 }
+
+# Headers that CMake generates from the imported GLSL files in video_core/host_shaders.
+GENERATED_SHADER_HEADERS = {
+    f"video_core/host_shaders/{name}.h"
+    for name in """
+    color_to_ms_depth_frag fault_buffer_process_comp fs_tri_vert fsr_easu_comp fsr_rcas_comp
+    ms_image_blit_frag ms_image_blit_msaa_frag post_process_frag tiling_macro_128_comp
+    tiling_macro_16_comp tiling_macro_32_comp tiling_macro_64_comp tiling_macro_8_comp
+    tiling_macro_96_comp tiling_micro_128_comp tiling_micro_16_comp tiling_micro_32_comp
+    tiling_micro_64_comp tiling_micro_8_comp tiling_micro_96_comp
+    """.split()
+}
+
+# Quoted includes that system packages or the ImGui fetched by CMake provide.
+SYSTEM_HEADERS = {"imgui_internal.h", "vulkan/vulkan.hpp", "vulkan/vulkan_handles.hpp"}
 
 # SPDX identifiers from the allow-list in docs/source-policy.md.
 ALLOWED_LICENSES = {
@@ -125,7 +183,9 @@ def owned_roots() -> list[str]:
 
 # Include directories of the imported tree, for the closure check.
 INCLUDE_DIRS = ["src/shadps4", "third_party/sirit/include", "third_party/boost",
-                "third_party/fmt/include", "third_party/magic_enum/include", "third_party/xbyak"]
+                "third_party/fmt/include", "third_party/magic_enum/include", "third_party/xbyak",
+                "third_party/vma/include", "third_party/xxhash", "third_party/robin-map/include",
+                "third_party/stb"]
 
 
 class ImportError_(Exception):
@@ -180,20 +240,29 @@ def license_allowed(expression: str) -> bool:
     return all(term.strip() in ALLOWED_LICENSES for term in expression.split(" AND "))
 
 
+SPDX_LINE = re.compile(r"^(//|#)\s*SPDX-")
+
+
 def add_notice(text: str, source_path: str) -> str:
-    """Insert the Source and Changed lines after the file's leading SPDX lines."""
+    """Insert the Source and Changed lines after the file's leading SPDX lines.
+
+    The lines use the comment marker of the SPDX lines: // in code and GLSL, # in CMake files.
+    """
     newline = "\r\n" if "\r\n" in text else "\n"
     lines = text.split(newline)
     last = -1
+    marker = "//"
     for index, line in enumerate(lines[:10]):
-        if line.lstrip("﻿").startswith("// SPDX-"):
+        match = SPDX_LINE.match(line.lstrip("\ufeff"))
+        if match:
             last = index
+            marker = match.group(1)
     if last < 0:
         raise ImportError_(f"{source_path}: no leading SPDX lines")
     notice = [
-        f"// Source: shadPS4 src/{source_path} @{SHADPS4_COMMIT}",
-        f"// Changed for bloodborne-linux, {NOTICE_DATE}",
-        "// License texts: third_party/shadps4/LICENSES/",
+        f"{marker} Source: shadPS4 src/{source_path} @{SHADPS4_COMMIT}",
+        f"{marker} Changed for bloodborne-linux, {NOTICE_DATE}",
+        f"{marker} License texts: third_party/shadps4/LICENSES/",
     ]
     return newline.join(lines[: last + 1] + notice + lines[last + 1 :])
 
@@ -210,12 +279,44 @@ def write(destination: Path, data: bytes) -> None:
 
 def import_shadps4_file(source: Path, relative: str, output: Path) -> None:
     text = source.read_bytes().decode("utf-8")
+    if relative in LICENSE_IN_FILE:
+        if not license_allowed(LICENSE_IN_FILE[relative]) or spdx_expression(text) is not None:
+            raise ImportError_(f"{relative}: LICENSE_IN_FILE entry is stale")
+        write(output / "src/shadps4" / relative, source.read_bytes())
+        return
     expression = spdx_expression(text)
     if expression is None:
         raise ImportError_(f"{relative}: no SPDX license identifier")
     if not license_allowed(expression):
         raise ImportError_(f"{relative}: license {expression!r} is not on the allow-list")
     write(output / "src/shadps4" / relative, rewrite_includes(add_notice(text, relative)).encode("utf-8"))
+
+
+QUOTED_INCLUDE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.M)
+
+
+def common_closure(src: Path, relatives: list[str]) -> list[str]:
+    """The files of common/ that the imported files include, directly or through each other.
+
+    Quoted includes name the file from src/ or from the including file's directory. Anything
+    else is left to check_closure(). HOST_PROVIDED files stay out.
+    """
+    found: set[str] = set()
+    queue = list(relatives)
+    while queue:
+        relative = queue.pop()
+        if not relative.endswith((".h", ".cpp", ".inc")):
+            continue
+        for name in QUOTED_INCLUDE.findall((src / relative).read_text(encoding="utf-8")):
+            if name in HOST_PROVIDED:
+                continue
+            candidate = (Path(relative).parent / name).as_posix()
+            for path in (candidate, name):
+                if path.startswith("common/") and (src / path).is_file() and path not in found:
+                    found.add(path)
+                    queue.append(path)
+                    break
+    return sorted(found - set(relatives))
 
 
 def generate(cache: Path, output: Path) -> None:
@@ -226,6 +327,10 @@ def generate(cache: Path, output: Path) -> None:
     relatives = [str(p.relative_to(src)) for p in translator]
     relatives += [f"common/{name}" for name in COMMON_FILES]
     relatives += [f"video_core/amdgpu/{name}" for name in AMDGPU_FILES]
+    relatives += [str(p.relative_to(src)) for p in sorted((src / "video_core").rglob("*")) if p.is_file()]
+    relatives += EXTRA_FILES
+    relatives = sorted(set(relatives))
+    relatives += common_closure(src, relatives)
     for relative in relatives:
         import_shadps4_file(src / relative, relative, output)
 
@@ -260,13 +365,13 @@ def check_closure(output: Path) -> None:
     tree = output / "src/shadps4"
     for path in sorted(p for p in tree.rglob("*") if p.is_file()):
         for name in include.findall(path.read_text(encoding="utf-8")):
-            if name in HOST_PROVIDED:
+            if name in HOST_PROVIDED or name in GENERATED_SHADER_HEADERS or name in SYSTEM_HEADERS:
                 used_host.add(name)
             elif not any((root / name).is_file() for root in [path.parent, *roots]):
                 missing.append(f"{path.relative_to(tree)}: {name}")
     if missing:
         raise ImportError_("includes outside the import:\n  " + "\n  ".join(missing))
-    stale = HOST_PROVIDED - used_host
+    stale = (HOST_PROVIDED | GENERATED_SHADER_HEADERS | SYSTEM_HEADERS) - used_host
     if stale:
         raise ImportError_(f"HOST_PROVIDED entries no longer used: {sorted(stale)}")
 
