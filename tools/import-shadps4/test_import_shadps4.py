@@ -28,6 +28,64 @@ class AddNotice(unittest.TestCase):
             tool.add_notice("int x;\n", "a.h")
 
 
+class NoticeMarkers(unittest.TestCase):
+    def test_cmake_files_get_hash_comments(self):
+        text = "# SPDX-FileCopyrightText: A\n# SPDX-License-Identifier: GPL-2.0-or-later\n\nset(a b)\n"
+        lines = tool.add_notice(text, "video_core/x.txt").split("\n")
+        self.assertEqual(lines[2], f"# Source: shadPS4 src/video_core/x.txt @{tool.SHADPS4_COMMIT}")
+        self.assertEqual(lines[3], f"# Changed for bloodborne-linux, {tool.NOTICE_DATE}")
+
+    def test_spdx_lines_with_two_spaces_are_found(self):
+        text = "//  SPDX-License-Identifier: MIT\n\nint x;\n"
+        self.assertTrue(tool.add_notice(text, "a.h").split("\n")[1].startswith("// Source:"))
+
+
+class LicenseInFile(unittest.TestCase):
+    def test_is_copied_byte_for_byte(self):
+        name = next(iter(tool.LICENSE_IN_FILE))
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "a.h"
+            source.write_bytes(b"// clang-format off\r\n// MIT text\n")
+            tool.import_shadps4_file(source, name, Path(temp) / "out")
+            self.assertEqual((Path(temp) / "out/src/shadps4" / name).read_bytes(), source.read_bytes())
+
+    def test_a_tagged_file_makes_the_entry_stale(self):
+        name = next(iter(tool.LICENSE_IN_FILE))
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "a.h"
+            source.write_text("// SPDX-License-Identifier: MIT\n")
+            with self.assertRaises(tool.ImportError_):
+                tool.import_shadps4_file(source, name, Path(temp) / "out")
+
+    def test_entries_are_allowed_licenses(self):
+        for name, expression in tool.LICENSE_IN_FILE.items():
+            self.assertTrue(tool.license_allowed(expression), name)
+
+
+class CommonClosure(unittest.TestCase):
+    def make(self, temp, files):
+        for name, text in files.items():
+            path = Path(temp) / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+
+    def test_follows_includes_through_common_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            self.make(temp, {"video_core/a.cpp": '#include "common/b.h"\n#include "video_core/a.h"\n',
+                             "common/b.h": '#include "c.h"\n', "common/c.h": "", "common/unused.h": "",
+                             "video_core/a.h": ""})
+            self.assertEqual(tool.common_closure(Path(temp), ["video_core/a.cpp", "video_core/a.h"]),
+                             ["common/b.h", "common/c.h"])
+
+    def test_skips_files_already_listed_and_host_provided_ones(self):
+        with tempfile.TemporaryDirectory() as temp:
+            host = "common/alignment.h"
+            self.assertIn(host, tool.HOST_PROVIDED)
+            self.make(temp, {"video_core/a.cpp": f'#include "common/b.h"\n#include "{host}"\n',
+                             "common/b.h": "", host: ""})
+            self.assertEqual(tool.common_closure(Path(temp), ["video_core/a.cpp", "common/b.h"]), [])
+
+
 class Licenses(unittest.TestCase):
     def test_allowed_expressions(self):
         for expression in ("GPL-2.0-or-later", "MIT", "BSD-3-Clause AND GPL-2.0-or-later", "MIT OR Apache-2.0"):
@@ -54,6 +112,19 @@ class Includes(unittest.TestCase):
     def test_rewrites_only_the_src_prefixed_include(self):
         text = '#include "src/common/types.h"\n#include "common/assert.h"\n'
         self.assertEqual(tool.rewrite_includes(text), '#include "common/types.h"\n#include "common/assert.h"\n')
+
+
+class Scope(unittest.TestCase):
+    def test_host_provided_names_are_not_imported(self):
+        imported = set(tool.EXTRA_FILES) | set(tool.LICENSE_IN_FILE)
+        self.assertEqual(imported & (tool.HOST_PROVIDED | tool.GENERATED_SHADER_HEADERS), set())
+
+    def test_the_imgui_layers_are_host_provided(self):
+        for name in ("imgui/imgui_layer.h", "imgui/friends_layer.h", "imgui/notifications_layer.h"):
+            self.assertIn(name, tool.HOST_PROVIDED)
+
+    def test_generated_shader_headers_are_listed_once_per_shader(self):
+        self.assertEqual(len(tool.GENERATED_SHADER_HEADERS), 20)
 
 
 class Dependencies(unittest.TestCase):
