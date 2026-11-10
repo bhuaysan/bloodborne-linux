@@ -44,16 +44,30 @@ constexpr std::string_view ok_marker = "RESULT ok";
 // A copy shader never becomes a module of its own: it is read while translating its geometry shader.
 constexpr std::string_view copy_marker = "RESULT copy-parsed";
 constexpr unsigned time_limit_seconds = 120;
-// What is known not to translate, by cause, with how many programs may fail for it (fewer is
-// fine, docs/design/shader-corpus.md). Anything else fails the test: an invalid module, another
-// assertion or another kind of crash. The abort is an out-of-bounds lookup in the translator,
-// which only the build with checked containers reports as such.
-const std::map<std::string_view, std::uint64_t> known_failures = {
-    {"hull_shader_transform.cpp:# HullShaderTransform: Assertion Failed!unhandled pattern in tess "
-     "factor store",
-     4},
-    {"copy_shader.cpp:# operator(): Assertion Failed!", 4},
-    {"crash (abort)", 1},
+// What is known not to translate: these programs, by the SHA-256 of their code (the key that
+// deduplicates the corpus), each with the cause it fails for. A failure of any other program, a
+// listed program that fails for another cause and a listed program that no longer fails all fail
+// the test. A fixed program has to leave the list.
+struct KnownFailure {
+    std::string_view sha256;
+    std::string_view cause;
+};
+constexpr std::string_view hull_cause =
+    "hull_shader_transform.cpp:# HullShaderTransform: Assertion Failed!unhandled pattern in tess "
+    "factor store";
+constexpr std::string_view copy_cause = "copy_shader.cpp:# operator(): Assertion Failed!";
+const KnownFailure known_failures[] = {
+    {"4a8d09572b70b42167b40b7fb73929772acbe1e16ea65524f2cef43f344ce87b", hull_cause},
+    {"55b2005381c36b49bae1a0fb6edf849637bc4e4138ae1770a21150296ca88623", hull_cause},
+    {"d9cb21f09c646f2462b109f3bc568c7a87dd052fabd42511adfdeded6055b723", hull_cause},
+    {"e221e748e05b1449b983c429f95d7f8f8616455515b692ff7d7eab85ae1a270a", hull_cause},
+    {"23030583679d1f3afab511489a789be1d356185abc93d1d8d4a51502a166fa44", copy_cause},
+    {"36083e50dfc5a82ba166075dc9f5e8d1c7483ec1f9bd78700583fa2562582f85", copy_cause},
+    {"43f205541fb1910e9b5c5f9d04138cb0f214b03c3c7289a22e7eeb6753b9a54b", copy_cause},
+    {"fcb07ce8fd8c6981f1fabf6a6b709183edf965f6517191c81f657296f625c382", copy_cause},
+    // EmitImageQueryLod indexes ctx.samplers out of bounds. It crashes with and without checked
+    // containers (-D_GLIBCXX_ASSERTIONS), so it needs no exception.
+    {"a98c9836981b0d3914b711f96fde634c8a5c54d51a382447a7390520f3806dd5", "crash (abort)"},
 };
 
 [[noreturn]] void finish_job(std::string_view marker) {
@@ -66,6 +80,7 @@ struct Job {
     fs::path file;
     Program program;
     std::vector<std::uint32_t> copy_shader;
+    std::string sha256;
 };
 
 struct Running {
@@ -209,7 +224,7 @@ std::vector<Job> distinct_programs(const fs::path& root) {
             continue;
         }
         const auto digest = bb::common::sha256(std::as_bytes(std::span(program.code)));
-        Job job{file, std::move(program), {}};
+        Job job{file, std::move(program), {}, bb::common::to_hex(digest)};
         if (job.program.type == static_cast<unsigned>(ProgramType::gs)) {
             fs::path copy = file;
             copy.replace_extension(".1");
@@ -241,19 +256,21 @@ TEST(ShaderCorpus, EveryProgramTranslatesOrHasAReason) {
 
     std::vector<Job> jobs = distinct_programs(root);
     // For debugging one program: only the jobs whose file path contains this text run.
-    if (const char* only = getenv("BB_CORPUS_ONLY")) {
+    const char* only = getenv("BB_CORPUS_ONLY");
+    const bool filtered = only != nullptr;
+    if (filtered) {
         std::erase_if(jobs, [&](const Job& job) { return job.file.string().find(only) == std::string::npos; });
     }
-    if (getenv("BB_CORPUS_ONLY") == nullptr) {
+    if (!filtered) {
         EXPECT_EQ(jobs.size(), 3832u);
     }
 
     std::map<std::string, std::uint64_t> total_by_stage, ok_by_stage, by_reason;
     std::map<std::string, const Job*> example;
+    std::map<std::string, std::string> cause_by_sha;  // the programs that failed
     // A filtered debugging run must not overwrite the full report.
-    std::ofstream report(bb::test::analysis_dir() / (getenv("BB_CORPUS_ONLY") == nullptr
-                                                         ? "shadps4-corpus-report.txt"
-                                                         : "shadps4-corpus-report-filtered.txt"));
+    std::ofstream report(bb::test::analysis_dir() / (!filtered ? "shadps4-corpus-report.txt"
+                                                                       : "shadps4-corpus-report-filtered.txt"));
 
     const auto finish = [&](const Running& running, const std::string& outcome) {
         const std::string stage = program_type_name(running.job->program.type);
@@ -267,6 +284,7 @@ TEST(ShaderCorpus, EveryProgramTranslatesOrHasAReason) {
         }
         const std::string reason = reason_of(outcome);
         ++by_reason[reason];
+        cause_by_sha[running.job->sha256] = std::string(cause_of(reason));
         example.try_emplace(reason, running.job);
         report << "failed " << running.job->file.string() << ": " << outcome << '\n';
     };
@@ -295,11 +313,9 @@ TEST(ShaderCorpus, EveryProgramTranslatesOrHasAReason) {
 
     std::vector<std::pair<std::uint64_t, std::string>> reasons;
     std::uint64_t failed = 0;
-    std::map<std::string, std::uint64_t> by_cause;
     for (const auto& [reason, count] : by_reason) {
         reasons.emplace_back(count, reason);
         failed += count;
-        by_cause[std::string(cause_of(reason))] += count;
     }
     std::sort(reasons.rbegin(), reasons.rend());
 
@@ -316,12 +332,20 @@ TEST(ShaderCorpus, EveryProgramTranslatesOrHasAReason) {
     std::cout << summary.str();
     report << '\n' << summary.str();
 
-    if (getenv("BB_CORPUS_ONLY") == nullptr) {
-        for (const auto& [cause, count] : by_cause) {
-            const auto known = known_failures.find(cause);
-            EXPECT_NE(known, known_failures.end()) << count << " programs: " << cause;
-            if (known != known_failures.end()) {
-                EXPECT_LE(count, known->second) << cause;
+    if (!filtered) {
+        for (const auto& [sha, cause] : cause_by_sha) {
+            const auto known = std::find_if(std::begin(known_failures), std::end(known_failures),
+                                            [&](const KnownFailure& k) { return k.sha256 == sha; });
+            if (known == std::end(known_failures)) {
+                ADD_FAILURE() << "program " << sha << " is not a known failure: " << cause;
+            } else {
+                EXPECT_EQ(cause, known->cause) << "program " << sha;
+            }
+        }
+        for (const auto& known : known_failures) {
+            if (!cause_by_sha.contains(std::string(known.sha256))) {
+                ADD_FAILURE() << "program " << known.sha256 << " no longer fails (" << known.cause
+                              << "): remove it from known_failures";
             }
         }
     }

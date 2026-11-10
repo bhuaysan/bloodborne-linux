@@ -31,16 +31,14 @@ The cost is that image and buffer types follow a null sharp. A shader whose SPIR
 
 ## Result
 
-Of the 3,832 programs, 3,793 translate to a module that passes `spirv-val --target-env vulkan1.3` and 30 are copy shaders that `ParseCopyShader` accepts (2026-11-09, debug and optimized builds, the device profile of the reference GPU). Nine don't translate, and the test allows exactly these causes, each up to its count:
+Of the 3,832 programs, 3,793 translate to a module that passes `spirv-val --target-env vulkan1.3` and 30 are copy shaders that `ParseCopyShader` accepts (2026-11-09, debug and optimized builds, the device profile of the reference GPU). Nine don't translate, and the test lists exactly these programs by the SHA-256 of their code, each with its cause. Another program that fails, a listed one that fails for another cause and a listed one that stops failing all fail the test:
 
 | Programs | Stage | Cause |
 |---|---|---|
 | 4 | hull | `HullShaderTransform` asserts on a tessellation factor store whose address isn't in the form it expects |
 | 2 | geometry | `ParseCopyShader` asserts on an `s_lshl_b32` whose operands are not inline constants, in the copy shader of a stream-out program |
 | 2 | copy shader | the same copy shaders on their own |
-| 1 | pixel | a bug in the translator: `resource_patching_pass.cpp` adds a sampler only for `ImageSampleRaw`, but `EmitImageQueryLod` indexes `ctx.samplers` anyway. Out of bounds, an abort in the build with checked containers |
-
-An invalid module, any other assertion and a crash of any other kind fail the test.
+| 1 | pixel | a bug in the translator: `resource_patching_pass.cpp` adds a sampler only for `ImageSampleRaw`, but `EmitImageQueryLod` indexes `ctx.samplers` anyway. Out of bounds, and a crash with or without checked containers |
 
 A program is identified by its code. 21 of them come with more than one register block, and only one block is translated.
 
