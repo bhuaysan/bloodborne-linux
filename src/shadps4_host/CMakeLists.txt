@@ -33,6 +33,7 @@ target_include_directories(bbshadps4 SYSTEM PUBLIC
     ${BB_SHADPS4_DIR}
     ${PROJECT_SOURCE_DIR}/third_party/boost
     ${PROJECT_SOURCE_DIR}/third_party/fmt/include
+    ${PROJECT_SOURCE_DIR}/third_party/half/include
     ${PROJECT_SOURCE_DIR}/third_party/magic_enum/include
     ${PROJECT_SOURCE_DIR}/third_party/xbyak)
 # shadPS4 is written against C++23 (std::to_underlying, std::ranges::contains).

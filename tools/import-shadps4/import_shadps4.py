@@ -40,9 +40,10 @@ SHADPS4_COMMIT = "11557f2eb60b3b00712c8887c30852de7615d6df"  # tag v.0.21.0
 NOTICE_DATE = "2026-11-09"
 
 COMMON_FILES = """
-arch.h assert.h bit_field.h concepts.h decoder.cpp decoder.h div_ceil.h enum.h func_traits.h
-hash.h io_file.h logging/classes.cpp logging/classes.h logging/log.h object_pool.h path_util.h
-signal_context.cpp signal_context.h singleton.h small_vector.h types.h
+arch.h assert.h bit_field.h concepts.h decoder.cpp decoder.h div_ceil.h enum.h func_traits.h hash.h
+io_file.h logging/classes.cpp logging/classes.h logging/log.h number_utils.cpp object_pool.h
+path_util.h recursive_lock.cpp signal_context.cpp signal_context.h singleton.h slot_vector.cpp
+small_vector.h spin_lock.cpp types.h
 """.split()
 
 AMDGPU_FILES = """
@@ -50,16 +51,18 @@ pixel_format.cpp pixel_format.h regs_shader.h regs_vertex.h resource.h tiling.cp
 """.split()
 
 # The renderer core of the ImGui presenter (R4). The overlay layers are host classes instead.
+# imgui_config.h is ImGui's user config (32-bit indices, ImTextureID as a texture pointer), which
+# the renderer and the ImGui library must both be built with.
 IMGUI_FILES = """
-imgui/imgui_texture.h
+imgui/imgui_config.h imgui/imgui_layer.h imgui/imgui_texture.h
 imgui/renderer/imgui_core.cpp imgui/renderer/imgui_core.h imgui/renderer/imgui_impl_vulkan.cpp
 imgui/renderer/imgui_impl_vulkan.h imgui/renderer/texture_manager.cpp
 imgui/renderer/texture_manager.h
 """.split()
 
 # Files outside src/shader_recompiler and src/common that are imported whole, besides all of
-# video_core.
-EXTRA_FILES = ["core/platform.h"] + IMGUI_FILES
+# video_core. The VideoOut buffer types are what video_core and the VideoOut driver share.
+EXTRA_FILES = ["core/platform.h", "core/libraries/videoout/buffer.h"] + IMGUI_FILES
 
 # Files with no SPDX tag whose text carries the license itself (AMD FidelityFX, MIT). They are
 # copied byte for byte, without a notice. The value is the license they are allowed under.
@@ -86,12 +89,10 @@ HOST_PROVIDED = {
     "core/libraries/kernel/process.h",
     "core/libraries/kernel/time.h",
     "core/libraries/system/systemservice.h",
-    "core/libraries/videoout/buffer.h",
     "core/libraries/videoout/driver.h",
     "core/memory.h",
     "core/signals.h",
     "imgui/friends_layer.h",
-    "imgui/imgui_layer.h",
     "imgui/invitation_prompt_layer.h",
     "imgui/notifications_layer.h",
     "font_data.h",
@@ -155,7 +156,8 @@ def dependencies() -> list[Dependency]:
         Dependency("boost", "externals/ext-boost", "https://github.com/shadps4-emu/ext-boost.git",
                    "LICENSE_1_0.txt", boost_headers()),
         Dependency("fmt", "externals/fmt", "https://github.com/shadps4-emu/ext-fmt.git", "LICENSE",
-                   ("include/fmt/base.h", "include/fmt/format-inl.h", "include/fmt/format.h")),
+                   ("include/fmt/base.h", "include/fmt/format-inl.h", "include/fmt/format.h",
+                    "include/fmt/ranges.h")),
         Dependency("magic_enum", "externals/magic_enum", "https://github.com/Neargye/magic_enum.git",
                    "LICENSE", ("include/magic_enum/magic_enum.hpp",)),
         Dependency("xbyak", "externals/xbyak", "https://github.com/herumi/xbyak.git", "COPYRIGHT",
@@ -168,6 +170,9 @@ def dependencies() -> list[Dependency]:
                    ("xxhash.c", "xxhash.h")),
         Dependency("robin-map", "externals/robin-map", "https://github.com/Tessil/robin-map.git",
                    "LICENSE", ("include/tsl",)),
+        # half floats for common/number_utils.cpp, which video_core's format conversions use (#429).
+        Dependency("half", "externals/half", "https://github.com/ROCm/half.git", "LICENSE.txt",
+                   ("include/half.hpp",)),
         # Dear ImGui is fetched by CMake at build time instead (src/shadps4_host/CMakeLists.txt):
         # its sources hold the text "Home/End", which the privacy hook reads as a home path.
         # Only what the presenter includes (PNG writing for screenshots). The header ends with its
@@ -185,7 +190,7 @@ def owned_roots() -> list[str]:
 INCLUDE_DIRS = ["src/shadps4", "third_party/sirit/include", "third_party/boost",
                 "third_party/fmt/include", "third_party/magic_enum/include", "third_party/xbyak",
                 "third_party/vma/include", "third_party/xxhash", "third_party/robin-map/include",
-                "third_party/stb"]
+                "third_party/stb", "third_party/half/include"]
 
 
 class ImportError_(Exception):

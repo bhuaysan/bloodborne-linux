@@ -119,9 +119,14 @@ class Scope(unittest.TestCase):
         imported = set(tool.EXTRA_FILES) | set(tool.LICENSE_IN_FILE)
         self.assertEqual(imported & (tool.HOST_PROVIDED | tool.GENERATED_SHADER_HEADERS), set())
 
-    def test_the_imgui_layers_are_host_provided(self):
-        for name in ("imgui/imgui_layer.h", "imgui/friends_layer.h", "imgui/notifications_layer.h"):
+    def test_the_imgui_overlay_layers_are_host_provided(self):
+        for name in ("imgui/friends_layer.h", "imgui/notifications_layer.h",
+                     "imgui/invitation_prompt_layer.h", "imgui/shadnet_notifications_layer.h"):
             self.assertIn(name, tool.HOST_PROVIDED)
+
+    def test_the_imgui_layer_base_class_is_imported(self):
+        self.assertIn("imgui/imgui_layer.h", tool.IMGUI_FILES)
+        self.assertNotIn("imgui/imgui_layer.h", tool.HOST_PROVIDED)
 
     def test_generated_shader_headers_are_listed_once_per_shader(self):
         self.assertEqual(len(tool.GENERATED_SHADER_HEADERS), 20)
