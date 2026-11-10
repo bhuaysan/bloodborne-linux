@@ -53,7 +53,7 @@ GNM builds AMD GCN command buffers (PM4 packets). The game still produces those,
 3. Translate GCN shader binaries to SPIR-V.
 4. Record and submit the equivalent Vulkan work.
 
-Since 2026-11-09 all four steps are derived from shadPS4 (`video_core` and `shader_recompiler`). They go in nearly unchanged first and get rewritten later where that measurably helps. A thin host layer connects them to our runtime: guest memory, write tracking, flips and the window. [design/graphics.md](design/graphics.md) describes the GPU path we built before that decision, which R3 and R4 replace.
+Since 2026-11-09 all four steps are derived from shadPS4 (`video_core` and `shader_recompiler`). They go in nearly unchanged first and get rewritten later where that measurably helps. A thin host layer connects them to our runtime: guest memory, write tracking, flips and the window. [design/renderer.md](design/renderer.md) fixes that layer for R4. [design/graphics.md](design/graphics.md) describes the GPU path we built before that decision, which R3 and R4 replace.
 
 ### Function replacement
 Decompiled functions are compiled into the runtime. At startup, a table of `{original_address, replacement}` pairs is applied. Each original function entry is patched to jump to the replacement. Replacements call other game functions through their original addresses. Only functions that serve playability, performance or quality are replaced, and the rest of the game keeps running as original machine code.

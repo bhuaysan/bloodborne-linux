@@ -1,0 +1,46 @@
+# The renderer behind a thin host layer (R4)
+
+R4 runs shadPS4's `video_core` (v.0.21.0, the same pin as R3's translator) on our runtime and removes our own GPU code (`src/gpu`, the memory mirror). This note records how the boundary between the two is cut and why. It names the interfaces the R4 issues build on. How each piece works as built belongs in its comments and tests.
+
+## What `video_core` needs from outside
+
+| Need | Upstream provider | Ours |
+|---|---|---|
+| Guest memory: write through the backing, sparse reads, page hashes, range checks | `Core::MemoryManager`, `AddressSpace::BackingPages()` | host `core/memory.h` on top of `vmem` and `dmem` |
+| Map and unmap notices to the caches | `MemoryManager` calls `Rasterizer::MapMemory/UnmapMemory` | the kernel's mapping observer |
+| Write tracking | `PageManager` with `mprotect` and `Core::Signals` | the runtime owns `SIGSEGV` and dispatches to `Core::Signals` |
+| Command submission, compute queues, end-of-pipe and flip interrupts | `gnmdriver.cpp`, `Platform::IrqController` | `src/hle/video`, adapted from upstream |
+| Flips, labels, vblank pacing | `videoout/driver.cpp` and `video_out.cpp` | `src/hle/video`, adapted from upstream |
+| Window and surface | `Frontend::WindowSDL` | host `sdl_window.h` over our SDL3 window |
+| Getting the frame to the swapchain | Dear ImGui (`imgui_core`, `imgui_impl_vulkan`) | imported, layers replaced with empty ones |
+| Settings, debug state, paths, game serial, Neo mode | `EmulatorSettings`, `DebugState`, `path_util`, `ElfInfo`, `process.h` | host headers with fixed values |
+
+## Decisions
+
+**One backing for every page the GPU can see.** Upstream reads and writes guest memory through a backing file, not through the guest's own mapping. GPU writes then never hit write-protected pages, and pages can be hashed without faulting. Our direct memory is already a memfd (`dmem::fd()`). Flexible memory is private anonymous memory today. It moves into the same memfd, above the 8 GiB of direct memory, as upstream does with its flexible area. The host `MemoryManager` maps the whole memfd once as `BackingBase()` and keeps a `BackingPageTable` (guest page → backing pointer) up to date from the kernel's mapping observer. File mappings (`mmap` of game files) have no backing entry. Upstream treats such pages as unbacked: sparse reads return zeros and `TryWriteBacking` writes nothing. The game's GPU buffers live in direct memory, so that is enough. If a run shows the GPU reading a file mapping, it gets an issue.
+
+Alternative: keep upstream's `AddressSpace`, which reserves its own address space and backing. It would fight our guest window and the kernel's deterministic placement, and the kernel would have two owners.
+
+**The mapping observer replaces the mirror's.** `vmem::DirectObserver` (mapped, unmapped, released) stays as the hook, widened to flexible memory and renamed for what it now serves. It calls `Rasterizer::MapMemory/UnmapMemory` for GPU-visible ranges and updates the backing table. Rule: the observer runs **after** the kernel has released its region lock. An unmap can wait for the GPU thread, and the GPU thread looks up regions (`CopySparseMemory`, `TryWriteBacking`), so calling it under the lock can deadlock. The unmap notice still goes out before the host `munmap`, so the caches stop using the range before it disappears. The mirror's leftovers (`mirror_block`, `Mapping::congruent`, the udmabuf sealing) go with the mirror.
+
+**Write tracking with `mprotect` and `SIGSEGV`.** This is upstream's default (`SignalImpl`). The `userfaultfd` path needs a second thread and kernel support, and is a performance option for R8. Nothing in the runtime installs a fault handler today. `bb-run` installs one `SIGSEGV`/`SIGBUS` handler. It calls `Core::Signals::DispatchAccessViolation` and, if no handler claims the fault, restores the default action and returns, so the fault crashes as it does now. Guest code shares glibc's thread pointer and runs on ordinary pthreads, so the handler runs on the faulting thread without switching any state. The host `Core::Signals` keeps an ordered list of handlers. Upstream's set compares priority only, so two handlers with the same priority would collapse into one entry; ours keeps both. R3's corpus test already uses this dispatcher.
+
+**System calls into tracked memory.** A guest page the caches have protected faults when guest code writes it, but the kernel does not fault when our HLE code passes that page to a system call such as `read(2)`. It returns `EFAULT` instead. Every HLE path that lets the host kernel write guest memory (file reads, `getdirentries`) first tells the tracker that the range is about to be written (`Rasterizer::InvalidateMemory`), through one helper in `src/hle/kernel`. Alternative: retry on `EFAULT`. It would hide real bad pointers and runs the system call twice.
+
+**GNM and VideoOut glue is adapted, not imported.** Upstream's `Liverpool` expects what its own `gnmdriver` writes. Flips arrive as a `PatchedFlip` NOP that `PatchFlipRequest` makes out of the game's flip packet, end-of-pipe events go through `Platform::IrqController`, and the VideoOut port provides the flip labels that `WAIT_REG_MEM` polls. The functions that cross into `Liverpool` are adapted into `src/hle/video` with upstream notices: submit, submit-and-flip with `PatchFlipRequest`, submit-done with the submission lock, compute queue map and unmap, `DingDong`, the equeue registration and `RequestFlipAndSubmitDoneForWorkload`. The same goes for the VideoOut driver: port, buffer registration, flip queue, present thread and labels. `core/platform.h` comes with the import, and its interrupt handlers trigger our `EventQueue`. `gnm_shader.cpp` and `gnm_state.cpp` stay. They write ordinary PM4 that `Liverpool` parses. The whole libraries are not imported, because they are built on upstream's kernel (`Libraries::Kernel`, its equeue and memory) and we have our own.
+
+**Keep ImGui as the presenter's path to the swapchain.** The frame reaches the swapchain only as an ImGui image (`vk_presenter.cpp`, the "Display" window). Removing ImGui means rewriting `Present`, and that waits for R6 under "derive first". ImGui's core and its Vulkan backend are imported. The developer tools and the overlay layers (friends, notifications, invitations, splash) become empty host classes.
+
+**The window is ours, the surface is upstream's.** `vk_platform.cpp` builds the surface from native X11 or Wayland handles. A host `Frontend::WindowSDL` wraps the SDL3 window that `bb-run` already opens and returns those handles. Upstream's `sdl_window.cpp` carries input and settings that R5 will judge on their own. `--device` (a name substring) is resolved to the index `GetGpuId()` returns.
+
+**Settings are fixed in the host header.** Defaults come from upstream: readbacks off, `userfaultfd` off, null GPU off, present mode Mailbox, HDR and FSR off, RCAS on. The pipeline cache stays off until R8 makes it work on disk under `$XDG_CACHE_HOME/bloodborne-linux/`. Debug state, RenderDoc and Tracy become no-ops. `sceKernelIsNeoMode()` returns false, because we run the base PS4 game.
+
+**Dependencies.** We take each at shadPS4's submodule commit and under a license on our allow-list: VulkanMemoryAllocator (MIT), xxHash (BSD-2-Clause), robin-map (MIT), Dear ImGui (MIT) and stb (MIT option). Vulkan-Headers come under their MIT option, as a system package where its version is at least upstream's 1.4.330. glslang is a system package, used only at build time to compile the host shaders. Abseil is Apache-2.0, which our GPL-2.0-or-later program can't take, so a host `absl/container/flat_hash_map.h` maps the three uses in `texture_cache.h` onto `tsl::robin_map`. miniz, used only by the archived pipeline cache, is left out with that cache.
+
+## Startup order
+
+As upstream: the memory manager, the window, then the GNM library (it creates `Liverpool`, whose GPU thread starts, and the `Presenter` with instance, schedulers, swapchain and rasterizer), then VideoOut (its present thread starts). `bb-run` does this before it starts the game thread, then pumps window events on the main thread. `--headless` creates no window and no presenter. Flips then complete without presenting, and the trace and memory tests keep running on CI.
+
+## Done when
+
+`bb-run` shows the main menu, and the rig's capture of it matches the reference capture of the same menu frame within the agreed tolerance. `src/gpu` and the mirror hooks are gone, and `tools/run-tests.sh` passes.
