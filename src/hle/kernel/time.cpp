@@ -53,9 +53,17 @@ bool valid(const GuestTimespec& t) {
 }
 
 // Sleeps for `request` on CLOCK_MONOTONIC. Returns 0 or the host errno; on EINTR `remain` holds
-// the time left.
+// the time left. Linux counts that time to the timer's hard expiry, which adds the thread's timer
+// slack (50 us by default) to the request, so an early interrupt reports more than was asked for.
+// FreeBSD subtracts the elapsed time from the request, so the guest never sees more (#398).
 int sleep_for(const timespec& request, timespec* remain) {
-    return clock_nanosleep(CLOCK_MONOTONIC, 0, &request, remain);
+    const int error = clock_nanosleep(CLOCK_MONOTONIC, 0, &request, remain);
+    if (error == EINTR && remain != nullptr &&
+        (remain->tv_sec > request.tv_sec ||
+         (remain->tv_sec == request.tv_sec && remain->tv_nsec > request.tv_nsec))) {
+        *remain = request;
+    }
+    return error;
 }
 
 timespec from_microseconds(std::uint32_t microseconds) {

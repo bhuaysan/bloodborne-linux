@@ -2,6 +2,7 @@
 
 #include <pthread.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 
 #include <atomic>
 #include <chrono>
@@ -176,6 +177,29 @@ TEST(KernelTime, InterruptedSleepsReportEintr) {
     EXPECT_GE(left, 1u);
     EXPECT_LE(left, 10u);
     EXPECT_EQ(sleep_errno, 0);  // sleep reports the unslept seconds instead
+}
+
+// Linux reports the time left to the timer's hard expiry, which adds the thread's timer slack
+// (50 us by default) to the request. A slack of 1 s makes every interrupt in the first second
+// overshoot; the guest must still see at most what it asked for, as on FreeBSD (#398).
+TEST(KernelTime, InterruptedSleepsNeverReportMoreThanTheRequest) {
+    GuestTimespec remain{};
+    const GuestTimespec request{2, 0};
+    auto [nano, nano_errno] = interrupted([&] {
+        prctl(PR_SET_TIMERSLACK, 1'000'000'000UL);
+        return guest_nanosleep(&request, &remain);
+    });
+    EXPECT_EQ(nano, -1);
+    EXPECT_EQ(nano_errno, guest_eintr);
+    EXPECT_GT(ns(remain), 0);
+    EXPECT_LE(ns(remain), ns(request));
+
+    auto [left, sleep_errno] = interrupted([] {
+        prctl(PR_SET_TIMERSLACK, 1'000'000'000UL);
+        return guest_sleep(2);
+    });
+    EXPECT_GE(left, 1u);
+    EXPECT_LE(left, 2u);
 }
 
 TEST(KernelTime, WallClockAndTimezone) {
