@@ -18,13 +18,16 @@ FetchContent_MakeAvailable(zydis)
 find_package(SPIRV-Headers REQUIRED CONFIG)
 add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/sirit/src ${CMAKE_CURRENT_BINARY_DIR}/sirit)
 
-# The set of files is the import script's dependency closure, so it is taken as it stands.
+# The set of files is the import script's dependency closure, so it is taken as it stands. The
+# renderer (video_core and the ImGui renderer core) goes into bbvideocore below, the rest is the
+# translator.
 set(BB_SHADPS4_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../shadps4)
 file(GLOB_RECURSE BB_SHADPS4_SOURCES CONFIGURE_DEPENDS ${BB_SHADPS4_DIR}/*.cpp)
-# The rest of video_core and the ImGui renderer core are imported (#428) and not built yet. #429
-# builds them on the host layer and removes this filter.
-list(FILTER BB_SHADPS4_SOURCES EXCLUDE REGEX
+set(BB_VIDEO_CORE_SOURCES ${BB_SHADPS4_SOURCES})
+set(BB_VIDEO_CORE_REGEX
     "/(imgui|video_core/(amdgpu/(liverpool|regs)|buffer_cache|texture_cache|renderer_vulkan|cache_storage|page_manager|renderdoc))")
+list(FILTER BB_SHADPS4_SOURCES EXCLUDE REGEX ${BB_VIDEO_CORE_REGEX})
+list(FILTER BB_VIDEO_CORE_SOURCES INCLUDE REGEX ${BB_VIDEO_CORE_REGEX})
 
 add_library(bbshadps4 STATIC ${BB_SHADPS4_SOURCES} host.cpp)
 target_include_directories(bbshadps4 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -78,6 +81,10 @@ add_library(bb_imgui STATIC ${BB_IMGUI_DIR}/imgui.cpp ${BB_IMGUI_DIR}/imgui_draw
     ${BB_IMGUI_DIR}/imgui_tables.cpp ${BB_IMGUI_DIR}/imgui_widgets.cpp)
 target_include_directories(bb_imgui SYSTEM PUBLIC ${BB_IMGUI_DIR})
 target_compile_options(bb_imgui PRIVATE -w)
+# shadPS4's ImGui config (32-bit indices, ImTextureID as a texture pointer) changes the ABI, so the
+# library and everything that includes imgui.h use it. Its IM_ASSERT calls assert_fail_debug_msg,
+# which video_core_host.cpp defines.
+target_compile_definitions(bb_imgui PUBLIC IMGUI_USER_CONFIG="${BB_SHADPS4_DIR}/imgui/imgui_config.h")
 # The Vulkan backend needs the Vulkan headers and is left out without them.
 find_package(Vulkan QUIET)
 if(Vulkan_FOUND)
@@ -89,3 +96,37 @@ endif()
 
 add_library(bb_third_party_check STATIC third_party_check.cpp)
 target_link_libraries(bb_third_party_check PUBLIC bb_vma bb_robin_map bb_stb bb_xxhash bb_imgui)
+
+# The renderer: video_core and the ImGui renderer core on the host headers in this directory. It
+# needs the Vulkan headers (the loader is opened at run time), SDL3 for the window and glslang to
+# compile the host shaders. Without them it is not built.
+find_program(BB_GLSLANG glslangValidator)
+find_package(SDL3 CONFIG QUIET)
+if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
+    # Upstream's host_shaders/CMakeLists.txt, run with the system glslang: it compiles each shader
+    # into a header with the SPIR-V as an array and sets HOST_SHADERS_INCLUDE.
+    set(GLSLANG_COMPILER ${BB_GLSLANG})
+    add_subdirectory(${BB_SHADPS4_DIR}/video_core/host_shaders ${CMAKE_CURRENT_BINARY_DIR}/host_shaders)
+
+    # cache_storage.cpp is the pipeline cache's storage, which needs miniz and stays off until R8.
+    # renderdoc.cpp loads RenderDoc. video_core_host.cpp replaces both with fixed no-ops.
+    list(FILTER BB_VIDEO_CORE_SOURCES EXCLUDE REGEX "/video_core/(cache_storage|renderdoc)\\.cpp$")
+    add_library(bbvideocore STATIC ${BB_VIDEO_CORE_SOURCES} video_core_host.cpp)
+    add_dependencies(bbvideocore host_shaders)
+    target_include_directories(bbvideocore SYSTEM PUBLIC ${HOST_SHADERS_INCLUDE})
+    # Boost's pool/singleton_pool.hpp (for range_set.h) comes from the commit of third_party/boost
+    # here, not from the tree: see tools/import-shadps4/boost-headers.txt.
+    set(BB_BOOST_FETCHED ${CMAKE_CURRENT_BINARY_DIR}/boost_fetched)
+    file(DOWNLOAD
+        https://raw.githubusercontent.com/shadps4-emu/ext-boost/ca6f230e67be7cc45fc919057f07b2aee64dadc1/boost/pool/singleton_pool.hpp
+        ${BB_BOOST_FETCHED}/boost/pool/singleton_pool.hpp
+        EXPECTED_HASH SHA256=da873b7c64a6241e32d219d4fd667a7dca12a93ba978e11ffde2e9cc73cbf796
+        TLS_VERIFY ON)
+    target_include_directories(bbvideocore SYSTEM PUBLIC ${BB_BOOST_FETCHED})
+    target_link_libraries(bbvideocore
+        PUBLIC bbshadps4 bb_vma bb_robin_map bb_stb bb_xxhash bb_imgui Vulkan::Headers SDL3::SDL3
+        PRIVATE bbcommon bb_warnings ${CMAKE_DL_LIBS})
+    set_source_files_properties(${BB_VIDEO_CORE_SOURCES} PROPERTIES COMPILE_OPTIONS -w)
+else()
+    message(STATUS "Vulkan headers, SDL3 or glslangValidator not found: bbvideocore is not built")
+endif()

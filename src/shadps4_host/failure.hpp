@@ -2,6 +2,7 @@
 #pragma once
 
 #include <stdexcept>
+#include <string_view>
 
 namespace bb::shader {
 
@@ -16,3 +17,11 @@ public:
 };
 
 }  // namespace bb::shader
+
+namespace bb::shadps4 {
+
+// Logs `what` as fatal and aborts. For host functions that src/shadps4 links against but that the
+// port doesn't provide (yet), so that reaching one is never silent.
+[[noreturn]] void host_missing(std::string_view what);
+
+}  // namespace bb::shadps4

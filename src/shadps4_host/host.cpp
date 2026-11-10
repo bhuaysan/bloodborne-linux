@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
 #include <string>
+
+#include <pthread.h>
 
 #include <fmt/format.h>
 
@@ -11,6 +14,8 @@
 #include "common/log.hpp"
 #include "common/logging/log.h"
 #include "common/path_util.h"
+#include "common/runtime_dirs.hpp"
+#include "common/thread.h"
 #include "shadps4_host/failure.hpp"
 
 namespace {
@@ -66,17 +71,55 @@ void assert_fail_impl() {
     throw bb::shader::TranslationFailure(last_critical);
 }
 
-// Only the shader dumps use these, and EmulatorSettings keeps them off.
-namespace Common::FS {
-
-const std::filesystem::path& GetUserPath(PathType) {
-    UNREACHABLE_MSG("shader dumps are disabled");
+[[noreturn]] void bb::shadps4::host_missing(std::string_view what) {
+    bb::common::log_fatal("shadps4", fmt::format("not provided by the host layer: {}", what));
 }
 
+// Names the calling thread for debuggers. Linux takes at most 15 characters.
+void Common::SetCurrentThreadName(const char* name) {
+    pthread_setname_np(pthread_self(), std::string(name).substr(0, 15).c_str());
+}
+
+namespace Common::FS {
+
+// shadPS4's user directories, inside the runtime's XDG directories (bb::common::RuntimeDirs).
+// Nothing is created here. Types the port never asks for end the process.
+const std::filesystem::path& GetUserPath(PathType user_path) {
+    static const std::map<PathType, std::filesystem::path> paths = [] {
+        const auto dirs =
+            bb::common::RuntimeDirs::from_environment(bb::common::default_profile, {});
+        return std::map<PathType, std::filesystem::path>{
+            {PathType::UserDir, dirs.data()},
+            {PathType::LogDir, dirs.logs()},
+            {PathType::ScreenshotsDir, dirs.data() / "screenshots"},
+            {PathType::ShaderDir, dirs.cache() / "shader"},
+            {PathType::CacheDir, dirs.cache() / "pipeline"},
+            {PathType::CapturesDir, dirs.data() / "captures"},
+        };
+    }();
+    const auto it = paths.find(user_path);
+    if (it == paths.end()) {
+        bb::shadps4::host_missing(
+            fmt::format("Common::FS::GetUserPath({})", static_cast<int>(user_path)));
+    }
+    return it->second;
+}
+
+std::string GetUserPathString(PathType user_path) {
+    return GetUserPath(user_path).string();
+}
+
+// Files are written only by the shader dumps and screenshots, and read only by the shader patches,
+// the pipeline cache and PNG icons. The port builds none of them.
 IOFile::IOFile(const std::filesystem::path&, FileAccessMode, FileType, FileShareFlag) {
-    UNREACHABLE_MSG("shader dumps are disabled");
+    bb::shadps4::host_missing("Common::FS::IOFile");
 }
 
 IOFile::~IOFile() = default;
+
+// No IOFile can be opened, so these are not reached either.
+u64 IOFile::GetSize() const { bb::shadps4::host_missing("Common::FS::IOFile::GetSize"); }
+bool IOFile::Seek(s64, SeekOrigin) const { bb::shadps4::host_missing("Common::FS::IOFile::Seek"); }
+void IOFile::Close() { bb::shadps4::host_missing("Common::FS::IOFile::Close"); }
 
 }  // namespace Common::FS

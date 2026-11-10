@@ -1,4 +1,4 @@
-// The alignment helper of shadPS4's common/alignment.h that the translator uses. Written for this
+// The alignment helpers of shadPS4's common/alignment.h that src/shadps4 uses. Written for this
 // project: the upstream header is CC0-1.0, which is not on the allow-list of docs/source-policy.md.
 #pragma once
 
@@ -12,6 +12,23 @@ template <std::unsigned_integral T>
 [[nodiscard]] constexpr T AlignUp(T value, std::size_t size) {
     const T over = static_cast<T>(value % size);
     return over == 0 ? value : static_cast<T>(value + (size - over));
+}
+
+// The multiple of `size` at or below `value`.
+template <std::unsigned_integral T>
+[[nodiscard]] constexpr T AlignDown(T value, std::size_t size) {
+    return static_cast<T>(value - value % size);
+}
+
+// As AlignUp and AlignDown, for a `size` that is a power of two.
+template <std::unsigned_integral T>
+[[nodiscard]] constexpr T AlignUpPow2(T value, std::size_t size) {
+    return static_cast<T>((value + (size - 1)) & ~(size - 1));
+}
+
+template <std::unsigned_integral T>
+[[nodiscard]] constexpr T AlignDownPow2(T value, std::size_t size) {
+    return static_cast<T>(value & ~(size - 1));
 }
 
 }  // namespace Common
