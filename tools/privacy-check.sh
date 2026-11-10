@@ -51,7 +51,7 @@ hits="$(git -c core.quotePath=false log -p -U0 --text --no-textconv --no-ext-dif
     /^diff --git / { h = 0; f = $0; sub(/^diff --git a\/.* b\//, "", f); print c " " f ": (file name)"; next }
     /^@@/ { h = 1; next }
     h && /^\+/ { print c " " f ": " substr($0, 2) }' |
-    grep -E -i -- "$pat" || true)"
+    grep -a -E -i -- "$pat" || true)"
 if [ -n "$hits" ]; then
     fail "added lines or file names contain personal data or absolute paths:"
     printf '%s\n' "$hits" | head -20 >&2

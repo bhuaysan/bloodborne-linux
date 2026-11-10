@@ -1,4 +1,5 @@
-"""Tests for the commit subject length check in commit-msg and privacy-check.sh."""
+"""Tests for the commit subject length check and the content check of the git hooks and
+privacy-check.sh."""
 
 import os
 import shutil
@@ -76,7 +77,9 @@ class CommitMsgTest(unittest.TestCase):
         self.assertEqual(self.run_hook("# only a comment\n").returncode, 0)
 
 
-class PrivacyCheckTest(unittest.TestCase):
+class RepoTest(unittest.TestCase):
+    """A scratch repository with the hooks and privacy-check.sh of this checkout."""
+
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -103,6 +106,8 @@ class PrivacyCheckTest(unittest.TestCase):
         return subprocess.run([SHELL, "tools/privacy-check.sh", "base"],
                               cwd=self.repo, capture_output=True, text=True)
 
+
+class PrivacyCheckTest(RepoTest):
     def test_71_passes_and_72_fails(self):
         self.commit(subject(71))
         self.assertEqual(self.check().returncode, 0, self.check().stderr)
@@ -124,6 +129,42 @@ class PrivacyCheckTest(unittest.TestCase):
                 result = self.check()
                 self.assertEqual(result.returncode, 1)
                 self.assertIn("squashed before merging", result.stderr)
+
+
+class NulByteTest(RepoTest):
+    """A file with a NUL byte in the same diff must not hide a hit in another file (#39)."""
+
+    def setUp(self):
+        super().setUp()
+        patterns = self.repo / ".git" / "info" / "privacy-patterns"
+        patterns.parent.mkdir(parents=True, exist_ok=True)
+        patterns.write_text("zq" "xjname\n")  # split so this file does not match itself
+        (self.repo / "notes.txt").write_text("written by zq" "xjname\n")
+        (self.repo / "blob.dat").write_bytes(b"ab\0cd\n")
+        self.git("add", "notes.txt", "blob.dat")
+
+    def pre_commit(self):
+        return subprocess.run([SHELL, "tools/githooks/pre-commit"],
+                              cwd=self.repo, capture_output=True, text=True)
+
+    def test_pre_commit_blocks_the_hit(self):
+        result = self.pre_commit()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("written by zq" "xjname", result.stderr)
+
+    def test_privacy_check_reports_the_hit(self):
+        self.git("commit", "-q", "-m", "Add notes")
+        result = self.check()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("notes.txt", result.stderr)
+
+    def test_the_nul_file_alone_passes(self):
+        self.git("rm", "-q", "--cached", "notes.txt")
+        result = self.pre_commit()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.git("commit", "-q", "-m", "Add blob")
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

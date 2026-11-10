@@ -26,7 +26,7 @@ pat="$(privacy_pattern)"
 # --text and no textconv: a .gitattributes must not hide content as binary.
 # Every added line counts, also one whose content starts with "+".
 hits="$(git -c core.quotePath=false diff --cached -U0 --no-color --text --no-textconv --no-ext-diff |
-    grep -E '^\+' | grep -nE -i -- "$pat")"
+    grep -a -E '^\+' | grep -a -nE -i -- "$pat")"
 if [ -n "$hits" ]; then
     fail "staged changes contain personal data or absolute paths:"
     printf '%s\n' "$hits" | head -20 >&2
