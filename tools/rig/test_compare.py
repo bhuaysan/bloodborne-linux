@@ -154,6 +154,25 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(failing.returncode, 1, failing.stdout + failing.stderr)
             self.assertIn('"pictures_ok": false', failing.stdout)
 
+    def test_runs_with_different_numbers_of_shots_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a, b, c = (self.make_run(root, n, v, 20) for n, v in (("a", 10), ("b", 12), ("c", 13)))
+            write_png(c / "shots" / "menu-2.png", 2, 2, bytes([13, 13, 13, 255]) * 4)
+            with self.assertRaises(SystemExit) as caught:
+                compare.run_compare(a, b, c, "menu-*.png")
+            self.assertIn("different numbers of shots", str(caught.exception))
+            self.assertNotEqual(self.run_rig(a, b, c).returncode, 0)
+
+    def test_identical_reference_runs_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a, b = self.make_run(root, "a", 10, 20), self.make_run(root, "b", 10, 30)
+            ours = self.make_run(root, "ours", 10, 40)
+            with self.assertRaises(SystemExit) as caught:
+                compare.run_compare(a, b, ours, "menu-*.png")
+            self.assertIn("noise floor is 0", str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

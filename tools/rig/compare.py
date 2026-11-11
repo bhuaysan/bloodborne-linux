@@ -131,6 +131,12 @@ def run_compare(reference_1: Path, reference_2: Path, ours: Path, shots: str) ->
     try:
         (r1, t1), (r2, t2), (o, t) = (load_run(run, shots)
                                       for run in (reference_1, reference_2, ours))
+        if not len(r1) == len(r2) == len(o):
+            raise SystemExit(f"the runs have different numbers of shots: reference_1 {len(r1)}, "
+                             f"reference_2 {len(r2)}, ours {len(o)}")
+        if mean_difference(r1, r2) == 0:
+            raise SystemExit("the two reference runs are identical: the noise floor is 0, so "
+                             "any difference would fail; the tolerance is not invented here")
         result = {"shots": {"reference_1": len(r1), "reference_2": len(r2), "ours": len(o)},
                   **verdict(r1, r2, o, [t1, t2], t)}
     except ValueError as e:
