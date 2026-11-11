@@ -35,7 +35,10 @@ namespace Libraries {
 void InitHLELibs(Core::Loader::SymbolsResolver* sym) {
     // Upstream's window starts these before the libraries register: Pad looks for gamepads in
     // its RegisterLib, AudioOut opens devices on sceAudioOutOpen. A failure leaves the game
-    // without sound or pads, not without a start.
+    // without sound or pads, not without a start. SDL would turn SIGINT and SIGTERM into a quit
+    // event nobody reads (the window sets the same hint, but a headless run has none), so the
+    // limit of `timeout` would not end the run.
+    SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     for (const auto& [flag, name] : {std::pair{SDL_INIT_AUDIO, "audio"},
                                     std::pair{SDL_INIT_GAMEPAD, "gamepad"}}) {
         if (!SDL_InitSubSystem(flag)) {
