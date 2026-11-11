@@ -205,8 +205,10 @@ class InterpreterTests(unittest.TestCase):
     def test_stable_restarts_when_the_picture_changes(self) -> None:
         clock = FakeClock()
         target = FakeTarget(clock, pictures=[BLACK, GREY, GREY, GREY, GREY, GREY])
-        run("stable seconds=1 delta=5\n", target, clock)
+        events: list = []
+        run("stable seconds=1 delta=5\n", target, clock, events)
         self.assertEqual(clock.now, 1.25)  # the change at 0.25, then a full second unchanged
+        self.assertIn(("stable", "unchanged for 1.000 s"), events)
 
     def test_stable_fails_on_constant_motion(self) -> None:
         clock = FakeClock()

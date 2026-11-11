@@ -14,7 +14,8 @@ A scenario is a list of steps, one per line, `#` starts a comment. Options are k
   frames N [timeout=60]                N more presents happened
   nonblack [level=16] [timeout=60]     the picture's mean luma reaches level
   changed [delta=4] [timeout=60]       the picture differs from the one at the start of the step
-  stable [seconds=2] [delta=2] [timeout=60]    the picture stops changing for that long
+  stable [seconds=2] [delta=2] [timeout=60]    the picture stops changing for that long; logs
+                                       a "stable" event with how long it has been unchanged
   shot NAME                            save the current picture
   mark NAME                            start a named segment of the frame-time report
 
@@ -353,3 +354,5 @@ class Interpreter:
             current = self._picture(step, deadline)
             if difference(reference, current) > delta:
                 reference, since = current, self.clock()
+        # When the picture last changed: the rig's time to a menu is measured from it.
+        self.event("stable", f"unchanged for {self.clock() - since:.3f} s")
