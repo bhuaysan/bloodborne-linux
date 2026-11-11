@@ -141,23 +141,43 @@ TEST(SysLibsHost, ThreadRunsOnAGuestThreadAndStops) {
     EXPECT_TRUE(stopped);
 }
 
-TEST(SysLibsHost, ThreadJoinedByItselfDetaches) {
-    // AvPlayer's decoder threads end with a Join of their own Thread object.
+TEST(SysLibsHost, ThreadJoinedByItselfStaysJoinableUntilStop) {
+    // AvPlayer's decoder threads end with a Join of their own Thread object. It must not
+    // fail or detach: Stop() later joins the worker, so the owner can free the Thread.
     Libraries::Kernel::Thread thread;
-    std::atomic<bool> started{false}, ended{false};
+    std::atomic<bool> started{false}, joined_self{false}, finished{false};
     thread.Run([&](std::stop_token) {
         while (!started) {
             std::this_thread::yield();
         }
         thread.Join();
-        ended = true;
+        joined_self = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        finished = true;
     });
     started = true;
-    for (int i = 0; i < 2000 && !ended; ++i) {
+    for (int i = 0; i < 2000 && !joined_self; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    EXPECT_TRUE(ended);
+    EXPECT_TRUE(joined_self);
+    EXPECT_TRUE(thread.Joinable());
+    thread.Stop();
+    EXPECT_TRUE(finished);  // Stop() returned only after the worker ended
     EXPECT_FALSE(thread.Joinable());
+}
+
+TEST(SysLibsHost, StopRacingASelfJoinWaitsForTheWorker) {
+    for (int round = 0; round < 20; ++round) {
+        Libraries::Kernel::Thread thread;
+        std::atomic<bool> finished{false};
+        thread.Run([&](std::stop_token) {
+            thread.Join();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            finished = true;
+        });
+        thread.Stop();
+        EXPECT_TRUE(finished);
+    }
 }
 
 TEST(SysLibsHost, GuestPathsResolveThroughTheKernel) {

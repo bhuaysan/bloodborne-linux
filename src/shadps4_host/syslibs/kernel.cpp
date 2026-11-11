@@ -57,16 +57,17 @@ void Thread::Join() {
     if (thread == nullptr) {
         return;
     }
-    // AvPlayer's workers end by joining themselves (upstream's pthread_join returns EDEADLK and
-    // leaves the thread unjoined). Detach instead, so the thread frees itself when it ends. When
-    // Stop() joins it at the same time, the detach finds it joining (EINVAL) and the join frees it.
-    const bool self = thread == bb::hle::kernel::current_thread();
-    const int error =
-        self ? bb::hle::kernel::detach_thread(thread) : bb::hle::kernel::join_thread(thread, nullptr);
-    if (error != 0 && !(self && error == EINVAL)) {
+    // AvPlayer's workers end by joining themselves; upstream's pthread_join returns EDEADLK and
+    // leaves the thread joinable. Do the same: leave it for Stop() or the destructor to join.
+    // Detaching here would let Stop() return before the worker ends, and the worker would then
+    // write to a Thread its owner has freed.
+    if (thread == bb::hle::kernel::current_thread()) {
+        return;
+    }
+    const int error = bb::hle::kernel::join_thread(thread, nullptr);
+    if (error != 0) {
         bb::common::log(bb::common::LogLevel::error, "shadps4",
-                        "system library thread: {} failed, errno {}", self ? "detach" : "join",
-                        error);
+                        "system library thread: join failed, errno {}", error);
     }
     thread = nullptr;
 }

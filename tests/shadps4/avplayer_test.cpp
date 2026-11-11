@@ -89,6 +89,10 @@ bool reference_frames(const std::string& path, std::vector<Nv12Frame>& out, int&
         why = "no H.264 decoder in this FFmpeg build (ffmpeg-free; RPM Fusion's FFmpeg has one)";
         return false;
     }
+    if (avcodec_find_decoder(AV_CODEC_ID_AAC) == nullptr) {
+        why = "no AAC decoder in this FFmpeg build; the player needs it for the movie's audio";
+        return false;
+    }
     AVFormatContext* fmt = nullptr;
     if (avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) < 0 ||
         avformat_find_stream_info(fmt, nullptr) < 0) {
@@ -155,7 +159,7 @@ TEST(AvPlayerGame, OpeningMovieFramesMatchFfmpeg) {
     EXPECT_EQ(height, 1080);
 
     Common::Log::g_class_levels[static_cast<std::size_t>(Common::Log::Class::Lib_AvPlayer)] =
-        Common::Log::Level::Info;
+        Common::Log::Level::Warning;  // Info is very noisy
     // The game opens its files under /app0/dvdroot_ps4, in the dump.
     bb::hle::kernel::path_map().mount_game(game);
 
