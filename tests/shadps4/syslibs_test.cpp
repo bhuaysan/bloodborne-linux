@@ -6,6 +6,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -138,6 +139,25 @@ TEST(SysLibsHost, ThreadRunsOnAGuestThreadAndStops) {
     }
     EXPECT_TRUE(guest);
     EXPECT_TRUE(stopped);
+}
+
+TEST(SysLibsHost, ThreadJoinedByItselfDetaches) {
+    // AvPlayer's decoder threads end with a Join of their own Thread object.
+    Libraries::Kernel::Thread thread;
+    std::atomic<bool> started{false}, ended{false};
+    thread.Run([&](std::stop_token) {
+        while (!started) {
+            std::this_thread::yield();
+        }
+        thread.Join();
+        ended = true;
+    });
+    started = true;
+    for (int i = 0; i < 2000 && !ended; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_TRUE(ended);
+    EXPECT_FALSE(thread.Joinable());
 }
 
 TEST(SysLibsHost, GuestPathsResolveThroughTheKernel) {

@@ -13,6 +13,7 @@
 // process time, the SDK and system versions, and the user on pad slot 1. Each forwards to our
 // kernel or user service, or returns the fixed value its header names.
 
+#include <cerrno>
 #include <cstdio>
 #include <format>
 
@@ -56,9 +57,16 @@ void Thread::Join() {
     if (thread == nullptr) {
         return;
     }
-    if (const int error = bb::hle::kernel::join_thread(thread, nullptr); error != 0) {
+    // AvPlayer's workers end by joining themselves (upstream's pthread_join returns EDEADLK and
+    // leaves the thread unjoined). Detach instead, so the thread frees itself when it ends. When
+    // Stop() joins it at the same time, the detach finds it joining (EINVAL) and the join frees it.
+    const bool self = thread == bb::hle::kernel::current_thread();
+    const int error =
+        self ? bb::hle::kernel::detach_thread(thread) : bb::hle::kernel::join_thread(thread, nullptr);
+    if (error != 0 && !(self && error == EINVAL)) {
         bb::common::log(bb::common::LogLevel::error, "shadps4",
-                        "system library thread: join failed, errno {}", error);
+                        "system library thread: {} failed, errno {}", self ? "detach" : "join",
+                        error);
     }
     thread = nullptr;
 }
