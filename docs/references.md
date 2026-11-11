@@ -25,6 +25,8 @@ One row per source and use. A change that uses a source adds its own row (or row
 | [GoogleTest](https://github.com/google/googletest) 1.17 (installed `gtest-devel`) | BSD-3-Clause | `GTEST_SKIP()`, fixtures and `gtest_main` (`tests/`, `docs/design/runtime.md`) |
 | GCC 16.2 (installed) | GPL-3.0+ with runtime exception | Compiler |
 | GCC 16.2 (installed) | GPL-3.0+ with runtime exception | `-fsanitize=address,undefined` in the `debug` preset (`CMakeLists.txt`) |
+| GCC 16.2 (installed) | GPL-3.0+ with runtime exception | its LeakSanitizer's leak reports, `__lsan_default_suppressions()` and the `leak:` suppression lines, checked with the runtime's "Suppressions used" summary (`tests/support/lsan_vulkan.cpp`) |
+| GCC 16.2 (installed) | GPL-3.0+ with runtime exception | its LeakSanitizer's leak reports, `__lsan_default_suppressions()` and the `leak:` suppression lines, checked with the runtime's "Suppressions used" summary, moved into the `bbvktest` object library that `vk_test` and `compute_runner_test` link (`tests/support/lsan_vulkan.cpp`, issue #269) |
 | GNU coreutils 9.10 `sha256sum` (installed) | GPL-3.0+ | Expected digests for the SHA-256 unit tests (`tests/common/sha256_test.cpp`) |
 | [zlib](https://zlib.net/) through Python's `zlib` module (installed Python 3) | Zlib | Inflating the DCX streams of the shader archives (`tools/shaderbnd`, `docs/formats/dcx.md`) |
 | [zlib](https://zlib.net/) through Python's `zlib` module (installed Python 3) | Zlib | Inflating the DCX streams of the game's texture files and archives to read the tile mode of their TPF entries (`docs/design/graphics.md`, "Tiling", 2026-11-07) |
