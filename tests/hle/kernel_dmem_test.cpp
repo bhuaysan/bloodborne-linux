@@ -48,12 +48,6 @@ void* map(std::uint64_t offset, std::uint64_t length, std::uint64_t alignment = 
 
 // Each test releases what it allocates, so every test starts with all of direct memory free.
 
-// udmabuf imports only from a memfd sealed against shrinking (the GPU memory mirror).
-TEST(KernelDmem, MemfdIsSealedAgainstShrinking) {
-    ASSERT_GE(dmem::fd(), 0);
-    EXPECT_NE(::fcntl(dmem::fd(), F_GET_SEALS) & F_SEAL_SHRINK, 0);
-}
-
 TEST(KernelDmem, AllocationRespectsAlignmentAndRange) {
     const std::uint64_t first = allocate(page_size, 0);  // 0: the guest page
     EXPECT_EQ(first, 0u);
@@ -121,65 +115,6 @@ TEST(KernelDmem, TwoMappingsOfOneRangeAlias) {
     EXPECT_EQ(sceKernelMunmap(a, 2 * page_size), 0);
     EXPECT_EQ(sceKernelMunmap(b, 2 * page_size), 0);
     EXPECT_EQ(release_direct(offset, 2 * page_size), 0);
-}
-
-// Mappings keep window offset ≡ direct memory offset (mod mirror_block), which the GPU memory
-// mirror binds by, also for a page in the middle of a block and when a hint asks elsewhere.
-TEST(KernelDmem, MappingsAreCongruentToTheirOffsetModTheMirrorBlock) {
-    const std::uint64_t offset = allocate(4 * page_size, dmem::mirror_block);
-    std::vector<void*> views;
-    for (std::uint64_t k = 0; k < 4; ++k) {
-        void* p = reinterpret_cast<void*>(vmem::window_start + 0x10'0000'0000 + page_size);
-        ASSERT_EQ(map_direct(&p, page_size, 3, 0, offset + k * page_size, 0), 0);
-        EXPECT_EQ((addr(p) - vmem::window_start) % dmem::mirror_block, k * page_size) << k;
-        views.push_back(p);
-    }
-    // An alignment above the page keeps it where it can: 32 KiB-aligned at offset 2 pages.
-    void* p = nullptr;
-    ASSERT_EQ(map_direct(&p, page_size, 3, 0, offset + 2 * page_size, 2 * page_size), 0);
-    EXPECT_EQ(addr(p) % dmem::mirror_block, 2 * page_size);
-    views.push_back(p);
-    for (void* const v : views) {
-        EXPECT_EQ(sceKernelMunmap(v, page_size), 0);
-    }
-    EXPECT_EQ(release_direct(offset, 4 * page_size), 0);
-}
-
-// A view the mirror can't bind exactly is logged: an alignment whose multiples the offset is not
-// one of (32 KiB at an odd page, 64 KiB at two pages), or a batch map that the game places at an
-// address not congruent to its offset. Congruent views are not logged.
-TEST(KernelDmem, MapsThatBreakTheCongruenceAreLogged) {
-    const std::uint64_t offset = allocate(4 * page_size, dmem::mirror_block);
-    void* range = nullptr;
-    ASSERT_EQ(reserve_range(&range, 2 * page_size, 0, dmem::mirror_block), 0);
-    const std::uintptr_t r = addr(range);
-    const BatchEntry entries[2] = {
-        {r, offset + page_size, page_size, 3, {}, dmem::batch_map},
-        {r + page_size, offset + page_size, page_size, 3, {}, dmem::batch_map},
-    };
-    const struct {
-        std::uint64_t page, alignment;  // of a map_direct; alignment 0 or 1: that batch entry
-        bool logged;
-    } cases[] = {{1, 2 * page_size, true}, {2, 4 * page_size, true}, {2, 2 * page_size, false},
-                 {3, page_size, false},    {0, 0, true},             {0, 1, false}};
-    bb::common::set_log_filter(bb::common::LogFilter{});  // info and above
-    std::vector<void*> views;
-    for (const auto& c : cases) {
-        testing::internal::CaptureStderr();
-        if (c.alignment > 1) {
-            views.push_back(map(offset + c.page * page_size, page_size, c.alignment));
-        } else {
-            EXPECT_EQ(map_direct_batch(&entries[c.alignment], 1, nullptr), 0);
-        }
-        const std::string log = testing::internal::GetCapturedStderr();
-        EXPECT_EQ(log.find("not congruent mod 0x10000") != std::string::npos, c.logged)
-            << c.page << " " << c.alignment << ": " << log;
-    }
-    for (void* const v : views) {
-        EXPECT_EQ(sceKernelMunmap(v, page_size), 0);
-    }
-    EXPECT_EQ(sceKernelMunmap(range, 2 * page_size), 0);
-    EXPECT_EQ(release_direct(offset, 4 * page_size), 0);
 }
 
 TEST(KernelDmem, MapRefusesBadArguments) {

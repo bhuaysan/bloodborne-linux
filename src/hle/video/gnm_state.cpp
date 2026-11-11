@@ -13,9 +13,9 @@
 #include <string_view>
 
 #include "common/log.hpp"
-#include "gpu/pm4/default_state.hpp"
-#include "gpu/pm4/packet.hpp"
 #include "hle/hle.hpp"
+#include "hle/video/gnm_default_state.hpp"
+#include "si_ci_vi_merged_pm4_it_opcodes.h"
 
 namespace bb::hle::video {
 namespace {

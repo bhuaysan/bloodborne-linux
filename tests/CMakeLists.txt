@@ -37,6 +37,9 @@ target_link_libraries(bbcorpus PRIVATE bb_warnings bbcommon)
 # Linked into the test binaries whose tests map guest memory (support/guest_window_asan.cpp). An
 # OBJECT library, so that the linker keeps its __asan_default_options.
 add_library(bbtestguestwindow OBJECT support/guest_window_asan.cpp)
+# Linked into the Vulkan test binaries: the LeakSanitizer suppressions for Mesa (support/lsan_vulkan.cpp).
+add_library(bbvktest OBJECT support/lsan_vulkan.cpp)
+target_link_libraries(bbvktest PRIVATE bb_warnings)
 
 # bb_add_test(<name> SOURCES <files...> LIBS <targets...>) builds one test binary with gtest_main.
 function(bb_add_test name)
@@ -53,7 +56,6 @@ add_subdirectory(loader)
 add_subdirectory(hook)
 add_subdirectory(harness)
 add_subdirectory(game)
-add_subdirectory(gpu)
 add_subdirectory(tools)
 bb_add_test(support_test SOURCES support/game_test.cpp)
 target_compile_definitions(support_test PRIVATE BB_IN_GIT_CHECKOUT=${BB_IN_GIT_CHECKOUT})

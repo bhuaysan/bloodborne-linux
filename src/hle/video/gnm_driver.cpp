@@ -119,8 +119,6 @@ std::array<std::uint32_t, compute_rings> asc_next_offs_dw{};
 std::atomic<std::uint64_t> submits{0};
 std::atomic<std::uint64_t> gpu_events{0};
 
-pm4::GpuTrace* gpu_trace = nullptr;  // set before gpu_thread() starts, then never changed
-
 void ResetSubmissionLock(InterruptId) {
     std::unique_lock lock{m_wait_idle};
     submission_lock = false;
@@ -320,19 +318,6 @@ void SubmitDoneLocked() {
 }
 
 }  // namespace
-
-pm4::GpuThread& gpu_thread() {
-    static pm4::GpuThread thread(guest_readable, {}, gpu_trace);
-    return thread;
-}
-
-bool enable_gpu_trace(const std::filesystem::path& path) {
-    if (gpu_trace != nullptr) {
-        return false;
-    }
-    gpu_trace = pm4::GpuTrace::open(path).release();  // never destroyed, like the thread
-    return gpu_trace != nullptr;
-}
 
 void start_gnm(CommandProcessor* gpu) {
     static const bool started = [] {

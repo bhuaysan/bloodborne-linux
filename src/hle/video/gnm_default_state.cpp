@@ -6,13 +6,14 @@
 //   src/core/libraries/gnmdriver/gnmdriver_init.h (InitSequence200)
 //   @0d5f2739d2544d2a35c73e354cba7a32b7a81bea
 // Changed for bloodborne-linux, 2026-11-06: the sequences as data with our packet headers, the
-// padding as one function.
-#include "gpu/pm4/default_state.hpp"
+// padding as one function. Changed 2026-11-11: moved from src/gpu/pm4 into src/hle/video, without
+// the CLEAR_STATE register defaults.
+#include "hle/video/gnm_default_state.hpp"
 
 #include <algorithm>
 #include <array>
 
-#include "gpu/pm4/packet.hpp"
+#include "si_ci_vi_merged_pm4_it_opcodes.h"
 
 namespace bb::pm4 {
 

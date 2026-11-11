@@ -279,12 +279,12 @@ bool free_range(std::uintptr_t start, std::uintptr_t end) {
     return !taken_until(start, end);
 }
 
-// The lowest start of `length` free bytes (free_range) in the window at or above `low` that is
-// `residue` modulo `alignment`. Needs table_mutex.
+// The lowest `alignment`-aligned start of `length` free bytes (free_range) in the window at or
+// above `low`. Needs table_mutex.
 std::optional<std::uintptr_t> find_free(std::uintptr_t low, std::uint64_t length,
-                                        std::uint64_t alignment, std::uint64_t residue = 0) {
+                                        std::uint64_t alignment) {
     const auto next = [&](std::uintptr_t from) {
-        return align_up(std::max(from, window_start) - residue, alignment) + residue;
+        return align_up(std::max(from, window_start), alignment);
     };
     std::uintptr_t at = next(low);
     while (at < window_end && window_end - at >= length) {
@@ -329,19 +329,12 @@ void* map_host_placed(const Mapping& m, int prot) {
 // Maps at the lowest free aligned address in the window, at or above the hint if it lies there.
 // Returns the address, or MAP_FAILED with errno set. Needs table_mutex.
 void* map_in_window(const Mapping& m, int prot) {
-    // An alignment whose multiples the offset is not one of rules the congruence out; map_locked
-    // logs that.
-    std::uint64_t alignment = m.alignment, residue = 0;
-    if (m.congruent > alignment && m.offset % alignment == 0) {
-        residue = m.offset % m.congruent;
-        alignment = m.congruent;
-    }
     std::optional<std::uintptr_t> at;
     if (in_window(m.address, m.address + 1)) {
-        at = find_free(m.address, m.length, alignment, residue);
+        at = find_free(m.address, m.length, m.alignment);
     }
     if (!at) {
-        at = find_free(window_start, m.length, alignment, residue);
+        at = find_free(window_start, m.length, m.alignment);
     }
     if (!at) {
         log(LogLevel::warn, "guest window: no {:#x} bytes aligned to {:#x} free", m.length,
@@ -436,10 +429,6 @@ int map_locked(const Mapping& m, int prot, bool reserved, std::uint64_t backing,
     out = reinterpret_cast<std::uintptr_t>(at);
     table.insert_or_assign(out, Region{out, out + m.length, m.prot, m.flags, m.offset, m.name,
                                        reserved, backing});
-    if (m.congruent != 0 && (out - m.offset) % m.congruent != 0) {
-        log(LogLevel::warn, "map {:#x}-{:#x} of offset {:#x}{}: not congruent mod {:#x}", out,
-            out + m.length, m.offset, m.fixed ? " (fixed)" : "", m.congruent);
-    }
     return 0;
 }
 
@@ -729,8 +718,6 @@ std::int32_t map_anonymous_named(void** address, std::uint64_t length, int prot,
     if (const int error = vmem::map(m, out)) {
         return sce_fail(error);
     }
-    // The GPU memory mirror holds direct memory only. Which of these mappings the GPU reads is
-    // open until a run shows it.
     if ((prot & vmem::prot_extra) == vmem::prot_extra) {
         log(LogLevel::info, "flexible memory {:#x}-{:#x} '{}' mapped with protection {:#x}", out,
             out + length, m.name, prot);

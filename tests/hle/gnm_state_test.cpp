@@ -6,14 +6,15 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <map>
+#include <set>
 #include <span>
 #include <vector>
 
 #include <gtest/gtest.h>
 
-#include "gpu/pm4/default_state.hpp"
-#include "gpu/pm4/parser.hpp"
-#include "gpu/pm4/registers.hpp"
+#include "hle/video/gnm_default_state.hpp"
+#include "si_ci_vi_merged_pm4_it_opcodes.h"
 
 namespace {
 
@@ -23,24 +24,46 @@ using Words = std::vector<std::uint32_t>;
 
 constexpr std::uint32_t poison = 0xdeadbeef;
 
-struct Parsed {
-    bb::pm4::RunResult result;
+// What a walk over type-3 packets found: the opcodes in order, the last packet's body size and
+// the registers that the SET_SH_REG, SET_CONTEXT_REG and SET_UCONFIG_REG packets wrote.
+struct Walked {
+    bool ok = false;  // every packet is type 3 and the last one ends exactly at the end
     std::vector<std::uint8_t> opcodes;
-    bb::pm4::Packet last;
+    std::size_t last_body = 0;
+    std::uint32_t last_first = 0;  // the first body dword of the last packet
+    std::map<std::uint32_t, std::uint32_t> regs;
 };
 
-// Runs `words` on `regs` with the CLEAR_STATE defaults installed.
-Parsed parse(std::span<const std::uint32_t> words, bb::pm4::RegisterMirror& regs) {
-    regs.set_context_defaults(bb::pm4::context_defaults());
-    bb::pm4::Parser parser(regs);
-    Parsed parsed{};
-    parser.set_trace([&](const bb::pm4::Packet& packet) {
-        parsed.opcodes.push_back(packet.opcode());
-        parsed.last = packet;
-    });
-    bb::pm4::Stream stream(words);
-    parsed.result = parser.run(stream);
-    return parsed;
+Walked walk(std::span<const std::uint32_t> words) {
+    Walked w;
+    std::size_t i = 0;
+    while (i < words.size()) {
+        const std::uint32_t header = words[i];
+        const std::size_t body = (header >> 16 & 0x3fff) + 1;
+        if (header >> 30 != 3 || i + 1 + body > words.size()) {
+            return w;
+        }
+        const auto opcode = static_cast<std::uint8_t>(header >> 8);
+        w.opcodes.push_back(opcode);
+        std::uint32_t base = 0;
+        if (opcode == IT_SET_SH_REG) {
+            base = 0x2c00;
+        } else if (opcode == IT_SET_CONTEXT_REG) {
+            base = 0xa000;
+        } else if (opcode == IT_SET_UCONFIG_REG__CI__VI) {
+            base = 0xc000;
+        }
+        if (base != 0) {
+            for (std::size_t k = 1; k < body; ++k) {
+                w.regs[base + words[i + 1] + static_cast<std::uint32_t>(k) - 1] = words[i + 1 + k];
+            }
+        }
+        w.last_body = body;
+        w.last_first = words[i + 1];
+        i += 1 + body;
+    }
+    w.ok = true;
+    return w;
 }
 
 TEST(GnmState, DrawDefaultStateFillsItsBlockAndParses) {
@@ -53,59 +76,41 @@ TEST(GnmState, DrawDefaultStateFillsItsBlockAndParses) {
     ASSERT_EQ(state.size(), 130u);
     EXPECT_TRUE(std::equal(state.begin(), state.end(), buffer.begin()));
 
-    bb::pm4::RegisterMirror regs;
-    regs.write(bb::pm4::RegSpace::context, 0x300, Words{7});  // cleared by CLEAR_STATE
-    const std::span<const std::uint32_t> block(buffer.data(), default_state_dwords);
-    const Parsed parsed = parse(block, regs);
-    ASSERT_EQ(parsed.result, bb::pm4::RunResult::done);
-    for (const std::uint8_t opcode : parsed.opcodes) {
-        EXPECT_TRUE(bb::pm4::Parser::known_opcode(opcode)) << std::hex << int{opcode};
-    }
-    EXPECT_EQ(parsed.opcodes.front(), IT_CONTEXT_CONTROL);
-    EXPECT_EQ(parsed.opcodes[1], IT_CLEAR_STATE);
+    const Walked walked = walk(std::span<const std::uint32_t>(buffer.data(), default_state_dwords));
+    ASSERT_TRUE(walked.ok);
+    // Exactly the opcodes of the default state: a stale entry fails too.
+    const std::set<std::uint8_t> expected{IT_CONTEXT_CONTROL, IT_CLEAR_STATE, IT_ACQUIRE_MEM__CI__VI,
+                                          IT_SET_SH_REG,      IT_SET_CONTEXT_REG, IT_NUM_INSTANCES,
+                                          IT_SET_UCONFIG_REG__CI__VI, IT_NOP};
+    EXPECT_EQ(std::set<std::uint8_t>(walked.opcodes.begin(), walked.opcodes.end()), expected);
+    EXPECT_EQ(walked.opcodes.front(), IT_CONTEXT_CONTROL);
+    EXPECT_EQ(walked.opcodes[1], IT_CLEAR_STATE);
     // The padding NOP: 125 body dwords, the first one 0.
-    EXPECT_EQ(parsed.last.opcode(), IT_NOP);
-    ASSERT_EQ(parsed.last.body.size(), 125u);
-    EXPECT_EQ(parsed.last.body[0], 0u);
+    EXPECT_EQ(walked.opcodes.back(), IT_NOP);
+    EXPECT_EQ(walked.last_body, 125u);
+    EXPECT_EQ(walked.last_first, 0u);
 
-    EXPECT_EQ(regs.get(0xA300), 0u);
-    EXPECT_EQ(regs.get(0xA0D4), 0x2a00161au);  // a CLEAR_STATE default
-    EXPECT_EQ(regs.get(0xA202), 0xcc0010u);    // CB_COLOR_CONTROL
-    EXPECT_EQ(regs.get(0xA295), 0x100u);
-    EXPECT_EQ(regs.get(0xA297), 4u);
-    EXPECT_EQ(regs.get(0x2E16), 0xffffffffu);  // COMPUTE_STATIC_THREAD_MGMT_SE0
-    EXPECT_EQ(regs.get(0x2C47), 0x1cu);
-    EXPECT_EQ(regs.get(0xC200), 0xe0000000u);  // GRBM_GFX_INDEX
-}
-
-// Values fpPS4's clear_state writes, and registers it leaves alone, which are 0 in ours.
-TEST(GnmState, ClearStateDefaultsFollowFpPS4) {
-    const auto defaults = bb::pm4::context_defaults();
-    ASSERT_EQ(defaults.size(), 0x400u);
-    EXPECT_EQ(defaults[0x00d], 0x40004000u);
-    EXPECT_EQ(defaults[0x08c], 0xaa99aaaau);
-    EXPECT_EQ(defaults[0x0d4], 0x2a00161au);
-    EXPECT_EQ(defaults[0x2aa], 0xffu);  // IA_MULTI_VGT_PARAM
-    EXPECT_EQ(defaults[0x317], 0x10u);
-    for (const std::uint32_t unwritten : {0x083u, 0x08eu, 0x08fu, 0x300u}) {
-        EXPECT_EQ(defaults[unwritten], 0u) << std::hex << unwritten;
-    }
+    EXPECT_EQ(walked.regs.at(0xA202), 0xcc0010u);  // CB_COLOR_CONTROL
+    EXPECT_EQ(walked.regs.at(0xA295), 0x100u);
+    EXPECT_EQ(walked.regs.at(0xA297), 4u);
+    EXPECT_EQ(walked.regs.at(0x2E16), 0xffffffffu);  // COMPUTE_STATIC_THREAD_MGMT_SE0
+    EXPECT_EQ(walked.regs.at(0x2C47), 0x1cu);
+    EXPECT_EQ(walked.regs.at(0xC200), 0xe0000000u);  // GRBM_GFX_INDEX
 }
 
 TEST(GnmState, DispatchDefaultStateFillsItsBlockAndParses) {
     Words buffer(default_state_dwords, poison);
     ASSERT_EQ(sceGnmDispatchInitDefaultHardwareState(buffer.data(), default_state_dwords),
               default_state_dwords);
-    bb::pm4::RegisterMirror regs;
-    const Parsed parsed = parse(buffer, regs);
-    ASSERT_EQ(parsed.result, bb::pm4::RunResult::done);
+    const Walked parsed = walk(buffer);
+    ASSERT_TRUE(parsed.ok);
     EXPECT_EQ(parsed.opcodes,
               (std::vector<std::uint8_t>{IT_SET_SH_REG, IT_SET_SH_REG, IT_SET_SH_REG,
                                          IT_ACQUIRE_MEM__CI__VI, IT_NOP}));
     EXPECT_EQ(buffer[0], 0xc0017602u);  // shader-type bit set
-    EXPECT_EQ(parsed.last.body.size(), 239u);
-    EXPECT_EQ(regs.get(0x2E15), 0x170u);  // COMPUTE_RESOURCE_LIMITS
-    EXPECT_EQ(regs.get(0x2E17), 0xffffffffu);
+    EXPECT_EQ(parsed.last_body, 239u);
+    EXPECT_EQ(parsed.regs.at(0x2E15), 0x170u);  // COMPUTE_RESOURCE_LIMITS
+    EXPECT_EQ(parsed.regs.at(0x2E17), 0xffffffffu);
 }
 
 TEST(GnmState, DefaultStateNeedsItsWholeBlock) {
@@ -136,9 +141,8 @@ TEST(GnmState, StringMarkersHoldTheirTagAndString) {
     ASSERT_EQ(sceGnmInsertSetMarker(set.data(), 6, ""), 0);
     EXPECT_EQ(set, (Words{0xc0041000u, marker_set_tag, 0, 0, 0, 0}));
 
-    bb::pm4::RegisterMirror regs;
-    const Parsed parsed = parse(std::span(buffer).first(13), regs);
-    EXPECT_EQ(parsed.result, bb::pm4::RunResult::done);
+    const Walked parsed = walk(std::span(buffer).first(13));
+    EXPECT_TRUE(parsed.ok);
     EXPECT_EQ(parsed.opcodes, std::vector<std::uint8_t>{IT_NOP});
 }
 

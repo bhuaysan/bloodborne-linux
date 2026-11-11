@@ -16,8 +16,7 @@ namespace bb::tools {
 
 inline constexpr std::string_view run_usage =
     "usage: bb-run [--game-dir DIR] [--profile NAME] [--timeout SECONDS] [--stop-at-main-loop]\n"
-    "              [--log SPEC] [--no-log-file] [--headless] [--device NAME] [--gpu-trace]\n"
-    "              [--mirror-size GIB]\n"
+    "              [--log SPEC] [--no-log-file] [--headless] [--device NAME]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
@@ -29,19 +28,12 @@ inline constexpr std::string_view run_usage =
     "  --no-log-file        log to stderr only, not to a file in the logs directory\n"
     "  --headless           open no window; flips complete without being presented (also when\n"
     "                       neither WAYLAND_DISPLAY nor DISPLAY is set)\n"
-    "  --gpu-trace          write the GPU packets, draws and dispatches of each frame to a file\n"
-    "                       in the logs directory\n"
-    "  --mirror-size GIB    the part of the guest window that the GPU memory mirror holds: 2 to\n"
-    "                       32 GiB in steps of 2 (default: 32)\n"
     "  --device NAME        the Vulkan device whose name contains NAME, ignoring case\n"
-    "                       (default: video_core's choice, a discrete GPU first); the GPU memory\n"
-    "                       mirror chooses with the same rule; status 2 when none matches\n";
+    "                       (default: video_core's choice, a discrete GPU first); status 2 when\n"
+    "                       none matches\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
-
-// The mirror's size limit in GiB (mirror_max_size of gpu/vk/memory_mirror.hpp).
-inline constexpr unsigned max_mirror_gib = 32;
 
 struct RunOptions {
     std::optional<std::filesystem::path> game_dir;  // --game-dir, else the environment
@@ -52,8 +44,6 @@ struct RunOptions {
     bool log_file = true;
     bool headless = false;  // --headless: no window and no presentation
     std::string device;     // --device: a device name part (resolve_gpu_id), empty for any
-    bool gpu_trace = false;  // --gpu-trace
-    unsigned mirror_gib = max_mirror_gib;  // --mirror-size
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 

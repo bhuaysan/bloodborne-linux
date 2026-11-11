@@ -52,22 +52,6 @@
 #include "loader/load_set.hpp"
 #include "tools/main_loop_probe.hpp"
 #include "tools/run_options.hpp"
-#ifdef BB_HAVE_MIRROR
-#include "gpu/vk/compute_pipeline.hpp"
-#include "gpu/vk/device.hpp"
-#include "gpu/vk/dispatcher.hpp"
-#include "gpu/vk/draw_recorder.hpp"
-#include "gpu/vk/image_cache.hpp"
-#include "gpu/vk/pipeline_cache.hpp"
-#include "gpu/vk/rendering.hpp"
-#include "gpu/vk/memory_mirror.hpp"
-#include "gpu/vk/scheduler.hpp"
-#include "gpu/vk/texture_binder.hpp"
-#include "gpu/vk/texture_cache.hpp"
-#include "hle/kernel/dmem.hpp"
-#include "hle/kernel/vmem.hpp"
-#include "tools/mirror_observer.hpp"
-#endif
 #ifdef BB_HAVE_VIDEO_CORE
 #include "core/memory.h"
 #include "hle/kernel/vmem.hpp"
@@ -102,28 +86,6 @@ constexpr std::size_t main_stack_size =
 Core::MemoryManager* guest_memory = nullptr;
 #endif
 
-#ifdef BB_HAVE_MIRROR
-// The GPU memory mirror and what keeps it in step with direct memory. Set once before the game
-// starts, never destroyed: game threads map and unmap until the process ends.
-struct Mirror {
-    std::unique_ptr<bb::vk::Instance> instance;  // only when no display has the device
-    std::unique_ptr<bb::vk::Device> device;
-    std::unique_ptr<bb::vk::MemoryMirror> mirror;
-    std::unique_ptr<bb::tools::MirrorObserver> observer;
-    // The dispatches of the game's compute and draw streams, recorded on the GPU thread.
-    std::unique_ptr<bb::vk::Scheduler> scheduler;
-    std::unique_ptr<bb::vk::ComputePipelineCache> pipelines;
-    std::unique_ptr<bb::vk::Dispatcher> dispatcher;
-    std::unique_ptr<bb::vk::ImageCache> images;
-    std::unique_ptr<bb::vk::TargetRenderer> targets;
-    std::unique_ptr<bb::vk::PipelineCache> draw_pipelines;
-    std::unique_ptr<bb::vk::TextureCache> textures;
-    std::unique_ptr<bb::vk::TextureBinder> binder;
-    std::unique_ptr<bb::vk::DrawRecorder> recorder;
-};
-Mirror* mirror = nullptr;
-#endif
-
 #ifdef BB_HAVE_WINDOW
 void log_presented();
 #endif
@@ -142,24 +104,6 @@ void log_presented();
         bb::common::log(LogLevel::info, channel,
                         "write tracking: {} faults claimed, {} system call writes announced",
                         bb::shadps4::claimed_faults(), bb::hle::kernel::vmem::host_writes());
-    }
-#endif
-#ifdef BB_HAVE_MIRROR
-    if (mirror != nullptr && mirror->observer) {
-        bb::common::log(LogLevel::info, channel, "mirror: {} binds, {} unbinds, {} releases",
-                        mirror->observer->binds(), mirror->observer->unbinds(),
-                        mirror->observer->releases());
-    }
-    if (mirror != nullptr && mirror->dispatcher) {
-        const auto stats = mirror->dispatcher->stats();
-        bb::common::log(LogLevel::info, channel,
-                        "dispatches: {} recorded, {} untranslated, {} failed", stats.recorded,
-                        stats.untranslated, stats.failed);
-    }
-    if (mirror != nullptr && mirror->recorder) {
-        const auto stats = mirror->recorder->stats();
-        bb::common::log(LogLevel::info, channel, "draws: {} recorded, {} unsupported, {} failed",
-                        stats.recorded, stats.unsupported, stats.failed);
     }
 #endif
 #ifdef BB_HAVE_WINDOW
@@ -345,99 +289,6 @@ void log_presented() {
     end_run(bb::tools::timeout_status);
 }
 
-#ifdef BB_HAVE_MIRROR
-// The readable guest dwords from `address` on, to the end of its mapping (at most 1 MiB).
-std::span<const std::uint32_t> read_guest_code(std::uint64_t address) {
-    constexpr std::uint64_t page = 16384, limit = std::uint64_t{1} << 20;
-    std::uint64_t bytes = 0;
-    while (bytes < limit) {
-        const std::uint64_t next = std::min(limit, ((address + bytes) / page + 1) * page - address);
-        if (!bb::hle::kernel::vmem::readable(address, address + next)) {
-            break;
-        }
-        bytes = next;
-    }
-    return {reinterpret_cast<const std::uint32_t*>(address), bytes / 4};
-}
-
-// The guest bytes [address, address + bytes) when they are all readable.
-std::span<const std::byte> read_guest_bytes(std::uint64_t address, std::uint64_t bytes) {
-    if (address + bytes < address || !bb::hle::kernel::vmem::readable(address, address + bytes)) {
-        return {};
-    }
-    return {reinterpret_cast<const std::byte*>(address), bytes};
-}
-
-// Makes the GPU memory mirror over the first `gib` GiB of the guest window and hooks it to direct
-// memory, on `device` or, without one, on a device of its own. Logs why and goes on without a
-// mirror when it can't.
-void open_mirror(bb::vk::Device* device, const std::string& device_selector, unsigned gib) {
-    auto m = std::make_unique<Mirror>();
-    std::string why;
-    try {
-        if (device == nullptr) {
-            m->instance = bb::vk::Instance::create(why);
-            if (m->instance) {
-                m->device = bb::vk::Device::create(*m->instance, {.device = device_selector}, why);
-            }
-            device = m->device.get();
-        }
-        const int memfd = bb::hle::kernel::dmem::fd();
-        if (device != nullptr && memfd < 0) {
-            why = "no direct memory";
-            device = nullptr;
-        }
-        if (device != nullptr) {
-            m->mirror = bb::vk::MemoryMirror::create(
-                *device,
-                {.memfd = memfd,
-                 .window_start = bb::hle::kernel::vmem::window_start,
-                 .size = std::uint64_t{gib} << 30},
-                why);
-        }
-    } catch (const std::runtime_error& e) {
-        why = e.what();
-    }
-    if (!m->mirror) {
-        bb::common::log(LogLevel::warn, channel, "no GPU memory mirror: {}", why);
-        return;
-    }
-    m->observer = std::make_unique<bb::tools::MirrorObserver>(*m->mirror);
-    bb::hle::kernel::vmem::add_mapping_observer(m->observer.get());
-    bb::common::log(LogLevel::info, channel, "GPU memory mirror of {} GiB, blocks of {:#x}", gib,
-                    m->mirror->block());
-    // Dispatches run through the mirror on the GPU thread.
-    try {
-        m->scheduler = std::make_unique<bb::vk::Scheduler>(*device);
-        m->pipelines = std::make_unique<bb::vk::ComputePipelineCache>(*device, read_guest_code);
-        m->images = std::make_unique<bb::vk::ImageCache>(*device);
-        m->targets = std::make_unique<bb::vk::TargetRenderer>(*device, *m->images);
-        m->draw_pipelines = std::make_unique<bb::vk::PipelineCache>(*device, read_guest_code);
-        m->textures = std::make_unique<bb::vk::TextureCache>(*device, *m->scheduler);
-        m->binder = std::make_unique<bb::vk::TextureBinder>(*device, *m->scheduler, *m->textures,
-                                                            read_guest_bytes);
-        m->dispatcher = std::make_unique<bb::vk::Dispatcher>(
-            *device, *m->scheduler, *m->pipelines, *m->mirror, m->binder.get());
-        auto& gpu = bb::hle::video::gpu_thread();
-        m->recorder = std::make_unique<bb::vk::DrawRecorder>(
-            *device, *m->scheduler, *m->dispatcher, *m->draw_pipelines, *m->targets, *m->mirror,
-            gpu.extent_hints(), m->binder.get());
-        Mirror* const raw = m.get();
-        gpu.set_backend(
-            [raw](const bb::pm4::RegisterMirror& regs, const bb::pm4::DispatchCall& call) {
-                raw->dispatcher->dispatch(regs, call);
-            },
-            [raw](bb::pm4::SyncPoint point) { raw->dispatcher->sync(point); },
-            [raw](const bb::pm4::RegisterMirror& regs, const bb::pm4::DrawCall& call) {
-                raw->recorder->draw(regs, call);
-            });
-    } catch (const std::runtime_error& e) {
-        bb::common::log(LogLevel::warn, channel, "no GPU dispatches or draws: {}", e.what());
-    }
-    mirror = m.release();
-}
-#endif
-
 // Everything up to the start of the game's main thread. Returns the exit status of a run that
 // ends before it; throws for errors that end it with status 1.
 int start(const bb::tools::RunOptions& options) {
@@ -464,16 +315,6 @@ int start(const bb::tools::RunOptions& options) {
     }
     bb::common::log(LogLevel::info, channel, "game {}, profile {}", game_dir->string(),
                     options.profile);
-    if (options.gpu_trace) {
-        const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
-        const fs::path trace = dirs.ensure(dirs.logs()) /
-                               std::format("{:%Y%m%dT%H%M%S}Z-{}-gpu-trace.txt", now, ::getpid());
-        if (!bb::hle::video::enable_gpu_trace(trace)) {
-            std::cerr << "bb-run: cannot create the GPU trace " << trace.string() << '\n';
-            return 1;
-        }
-        bb::common::log(LogLevel::info, channel, "GPU trace {}", trace.string());
-    }
 
 #ifdef BB_HAVE_VIDEO_CORE
     // video_core's guest memory follows the kernel's mappings from the first one on. Its write
@@ -509,9 +350,6 @@ int start(const bb::tools::RunOptions& options) {
 #else
     bb::hle::video::start_video_out(nullptr);
     bb::hle::video::start_gnm(nullptr);
-#endif
-#ifdef BB_HAVE_MIRROR
-    open_mirror(nullptr, options.device, options.mirror_gib);
 #endif
     run_game(*game, options.timeout_seconds);
 }

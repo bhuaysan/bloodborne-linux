@@ -16,7 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "common/file.hpp"
-#include "gpu/gcn/gcn.hpp"
+#include "shader_recompiler/frontend/decode.h"
 #include "support/game.hpp"
 
 namespace {
@@ -127,23 +127,51 @@ struct Usage {
     std::set<unsigned> exports;  // targets: mrt 0-7, mrtz 8, pos 12-15, param 32-63
 };
 
+// The operand's width in dwords from its scalar type. shadPS4's decoder doesn't give the register
+// count of memory operands (a sample's result, a buffer's data), so the highest register of a
+// wider operand can be missed; the check that reads this only needs a lower bound.
+int dwords_of(Shader::Gcn::ScalarType type) {
+    using Shader::Gcn::ScalarType;
+    return type == ScalarType::Uint64 || type == ScalarType::Sint64 || type == ScalarType::Float64
+               ? 2
+               : 1;
+}
+
 Usage usage(std::span<const std::uint32_t> code) {
+    using namespace Shader::Gcn;
     Usage u;
-    for (const bb::gcn::Instruction& inst : bb::gcn::decode(code)) {
-        const auto note = [&](const bb::gcn::Operand& op) {
-            const int last = op.code + op.dwords - 1;
-            if (op.kind == bb::gcn::OperandKind::vector) {
+    GcnCodeSlice slice(code.data(), code.data() + code.size());
+    GcnDecodeContext context;
+    while (!slice.atEnd()) {
+        const GcnInst inst = context.decodeInstruction(slice);
+        const auto note = [&](const InstOperand& op) {
+            const int last = static_cast<int>(op.code) + dwords_of(op.type) - 1;
+            if (op.field == OperandField::VectorGPR) {
                 u.max_vgpr = std::max(u.max_vgpr, last);
-            } else if (op.kind == bb::gcn::OperandKind::scalar && op.code < 104) {
+            } else if (op.field == OperandField::ScalarGPR) {
                 u.max_sgpr = std::max(u.max_sgpr, last);
-            } else if (op.kind == bb::gcn::OperandKind::interp_attr) {
-                u.max_attr = std::max(u.max_attr, static_cast<int>(op.value / 4));
             }
         };
-        std::for_each(inst.dst.begin(), inst.dst.end(), note);
-        std::for_each(inst.src.begin(), inst.src.end(), note);
-        if (inst.format == bb::gcn::Format::exp) {
-            u.exports.insert(inst.mem_offset);
+        // shadPS4's decoder keeps a VOP3 compare's scalar destination in dst[1] and labels dst[0]
+        // (the same bits) a vector register.
+        const bool vop3_cmp = inst.encoding == InstEncoding::VOP3 &&
+                              inst.dst[1].field != OperandField::Undefined &&
+                              inst.dst[0].field == OperandField::VectorGPR &&
+                              inst.dst[1].type == ScalarType::Uint64 && inst.dst_count == 1;
+        if (vop3_cmp) {
+            note(inst.dst[1]);
+        } else {
+            std::for_each(inst.dst.begin(), inst.dst.begin() + inst.dst_count, note);
+        }
+        std::for_each(inst.src.begin(), inst.src.begin() + inst.src_count, note);
+        if (inst.encoding == InstEncoding::VINTRP) {
+            u.max_attr = std::max(u.max_attr, static_cast<int>(inst.control.vintrp.attr));
+        }
+        if (inst.encoding == InstEncoding::EXP) {
+            u.exports.insert(static_cast<unsigned>(inst.control.exp.target));
+        }
+        if (inst.opcode == Opcode::S_ENDPGM) {
+            break;
         }
     }
     return u;

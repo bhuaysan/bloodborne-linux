@@ -3,8 +3,8 @@
 // mappings through map() with its own fd, flags, offsets and alignment, and maps into the
 // reservations of reserve() (dmem.hpp).
 // Exceptions: mapped() is also the GNM submits' check (src/hle/video/gnm_driver.cpp, PM4 readable),
-// and MappingObserver is how the renderer's guest memory and the GPU memory mirror follow the
-// mappings of direct and flexible memory.
+// and MappingObserver is how the renderer's guest memory follows the mappings of direct and
+// flexible memory.
 #pragma once
 
 #include <sys/types.h>
@@ -77,10 +77,6 @@ struct Mapping {
     std::uint32_t flags = region_anonymous;  // Region::flags
     std::uint64_t offset = 0;                // Region::offset
     std::uint64_t alignment = page_size;     // of the address the runtime picks: a power of two
-    // A power of two or 0. The address the runtime picks in the window is ≡ `offset` (mod
-    // congruent) where `alignment` allows it. A mapping at an address that isn't (the alignment
-    // rules it out, or a fixed map) is logged.
-    std::uint64_t congruent = 0;
     // Flexible memory: map() takes the backing from the memfd's flexible area
     // (dmem::allocate_flexible) and maps it MAP_SHARED in place of `fd`, `fd_offset` and
     // MAP_ANONYMOUS or MAP_PRIVATE. Unmapping gives it back.

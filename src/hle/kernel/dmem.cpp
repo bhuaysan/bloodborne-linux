@@ -130,11 +130,8 @@ bool valid_range(std::uint64_t offset, std::uint64_t length) {
 
 int fd() {
     static const int memfd = [] {
-        // Sealed against shrinking, as udmabuf needs to import ranges of it for the GPU memory
-        // mirror (docs/design/graphics.md, "GPU memory mirror").
-        const int created = ::memfd_create("bb-direct-memory", MFD_CLOEXEC | MFD_ALLOW_SEALING);
-        if (created < 0 || ::ftruncate(created, static_cast<off_t>(memfd_size)) != 0 ||
-            ::fcntl(created, F_ADD_SEALS, F_SEAL_SHRINK) != 0) {
+        const int created = ::memfd_create("bb-direct-memory", MFD_CLOEXEC);
+        if (created < 0 || ::ftruncate(created, static_cast<off_t>(memfd_size)) != 0) {
             const int error = errno;
             common::log(LogLevel::error, channel, "direct memory: no memfd of {:#x} bytes: {}",
                         memfd_size, std::strerror(error));
@@ -292,7 +289,6 @@ int run_batch_entry(const BatchEntry& e) {
     vmem::Mapping m = direct_mapping(e.address, e.length, e.prot, e.offset);
     m.fixed = true;
     m.into_reservation = true;
-    m.congruent = mirror_block;  // only checked: the address is the game's
     std::uintptr_t out = 0;
     return vmem::map(m, out);
 }
@@ -352,7 +348,6 @@ std::int32_t map_direct(void** address, std::uint64_t length, int prot, int flag
     vmem::Mapping m =
         direct_mapping(reinterpret_cast<std::uintptr_t>(*address), length, prot, offset);
     m.alignment = *align;
-    m.congruent = mirror_block;
     std::uintptr_t out = 0;
     if (const int error = vmem::map(m, out)) {
         return sce_fail(error);
@@ -377,7 +372,7 @@ std::int32_t release_direct(std::uint64_t offset, std::uint64_t length) {
     split_at(offset);
     split_at(end);
     table.erase(table.lower_bound(offset), table.lower_bound(end));
-    // The mirror's imports pin the pages: they go before the hole is punched.
+    // Observers drop what they hold of the range before the hole is punched.
     vmem::notify_released(offset, length);
     if (::fallocate(fd(), FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, static_cast<off_t>(offset),
                     static_cast<off_t>(length)) != 0) {

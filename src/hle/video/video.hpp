@@ -15,7 +15,6 @@
 #include <cstdint>
 #include <filesystem>
 
-#include "gpu/pm4/gpu_thread.hpp"
 #include "hle/kernel/equeue.hpp"
 #include "hle/video/gnm_driver.hpp"
 #include "hle/video/video_out.hpp"
@@ -80,14 +79,6 @@ std::int32_t sceVideoOutGetFlipStatus(std::int32_t handle, void* status);
 // VideoOut glue is adapted"). They hand the command buffers to the CommandProcessor given to
 // start_gnm (gnm_driver.hpp) and return before it runs them; without one they are logged and
 // dropped.
-
-// The GPU thread of src/gpu, started on first use; #435 removes it. The submits no longer feed it:
-// bb-run only attaches the memory mirror's backends to it.
-pm4::GpuThread& gpu_thread();
-
-// Starts the GPU trace (gpu_trace.hpp) of gpu_thread() into a new file at `path`, which stays
-// without frames now. False if the file can't be created or a trace is already on.
-bool enable_gpu_trace(const std::filesystem::path& path);
 
 // The errors of the submits (gnm_error.h).
 inline constexpr std::int32_t submission_invalid_argument = static_cast<std::int32_t>(0x80d11000u);

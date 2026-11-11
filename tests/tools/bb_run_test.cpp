@@ -55,8 +55,6 @@ TEST(RunOptions, Defaults) {
     EXPECT_FALSE(o.log_spec);
     EXPECT_TRUE(o.log_file);
     EXPECT_FALSE(o.headless);
-    EXPECT_FALSE(o.gpu_trace);
-    EXPECT_EQ(o.mirror_gib, 32U);
     EXPECT_EQ(o.device, "");
     EXPECT_FALSE(o.help);
 }
@@ -64,18 +62,15 @@ TEST(RunOptions, Defaults) {
 TEST(RunOptions, ParsesEveryOption) {
     const RunOptions o = parse({"--game-dir", "/games/bb", "--profile", "test_1-a", "--timeout",
                                 "10", "--stop-at-main-loop", "--log", "hle=trace,warn",
-                                "--no-log-file", "--headless", "--device", "RADV", "--gpu-trace",
-                                "--mirror-size", "8"});
+                                "--no-log-file", "--headless", "--device", "RADV"});
     EXPECT_EQ(o.game_dir, std::filesystem::path("/games/bb"));
     EXPECT_EQ(o.profile, "test_1-a");
     EXPECT_EQ(o.timeout_seconds, 10U);
     EXPECT_TRUE(o.stop_at_main_loop);
     EXPECT_EQ(o.log_spec, "hle=trace,warn");
-    EXPECT_TRUE(o.gpu_trace);
     EXPECT_FALSE(o.log_file);
     EXPECT_TRUE(o.headless);
     EXPECT_EQ(o.device, "RADV");
-    EXPECT_EQ(o.mirror_gib, 8U);
     EXPECT_TRUE(parse({"-h"}).help);
     EXPECT_TRUE(parse({"--help"}).help);
     // A later value replaces an earlier one.
@@ -90,12 +85,9 @@ TEST(RunOptions, RefusesBadArguments) {
     EXPECT_EQ(parse_error({"--log"}), "--log needs a value");
     EXPECT_EQ(parse_error({"--timeout"}), "--timeout needs a value");
     EXPECT_EQ(parse_error({"--device"}), "--device needs a value");
-    EXPECT_EQ(parse_error({"--mirror-size"}), "--mirror-size needs a value");
-    for (std::string_view g : {"0", "1", "3", "34", "64", "-2", "2G", "", "2.0"}) {
-        EXPECT_TRUE(parse_error({"--mirror-size", g}).starts_with("--mirror-size: ")) << g;
-    }
-    EXPECT_EQ(parse({"--mirror-size", "2"}).mirror_gib, 2U);
-    EXPECT_EQ(parse({"--mirror-size", "32"}).mirror_gib, 32U);
+    // The options of the removed GPU path are unknown now.
+    EXPECT_EQ(parse_error({"--mirror-size", "8"}), "unknown argument \"--mirror-size\"");
+    EXPECT_EQ(parse_error({"--gpu-trace"}), "unknown argument \"--gpu-trace\"");
     for (std::string_view name :
          {"", "a/b", "../x", "with space", "abcdefghijklmnopqrstuvwxyz0123456"}) {
         EXPECT_TRUE(parse_error({"--profile", name}).starts_with("--profile: ")) << name;
@@ -284,23 +276,6 @@ TEST(BbRunGame, RunsTheEntry) {
                                               "data/bloodborne-linux/profiles/test/savedata"));
 }
 
-// --gpu-trace creates its file next to the log file, and the run says where.
-TEST(BbRunGame, CreatesTheGpuTrace) {
-    BB_REQUIRE_GAME(game);
-    const TempDir dir;
-    const Result r = run_bb_run(dir, "--headless --gpu-trace --timeout 10 --profile test "
-                                     "--game-dir " +
-                                         quote(game.string()));
-    ASSERT_NE(r.status, -1) << r.output;
-    EXPECT_NE(r.output.find("GPU trace "), std::string::npos) << r.output;
-    int traces = 0;
-    for (const auto& entry :
-         std::filesystem::directory_iterator(dir.path() / "state/bloodborne-linux/logs")) {
-        traces += entry.path().string().ends_with("-gpu-trace.txt") ? 1 : 0;
-    }
-    EXPECT_EQ(traces, 1) << r.output;
-}
-
 // The goal of M3 (docs/design/m3-core-os.md, "Goal"): the game reaches its main loop, and bb-run
 // stops there with status 0.
 TEST(BbRunGame, ReachesTheMainLoop) {
@@ -351,30 +326,6 @@ TEST(BbRunGame, RejectsADeviceThatNamesNoDevice) {
               std::string::npos)
         << r.output;
     EXPECT_EQ(r.output.find("run: calling the entry"), std::string::npos) << r.output;
-}
-
-// The GPU memory mirror follows the game's direct mappings: the run binds them and ends cleanly
-// (a machine without a suitable Vulkan device logs why and runs without a mirror).
-TEST(BbRunGame, MirrorsDirectMemory) {
-    BB_REQUIRE_GAME(game);
-    const TempDir dir;
-    const Result r = run_bb_run(dir, "--headless --mirror-size 4 --timeout 10 --profile test "
-                                     "--game-dir " +
-                                         quote(game.string()));
-    ASSERT_NE(r.status, -1) << r.output;
-    if (r.output.find("no GPU memory mirror: ") != std::string::npos) {
-        GTEST_SKIP() << "no mirror on this machine";
-    }
-    EXPECT_NE(r.output.find("GPU memory mirror of 4 GiB"), std::string::npos) << r.output;
-    EXPECT_NE(r.output.find(" binds, "), std::string::npos) << r.output;
-    EXPECT_EQ(r.output.find("run: mirror: 0 binds"), std::string::npos) << r.output;
-    // No error line of the mirror. Lines start with a clock stamp: "23:57:19.639 error [game main]
-    // mirror: ...".
-    std::istringstream lines(r.output);
-    for (std::string line; std::getline(lines, line);) {
-        EXPECT_FALSE(line.find(" error [") != std::string::npos && line.find("] mirror: ") != std::string::npos)
-            << line;
-    }
 }
 
 }  // namespace
