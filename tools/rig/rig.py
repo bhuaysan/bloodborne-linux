@@ -40,6 +40,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[0] / "common"))
 sys.path.insert(0, str(HERE.parents[0] / "self2elf"))
+import audio  # noqa: E402
 import compare  # noqa: E402
 import report  # noqa: E402
 import scenario as scn  # noqa: E402
@@ -394,6 +395,10 @@ def run_target(args: argparse.Namespace) -> int:
         program = bb_run_program(run, game_dir, args.preset, args.window, work_root)
 
     env = {**os.environ, **program.env, "BB_RIG_DIR": str(run)}
+    audio_file = run / "audio.raw"
+    if args.audio:
+        # SDL's disk driver plays to a file in real time instead of to a device (tools/rig/audio.py).
+        env |= {"SDL_AUDIO_DRIVER": "disk", "SDL_AUDIO_DISK_OUTPUT_FILE": str(audio_file)}
     if not args.no_layer:
         env |= {"VK_LAYER_PATH": str(layer), "VK_INSTANCE_LAYERS": LAYER_NAME}
     unit = f"bb-rig-{stamp}"
@@ -473,6 +478,9 @@ def run_target(args: argparse.Namespace) -> int:
         "kernel_gpu_faults": faults, "game_dir_changes": changes,
         "zenity_called": zenity.exists(), "shot_errors": conversion_errors,
     }
+    if args.audio and audio_file.exists():
+        summary["audio"] = audio.summary(audio_file)
+        audio_file.unlink()  # 1.5 MB per second of play, the levels are what matters
     (run / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2))
     print(f"\noutput: {run}")
@@ -493,6 +501,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--user-from", type=Path, help="copy this user/ directory (reference)")
     run.add_argument("--preset", default="relwithdebinfo", help="bb-run build preset")
     run.add_argument("--window", action="store_true", help="let bb-run open its window")
+    run.add_argument("--audio", action="store_true",
+                     help="record the sound with SDL's disk driver and report its level")
     run.add_argument("--no-layer", action="store_true",
                      help="without the Vulkan layer, so no frame times and no picture steps")
     compared = commands.add_parser("compare", help="compare menu captures with the reference")

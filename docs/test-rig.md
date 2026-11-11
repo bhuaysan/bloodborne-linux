@@ -7,6 +7,7 @@ tools/rig/rig.py setup                              # once: download and check t
 tools/rig/rig.py run reference new-game-to-clinic   # the reference run
 tools/rig/rig.py run bb-run --time 120              # our program, same limits, no input yet
 tools/rig/rig.py run bb-run main-menu --window      # our program to the title menu
+tools/rig/rig.py run reference --audio --time 100   # and bb-run the same: the sound level of the first 100 s
 tools/rig/rig.py compare REF_RUN REF_RUN OUR_RUN    # its menu against two reference runs
 tools/rig/rig.py run bb-run main-menu-offline --window   # on to the main menu, with the pad
 ```
@@ -50,3 +51,11 @@ Measured on 2026-11-11 (RADV, `relwithdebinfo`): the noise floor is 0.0259 and o
 ## Matching the main menu behind Play Offline
 
 `main-menu-offline.scn` presses Down and A on the title and takes its pictures of the menu that follows (New Game, System, Log In). It checks that `bb-run`'s window feeds the virtual gamepad to the imported pad. Measured on 2026-11-11 (RADV, `relwithdebinfo`): noise floor 0.0263, ours 0.0262, a ratio of 1.00.
+
+## Sound
+
+`run --audio` starts the target with SDL's disk audio driver (`SDL_AUDIO_DRIVER=disk`), which writes what the program plays to a file in real time, in the format it opened (both targets open 48000 Hz, 8 channels, 32-bit float). The rig reads the file in 10 s windows (`tools/rig/audio.py`), puts the RMS, the peak, the silent windows and the RMS per window into `summary.json` under `audio` and deletes the file, which grows by 1.5 MB per second. The same span from the start of both targets is compared, because the logos and the title are driven by the game and not by input.
+
+Measured on 2026-11-11, 100 s from the start with no input: the reference RMS is 0.0188 (peak 0.36), ours 0.0216 (peak 0.41), a ratio of 1.15. The levels per 10 s window agree to within a few percent from the first music (0.0021, 0.0063, 0.0092, 0.0090, 0.0092, 0.0109, 0.0153, 0.0313, 0.0438 against 0.0022, 0.0064, 0.0092, 0.0090, 0.0092, 0.0110, 0.0153, 0.0318, 0.0415). Ours logs `Opened audio device: Default Device (48000 Hz, 8 ch)` for the main and the BGM port and creates the AT9 instances (`sceAjmInstanceCreate ... At9Dec`), with no AJM or AudioOut error.
+
+The disk driver replaces the device, so this measures what the game hands to SDL (AudioOut, AJM and ATRAC9), and not the device or PipeWire path.
