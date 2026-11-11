@@ -5,6 +5,7 @@
   rig.py run reference new-game-to-clinic    a scenario from tools/rig/scenarios/ on the reference
   rig.py run bb-run --time 120          our program under the same limits, with no input
   rig.py run reference --user-from DIR ...   start with a copy of an earlier user/ directory
+  rig.py compare REF_RUN REF_RUN OUR_RUN     our menu captures and time against two reference runs
 
 Output of each run goes to analysis/rig/runs/<stamp>-<target>-<scenario>/: target.log, events.csv,
 frames.csv, memory.csv, shots/*.png, kernel.log, summary.json. Exit status 0 means the scenario
@@ -39,6 +40,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[0] / "common"))
 sys.path.insert(0, str(HERE.parents[0] / "self2elf"))
+import compare  # noqa: E402
 import report  # noqa: E402
 import scenario as scn  # noqa: E402
 import self2elf  # noqa: E402
@@ -491,7 +493,14 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--window", action="store_true", help="let bb-run open its window")
     run.add_argument("--no-layer", action="store_true",
                      help="without the Vulkan layer, so no frame times and no picture steps")
+    compared = commands.add_parser("compare", help="compare menu captures with the reference")
+    compared.add_argument("runs", nargs=3, type=Path, metavar="RUN",
+                          help="two reference run directories, then ours")
+    compared.add_argument("--shots", default=compare.DEFAULT_SHOTS,
+                          help="which shots of each run to compare (a glob)")
     args = parser.parse_args(argv)
+    if args.command == "compare":
+        return compare.run_compare(*args.runs, args.shots)
     if args.command == "setup":
         print(setup_reference())
         return 0

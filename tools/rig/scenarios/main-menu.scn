@@ -1,0 +1,29 @@
+# The title menu (Play Online, Play Offline), which both the reference and bb-run reach with no
+# input. Captures for `rig.py compare`: several, so that the comparison averages over the phases
+# of the menu's animated highlight (docs/test-rig.md).
+limit time=300
+
+# The reference logs the call by name, bb-run by its NID. Before it, the reference shows the
+# game's splash picture, which stays still for longer than the logos.
+log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
+mark logos
+# The logos fade and hold for a few seconds each; only the title stays still this long. The stable
+# event gives the time to the menu: when the picture stopped changing.
+stable seconds=6 delta=1 timeout=120
+mark menu
+shot menu-1
+sleep 1.5
+shot menu-2
+sleep 1.5
+shot menu-3
+sleep 1.5
+shot menu-4
+sleep 1.5
+shot menu-5
+sleep 1.5
+shot menu-6
+sleep 1.5
+shot menu-7
+sleep 1.5
+shot menu-8
+sleep 1
