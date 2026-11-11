@@ -1,6 +1,8 @@
 #include "hle/system/save_data.hpp"
 
 #include <stdlib.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include <array>
 #include <cstdint>
@@ -15,6 +17,7 @@
 #include "common/runtime_dirs.hpp"
 #include "hle/hle.hpp"
 #include "hle/kernel/file.hpp"
+#include "hle/kernel/vmem.hpp"
 #include "loader/dynamic.hpp"
 
 namespace {
@@ -175,6 +178,40 @@ TEST_F(SaveDataTest, TheByteStoreReadsBackWhatWasWritten) {
     EXPECT_EQ(std::string(read.data(), read.size()), std::string("\0\0abcd\0\0", 8));
     EXPECT_EQ(save_store_write(1, "x", 1, 0x400000), save_failed);
     EXPECT_EQ(save_store_read(1, nullptr, 1, 0), save_failed);
+}
+
+// The store is read with pread straight into the guest buffer, which the write tracking may have
+// write-protected (docs/design/renderer.md, "System calls into tracked memory"): the buffer is
+// announced first. A stand-in for the tracking lifts the protection there; without the
+// announcement the read would fault on the protected page.
+TEST_F(SaveDataTest, TheByteStoreAnnouncesItsBufferBeforeReading) {
+    class Unprotect final : public bb::hle::kernel::vmem::MappingObserver {
+    public:
+        void mapped(std::uintptr_t, std::uint64_t, std::uint64_t) override {}
+        void unmapped(std::uintptr_t, std::uint64_t, std::uint64_t) override {}
+        void released(std::uint64_t, std::uint64_t) override {}
+        void host_writing(std::uintptr_t address, std::uint64_t length) override {
+            ++calls;
+            EXPECT_EQ(address, reinterpret_cast<std::uintptr_t>(page) + 0x20);
+            EXPECT_EQ(length, 8U);
+            ::mprotect(page, ::getpagesize(), PROT_READ | PROT_WRITE);
+        }
+        void* page = nullptr;
+        int calls = 0;
+    } observer;
+    use_profile("alice");
+    EXPECT_EQ(save_store_declare(1, 0x100000, "record"), save_ok);
+    EXPECT_EQ(save_store_write(1, "abcd", 4, 0x12), save_ok);
+    observer.page =
+        ::mmap(nullptr, ::getpagesize(), PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    ASSERT_NE(observer.page, MAP_FAILED);
+    ASSERT_TRUE(bb::hle::kernel::vmem::add_mapping_observer(&observer));
+    char* const buffer = static_cast<char*>(observer.page) + 0x20;
+    EXPECT_EQ(save_store_read(1, buffer, 8, 0x10), save_ok);
+    bb::hle::kernel::vmem::remove_mapping_observer(&observer);
+    EXPECT_EQ(observer.calls, 1);
+    EXPECT_EQ(std::string(buffer, 8), std::string("\0\0abcd\0\0", 8));
+    ::munmap(observer.page, ::getpagesize());
 }
 
 TEST_F(SaveDataTest, TheDialogNeverOpens) {

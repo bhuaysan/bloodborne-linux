@@ -10,6 +10,7 @@
 #include "common/log.hpp"
 #include "hle/hle.hpp"
 #include "hle/kernel/paths.hpp"
+#include "hle/kernel/vmem.hpp"
 
 namespace bb::hle::kernel {
 namespace {
@@ -165,7 +166,10 @@ std::int32_t sceKernelClose(std::int32_t fd) {
 }
 
 std::int64_t sceKernelRead(std::int32_t fd, void* buffer, std::uint64_t size) {
-    return sce(with_fd(fd, [&](int h) { return from_host(::read(h, buffer, size)); }));
+    return sce(with_fd(fd, [&](int h) {
+        vmem::before_host_write(buffer, size);
+        return from_host(::read(h, buffer, size));
+    }));
 }
 
 std::int64_t sceKernelWrite(std::int32_t fd, const void* buffer, std::uint64_t size) {
@@ -174,7 +178,10 @@ std::int64_t sceKernelWrite(std::int32_t fd, const void* buffer, std::uint64_t s
 
 std::int64_t sceKernelPread(std::int32_t fd, void* buffer, std::uint64_t size,
                             std::int64_t offset) {
-    return sce(with_fd(fd, [&](int h) { return from_host(::pread(h, buffer, size, offset)); }));
+    return sce(with_fd(fd, [&](int h) {
+        vmem::before_host_write(buffer, size);
+        return from_host(::pread(h, buffer, size, offset));
+    }));
 }
 
 std::int64_t sceKernelPwrite(std::int32_t fd, const void* buffer, std::uint64_t size,

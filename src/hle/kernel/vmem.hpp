@@ -105,6 +105,13 @@ public:
     // Direct memory [offset, offset + length) is about to be released (dmem.hpp), possibly still
     // mapped. Called under the allocation table's lock; it may take the change lock.
     virtual void released(std::uint64_t offset, std::uint64_t length) = 0;
+    // The host kernel is about to write guest memory [address, address + length) for an HLE call
+    // (before_host_write); pages the observer write-protected must be writable before it
+    // returns. Called on the calling thread, without the kernel's locks.
+    virtual void host_writing(std::uintptr_t address, std::uint64_t length) {
+        (void)address;
+        (void)length;
+    }
 };
 
 // Adds an observer, before the first guest mapping it is meant to see. Returns false when
@@ -116,6 +123,19 @@ bool add_mapping_observer(MappingObserver* observer);
 void remove_mapping_observer(MappingObserver* observer);
 // Tells every observer that direct memory [offset, offset + length) is about to be released.
 void notify_released(std::uint64_t offset, std::uint64_t length);
+
+// Tells every observer that a system call is about to write guest memory [address, address +
+// length) (docs/design/renderer.md, "System calls into tracked memory"). The renderer's write
+// tracking protects guest pages with mprotect. A guest store to such a page faults, and the fault
+// handler lifts the protection; a system call fails with EFAULT instead. So every HLE path that
+// passes a guest buffer to the host kernel for writing calls this first: sceKernelRead,
+// sceKernelPread and the save data byte store. Paths that let the host kernel fill a host buffer
+// and copy it to the guest in user space (getdirentries, the stat family, clocks, sleeps) don't
+// need it: their stores fault and are claimed like the guest's own. Null or empty ranges are
+// ignored.
+void before_host_write(void* address, std::uint64_t length);
+// How many ranges before_host_write announced, for bb-run's log and the tests.
+std::uint64_t host_writes();
 
 // Runs `call` under the change lock, as the observers' mapped and unmapped run (not from them):
 // no map, unmap or restore changes the table meanwhile, and `call` must not do one either.

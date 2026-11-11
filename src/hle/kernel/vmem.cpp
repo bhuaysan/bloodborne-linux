@@ -67,6 +67,7 @@ constinit std::mutex table_mutex;
 std::map<std::uintptr_t, Region>& table = *new std::map<std::uintptr_t, Region>;
 
 constinit std::array<std::atomic<MappingObserver*>, max_mapping_observers> observers{};
+constinit std::atomic<std::uint64_t> host_write_count{0};
 
 // A part of a region that the memfd backs.
 struct Backed {
@@ -507,6 +508,21 @@ void remove_mapping_observer(MappingObserver* o) {
 
 void notify_released(std::uint64_t offset, std::uint64_t length) {
     each_observer([&](MappingObserver& o) { o.released(offset, length); });
+}
+
+void before_host_write(void* address, std::uint64_t length) {
+    if (address == nullptr || length == 0) {
+        return;
+    }
+    host_write_count.fetch_add(1, std::memory_order_relaxed);
+    const auto start = reinterpret_cast<std::uintptr_t>(address);
+    // A guest length that runs past the end of the address space fails in the system call.
+    length = std::min<std::uint64_t>(length, UINTPTR_MAX - start);
+    each_observer([&](MappingObserver& o) { o.host_writing(start, length); });
+}
+
+std::uint64_t host_writes() {
+    return host_write_count.load(std::memory_order_relaxed);
 }
 
 void without_changes(const std::function<void()>& call) {

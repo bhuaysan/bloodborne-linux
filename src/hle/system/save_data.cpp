@@ -19,6 +19,7 @@
 #include "common/runtime_dirs.hpp"
 #include "hle/hle.hpp"
 #include "hle/kernel/paths.hpp"
+#include "hle/kernel/vmem.hpp"
 #include "hle/system/log.hpp"
 
 namespace bb::hle::system {
@@ -251,7 +252,9 @@ std::int32_t save_store_read(std::uint32_t user_id, void* buffer, std::uint64_t 
         return save_failed;
     }
     // Bytes the store doesn't hold read as zeros, so a missing store looks empty: the game
-    // then finds no header and reports "no save yet" (0x2841056).
+    // then finds no header and reports "no save yet" (0x2841056). The pread below writes the
+    // guest buffer from the host kernel.
+    kernel::vmem::before_host_write(buffer, size);
     std::memset(buffer, 0, size);
     const int fd = ::open(store_path(*s.root, user_id).c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
