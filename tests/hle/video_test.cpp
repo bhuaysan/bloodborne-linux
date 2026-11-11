@@ -95,6 +95,10 @@ TEST(HleVideo, OnlyOnePortOpensAtATime) {
     EXPECT_EQ(a, main_port_handle);
     EXPECT_EQ(sceVideoOutOpen(0, 0, 0, nullptr), video_out_resource_busy);
     EXPECT_EQ(sceVideoOutSetFlipRate(a, 0), 0);
+    EXPECT_EQ(sceVideoOutSetFlipRate(a, max_flip_rate), 0);
+    EXPECT_EQ(sceVideoOutSetFlipRate(a, max_flip_rate + 1), video_out_invalid_value);
+    EXPECT_EQ(sceVideoOutSetFlipRate(a, 0x7fffffff), video_out_invalid_value);
+    EXPECT_EQ(sceVideoOutSetFlipRate(a, -1), video_out_invalid_value);
     EXPECT_EQ(sceVideoOutSetFlipRate(a + 1, 0), video_out_invalid_handle);
     EXPECT_EQ(sceVideoOutClose(a), 0);
     EXPECT_EQ(sceVideoOutClose(a + 1), video_out_invalid_handle);
@@ -123,6 +127,11 @@ TEST(HleVideo, CallsOnUnknownPortsFail) {
     EXPECT_EQ(sceVideoOutRegisterBuffers(port, 0, &buffer, -1, block.data()),
               video_out_invalid_value);
     EXPECT_EQ(sceVideoOutRegisterBuffers(port, -1, &buffer, 1, block.data()),
+              video_out_invalid_value);
+    // start + count would overflow an int.
+    EXPECT_EQ(sceVideoOutRegisterBuffers(port, 0x7fffffff, &buffer, 1, block.data()),
+              video_out_invalid_value);
+    EXPECT_EQ(sceVideoOutRegisterBuffers(port, 1, &buffer, 0x7fffffff, block.data()),
               video_out_invalid_value);
     // A flip to a slot without a buffer, or out of range.
     EXPECT_EQ(sceVideoOutSubmitFlip(port, 0, 1, 0), video_out_invalid_index);
@@ -241,14 +250,34 @@ TEST(HleVideo, BlankFlipCompletes) {
     EXPECT_EQ(flip_status(port.handle).current_buffer, -1);
 }
 
-// A presenter that records what video out asks of it. send_command runs the work at once.
+// A presenter that records what video out asks of it. send_command runs the work at once, or
+// keeps it for run_deferred with `defer`. With `hold`, presenting a game frame waits until it is
+// cleared.
 struct FakePresenter final : FlipPresenter {
     void set_vo_port(VideoOutPort* p) override { port = p; }
     void send_command(std::function<void()> work) override {
         ++commands;
+        if (defer) {
+            const std::scoped_lock lock{mutex};
+            deferred.push_back(std::move(work));
+            return;
+        }
         work();
     }
+    void run_deferred() {
+        std::vector<std::function<void()>> work;
+        {
+            const std::scoped_lock lock{mutex};
+            work.swap(deferred);
+        }
+        for (const auto& w : work) {
+            w();
+        }
+    }
     void register_surface(const BufferAttributeGroup& group, std::uint64_t address) override {
+        // Video out calls this outside the port lock, so the port can be read meanwhile (under
+        // the lock this would deadlock).
+        EXPECT_EQ(flip_status(main_port_handle).count, 0u);
         const std::scoped_lock lock{mutex};
         surfaces.push_back(address);
         surface_width = group.attrib.width;
@@ -260,7 +289,12 @@ struct FakePresenter final : FlipPresenter {
         prepared_width = group.attrib.width;
         return game_frame();
     }
-    Vulkan::Frame* prepare_blank_frame(bool) override { return blank_frame(); }
+    Vulkan::Frame* prepare_blank_frame(bool present_thread) override {
+        if (!present_thread) {
+            ++gpu_blank_frames;
+        }
+        return blank_frame();
+    }
     Vulkan::Frame* prepare_last_frame() override { return nullptr; }
     void present(Vulkan::Frame* frame, bool reusing, bool is_game_frame) override {
         if (frame == blank_frame()) {
@@ -271,6 +305,10 @@ struct FakePresenter final : FlipPresenter {
         EXPECT_EQ(frame, game_frame());
         EXPECT_FALSE(reusing);
         EXPECT_TRUE(is_game_frame);
+        in_present = true;
+        while (hold) {
+            std::this_thread::sleep_for(1ms);
+        }
         // Presented before the flip counts and its event goes out.
         count_at_present = flip_count(main_port_handle);
         ++game_presents;
@@ -291,6 +329,11 @@ struct FakePresenter final : FlipPresenter {
     std::atomic<int> game_presents{0};
     std::atomic<int> blank_presents{0};
     std::atomic<std::uint64_t> count_at_present{~0ull};
+    std::atomic<bool> defer{false};
+    std::vector<std::function<void()>> deferred;
+    std::atomic<int> gpu_blank_frames{0};
+    std::atomic<bool> hold{false};
+    std::atomic<bool> in_present{false};
 };
 
 // With a presenter, the port goes to Liverpool at the open, its buffers become video out
@@ -325,6 +368,72 @@ TEST(HleVideo, PresenterPresentsTheFlipBeforeTheEvent) {
         EXPECT_EQ(fake.prepared_width, 1920u);
         start_video_out(nullptr);
     }
+}
+
+// A flip the present thread is presenting while the port closes still gets its frame presented,
+// but it no longer counts: the reopened port's first flip is flip 1 with no flip pending, and the
+// flip from before the close is not its previous buffer, whose label it would clear.
+TEST(HleVideo, FlipPresentedAcrossACloseLeavesTheNextPortAlone) {
+    static FakePresenter fake;
+    start_video_out(&fake);
+    fake.hold = true;
+    {
+        const Port port;
+        EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 1, 1, 5), 0);
+        const auto until = std::chrono::steady_clock::now() + 5s;
+        while (!fake.in_present && std::chrono::steady_clock::now() < until) {
+            std::this_thread::sleep_for(1ms);
+        }
+        ASSERT_TRUE(fake.in_present);
+    }  // closed while the flip is presented
+    const Port port;
+    VideoOutPort* const vo = fake.port;
+    ASSERT_NE(vo, nullptr);
+    vo->buffer_labels[1] = 1;  // as the GPU writes it before a flip
+    fake.hold = false;
+    EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 0, 1, 6), 0);
+    const std::uint32_t timeout_us = 1'000'000;
+    const WaitOutcome outcome = wait_for(port.queue, &timeout_us);
+    EXPECT_EQ(outcome.result, 0);
+    EXPECT_EQ(event_flip_arg(outcome.event), 6);
+    EXPECT_EQ(fake.game_presents, 2);
+    const FlipStatus status = flip_status(port.handle);
+    EXPECT_EQ(status.count, 1u);
+    EXPECT_EQ(status.flip_pending_num, 0);
+    EXPECT_EQ(status.flip_arg, 6);
+    EXPECT_EQ(status.current_buffer, 0);
+    EXPECT_EQ(vo->buffer_labels[1], 1u);
+    start_video_out(nullptr);
+}
+
+// A blank flip that reaches the GPU thread only after the port closed is dropped there: no frame
+// is prepared for it and the reopened port's status stays at zero.
+TEST(HleVideo, BlankFlipQueuedAcrossACloseIsDropped) {
+    static FakePresenter fake;
+    start_video_out(&fake);
+    fake.defer = true;
+    {
+        const Port port;
+        EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, -1, 1, 5), 0);
+        EXPECT_EQ(flip_status(port.handle).flip_pending_num, 1);
+    }
+    const Port port;
+    fake.run_deferred();  // the GPU thread reaches the flip after the close
+    fake.defer = false;
+    EXPECT_EQ(fake.gpu_blank_frames, 0);
+    EXPECT_EQ(fake.commands, 1);
+    const FlipStatus closed = flip_status(port.handle);
+    EXPECT_EQ(closed.count, 0u);
+    EXPECT_EQ(closed.flip_pending_num, 0);
+    EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 0, 1, 6), 0);
+    const std::uint32_t timeout_us = 1'000'000;
+    const WaitOutcome outcome = wait_for(port.queue, &timeout_us);
+    EXPECT_EQ(outcome.result, 0);
+    EXPECT_EQ(event_flip_arg(outcome.event), 6);
+    const FlipStatus status = flip_status(port.handle);
+    EXPECT_EQ(status.count, 1u);
+    EXPECT_EQ(status.flip_pending_num, 0);
+    start_video_out(nullptr);
 }
 
 // The flip labels Liverpool waits on: a completed flip clears the label of the buffer shown

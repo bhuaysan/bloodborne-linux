@@ -6,9 +6,10 @@
 // our runtime. Flip events go to our EventQueue, the presenter and Liverpool calls through
 // FlipPresenter (none when headless), times from our libkernel. Vblanks on a fixed 60 Hz grid with
 // sleep_until instead of AccurateTimer, and a flip waits for the first vblank after it was queued.
-// Closing drops the pending flips. Negative indices and counts and an unknown handle fail instead
-// of being used. No vblank events, resolution status, EOP flips or HDR output modes: the game
-// imports none of them.
+// A flip still in flight when the port closes is presented but leaves the port alone. Negative
+// indices and counts, flip rates other than 0..2 and an unknown handle fail instead of being used.
+// Surfaces are registered outside the port lock. No vblank events, resolution status, EOP flips or
+// HDR output modes: the game imports none of them.
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -54,6 +55,8 @@ struct Port : VideoOutPort {
     FlipStatus flip_status;
     std::vector<Registration> flip_events;
     int prev_index = -1;
+    // Counts the closes: a flip submitted before the last close no longer touches the port.
+    std::uint64_t generation = 0;
     std::mutex port_mutex;
 
     std::atomic<int> flip_rate{0};
@@ -81,12 +84,11 @@ public:
         return main_port_handle;
     }
 
+    // Queued flips stay queued: the present thread presents them, which gives their frames back to
+    // the presenter, and drops them by their generation.
     void close() {
-        {
-            const std::scoped_lock lock{mutex_};
-            requests_.clear();
-        }
         const std::scoped_lock lock{port_.port_mutex};
+        ++port_.generation;
         port_.is_open = false;
         port_.flip_rate = 0;
         port_.prev_index = -1;
@@ -114,14 +116,16 @@ public:
     std::int32_t register_buffers(std::int32_t start, const std::uint64_t* addresses,
                                   std::int32_t count, const BufferAttribute& attribute) {
         Port* const port = &port_;
-        const std::scoped_lock lock{port->port_mutex};
+        std::unique_lock lock{port->port_mutex};
         const s32 group_index = static_cast<s32>(
             std::ranges::find(port->groups, false, &BufferAttributeGroup::is_occupied) -
             port->groups.begin());
         if (group_index >= static_cast<s32>(VO::MaxDisplayBufferGroups)) {
             return video_out_no_empty_slot;
         }
-        if (start < 0 || count < 0 || start + count > static_cast<s32>(VO::MaxDisplayBuffers)) {
+        constexpr s32 max_buffers = VO::MaxDisplayBuffers;
+        if (start < 0 || count < 0 || start > max_buffers || count > max_buffers ||
+            start + count > max_buffers) {
             common::log(common::LogLevel::error, channel,
                         "too many buffers: startIndex = {}, bufferNum = {}", start, count);
             return video_out_invalid_value;
@@ -161,7 +165,7 @@ public:
         auto& group = port->groups[group_index];
         group.attrib = attribute;
         group.is_occupied = true;
-        FlipPresenter* const presenter = presenter_;
+        const BufferAttributeGroup registered = group;
         for (s32 i = 0; i < count; i++) {
             const std::uint64_t address = addresses[i];
             port->buffer_slots[start + i] = VO::VideoOutBuffer{
@@ -175,11 +179,15 @@ public:
                 port->buffer_labels[start + i] = 0;
             }
             port->SignalVoLabel();
-            if (presenter != nullptr) {
-                presenter->register_surface(group, address);
-            }
             common::log(common::LogLevel::info, channel, "buffers[{}] = {:#x}", start + i,
                         address);
+        }
+        lock.unlock();
+        // The presenter's work stays out of the port lock, as upstream holds none here.
+        if (FlipPresenter* const presenter = presenter_) {
+            for (s32 i = 0; i < count; i++) {
+                presenter->register_surface(registered, addresses[i]);
+            }
         }
         return group_index;
     }
@@ -187,6 +195,7 @@ public:
     // 0, or the error of the export.
     std::int32_t submit_flip(std::int32_t index, std::int64_t flip_arg) {
         Port* const port = &port_;
+        std::uint64_t generation = 0;
         {
             const std::scoped_lock lock{port->port_mutex};
             if (index != -1 && port->buffer_slots[index].group_index < 0) {
@@ -200,15 +209,16 @@ public:
             }
             ++port->flip_status.flip_pending_num;
             port->flip_status.submit_tsc = kernel::process_counter_nsec();
+            generation = port->generation;
         }
         // Flips can come from any thread, so the GPU thread prepares their frames in order with
         // the command buffers.
         FlipPresenter* const presenter = presenter_;
         if (presenter != nullptr) {
             presenter->send_command(
-                [=, this] { submit_flip_internal(presenter, index, flip_arg); });
+                [=, this] { submit_flip_internal(presenter, generation, index, flip_arg); });
         } else {
-            submit_flip_internal(nullptr, index, flip_arg);
+            submit_flip_internal(nullptr, generation, index, flip_arg);
         }
         return 0;
     }
@@ -226,31 +236,32 @@ private:
         FlipPresenter* presenter;
         s64 flip_arg;
         s32 index;
+        std::uint64_t generation;
         Clock::time_point queued;
     };
 
-    void submit_flip_internal(FlipPresenter* presenter, s32 index, s64 flip_arg) {
-        Vulkan::Frame* frame = nullptr;
-        if (presenter != nullptr) {
-            if (index == -1) {
-                frame = presenter->prepare_blank_frame(false);
-            } else {
-                BufferAttributeGroup group;
-                std::uint64_t address;
-                {
-                    const std::scoped_lock lock{port_.port_mutex};
-                    const auto& buffer = port_.buffer_slots[index];
-                    if (buffer.group_index < 0) {
-                        return;  // closed meanwhile: dropped with the port's state
-                    }
-                    group = port_.groups[buffer.group_index];
-                    address = buffer.address_left;
-                }
-                frame = presenter->prepare_frame(group, address);
+    void submit_flip_internal(FlipPresenter* presenter, std::uint64_t generation, s32 index,
+                              s64 flip_arg) {
+        BufferAttributeGroup group;
+        std::uint64_t address = 0;
+        {
+            const std::scoped_lock lock{port_.port_mutex};
+            if (port_.generation != generation) {
+                return;  // closed meanwhile: dropped with the port's state, no frame prepared
+            }
+            if (index != -1) {
+                const auto& buffer = port_.buffer_slots[index];
+                group = port_.groups[buffer.group_index];
+                address = buffer.address_left;
             }
         }
+        Vulkan::Frame* frame = nullptr;
+        if (presenter != nullptr) {
+            frame = index == -1 ? presenter->prepare_blank_frame(false)
+                                : presenter->prepare_frame(group, address);
+        }
         const std::scoped_lock lock{mutex_};
-        requests_.push_back({frame, presenter, flip_arg, index, Clock::now()});
+        requests_.push_back({frame, presenter, flip_arg, index, generation, Clock::now()});
     }
 
     // The oldest request, if it was queued no later than `vblank`.
@@ -277,6 +288,9 @@ private:
         int prev_index = -1;
         {
             const std::scoped_lock lock{port->port_mutex};
+            if (req.generation != port->generation) {
+                return;  // submitted before a close: the reopened port's status stays as it is
+            }
             auto& flip_status = port->flip_status;
             count = ++flip_status.count;
             flip_status.process_time = kernel::process_time_usec();
@@ -388,7 +402,7 @@ std::int32_t sceVideoOutSetFlipRate(std::int32_t handle, std::int32_t rate) {
     if (port == nullptr) {
         return video_out_invalid_handle;
     }
-    if (rate < 0) {
+    if (rate < 0 || rate > max_flip_rate) {
         return video_out_invalid_value;
     }
     port->flip_rate = rate;

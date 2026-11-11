@@ -52,6 +52,10 @@ inline constexpr std::int32_t video_out_flip_queue_full = static_cast<std::int32
 inline constexpr std::int32_t main_port_handle = 1;
 inline constexpr std::int32_t max_display_buffers = Libraries::VideoOut::MaxDisplayBuffers;
 
+// The highest flip rate: 0, 1 and 2 show a flip at most every first, second or third vblank
+// (60, 30 and 20 Hz). Other rates fail.
+inline constexpr std::int32_t max_flip_rate = 2;
+
 // The flip event (equeue.h of upstream): ident 6 (OrbisVideoOutInternalEventId::Flip) and filter
 // -13 (Filter::VideoOut). Its data holds the flip argument from bit 16 on, a count of 1 in bits
 // 12..15 (our queue replaces a pending record instead of counting) and the low 12 bits of the
