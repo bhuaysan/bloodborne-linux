@@ -55,9 +55,9 @@ void* ptr(std::uintptr_t address) {
     return reinterpret_cast<void*>(address);
 }
 
-// Every change of the table that the observers see (map, unmap, reserve again, restore) holds
-// change_mutex from start to end, and table_mutex only while it reads or changes the table and
-// the host mappings: the observers run between, without table_mutex (MappingObserver). Lock
+// Every change of the table that the observers see (map, unmap, reserve again, restore, protect)
+// holds change_mutex from start to end, and table_mutex only while it reads or changes the table
+// and the host mappings: the observers run between, without table_mutex (MappingObserver). Lock
 // order: dmem's allocation lock, change_mutex, table_mutex.
 constinit std::mutex change_mutex;
 
@@ -602,22 +602,26 @@ int protect(std::uintptr_t start, std::uint64_t length, int prot) {
     if (!host) {
         return EINVAL;
     }
-    const std::scoped_lock lock(table_mutex);
+    const std::scoped_lock change(change_mutex);
     std::uintptr_t end = 0;
-    if (const int error = check_range(start, length, end)) {
-        return error;
+    {
+        const std::scoped_lock lock(table_mutex);
+        if (const int error = check_range(start, length, end)) {
+            return error;
+        }
+        if (!covered(start, end, false)) {  // a reservation in the range
+            return EINVAL;
+        }
+        if (::mprotect(reinterpret_cast<void*>(start), end - start, *host) != 0) {
+            return errno;
+        }
+        split_at(start);
+        split_at(end);
+        for (auto it = table.lower_bound(start); it != table.lower_bound(end); ++it) {
+            it->second.prot = prot;
+        }
     }
-    if (!covered(start, end, false)) {  // a reservation in the range
-        return EINVAL;
-    }
-    if (::mprotect(reinterpret_cast<void*>(start), end - start, *host) != 0) {
-        return errno;
-    }
-    split_at(start);
-    split_at(end);
-    for (auto it = table.lower_bound(start); it != table.lower_bound(end); ++it) {
-        it->second.prot = prot;
-    }
+    each_observer([&](MappingObserver& o) { o.protection_changed(start, end - start); });
     return 0;
 }
 

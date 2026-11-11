@@ -112,6 +112,14 @@ public:
         (void)address;
         (void)length;
     }
+    // The guest changed the protection of the mapped range [address, address + length), which
+    // may hold mappings the memfd doesn't back (sceKernelMprotect). The host pages now carry the
+    // guest's protection, so the observer must drop the pages it write-protected from its
+    // tracking, as upstream's sceKernelMprotect invalidates the range.
+    virtual void protection_changed(std::uintptr_t address, std::uint64_t length) {
+        (void)address;
+        (void)length;
+    }
 };
 
 // Adds an observer, before the first guest mapping it is meant to see. Returns false when

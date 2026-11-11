@@ -8,7 +8,7 @@
 // replays the mappings made before it. CopySparseMemory and Protect are upstream's;
 // IsValidMapping, ClampRangeSize and TryWriteBacking keep upstream's rules on the kernel's guest
 // window, region table and the page table. The observer also lifts the write tracking before a
-// system call writes guest memory.
+// system call writes guest memory and, as upstream's sceKernelMprotect, after a guest mprotect.
 // License texts: third_party/shadps4/LICENSES/
 
 #include "core/memory.h"
@@ -95,9 +95,21 @@ public:
     }
 
     // Ours (docs/design/renderer.md, "System calls into tracked memory"): the caches lift their
-    // write protection of the GPU-mapped parts of the range, as a fault there would. The parts
-    // are collected first, so InvalidateMemory runs without the rasterizer's range lock.
+    // write protection of the range, as a fault there would.
     void host_writing(std::uintptr_t address, std::uint64_t length) override {
+        invalidate(address, length);
+    }
+
+    // Upstream's sceKernelMprotect invalidates the range after the protection changed: the
+    // guest's protection replaced the page manager's, which must no longer count it as tracked.
+    void protection_changed(std::uintptr_t address, std::uint64_t length) override {
+        invalidate(address, length);
+    }
+
+private:
+    // Invalidates the GPU-mapped parts of the range. The parts are collected first, so
+    // InvalidateMemory runs without the rasterizer's range lock.
+    void invalidate(std::uintptr_t address, std::uint64_t length) {
         Vulkan::Rasterizer* const r = manager.rasterizer.load(std::memory_order_acquire);
         if (r == nullptr) {
             return;
@@ -112,7 +124,6 @@ public:
         }
     }
 
-private:
     MemoryManager& manager;
 };
 

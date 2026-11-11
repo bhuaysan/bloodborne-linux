@@ -369,7 +369,7 @@ struct Registered {
 // Records the calls of a mapping observer as {kind, address, length, offset}.
 struct Recorder : vmem::MappingObserver {
     struct Call {
-        char kind;  // 'm'apped, 'u'nmapped, 'r'eleased (address 0)
+        char kind;  // 'm'apped, 'u'nmapped, 'r'eleased (address 0), 'p'rotection changed
         std::uint64_t address, length, offset;
         bool operator==(const Call&) const = default;
     };
@@ -381,7 +381,42 @@ struct Recorder : vmem::MappingObserver {
         calls.push_back({'u', a, l, o});
     }
     void released(std::uint64_t o, std::uint64_t l) override { calls.push_back({'r', 0, l, o}); }
+    void protection_changed(std::uintptr_t a, std::uint64_t l) override {
+        calls.push_back({'p', a, l, 0});
+    }
 };
+
+// A guest mprotect tells the observers of the whole range it changed, page-rounded, so that the
+// write tracking drops the pages whose protection the guest replaced; one that fails tells
+// nothing.
+TEST(KernelDmem, TheObserverHearsOfProtectionChanges) {
+    Recorder recorder;
+    const Registered registered(&recorder);
+    ASSERT_TRUE(registered.added);
+    const std::uint64_t offset = allocate(2 * page_size, 0);
+    void* const direct = map(offset, 2 * page_size);
+    const std::uintptr_t a = addr(direct);
+    void* range = nullptr;
+    ASSERT_EQ(reserve_range(&range, page_size, 0, 0), 0);
+    EXPECT_EQ(sceKernelMprotect(reinterpret_cast<void*>(a + page_size), 0x10, 1), 0);
+    EXPECT_EQ(vmem::find(a + page_size)->prot, 1);
+    EXPECT_EQ(sceKernelMprotect(direct, 2 * page_size, 3), 0);
+    EXPECT_EQ(sceKernelMprotect(direct, page_size, 0x100), sce_einval);  // bad protection
+    EXPECT_EQ(sceKernelMprotect(range, page_size, 3), sce_einval);       // reserved
+    EXPECT_EQ(sceKernelMunmap(direct, 2 * page_size), 0);
+    EXPECT_EQ(sceKernelMunmap(range, page_size), 0);
+    EXPECT_EQ(release_direct(offset, 2 * page_size), 0);
+    vmem::remove_mapping_observer(&recorder);
+    const std::vector<Recorder::Call> expected{
+        {'m', a, 2 * page_size, offset},
+        {'p', a + page_size, page_size, 0},
+        {'p', a, 2 * page_size, 0},
+        {'u', a, page_size, offset},
+        {'u', a + page_size, page_size, offset + page_size},
+        {'r', 0, 2 * page_size, offset},
+    };
+    EXPECT_EQ(recorder.calls, expected);
+}
 
 // The observer sees every map and unmap of direct and flexible memory, in parts with their own
 // offsets, and releases, also of a range still mapped; reservations it doesn't see.

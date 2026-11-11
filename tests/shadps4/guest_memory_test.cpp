@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -359,7 +360,7 @@ TEST(GuestMemory, TheRasterizerFollowsTheMappings) {
 // memory. A guest write there faults; the fault handler passes it to the page manager, which
 // claims it, and the image is marked as written by the CPU. A read(2) into such a page fails with
 // EFAULT, but sceKernelRead lifts the protection first (docs/design/renderer.md, "System calls
-// into tracked memory").
+// into tracked memory"). A guest mprotect of the pages drops them from the tracking.
 TEST(GuestMemory, GuestWritesToTrackedPagesAreClaimed) {
     if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
         GTEST_SKIP() << reason;
@@ -393,10 +394,11 @@ TEST(GuestMemory, GuestWritesToTrackedPagesAreClaimed) {
         textures.UpdateImage(image);
         ASSERT_FALSE(cpu_dirty());
 
-        char path[] = "/tmp/bb-tracked-XXXXXX";
-        const int host = ::mkstemp(path);
+        std::string path =
+            (std::filesystem::temp_directory_path() / "bb-tracked-XXXXXX").string();
+        const int host = ::mkstemp(path.data());
         ASSERT_GE(host, 0);
-        ::unlink(path);
+        ::unlink(path.c_str());
         ASSERT_EQ(::write(host, "file data", 9), 9);
         // Protected: the host kernel can't write it.
         EXPECT_EQ(::pread(host, bytes + 0x40, 9, 0), -1);
@@ -418,6 +420,15 @@ TEST(GuestMemory, GuestWritesToTrackedPagesAreClaimed) {
         EXPECT_TRUE(cpu_dirty());
         EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 1);  // lifted first, no fault
         bb::hle::kernel::sceKernelClose(fd);
+
+        // A guest mprotect makes the pages writable behind the page manager's back; it drops
+        // them from its tracking, so the image is marked as written by the CPU.
+        textures.UpdateImage(image);
+        ASSERT_FALSE(cpu_dirty());
+        ASSERT_EQ(bb::hle::kernel::sceKernelMprotect(d.address, d.length, 3), 0);
+        EXPECT_TRUE(cpu_dirty());
+        static_cast<volatile char*>(d.address)[0x200] = 'm';
+        EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 1);
         d.unmap();
     }
     liverpool.reset();
