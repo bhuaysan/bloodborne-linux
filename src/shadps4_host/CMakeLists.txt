@@ -129,7 +129,10 @@ if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
     target_link_libraries(bbvideocore
         PUBLIC bbshadps4 bb_vma bb_robin_map bb_stb bb_xxhash bb_imgui Vulkan::Headers SDL3::SDL3
         PRIVATE bbcommon bb_warnings ${CMAKE_DL_LIBS})
-    set_source_files_properties(${BB_VIDEO_CORE_SOURCES} PROPERTIES COMPILE_OPTIONS -w)
+    # Liverpool reads the PM4 packet structs, some with 64-bit members, at any dword of a command
+    # buffer, which x86-64 allows.
+    set_source_files_properties(${BB_VIDEO_CORE_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "-w;$<$<BOOL:${BB_SANITIZE}>:-fno-sanitize=alignment>")
 else()
     message(STATUS "Vulkan headers, SDL3 or glslangValidator not found: bbvideocore is not built")
 endif()

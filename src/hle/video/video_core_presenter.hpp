@@ -1,7 +1,9 @@
-// video_core's presenter behind video out (docs/design/renderer.md, "Startup order"): Liverpool,
-// whose GPU thread starts with it, then the Presenter with its instance, schedulers, swapchain and
-// rasterizer, as upstream's GNM driver creates them. bb-run makes one for its window and hands it
-// to start_video_out; --headless makes none.
+// video_core's presenter behind video out and the GNM driver (docs/design/renderer.md, "Startup
+// order"): Liverpool, whose GPU thread starts with it, then the Presenter with its instance,
+// schedulers, swapchain and rasterizer, as upstream's GNM driver creates them. bb-run makes one
+// for its window and hands it to start_video_out. Without a window there is Liverpool only: it
+// runs the command buffers without a rasterizer, so nothing is drawn, and flips complete without
+// presenting.
 #pragma once
 
 #include <atomic>
@@ -11,6 +13,7 @@
 #include <string>
 #include <string_view>
 
+#include "hle/video/gnm_driver.hpp"
 #include "hle/video/video_out.hpp"
 
 namespace AmdGpu {
@@ -26,11 +29,11 @@ class Presenter;
 
 namespace bb::hle::video {
 
-class VideoCorePresenter final : public FlipPresenter {
+class VideoCorePresenter final : public FlipPresenter, public CommandProcessor {
 public:
-    // Creates Liverpool and the Presenter on `window`, on the Vulkan device of GetGpuId(). Fails
-    // as upstream does (an assertion) when Vulkan can't.
-    explicit VideoCorePresenter(Frontend::WindowSDL& window);
+    // Creates Liverpool and, with a `window`, the Presenter on it, on the Vulkan device of
+    // GetGpuId(). Fails as upstream does (an assertion) when Vulkan can't.
+    explicit VideoCorePresenter(Frontend::WindowSDL* window);
     ~VideoCorePresenter() override;
 
     void set_vo_port(VideoOutPort* port) override;
@@ -44,8 +47,21 @@ public:
     void set_hdr(bool enable) override;
     bool must_keep_drawing() override;
 
+    void submit_gfx(std::span<const std::uint32_t> dcb,
+                    std::span<const std::uint32_t> ccb) override;
+    void submit_asc(std::uint32_t gnm_vqid, std::span<const std::uint32_t> acb) override;
+    void submit_done() override;
+    bool is_gpu_idle() override;
+    std::uint32_t map_queue(std::uint32_t* ring, std::uint32_t ring_dwords,
+                            std::uint32_t* read_pointer, std::uint32_t pipe) override;
+    bool unmap_queue(std::uint32_t index) override;
+    std::span<const std::uint32_t> queue_ring(std::uint32_t index) override;
+
     // The number of presents of the game's frames so far.
     std::uint64_t game_frames() const { return game_frames_; }
+    // The rasterizer's draws and dispatches so far (DebugState's counters).
+    static std::uint64_t draws();
+    static std::uint64_t dispatches();
 
 private:
     std::unique_ptr<AmdGpu::Liverpool> liverpool_;

@@ -259,7 +259,7 @@ void open_display(const std::string& device_selector) {
         end_run(2);
     }
     bb::shader::set_gpu_id(*gpu_id);
-    d->presenter = std::make_unique<bb::hle::video::VideoCorePresenter>(*d->window);
+    d->presenter = std::make_unique<bb::hle::video::VideoCorePresenter>(d->window.get());
     display = d.release();
 }
 
@@ -276,6 +276,9 @@ void log_presented() {
         bb::common::log(LogLevel::info, channel, "{} game frames presented",
                         display->presenter->game_frames());
     }
+    bb::common::log(LogLevel::info, channel, "{} draws, {} dispatches",
+                    bb::hle::video::VideoCorePresenter::draws(),
+                    bb::hle::video::VideoCorePresenter::dispatches());
 }
 #endif
 

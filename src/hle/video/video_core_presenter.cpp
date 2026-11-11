@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "common/log.hpp"
+#include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
@@ -18,6 +19,9 @@ namespace {
 
 constexpr std::string_view channel = "video";
 
+// Every stats_frames-th game frame logs the rasterizer's counts.
+constexpr std::uint64_t stats_frames = 300;
+
 bool contains_ignoring_case(std::string_view text, std::string_view part) {
     const auto lower = [](unsigned char c) { return std::tolower(c); };
     return !std::ranges::search(text, part, {}, lower, lower).empty();
@@ -25,9 +29,11 @@ bool contains_ignoring_case(std::string_view text, std::string_view part) {
 
 }  // namespace
 
-VideoCorePresenter::VideoCorePresenter(Frontend::WindowSDL& window)
+VideoCorePresenter::VideoCorePresenter(Frontend::WindowSDL* window)
     : liverpool_(std::make_unique<AmdGpu::Liverpool>()),
-      presenter_(std::make_unique<Vulkan::Presenter>(window, liverpool_.get())) {}
+      presenter_(window != nullptr
+                     ? std::make_unique<Vulkan::Presenter>(*window, liverpool_.get())
+                     : nullptr) {}
 
 // In reverse: the presenter's rasterizer is bound to Liverpool, whose GPU thread stops last.
 VideoCorePresenter::~VideoCorePresenter() {
@@ -43,38 +49,102 @@ void VideoCorePresenter::send_command(std::function<void()> work) {
     liverpool_->SendCommand(std::move(work));
 }
 
+// Without the Presenter there are no surfaces and no frames.
 void VideoCorePresenter::register_surface(const BufferAttributeGroup& group,
                                           std::uint64_t address) {
-    presenter_->RegisterVideoOutSurface(group, address);
+    if (presenter_) {
+        presenter_->RegisterVideoOutSurface(group, address);
+    }
 }
 
 Vulkan::Frame* VideoCorePresenter::prepare_frame(const BufferAttributeGroup& group,
                                                  std::uint64_t address) {
-    return presenter_->PrepareFrame(group, address);
+    return presenter_ ? presenter_->PrepareFrame(group, address) : nullptr;
 }
 
 Vulkan::Frame* VideoCorePresenter::prepare_blank_frame(bool present_thread) {
-    return presenter_->PrepareBlankFrame(present_thread);
+    return presenter_ ? presenter_->PrepareBlankFrame(present_thread) : nullptr;
 }
 
 Vulkan::Frame* VideoCorePresenter::prepare_last_frame() {
-    return presenter_->PrepareLastFrame();
+    return presenter_ ? presenter_->PrepareLastFrame() : nullptr;
 }
 
 void VideoCorePresenter::present(Vulkan::Frame* frame, bool is_reusing_frame,
                                  bool is_game_frame) {
+    if (!presenter_) {
+        return;
+    }
     presenter_->Present(frame, is_reusing_frame, is_game_frame);
-    if (is_game_frame && !is_reusing_frame && ++game_frames_ == 1) {
+    if (!is_game_frame || is_reusing_frame) {
+        return;
+    }
+    const std::uint64_t n = ++game_frames_;
+    if (n == 1) {
         common::log(common::LogLevel::info, channel, "first game frame presented");
+    }
+    if (n % stats_frames == 0) {
+        common::log(common::LogLevel::info, channel, "game frame {}: {} draws, {} dispatches", n,
+                    draws(), dispatches());
     }
 }
 
 void VideoCorePresenter::set_hdr(bool enable) {
-    presenter_->SetHDR(enable);
+    if (presenter_) {
+        presenter_->SetHDR(enable);
+    }
 }
 
 bool VideoCorePresenter::must_keep_drawing() {
-    return ImGui::Core::MustKeepDrawing();
+    return presenter_ && ImGui::Core::MustKeepDrawing();
+}
+
+void VideoCorePresenter::submit_gfx(std::span<const std::uint32_t> dcb,
+                                    std::span<const std::uint32_t> ccb) {
+    liverpool_->SubmitGfx(dcb, ccb);
+}
+
+void VideoCorePresenter::submit_asc(std::uint32_t gnm_vqid, std::span<const std::uint32_t> acb) {
+    liverpool_->SubmitAsc(gnm_vqid, acb);
+}
+
+void VideoCorePresenter::submit_done() {
+    liverpool_->SubmitDone();
+}
+
+bool VideoCorePresenter::is_gpu_idle() {
+    return liverpool_->IsGpuIdle();
+}
+
+std::uint32_t VideoCorePresenter::map_queue(std::uint32_t* ring, std::uint32_t ring_dwords,
+                                            std::uint32_t* read_pointer, std::uint32_t pipe) {
+    return liverpool_->asc_queues
+        .Insert(reinterpret_cast<VAddr>(ring), read_pointer, ring_dwords, pipe)
+        .index;
+}
+
+bool VideoCorePresenter::unmap_queue(std::uint32_t index) {
+    if (!liverpool_->asc_queues.IsAllocated(Common::SlotId{index})) {
+        return false;
+    }
+    liverpool_->asc_queues.Erase(Common::SlotId{index});
+    return true;
+}
+
+std::span<const std::uint32_t> VideoCorePresenter::queue_ring(std::uint32_t index) {
+    if (!liverpool_->asc_queues.IsAllocated(Common::SlotId{index})) {
+        return {};
+    }
+    const auto& queue = liverpool_->asc_queues[Common::SlotId{index}];
+    return {reinterpret_cast<const std::uint32_t*>(queue.map_addr), queue.ring_size_dw};
+}
+
+std::uint64_t VideoCorePresenter::draws() {
+    return DebugState.draws.load(std::memory_order_relaxed);
+}
+
+std::uint64_t VideoCorePresenter::dispatches() {
+    return DebugState.dispatches.load(std::memory_order_relaxed);
 }
 
 std::optional<std::int32_t> resolve_gpu_id(std::string_view selector,
