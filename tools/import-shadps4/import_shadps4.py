@@ -79,6 +79,7 @@ core/libraries/system/commondialog.cpp core/libraries/system/commondialog.h
 core/libraries/error_codes.h core/libraries/kernel/orbis_error.h
 core/libraries/videodec/video_utils.cpp core/libraries/videodec/video_utils.h
 common/support/avdec.h imgui/imgui_std.h input/controller.cpp input/controller.h
+input/controller_state.cpp
 """.split()
 
 # ajm_aac.cpp is built on FDK-AAC, which stays out (docs/source-policy.md). The host makes AAC
