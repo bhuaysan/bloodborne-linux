@@ -16,6 +16,10 @@
 #include "core/libraries/system/commondialog.h"
 #include "hle/hle.hpp"
 
+namespace {
+std::size_t linked_functions = 0;
+}  // namespace
+
 void LinkSymbolImpl(Core::Loader::SymbolsResolver*, const char* nid, const char* lib, u16,
                     const char*, u64 symbol, Core::Loader::SymbolType sym_type) {
     if (sym_type != Core::Loader::SymbolType::Function) {
@@ -23,6 +27,7 @@ void LinkSymbolImpl(Core::Loader::SymbolsResolver*, const char* nid, const char*
             "shadps4", std::format("LIB_OBJ {} {}: data imports are not supported", lib, nid));
     }
     bb::hle::register_function(lib, nid, reinterpret_cast<void*>(symbol));
+    ++linked_functions;
 }
 
 namespace Libraries {
@@ -53,6 +58,10 @@ void InitHLELibs(Core::Loader::SymbolsResolver* sym) {
     AvPlayer::RegisterLib(sym);
     ImeDialog::RegisterLib(sym);
     CommonDialog::RegisterLib(sym);
+}
+
+std::size_t LinkedFunctionCount() {
+    return linked_functions;
 }
 
 }  // namespace Libraries

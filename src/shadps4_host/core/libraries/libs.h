@@ -5,6 +5,8 @@
 // startup fails: every NID has one owner.
 #pragma once
 
+#include <cstddef>
+
 #include "common/types.h"
 #include "core/tls.h"
 
@@ -37,5 +39,9 @@ namespace Libraries {
 // subsystems they use (audio, gamepads). Call once, before the game's imports are linked
 // (bb::hle::link); throws std::logic_error for a NID that is registered already.
 void InitHLELibs(Core::Loader::SymbolsResolver* sym);
+
+// The number of (library, NID) pairs LinkSymbolImpl has registered so far. The test checks it
+// against the libraries' LIB_FUNCTION lines, so a RegisterLib that drops functions shows.
+std::size_t LinkedFunctionCount();
 
 }  // namespace Libraries

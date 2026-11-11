@@ -66,6 +66,10 @@ std::uintptr_t address(F* f) {
 
 TEST(SysLibsRegistration, FillsTheNidTable) {
     init_once();
+    // Every LIB_FUNCTION line of the six libraries (Pad, AudioOut with its sub-libraries, Ajm,
+    // AvPlayer, ImeDialog, CommonDialog) reached the registry: 255 lines, less AvPlayer's
+    // sceAvPlayerPrintf, which upstream leaves commented out.
+    EXPECT_EQ(Libraries::LinkedFunctionCount(), 254u);
     struct Row {
         const char *library, *nid;
         std::uintptr_t impl;
