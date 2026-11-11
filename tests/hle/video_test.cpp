@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "core/platform.h"
 #include "hle/hle.hpp"
 #include "hle/kernel/equeue.hpp"
 #include "hle/kernel/vmem.hpp"
@@ -500,6 +501,50 @@ TEST(HleVideo, FlipReachesOnlyRegisteredQueues) {
     const std::uint32_t timeout = 50'000;
     EXPECT_LT(wait_for(other, &timeout).result, 0);  // timed out
     EXPECT_EQ(bb::hle::kernel::equeue_delete(other), 0);
+}
+
+// The flip of a GPU flip packet (sceVideoOutSubmitEopFlip): queued only when the GPU reaches the
+// packet, which first sets the buffer's flip label, and signals GfxFlip. It is prepared on the
+// signalling (GPU) thread rather than sent as a command, counts in gc_queue_num until it
+// completes, and completes with its event.
+TEST(HleVideo, EopFlipIsQueuedAtTheFlipInterrupt) {
+    static FakePresenter fake;
+    start_video_out(&fake);
+    const Port port;
+    std::uintptr_t labels = 0;
+    EXPECT_EQ(get_buffer_label_address(port.handle, nullptr), video_out_invalid_address);
+    EXPECT_EQ(get_buffer_label_address(port.handle + 1, &labels), video_out_invalid_handle);
+    ASSERT_EQ(get_buffer_label_address(port.handle, &labels), 16);
+    ASSERT_NE(fake.port.load(), nullptr);
+    EXPECT_EQ(labels, reinterpret_cast<std::uintptr_t>(fake.port.load()->buffer_labels.data()));
+    EXPECT_EQ(submit_eop_flip(port.handle + 1, 1, 42), video_out_invalid_handle);
+    EXPECT_EQ(submit_eop_flip(port.handle, max_display_buffers, 42), video_out_invalid_index);
+
+    EXPECT_EQ(submit_eop_flip(port.handle, 1, 42), 0);
+    EXPECT_EQ(flip_status(port.handle).flip_pending_num, 0);  // not before the GPU gets there
+    reinterpret_cast<std::uint64_t*>(labels)[1] = 1;           // what the packet writes first
+    // A flip still pending at a vblank holds gc_queue_num up: hold the present of the first one.
+    fake.hold = true;
+    Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip);
+    const FlipStatus queued = flip_status(port.handle);
+    EXPECT_EQ(queued.flip_pending_num, 1);
+    EXPECT_EQ(queued.gc_queue_num, 1);
+    fake.hold = false;
+    const std::uint32_t timeout_us = 1'000'000;
+    const WaitOutcome w = wait_for(port.queue, &timeout_us);
+    EXPECT_EQ(w.result, 0);
+    EXPECT_EQ(event_flip_arg(w.event), 42);
+    const FlipStatus status = flip_status(port.handle);
+    EXPECT_EQ(status.count, 1u);
+    EXPECT_EQ(status.current_buffer, 1);
+    EXPECT_EQ(status.flip_pending_num, 0);
+    EXPECT_EQ(status.gc_queue_num, 0);
+    EXPECT_EQ(fake.commands, 0);
+    {
+        const std::scoped_lock lock{fake.mutex};
+        EXPECT_EQ(fake.prepared, (std::vector<std::uint64_t>{Port::buffers[1]}));
+    }
+    start_video_out(nullptr);
 }
 
 TEST(HleVideo, GnmSubmitsSucceedAndSubmitAndFlipFlips) {

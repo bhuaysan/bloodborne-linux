@@ -8,8 +8,8 @@
 // sleep_until instead of AccurateTimer, and a flip waits for the first vblank after it was queued.
 // A flip still in flight when the port closes is presented but leaves the port alone. Negative
 // indices and counts, flip rates other than 0..2 and an unknown handle fail instead of being used.
-// Surfaces are registered outside the port lock. No vblank events, resolution status, EOP flips or
-// HDR output modes: the game imports none of them.
+// Surfaces are registered outside the port lock. An EOP flip to a slot outside the port fails. No
+// vblank events, resolution status or HDR output modes: the game imports none of them.
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -23,7 +23,9 @@
 #include <utility>
 #include <vector>
 
+#include "common/assert.h"
 #include "common/log.hpp"
+#include "core/platform.h"
 #include "hle/hle.hpp"
 #include "hle/kernel/equeue.hpp"
 #include "hle/kernel/time.hpp"
@@ -192,8 +194,8 @@ public:
         return group_index;
     }
 
-    // 0, or the error of the export.
-    std::int32_t submit_flip(std::int32_t index, std::int64_t flip_arg) {
+    // 0, or the error of the export. An EOP flip comes on the GPU thread.
+    std::int32_t submit_flip(std::int32_t index, std::int64_t flip_arg, bool eop = false) {
         Port* const port = &port_;
         std::uint64_t generation = 0;
         {
@@ -207,6 +209,9 @@ public:
                 common::log(common::LogLevel::error, channel, "flip queue is full");
                 return video_out_flip_queue_full;
             }
+            if (eop) {
+                ++port->flip_status.gc_queue_num;
+            }
             ++port->flip_status.flip_pending_num;
             port->flip_status.submit_tsc = kernel::process_counter_nsec();
             generation = port->generation;
@@ -214,11 +219,11 @@ public:
         // Flips can come from any thread, so the GPU thread prepares their frames in order with
         // the command buffers.
         FlipPresenter* const presenter = presenter_;
-        if (presenter != nullptr) {
+        if (presenter != nullptr && !eop) {
             presenter->send_command(
-                [=, this] { submit_flip_internal(presenter, generation, index, flip_arg); });
+                [=, this] { submit_flip_internal(presenter, generation, index, flip_arg, eop); });
         } else {
-            submit_flip_internal(nullptr, generation, index, flip_arg);
+            submit_flip_internal(presenter, generation, index, flip_arg, eop);
         }
         return 0;
     }
@@ -236,12 +241,13 @@ private:
         FlipPresenter* presenter;
         s64 flip_arg;
         s32 index;
+        bool eop;
         std::uint64_t generation;
         Clock::time_point queued;
     };
 
     void submit_flip_internal(FlipPresenter* presenter, std::uint64_t generation, s32 index,
-                              s64 flip_arg) {
+                              s64 flip_arg, bool eop) {
         BufferAttributeGroup group;
         std::uint64_t address = 0;
         {
@@ -261,7 +267,7 @@ private:
                                 : presenter->prepare_frame(group, address);
         }
         const std::scoped_lock lock{mutex_};
-        requests_.push_back({frame, presenter, flip_arg, index, generation, Clock::now()});
+        requests_.push_back({frame, presenter, flip_arg, index, eop, generation, Clock::now()});
     }
 
     // The oldest request, if it was queued no later than `vblank`.
@@ -297,6 +303,9 @@ private:
             tsc = flip_status.tsc = kernel::process_counter_nsec();
             flip_status.flip_arg = req.flip_arg;
             flip_status.current_buffer = req.index;
+            if (req.eop) {
+                --flip_status.gc_queue_num;
+            }
             --flip_status.flip_pending_num;
             events = port->flip_events;
             prev_index = std::exchange(port->prev_index, req.index);
@@ -477,6 +486,36 @@ std::int32_t sceVideoOutSubmitFlip(std::int32_t handle, std::int32_t index, std:
                 channel, "flip {} submitted: bufferIndex = {}, flipMode = {}, flipArg = {}",
                 number, index, mode, arg);
     return driver().submit_flip(index, arg);
+}
+
+std::int32_t submit_eop_flip(std::int32_t handle, std::uint32_t index, std::int64_t arg) {
+    if (driver().get_port(handle) == nullptr) {
+        return video_out_invalid_handle;
+    }
+    if (index >= static_cast<std::uint32_t>(VO::MaxDisplayBuffers)) {
+        return video_out_invalid_index;
+    }
+    Platform::IrqC::Instance()->RegisterOnce(
+        Platform::InterruptId::GfxFlip, [=](Platform::InterruptId irq) {
+            ASSERT_MSG(irq == Platform::InterruptId::GfxFlip, "An unexpected IRQ occured");
+            Port* const port = driver().get_port(handle);
+            ASSERT_MSG(port->buffer_labels[index] == 1, "Out of order flip IRQ");
+            const std::int32_t result = driver().submit_flip(static_cast<s32>(index), arg, true);
+            ASSERT_MSG(result == 0, "EOP flip submission failed");
+        });
+    return 0;
+}
+
+std::int32_t get_buffer_label_address(std::int32_t handle, std::uintptr_t* address) {
+    if (address == nullptr) {
+        return video_out_invalid_address;
+    }
+    Port* const port = driver().get_port(handle);
+    if (port == nullptr) {
+        return video_out_invalid_handle;
+    }
+    *address = reinterpret_cast<std::uintptr_t>(port->buffer_labels.data());
+    return 16;
 }
 
 std::int32_t sceVideoOutGetFlipStatus(std::int32_t handle, void* status) {

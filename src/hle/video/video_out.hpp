@@ -4,7 +4,7 @@
 // @11557f2eb60b3b00712c8887c30852de7615d6df
 // Changed for bloodborne-linux, 2026-11-11: the error codes and the flip status of the exports the
 // game imports (declared in video.hpp), our FlipPresenter in place of the global presenter and
-// Liverpool, start_video_out.
+// Liverpool, start_video_out, and the EOP flip and flip label calls of the GNM driver.
 // License texts: third_party/shadps4/LICENSES/
 //
 // Video out's driver (docs/design/renderer.md, "GNM and VideoOut glue is adapted"): one port, a
@@ -107,5 +107,14 @@ public:
 // renderer.md, "Startup order"); the first export starts it without a presenter otherwise. A
 // later call replaces the presenter: the tests switch it while no flip is pending.
 void start_video_out(FlipPresenter* presenter);
+
+// sceVideoOutSubmitEopFlip, for the GNM driver's flip packets: the flip to buffer `index` is
+// queued when Liverpool reaches the packet (the GfxFlip interrupt), on its GPU thread, and counts
+// in gc_queue_num until it completes. 0, video_out_invalid_handle or video_out_invalid_index.
+std::int32_t submit_eop_flip(std::int32_t handle, std::uint32_t index, std::int64_t arg);
+
+// sceVideoOutGetBufferLabelAddress: the address of the port's 16 flip labels, which the flip
+// packet sets. Returns 16, or video_out_invalid_address or video_out_invalid_handle.
+std::int32_t get_buffer_label_address(std::int32_t handle, std::uintptr_t* address);
 
 }  // namespace bb::hle::video
