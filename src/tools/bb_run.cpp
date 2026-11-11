@@ -36,6 +36,7 @@
 #include "common/env.hpp"
 #include "common/log.hpp"
 #include "common/runtime_dirs.hpp"
+#include "common/signal_stack.hpp"
 #include "game/image.hpp"
 #include "hle/kernel/paths.hpp"
 #include "hle/kernel/thread.hpp"
@@ -69,6 +70,8 @@
 #endif
 #ifdef BB_HAVE_VIDEO_CORE
 #include "core/memory.h"
+#include "hle/kernel/vmem.hpp"
+#include "shadps4_host/fault_handler.hpp"
 #endif
 #ifdef BB_HAVE_WINDOW
 #include "core/emulator_settings.h"
@@ -136,6 +139,9 @@ void log_presented();
                         "guest memory: {} regions, {} GPU-visible of which {} backed; {} pages, "
                         "{} backing entries",
                         b.all_regions, b.regions, b.covered, b.pages, b.table_pages);
+        bb::common::log(LogLevel::info, channel,
+                        "write tracking: {} faults claimed, {} system call writes announced",
+                        bb::shadps4::claimed_faults(), bb::hle::kernel::vmem::host_writes());
     }
 #endif
 #ifdef BB_HAVE_MIRROR
@@ -202,6 +208,7 @@ void exit_handler() {
 void* game_main(void* p) {
     const Game& game = *static_cast<const Game*>(p);
     bb::common::set_thread_name("game main");
+    bb::common::ensure_signal_stack();  // for the fault handler, as on every game thread
     try {
         bb::hle::run_prx_init(game.set);
     } catch (const std::exception& e) {
@@ -456,8 +463,10 @@ int start(const bb::tools::RunOptions& options) {
     }
 
 #ifdef BB_HAVE_VIDEO_CORE
-    // video_core's guest memory follows the kernel's mappings from the first one on.
+    // video_core's guest memory follows the kernel's mappings from the first one on. Its write
+    // tracking needs the fault handler (docs/design/renderer.md).
     guest_memory = Core::Memory::Instance();
+    bb::shadps4::install_fault_handler();
 #endif
     // Never destroyed: the game runs in it until the process ends.
     auto* game = new Game{bb::loader::map_load_set(*game_dir)};
