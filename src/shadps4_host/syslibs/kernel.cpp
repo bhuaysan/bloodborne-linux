@@ -1,3 +1,14 @@
+// SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Source: shadPS4 src/core/libraries/kernel/threads.h (Thread::Run, Join, Stop) and
+// src/core/libraries/kernel/kernel.cpp (sceKernelGetSystemSwVersion)
+// @11557f2eb60b3b00712c8887c30852de7615d6df
+// Changed for bloodborne-linux, 2026-11-11: Thread starts and joins guest threads through our
+// kernel with upstream's default stack, and logs failures; sceKernelGetSystemSwVersion reports
+// the version its header names, without logging. The rest of the file is our own.
+// License texts: third_party/shadps4/LICENSES/
+
 // The kernel pieces the system libraries use (docs/design/os-libraries.md): guest threads, the
 // process time, the SDK and system versions, and the user on pad slot 1. Each forwards to our
 // kernel or user service, or returns the fixed value its header names.
