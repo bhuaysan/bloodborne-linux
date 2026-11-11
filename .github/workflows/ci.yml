@@ -35,12 +35,14 @@ jobs:
       # spirv-headers is a build dependency of the shader translator. The
       # Vulkan loader, lavapipe (mesa-vulkan-drivers), spirv-tools and llvm-mc
       # run its execution, validation and corpus tests (docs/design/graphics.md).
-      # SDL3 is for the window and presentation code.
+      # SDL3 is for the window, presentation, sound and the pad. FFmpeg decodes
+      # the movies and MP3 behind AJM (docs/design/os-libraries.md, #456).
       - name: Install build tools
         run: |
           dnf -y --setopt=install_weak_deps=False install git cmake ninja-build gcc-c++ \
               libasan libubsan gtest-devel python3 spirv-headers-devel spirv-tools \
-              vulkan-headers glslang vulkan-loader-devel mesa-vulkan-drivers llvm SDL3-devel
+              vulkan-headers glslang vulkan-loader-devel mesa-vulkan-drivers llvm SDL3-devel \
+              ffmpeg-free-devel
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
