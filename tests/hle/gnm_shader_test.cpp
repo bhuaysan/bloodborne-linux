@@ -211,9 +211,7 @@ TEST(GnmShaderGame, LayoutsAgreeWithTheShaderFiles) {
     BB_REQUIRE_GAME(game);
     (void)game;
     const std::filesystem::path root = bb::test::analysis_dir() / "shaders";
-    if (!std::filesystem::is_directory(root)) {
-        GTEST_SKIP() << root.string() << " is missing: run tools/shaderbnd";
-    }
+    BB_REQUIRE_GAME_DATA(root, "tools/shaderbnd");
     std::map<int, int> checked;
     int failures = 0;
     for (const auto& archive : std::filesystem::directory_iterator(root)) {

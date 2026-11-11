@@ -74,9 +74,7 @@ TEST(ShaderTranslatorGame, SmallestPixelShaderValidates) {
         GTEST_SKIP() << "spirv-val not found";
     }
     const auto root = bb::test::analysis_dir() / "shaders";
-    if (!std::filesystem::exists(root)) {
-        GTEST_SKIP() << "analysis/shaders was not extracted";
-    }
+    BB_REQUIRE_GAME_DATA(root, "tools/shaderbnd");
     bb::test::gcn::Program smallest;
     for (const auto& file : bb::test::gcn::program_files(root)) {
         std::string why;

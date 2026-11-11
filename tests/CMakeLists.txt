@@ -23,7 +23,7 @@ target_include_directories(bbtestsupport PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(bbtestsupport PRIVATE BB_MAIN_CHECKOUT="${BB_MAIN_CHECKOUT}")
 target_link_libraries(bbtestsupport PUBLIC bbcommon GTest::gtest PRIVATE bb_warnings)
 
-# The shader corpus reader and the spirv-val wrapper, shared by tests/shadps4 and tests/gpu. The
+# The shader corpus reader and the spirv-val wrapper, used by tests/shadps4. The
 # tests that need spirv-val skip without it.
 find_program(BB_SPIRV_VAL spirv-val)
 if(NOT BB_SPIRV_VAL)
@@ -46,7 +46,9 @@ function(bb_add_test name)
     cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "SOURCES;LIBS")
     add_executable(${name} ${arg_SOURCES})
     target_link_libraries(${name} PRIVATE ${arg_LIBS} bbtestsupport GTest::gtest_main bb_warnings)
-    gtest_discover_tests(${name})
+    # A skipped test must show as Skipped, never Passed (CMake sets this by default; stated here
+    # so that no CMake version drops it).
+    gtest_discover_tests(${name} PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
 endfunction()
 
 add_subdirectory(common)

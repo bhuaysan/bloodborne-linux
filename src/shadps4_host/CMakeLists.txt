@@ -100,6 +100,7 @@ target_link_libraries(bb_third_party_check PUBLIC bb_vma bb_robin_map bb_stb bb_
 # The renderer: video_core and the ImGui renderer core on the host headers in this directory. It
 # needs the Vulkan headers (the loader is opened at run time), SDL3 for the window and glslang to
 # compile the host shaders. Without them it is not built.
+option(BB_REQUIRE_VIDEOCORE "Fail the configure when bbvideocore cannot be built" ON)
 find_program(BB_GLSLANG glslangValidator)
 find_package(SDL3 CONFIG QUIET)
 if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
@@ -134,5 +135,11 @@ if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
     set_source_files_properties(${BB_VIDEO_CORE_SOURCES} PROPERTIES
         COMPILE_OPTIONS "-w;$<$<BOOL:${BB_SANITIZE}>:-fno-sanitize=alignment>")
 else()
+    # CI installs all three, so a missing one there would silently drop the video_core tests.
+    # Set BB_REQUIRE_VIDEOCORE=OFF to configure without the renderer.
+    if(BB_REQUIRE_VIDEOCORE)
+        message(FATAL_ERROR "Vulkan headers, SDL3 or glslangValidator not found: bbvideocore "
+                            "cannot be built (-DBB_REQUIRE_VIDEOCORE=OFF configures without it)")
+    endif()
     message(STATUS "Vulkan headers, SDL3 or glslangValidator not found: bbvideocore is not built")
 endif()

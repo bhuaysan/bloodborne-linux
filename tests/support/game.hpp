@@ -27,3 +27,10 @@ std::filesystem::path analysis_dir();
         GTEST_SKIP() << "BB_GAME_DIR is not set (environment or local.env)"; \
     }                                                                 \
     const std::filesystem::path game = *game##_opt
+
+// For data that the tools derive from the game: with the game present, missing data is a failure
+// (a skip would hide it), and `how` names the command that produces it.
+#define BB_REQUIRE_GAME_DATA(path, how)                                              \
+    if (!std::filesystem::exists(path)) {                                            \
+        FAIL() << (path).string() << " is missing although the game is present: run " << how; \
+    }

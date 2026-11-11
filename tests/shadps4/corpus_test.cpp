@@ -247,9 +247,7 @@ TEST(ShaderCorpus, EveryProgramTranslatesOrHasAReason) {
     BB_REQUIRE_GAME(game);
     (void)game;
     const auto root = bb::test::analysis_dir() / "shaders";
-    if (!fs::exists(root)) {
-        GTEST_SKIP() << "analysis/shaders was not extracted";
-    }
+    BB_REQUIRE_GAME_DATA(root, "tools/shaderbnd");
     if (!have_spirv_val()) {
         GTEST_SKIP() << "spirv-val not found";
     }
