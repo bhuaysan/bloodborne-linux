@@ -1,7 +1,7 @@
 // The piece of shadPS4's signal dispatcher that the translator touches. It registers a fault
-// handler for its SRT walker code, which runs while translating and on bad guest pointers. Whoever
-// owns the process's SIGSEGV handling (the corpus test, the runtime from R4) calls Dispatch.
-// video_core's page manager (#429) registers its write-tracking handler too, at priority 0.
+// handler for its SRT walker code, which runs while translating and on bad guest pointers. The
+// process's SIGSEGV handler (fault_handler.cpp, and the tests' own handlers) calls Dispatch.
+// video_core's page manager registers its write-tracking handler too, at priority 0.
 #pragma once
 
 #include <array>

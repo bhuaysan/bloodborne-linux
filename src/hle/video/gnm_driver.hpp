@@ -1,6 +1,7 @@
 // The GNM driver's side of Liverpool (docs/design/renderer.md, "GNM and VideoOut glue is
 // adapted"): the submit calls of video.hpp hand their command buffers to a CommandProcessor.
-// Apart from video.hpp, so that video_core_presenter.hpp needs neither src/gpu nor the kernel.
+// Apart from video.hpp, so that video_core_presenter.hpp needs neither the HLE registry nor the
+// kernel.
 #pragma once
 
 #include <cstdint>
