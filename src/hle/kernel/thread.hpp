@@ -84,6 +84,10 @@ void register_thread_exit_handler(void (*handler)());
 // The core functions behind the entry points. Each returns a host errno.
 int create_thread(Thread** thread, const std::uintptr_t* attr, ThreadEntry entry, void* arg,
                   const char* name);
+// create_thread with the attributes given directly, for the runtime's own guest threads (the
+// workers of the system libraries, src/shadps4_host/core/libraries/kernel/threads.h).
+int create_thread_with(Thread** thread, const ThreadAttributes& attributes, ThreadEntry entry,
+                       void* arg, const char* name);
 int join_thread(Thread* thread, void** value);
 int detach_thread(Thread* thread);
 // Ends the calling thread with `value` as its result. On a thread the runtime started it jumps

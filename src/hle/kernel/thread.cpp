@@ -337,6 +337,15 @@ void register_thread_exit_handler(void (*handler)()) {
 
 int create_thread(Thread** thread, const Cell* attr, ThreadEntry entry, void* arg,
                   const char* name) {
+    if (attr == nullptr) {
+        return create_thread_with(thread, ThreadAttributes{}, entry, arg, name);
+    }
+    const Attr* a = attr_at(attr);
+    return a == nullptr ? EINVAL : create_thread_with(thread, a->values, entry, arg, name);
+}
+
+int create_thread_with(Thread** thread, const ThreadAttributes& attributes, ThreadEntry entry,
+                       void* arg, const char* name) {
     if (thread == nullptr || entry == nullptr) {
         return EINVAL;
     }
@@ -346,13 +355,7 @@ int create_thread(Thread** thread, const Cell* attr, ThreadEntry entry, void* ar
     } catch (const std::bad_alloc&) {
         return EAGAIN;  // the pool is full
     }
-    if (attr != nullptr) {
-        const Attr* a = attr_at(attr);
-        if (a == nullptr) {
-            return EINVAL;
-        }
-        t->attributes = a->values;
-    }
+    t->attributes = attributes;
     t->name = name != nullptr ? name : "";
     t->entry = entry;
     t->arg = arg;
