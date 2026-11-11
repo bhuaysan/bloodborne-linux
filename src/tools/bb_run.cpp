@@ -54,6 +54,7 @@
 #include "tools/run_options.hpp"
 #ifdef BB_HAVE_VIDEO_CORE
 #include "core/libraries/libs.h"
+#include "core/libraries/pad_input.h"
 #include "core/memory.h"
 #include "hle/kernel/vmem.hpp"
 #include "shadps4_host/fault_handler.hpp"
@@ -196,6 +197,10 @@ void open_display(const std::string& device_selector) {
         bb::common::log(LogLevel::error, channel, "cannot open the window: {}", why);
         end_run(1);
     }
+    // The window passes the SDL gamepad events on to the imported pad, which the libraries
+    // registered before.
+    Frontend::WindowSDL::SetGamepadEventHandler(&Libraries::Pad::HandleGamepadEvent);
+    Libraries::Pad::StartPolling();
     // After the window: the device order depends on its window system type.
     const std::optional<std::int32_t> gpu_id =
         bb::hle::video::resolve_gpu_id(device_selector, d->window->GetWindowInfo().type, why);

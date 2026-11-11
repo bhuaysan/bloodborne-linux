@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 
+#include <SDL3/SDL.h>
 #include <gtest/gtest.h>
 
 #include "core/file_sys/fs.h"
@@ -30,8 +31,11 @@
 #include "core/libraries/kernel/threads.h"
 #include "core/libraries/libs.h"
 #include "core/libraries/pad/pad.h"
+#include "core/libraries/pad_input.h"
 #include "core/libraries/system/commondialog.h"
+#include "common/singleton.h"
 #include "core/user_settings.h"
+#include "input/controller.h"
 #include "hle/hle.hpp"
 #include "hle/kernel/paths.hpp"
 #include "hle/kernel/thread.hpp"
@@ -50,6 +54,8 @@ void init_once() {
     static std::once_flag once;
     std::call_once(once, [] {
         ::setenv("SDL_AUDIO_DRIVER", "dummy", 0);  // no sound device in tests
+        // Real gamepads on the machine would take the one pad slot the port has a user for.
+        ::setenv("SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT", "0x1234/0x5678", 1);
         Core::Loader::SymbolsResolver symbols;
         Libraries::InitHLELibs(&symbols);
     });
@@ -176,6 +182,71 @@ TEST(SysLibsHost, AacDecodeFailsWithUpstreamsCodecError) {
               static_cast<u32>(ORBIS_AJM_RESULT_CODEC_ERROR | ORBIS_AJM_RESULT_FATAL));
     EXPECT_EQ(result.samples_written, 0u);
     EXPECT_EQ(input.size(), in.size());  // nothing consumed
+}
+
+// SDL's virtual gamepad stands in for the rig's uinput one: the events it makes go through the
+// window's handler into the first pad slot, which scePadReadState reads.
+TEST(SysLibsHost, PadFollowsAVirtualSDLGamepad) {
+    init_once();
+    ASSERT_TRUE(SDL_InitSubSystem(SDL_INIT_GAMEPAD | SDL_INIT_EVENTS)) << SDL_GetError();
+    SDL_VirtualJoystickDesc desc;
+    SDL_INIT_INTERFACE(&desc);
+    desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+    desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+    desc.name = "bb test pad";
+    desc.vendor_id = 0x1234;
+    desc.product_id = 0x5678;
+    const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
+    ASSERT_NE(id, 0u) << SDL_GetError();
+    SDL_Joystick* joystick = SDL_OpenJoystick(id);
+    ASSERT_NE(joystick, nullptr) << SDL_GetError();
+
+    const auto pump = [] {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            Libraries::Pad::HandleGamepadEvent(event);
+        }
+    };
+    const auto state = [] {
+        auto& pad = *(*Common::Singleton<Input::GameControllers>::Instance())[0];
+        SDL_Delay(50);  // the sticks and triggers ease to their value over 33 ms
+        pad.PollState();
+        return pad.ReadState();
+    };
+    using Libraries::Pad::OrbisPadButtonDataOffset;
+    const auto held = [](const Input::State& s, OrbisPadButtonDataOffset button) {
+        return (s.buttonsState & button) == button;
+    };
+
+    pump();  // the device added: the first slot takes it
+    ASSERT_NE((*Common::Singleton<Input::GameControllers>::Instance())[0]->m_sdl_gamepad, nullptr);
+
+    SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_SOUTH, true);
+    SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 32767);
+    SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, -32768);
+    SDL_UpdateJoysticks();
+    pump();
+    Input::State pressed = state();
+    EXPECT_TRUE(held(pressed, OrbisPadButtonDataOffset::Cross));
+    EXPECT_TRUE(held(pressed, OrbisPadButtonDataOffset::R2));
+    EXPECT_FALSE(held(pressed, OrbisPadButtonDataOffset::L2));
+    EXPECT_EQ(pressed.axes[static_cast<int>(Input::Axis::TriggerRight)], 255);
+
+    SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_SOUTH, false);
+    // Released is the bottom of the raw range: SDL maps it up to 0..32767.
+    SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, -32768);
+    SDL_UpdateJoysticks();
+    pump();
+    Input::State released = state();
+    EXPECT_FALSE(held(released, OrbisPadButtonDataOffset::Cross));
+    EXPECT_FALSE(held(released, OrbisPadButtonDataOffset::R2));
+
+    SDL_CloseJoystick(joystick);
+    SDL_DetachVirtualJoystick(id);
+    SDL_UpdateJoysticks();
+    pump();  // the device removed: the slot is free again
+    EXPECT_EQ((*Common::Singleton<Input::GameControllers>::Instance())[0]->m_sdl_gamepad, nullptr);
 }
 
 }  // namespace

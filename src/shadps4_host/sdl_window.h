@@ -3,7 +3,7 @@
 // Source: shadPS4 src/sdl_window.h @11557f2eb60b3b00712c8887c30852de7615d6df
 // Changed for bloodborne-linux, 2026-11-11: the window and surface part only, over the SDL3
 // window bb-run opens (docs/design/renderer.md, "The window is ours, the surface is upstream's").
-// No input, settings or fullscreen; Open and PumpEvents are ours.
+// No input of its own, settings or fullscreen; Open and PumpEvents are ours.
 // License texts: third_party/shadps4/LICENSES/
 #pragma once
 
@@ -15,6 +15,7 @@
 #include "common/types.h"
 
 struct SDL_Window;
+union SDL_Event;
 
 namespace Frontend {
 
@@ -52,6 +53,11 @@ public:
     // Handles the pending events on the thread that opened the window, after waiting up to
     // `timeout_ms` for the first. Returns false once the window is to close.
     bool PumpEvents(s32 timeout_ms);
+
+    // Where PumpEvents hands the gamepad events (device added and removed, buttons, axes,
+    // touchpad, sensors): the pad lives in a library the window does not link.
+    using EventHandler = void (*)(const SDL_Event&);
+    static void SetGamepadEventHandler(EventHandler handler);
 
 private:
     void OnResize();

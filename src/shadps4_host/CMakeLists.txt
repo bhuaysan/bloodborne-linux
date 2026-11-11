@@ -153,7 +153,7 @@ if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
     target_compile_options(bb_atrac9 PRIVATE -w)
 
     add_library(bbsyslibs STATIC ${BB_SYSLIBS_SOURCES} syslibs/libs.cpp syslibs/kernel.cpp
-        syslibs/file_sys.cpp syslibs/left_out.cpp syslibs/thread.cpp)
+        syslibs/file_sys.cpp syslibs/left_out.cpp syslibs/thread.cpp syslibs/pad_input.cpp)
     target_link_libraries(bbsyslibs
         PUBLIC bbvideocore bbshadps4
         PRIVATE bb_atrac9 PkgConfig::BB_FFMPEG SDL3::SDL3 bbcommon bb_warnings)

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/sdl_window.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
 // Changed for bloodborne-linux, 2026-11-11: the window creation and the native handles of the
-// WindowSDL constructor, and OnResize; X11 and Wayland only. Open and PumpEvents are ours: no
-// input, gamepads, camera, audio, fullscreen or hotkeys.
+// WindowSDL constructor and OnResize; X11 and Wayland only. Open and PumpEvents are ours: no
+// input (the gamepad events go to a handler, syslibs/pad_input.cpp), camera, audio, fullscreen
+// or hotkeys.
 // License texts: third_party/shadps4/LICENSES/
 
 #include "sdl_window.h"
@@ -15,11 +16,22 @@
 
 namespace Frontend {
 
+namespace {
+WindowSDL::EventHandler gamepad_handler = nullptr;
+}
+
+void WindowSDL::SetGamepadEventHandler(EventHandler handler) {
+    gamepad_handler = handler;
+}
+
 std::unique_ptr<WindowSDL> WindowSDL::Open(std::string_view title, s32 width_, s32 height_,
                                            std::string& why) {
     // SDL would otherwise turn SIGINT and SIGTERM into SDL_EVENT_QUIT, so Ctrl-C would not end the
     // run.
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+    // The pad keeps its state while the window has no focus: the rig's virtual gamepad is never
+    // the focused window's (the reference gets the same through its environment).
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         why = SDL_GetError();
         return nullptr;
@@ -92,6 +104,19 @@ bool WindowSDL::PumpEvents(s32 timeout_ms) {
         case SDL_EVENT_WINDOW_MINIMIZED:
         case SDL_EVENT_WINDOW_EXPOSED:
             OnResize();
+            break;
+        case SDL_EVENT_GAMEPAD_ADDED:
+        case SDL_EVENT_GAMEPAD_REMOVED:
+        case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+        case SDL_EVENT_GAMEPAD_BUTTON_UP:
+        case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+        case SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN:
+        case SDL_EVENT_GAMEPAD_TOUCHPAD_UP:
+        case SDL_EVENT_GAMEPAD_TOUCHPAD_MOTION:
+        case SDL_EVENT_GAMEPAD_SENSOR_UPDATE:
+            if (gamepad_handler != nullptr) {
+                gamepad_handler(event);
+            }
             break;
         default:
             break;
