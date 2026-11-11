@@ -1,0 +1,59 @@
+# From the title to character creation and the name dialog, on both targets: New Game, the opening
+# video, Enter Name (the game's ImeDialog, drawn by ImGui over the presented frame), one letter
+# typed with the pad, Done, Finish, and the hand-over to the intro. Needs a fresh user directory.
+# The reference logs 'ImeDialog OK text(len=1): "g"' and 'GetResult -> endstatus=0'.
+limit time=600
+
+log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
+mark logos
+stable seconds=6 delta=1 timeout=120
+shot 01-title
+mark menu
+
+dpad D                  # Play Offline
+tap A
+sleep 2
+stable seconds=1.5 delta=1 timeout=40
+shot 02-new-game
+tap A                   # New Game
+stable seconds=1.5 delta=1 timeout=40
+shot 03-brightness
+dpad D
+tap A
+stable seconds=1.5 delta=1 timeout=40
+shot 04-controls
+dpad D count=6          # to Next
+sleep 0.5
+tap A
+mark movie
+
+# The opening is a video. The game unloads its player when it ends.
+log "sceSysmoduleUnloadModule.*0xa5|unload module 0xa5" timeout=240
+nonblack level=20 timeout=60
+stable seconds=2 delta=1 timeout=60
+shot 06-editor
+mark editor
+
+tap A                   # Enter Name
+log sceImeDialogInit timeout=20
+sleep 1.5
+shot 07-name-dialog
+tap A                   # types "g"
+sleep 0.7
+shot 08-name-typed
+trigger R               # Done
+log "ImeDialog OK|sceImeDialogGetResult" timeout=20
+sleep 2
+shot 09-name-done
+dpad D count=5          # to Finish
+sleep 0.5
+tap A
+sleep 2
+dpad L                  # the default answer is No
+sleep 0.4
+tap A
+mark intro
+# The game saves right after Finish (the reference logs the unlink of the backup, bb-run the mount).
+log "Unlinked /savedata0/backup0000|mount SPRJ0005 at /savedata0" timeout=60
+sleep 1
+shot 13-intro
