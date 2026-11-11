@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Reproduce the bulk import of shadPS4's shader_recompiler and video_core (R3 #415, R4 #428).
+"""Reproduce the bulk import of shadPS4's shader_recompiler and video_core (R3 #415, R4 #428)
+and of the system libraries in LIBRARY_FILES (R5 #455).
 
 Fetches shadPS4 at the pinned release and the submodules it records there, and writes:
 
     src/shadps4/                    shader_recompiler, video_core, core/platform.h, the ImGui
-                                    renderer core and the part of common/ they need, changed only
-                                    by add_notice() and rewrite_includes()
+                                    renderer core, the R5 libraries and the part of common/ they
+                                    need, changed only by add_notice() and rewrite_includes()
     third_party/shadps4/LICENSES/   the license texts those files refer to by SPDX tag
     third_party/<dependency>/       unchanged copies, with their license files
 
-The set of files is the measured dependency closure of src/shader_recompiler and src/video_core:
+The set of files is the measured dependency closure of src/shader_recompiler, src/video_core and
+the R5 libraries:
 an #include walk over common/ for shadPS4's own files (common_closure()), and the preprocessor over every translated source for the third-party
 headers (boost-headers.txt). Files outside the closure, or under a license that is not allowed
 by docs/source-policy.md, stay out. HOST_PROVIDED lists what the host layer writes instead.
@@ -60,6 +62,29 @@ imgui/renderer/imgui_impl_vulkan.h imgui/renderer/texture_manager.cpp
 imgui/renderer/texture_manager.h
 """.split()
 
+# The system libraries the reference run reaches (R5 #455, docs/design/os-libraries.md): Pad,
+# AudioOut with its SDL3 backend, Ajm, AvPlayer, ImeDialog and CommonDialog, and the files of
+# theirs they include. Directories are taken whole, minus LIBRARY_EXCLUDED.
+LIBRARY_FILES = """
+core/libraries/pad core/libraries/ajm core/libraries/avplayer
+core/libraries/audio/audioout.cpp core/libraries/audio/audioout.h
+core/libraries/audio/audioout_backend.h core/libraries/audio/audioout_error.h
+core/libraries/audio/sdl_audio_out.cpp
+core/libraries/ime/ime_common.h core/libraries/ime/ime_dialog.cpp core/libraries/ime/ime_dialog.h
+core/libraries/ime/ime_dialog_ui.cpp core/libraries/ime/ime_dialog_ui.h
+core/libraries/ime/ime_error.h core/libraries/ime/ime_kb_layout.cpp
+core/libraries/ime/ime_kb_layout.h core/libraries/ime/ime_ui_shared.cpp
+core/libraries/ime/ime_ui_shared.h
+core/libraries/system/commondialog.cpp core/libraries/system/commondialog.h
+core/libraries/error_codes.h core/libraries/kernel/orbis_error.h
+core/libraries/videodec/video_utils.cpp core/libraries/videodec/video_utils.h
+common/support/avdec.h imgui/imgui_std.h input/controller.cpp input/controller.h
+""".split()
+
+# ajm_aac.cpp is built on FDK-AAC, which stays out (docs/source-policy.md). The host makes AAC
+# instances fail instead.
+LIBRARY_EXCLUDED = {"core/libraries/ajm/ajm_aac.cpp"}
+
 # Files outside src/shader_recompiler and src/common that are imported whole, besides all of
 # video_core. The VideoOut buffer types are what video_core and the VideoOut driver share.
 EXTRA_FILES = ["core/platform.h", "core/libraries/videoout/buffer.h"] + IMGUI_FILES
@@ -92,6 +117,17 @@ HOST_PROVIDED = {
     "core/libraries/videoout/driver.h",
     "core/memory.h",
     "core/signals.h",
+    # R5 (#455, #456): upstream's loader, kernel, file system, RTC and user service, which ours
+    # replace (docs/design/os-libraries.md).
+    "core/file_sys/fs.h",
+    "core/file_sys/ifile.h",
+    "core/libraries/kernel/kernel.h",
+    "core/libraries/kernel/threads.h",
+    "core/libraries/libs.h",
+    "core/libraries/rtc/rtc.h",
+    "core/libraries/system/userservice.h",
+    "core/tls.h",
+    "core/user_settings.h",
     "imgui/friends_layer.h",
     "imgui/invitation_prompt_layer.h",
     "imgui/notifications_layer.h",
@@ -115,7 +151,8 @@ GENERATED_SHADER_HEADERS = {
 }
 
 # Quoted includes that system packages or the ImGui fetched by CMake provide.
-SYSTEM_HEADERS = {"imgui_internal.h", "vulkan/vulkan.hpp", "vulkan/vulkan_handles.hpp"}
+SYSTEM_HEADERS = {"SDL3/SDL_joystick.h", "imgui_internal.h", "vulkan/vulkan.hpp",
+                  "vulkan/vulkan_handles.hpp"}
 
 # SPDX identifiers from the allow-list in docs/source-policy.md.
 ALLOWED_LICENSES = {
@@ -178,6 +215,9 @@ def dependencies() -> list[Dependency]:
         # Only what the presenter includes (PNG writing for screenshots). The header ends with its
         # license text, under the MIT option.
         Dependency("stb", "externals/stb", SHADPS4_URL, None, ("stb_image_write.h",), in_shadps4=True),
+        # The ATRAC9 decoder behind AJM (R5 #455).
+        Dependency("LibAtrac9", "externals/LibAtrac9", "https://github.com/shadps4-emu/ext-LibAtrac9.git",
+                   "LICENSE", ("C/src",)),
     ]
 
 
@@ -190,7 +230,7 @@ def owned_roots() -> list[str]:
 INCLUDE_DIRS = ["src/shadps4", "third_party/sirit/include", "third_party/boost",
                 "third_party/fmt/include", "third_party/magic_enum/include", "third_party/xbyak",
                 "third_party/vma/include", "third_party/xxhash", "third_party/robin-map/include",
-                "third_party/stb", "third_party/half/include"]
+                "third_party/stb", "third_party/half/include", "third_party/LibAtrac9/C/src"]
 
 
 class ImportError_(Exception):
@@ -334,7 +374,12 @@ def generate(cache: Path, output: Path) -> None:
     relatives += [f"video_core/amdgpu/{name}" for name in AMDGPU_FILES]
     relatives += [str(p.relative_to(src)) for p in sorted((src / "video_core").rglob("*")) if p.is_file()]
     relatives += EXTRA_FILES
-    relatives = sorted(set(relatives))
+    for item in LIBRARY_FILES:
+        if (src / item).is_dir():
+            relatives += [str(p.relative_to(src)) for p in sorted((src / item).rglob("*")) if p.is_file()]
+        else:
+            relatives.append(item)
+    relatives = sorted(set(relatives) - LIBRARY_EXCLUDED)
     relatives += common_closure(src, relatives)
     for relative in relatives:
         import_shadps4_file(src / relative, relative, output)
