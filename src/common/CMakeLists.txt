@@ -1,4 +1,4 @@
-add_library(bbcommon STATIC code_hash.cpp env.cpp file.cpp log.cpp memory.cpp runtime_dirs.cpp sha256.cpp)
+add_library(bbcommon STATIC clock.cpp code_hash.cpp env.cpp file.cpp log.cpp memory.cpp runtime_dirs.cpp sha256.cpp)
 target_include_directories(bbcommon PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(bbcommon PRIVATE bb_warnings)
 # RuntimeDirs refuses directories inside the checkout the runtime was built from.

@@ -8,6 +8,7 @@
 #include <ctime>
 #include <string_view>
 
+#include "common/clock.hpp"
 #include "common/log.hpp"
 #include "hle/hle.hpp"
 
@@ -36,17 +37,6 @@ timespec now(clockid_t clock) {
     return t;
 }
 
-std::uint64_t nanoseconds(const timespec& t) {
-    return static_cast<std::uint64_t>(t.tv_sec) * 1'000'000'000u +
-           static_cast<std::uint64_t>(t.tv_nsec);
-}
-
-// The origin of the process counters: static initialisation, before the game runs.
-const std::uint64_t start_nsec = nanoseconds(now(CLOCK_MONOTONIC));
-
-std::uint64_t since_start_nsec() {
-    return nanoseconds(now(CLOCK_MONOTONIC)) - start_nsec;
-}
 
 bool valid(const GuestTimespec& t) {
     return t.tv_sec >= 0 && t.tv_nsec >= 0 && t.tv_nsec < 1'000'000'000;
@@ -187,11 +177,11 @@ std::int32_t sceKernelUsleep(std::uint32_t microseconds) {
 }
 
 std::uint64_t process_time_usec() {
-    return since_start_nsec() / 1000;
+    return common::process_nsec() / 1000;
 }
 
 std::uint64_t process_counter_nsec() {
-    return since_start_nsec();
+    return common::process_nsec();
 }
 
 std::int32_t clock_gettime_sce(std::int32_t clock, GuestTimespec* out) {

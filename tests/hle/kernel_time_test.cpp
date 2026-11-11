@@ -17,6 +17,7 @@
 
 #include <gtest/gtest.h>
 
+#include "common/clock.hpp"
 #include "common/log.hpp"
 #include "hle/hle.hpp"
 
@@ -111,6 +112,15 @@ TEST(KernelTime, CounterUnits) {
     const std::uint64_t n = process_counter_nsec(), u = process_time_usec();
     EXPECT_LE(n / 1000, u);
     EXPECT_LT(u - n / 1000, 1'000'000u);
+}
+
+// sceKernelReadTsc reads the runtime's process clock, which video_core's GPU clock reads too.
+TEST(KernelTime, TscIsTheProcessClock) {
+    const std::uint64_t before = bb::common::process_nsec();
+    const std::uint64_t tsc = process_counter_nsec();
+    const std::uint64_t after = bb::common::process_nsec();
+    EXPECT_LE(before, tsc);
+    EXPECT_LE(tsc, after);
 }
 
 TEST(KernelTime, SleepsLastAtLeastTheRequestedTime) {

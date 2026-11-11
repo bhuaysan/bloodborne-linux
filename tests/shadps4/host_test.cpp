@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include "common/alignment.h"
+#include "common/clock.hpp"
 #include "common/path_util.h"
 #include "core/libraries/kernel/time.h"
 
@@ -24,16 +25,15 @@ TEST(ShadPs4Host, Alignment) {
     EXPECT_EQ(Common::AlignDownPow2(0xffffffffffffffffull, 0x4000), 0xffffffffffffc000ull);
 }
 
-// The TSC counts nanoseconds of CLOCK_MONOTONIC, matching its 1 GHz frequency.
-TEST(ShadPs4Host, TscCountsNanoseconds) {
+// The TSC counts nanoseconds of the process clock that libkernel's sceKernelReadTsc reads, so GPU
+// timestamps and the game's TSC share one origin.
+TEST(ShadPs4Host, TscIsTheProcessClock) {
     EXPECT_EQ(Libraries::Kernel::sceKernelGetTscFrequency(), 1'000'000'000u);
-    timespec before{};
-    clock_gettime(CLOCK_MONOTONIC, &before);
+    const u64 before = bb::common::process_nsec();
     const u64 tsc = Libraries::Kernel::sceKernelReadTsc();
-    timespec after{};
-    clock_gettime(CLOCK_MONOTONIC, &after);
-    EXPECT_GE(tsc, static_cast<u64>(before.tv_sec) * 1'000'000'000 + before.tv_nsec);
-    EXPECT_LE(tsc, static_cast<u64>(after.tv_sec) * 1'000'000'000 + after.tv_nsec);
+    const u64 after = bb::common::process_nsec();
+    EXPECT_LE(before, tsc);
+    EXPECT_LE(tsc, after);
 }
 
 // shadPS4's user directories land in the runtime's XDG directories. GetUserPath reads the
