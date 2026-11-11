@@ -7,6 +7,7 @@
 
 #include "common/log.hpp"
 #include "gpu/vk/memory_mirror.hpp"
+#include "hle/kernel/dmem.hpp"
 
 namespace bb::tools {
 
@@ -51,6 +52,9 @@ std::vector<MirrorObserver::Piece> MirrorObserver::take(std::uintptr_t low, std:
 }
 
 void MirrorObserver::mapped(std::uintptr_t address, std::uint64_t length, std::uint64_t offset) {
+    if (offset >= hle::kernel::dmem::total_size) {
+        return;  // flexible memory
+    }
     try {
         if (mirror_.bind(address, length, offset)) {
             const std::scoped_lock lock(mutex_);

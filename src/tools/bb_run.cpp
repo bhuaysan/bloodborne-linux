@@ -369,7 +369,7 @@ void open_mirror(bb::vk::Device* device, const std::string& device_selector, uns
         return;
     }
     m->observer = std::make_unique<bb::tools::MirrorObserver>(*m->mirror);
-    bb::hle::kernel::vmem::set_direct_observer(m->observer.get());
+    bb::hle::kernel::vmem::add_mapping_observer(m->observer.get());
     bb::common::log(LogLevel::info, channel, "GPU memory mirror of {} GiB, blocks of {:#x}", gib,
                     m->mirror->block());
     // Dispatches run through the mirror on the GPU thread.

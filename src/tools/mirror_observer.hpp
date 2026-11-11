@@ -17,11 +17,11 @@ class MemoryMirror;
 namespace bb::tools {
 
 // Every direct mapping is mirrored, whatever its protection bits, until a run shows which
-// mappings the game makes with those bits. MemoryMirror::unbind() takes only ranges that bind()
-// bound, so the observer records what was bound and unbinds only that: a mapping that bind()
-// refused (outside the mirror) or that threw, and a part that released() took, are never
-// unbound. Failures are logged and don't reach the guest.
-class MirrorObserver final : public hle::kernel::vmem::DirectObserver {
+// mappings the game makes with those bits; flexible memory is not. MemoryMirror::unbind() takes
+// only ranges that bind() bound, so the observer records what was bound and unbinds only that: a
+// mapping that bind() refused (outside the mirror) or that threw, and a part that released()
+// took, are never unbound. Failures are logged and don't reach the guest.
+class MirrorObserver final : public hle::kernel::vmem::MappingObserver {
 public:
     // The mirror must outlive the observer.
     explicit MirrorObserver(vk::MemoryMirror& mirror) : mirror_(mirror) {}

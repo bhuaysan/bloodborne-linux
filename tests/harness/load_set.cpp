@@ -86,7 +86,8 @@ std::vector<Region> load_set_regions(const loader::LoadSet& set) {
     add({"guest errno", reinterpret_cast<std::byte*>(hle::kernel::guest_errno_location()),
          sizeof(int), 0, false});
     // The game's heap and whatever else the init mapped. Only writable mappings can change.
-    // Direct memory is a view of the sparse memfd, so only the pages a test touches cost.
+    // Direct and flexible memory are views of the sparse memfd, so only the pages a test touches
+    // cost.
     // LeakSanitizer scans the TLS blocks and the errno cell itself, but not these mappings.
     for (const hle::kernel::vmem::Region& r : hle::kernel::vmem::regions()) {
         if ((r.prot & (PROT_READ | PROT_WRITE)) != (PROT_READ | PROT_WRITE)) {
@@ -95,9 +96,9 @@ std::vector<Region> load_set_regions(const loader::LoadSet& set) {
         scan_for_leaks(r.start, r.end - r.start);
         Region region{std::format("mapping {:#x}{}{}", r.start, r.name.empty() ? "" : " ", r.name),
                       bytes_at(r.start), r.end - r.start, 0, false};
-        if ((r.flags & hle::kernel::vmem::region_direct) != 0) {
+        if (r.backing != hle::kernel::vmem::no_backing) {
             region.fd = hle::kernel::dmem::fd();
-            region.fd_offset = r.offset;
+            region.fd_offset = r.backing;
         }
         add(std::move(region));
     }

@@ -45,11 +45,12 @@ TEST(VkMirrorWiring, MapsUnmapsAndReleasesKeepTheMirrorConsistent) {
         GTEST_SKIP() << "no mirror: " << why;
     }
     bb::tools::MirrorObserver observer(*mirror);
-    vmem::set_direct_observer(&observer);
+    ASSERT_TRUE(vmem::add_mapping_observer(&observer));
     // Runs before observer and mirror go away, also when an ASSERT below returns early.
     struct ClearObserver {
-        ~ClearObserver() { vmem::set_direct_observer(nullptr); }
-    } clear_observer;
+        bb::tools::MirrorObserver* observer;
+        ~ClearObserver() { vmem::remove_mapping_observer(observer); }
+    } clear_observer{&observer};
 
     auto allocate = [] {
         std::uint64_t offset = ~std::uint64_t{0};

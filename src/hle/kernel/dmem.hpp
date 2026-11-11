@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace bb::hle::kernel::dmem {
@@ -10,6 +11,13 @@ namespace bb::hle::kernel::dmem {
 // What the total-size query returns, and the size of the memfd. The game uses it only as the end
 // of every allocation's search range (eboot 0x33eacc, 0x2081a9b, 0x2081eaf, 0x26d3edd).
 inline constexpr std::uint64_t total_size = std::uint64_t{8} << 30;
+
+// Flexible memory (vmem::Mapping::flexible) lives in the same memfd, above direct memory, so that
+// one backing holds every page the GPU can see (docs/design/renderer.md, "One backing for every
+// page the GPU can see"). The memfd is sparse, so the size costs only the pages the game touches.
+inline constexpr std::uint64_t flexible_size = std::uint64_t{8} << 30;
+// The size of the memfd: direct memory at [0, total_size), flexible memory above it.
+inline constexpr std::uint64_t memfd_size = total_size + flexible_size;
 
 // Map flag 0x80, passed at eboot 0x29032a4, and the reservation's flag 0x80 (0x2901fbd). Its
 // meaning is unknown; it is accepted and ignored.
@@ -26,6 +34,18 @@ inline constexpr std::int32_t batch_unmap = 1;  // unmap the range back into a r
 
 // The memfd, created at the first call. -1 (with errno set) if the host refused it.
 int fd();
+
+// Takes `length` bytes, a non-zero multiple of the page size, at the lowest free offset of the
+// flexible area. They read zeros. Nothing when no such range is free or there is no memfd.
+std::optional<std::uint64_t> allocate_flexible(std::uint64_t length);
+
+// Gives [offset, offset + length) of the flexible area back, which allocate_flexible() took, and
+// punches a hole there, so that it reads zeros when it is taken again. No guest mapping may view
+// it any more.
+void free_flexible(std::uint64_t offset, std::uint64_t length);
+
+// The free bytes of the flexible area, for tests.
+std::uint64_t flexible_free();
 
 // One allocation, as allocations() lists it.
 struct AllocatedRange {

@@ -133,11 +133,11 @@ int fd() {
         // Sealed against shrinking, as udmabuf needs to import ranges of it for the GPU memory
         // mirror (docs/design/graphics.md, "GPU memory mirror").
         const int created = ::memfd_create("bb-direct-memory", MFD_CLOEXEC | MFD_ALLOW_SEALING);
-        if (created < 0 || ::ftruncate(created, static_cast<off_t>(total_size)) != 0 ||
+        if (created < 0 || ::ftruncate(created, static_cast<off_t>(memfd_size)) != 0 ||
             ::fcntl(created, F_ADD_SEALS, F_SEAL_SHRINK) != 0) {
             const int error = errno;
             common::log(LogLevel::error, channel, "direct memory: no memfd of {:#x} bytes: {}",
-                        total_size, std::strerror(error));
+                        memfd_size, std::strerror(error));
             if (created >= 0) {
                 ::close(created);
             }
@@ -150,6 +150,65 @@ int fd() {
         errno = ENOMEM;
     }
     return memfd;
+}
+
+namespace {
+
+// The free ranges of the flexible area, start to end, never adjacent. Leaked as the table.
+constinit std::mutex flexible_mutex;
+std::map<std::uint64_t, std::uint64_t>& flexible_ranges =
+    *new std::map<std::uint64_t, std::uint64_t>{{total_size, memfd_size}};
+
+}  // namespace
+
+std::optional<std::uint64_t> allocate_flexible(std::uint64_t length) {
+    if (length == 0 || length % page_size != 0 || fd() < 0) {
+        return std::nullopt;
+    }
+    const std::scoped_lock lock(flexible_mutex);
+    const auto it = std::ranges::find_if(
+        flexible_ranges, [&](const auto& range) { return range.second - range.first >= length; });
+    if (it == flexible_ranges.end()) {
+        common::log(LogLevel::warn, channel, "flexible memory: no {:#x} bytes free", length);
+        return std::nullopt;
+    }
+    const auto [start, end] = *it;
+    flexible_ranges.erase(it);
+    if (start + length < end) {
+        flexible_ranges.emplace(start + length, end);
+    }
+    return start;
+}
+
+void free_flexible(std::uint64_t offset, std::uint64_t length) {
+    if (::fallocate(fd(), FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, static_cast<off_t>(offset),
+                    static_cast<off_t>(length)) != 0) {
+        // The range stays taken: it would not read zeros.
+        common::log(LogLevel::warn, channel, "flexible memory: no hole punched at {:#x}-{:#x}: {}",
+                    offset, offset + length, std::strerror(errno));
+        return;
+    }
+    const std::scoped_lock lock(flexible_mutex);
+    std::uint64_t start = offset, end = offset + length;
+    auto next = flexible_ranges.lower_bound(start);
+    if (next != flexible_ranges.begin() && std::prev(next)->second == start) {
+        start = std::prev(next)->first;
+        flexible_ranges.erase(std::prev(next));
+    }
+    if (next != flexible_ranges.end() && next->first == end) {
+        end = next->second;
+        flexible_ranges.erase(next);
+    }
+    flexible_ranges.emplace(start, end);
+}
+
+std::uint64_t flexible_free() {
+    const std::scoped_lock lock(flexible_mutex);
+    std::uint64_t free = 0;
+    for (const auto& [start, end] : flexible_ranges) {
+        free += end - start;
+    }
+    return free;
 }
 
 std::vector<AllocatedRange> allocations() {
@@ -319,9 +378,7 @@ std::int32_t release_direct(std::uint64_t offset, std::uint64_t length) {
     split_at(end);
     table.erase(table.lower_bound(offset), table.lower_bound(end));
     // The mirror's imports pin the pages: they go before the hole is punched.
-    if (vmem::DirectObserver* const observer = vmem::direct_observer()) {
-        observer->released(offset, length);
-    }
+    vmem::notify_released(offset, length);
     if (::fallocate(fd(), FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, static_cast<off_t>(offset),
                     static_cast<off_t>(length)) != 0) {
         common::log(LogLevel::warn, channel, "direct memory: no hole punched at {:#x}-{:#x}: {}",

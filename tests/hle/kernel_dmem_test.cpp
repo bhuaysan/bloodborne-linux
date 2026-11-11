@@ -1,8 +1,12 @@
 #include "hle/kernel/dmem.hpp"
 
 #include <fcntl.h>
+#include <unistd.h>
 
 #include <cerrno>
+#include <chrono>
+#include <future>
+#include <optional>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -346,8 +350,8 @@ TEST(KernelDmem, BatchMapsIntoAReservationAndUndoes) {
     EXPECT_EQ(release_direct(offset, 2 * page_size), 0);
 }
 
-// Records the calls of the GPU memory mirror's observer as {kind, address, length, offset}.
-struct Recorder : vmem::DirectObserver {
+// Records the calls of a mapping observer as {kind, address, length, offset}.
+struct Recorder : vmem::MappingObserver {
     struct Call {
         char kind;  // 'm'apped, 'u'nmapped, 'r'eleased (address 0)
         std::uint64_t address, length, offset;
@@ -363,15 +367,17 @@ struct Recorder : vmem::DirectObserver {
     void released(std::uint64_t o, std::uint64_t l) override { calls.push_back({'r', 0, l, o}); }
 };
 
-// The observer sees every map and unmap of direct memory, in parts with their own offsets, and
-// releases, also of a range still mapped; anonymous memory and reservations it doesn't see.
-TEST(KernelDmem, TheObserverFollowsDirectMemory) {
+// The observer sees every map and unmap of direct and flexible memory, in parts with their own
+// offsets, and releases, also of a range still mapped; reservations it doesn't see.
+TEST(KernelDmem, TheObserverFollowsDirectAndFlexibleMemory) {
     Recorder recorder;
-    vmem::set_direct_observer(&recorder);
+    ASSERT_TRUE(vmem::add_mapping_observer(&recorder));
     const std::uint64_t offset = allocate(3 * page_size, 0);
     const std::uintptr_t a = addr(map(offset, 3 * page_size));
     void* anonymous = nullptr;
     ASSERT_EQ(map_anonymous(&anonymous, page_size, 3, 0), 0);
+    const std::uint64_t flexible = vmem::find(addr(anonymous))->backing;
+    EXPECT_GE(flexible, dmem::total_size);
     void* range = nullptr;
     ASSERT_EQ(reserve_range(&range, 2 * page_size, 0, 0), 0);
     const std::uintptr_t r = addr(range);
@@ -389,9 +395,10 @@ TEST(KernelDmem, TheObserverFollowsDirectMemory) {
     EXPECT_EQ(sceKernelMunmap(reinterpret_cast<void*>(a + 2 * page_size), page_size), 0);
     EXPECT_EQ(sceKernelMunmap(range, 2 * page_size), 0);
     EXPECT_EQ(sceKernelMunmap(anonymous, page_size), 0);
-    vmem::set_direct_observer(nullptr);
+    vmem::remove_mapping_observer(&recorder);
     const std::vector<Recorder::Call> expected{
         {'m', a, 3 * page_size, offset},
+        {'m', addr(anonymous), page_size, flexible},
         {'m', r + page_size, page_size, offset + 2 * page_size},
         {'u', a + page_size, page_size, offset + page_size},
         {'u', a, page_size, offset},
@@ -399,6 +406,7 @@ TEST(KernelDmem, TheObserverFollowsDirectMemory) {
         {'r', 0, page_size, offset + 2 * page_size},
         {'u', r + page_size, page_size, offset + 2 * page_size},
         {'u', a + 2 * page_size, page_size, offset + 2 * page_size},
+        {'u', addr(anonymous), page_size, flexible},
     };
     EXPECT_EQ(recorder.calls, expected);
 }
@@ -481,6 +489,120 @@ TEST(KernelDmem, HarnessRestoreTakesBackMappingsAndAllocations) {
     EXPECT_EQ(vmem::regions(), now);
     EXPECT_EQ(sceKernelMunmap(static_cast<char*>(kept_view) + page_size, page_size), 0);
     EXPECT_EQ(release_direct(kept, 2 * page_size), 0);
+}
+
+// Flexible memory lives in the memfd above direct memory: what the guest writes is in the memfd
+// at the region's backing and the reverse. Unmapping gives the backing back with a hole punched,
+// so the next map reads zeros again. The anonymous mmap is flexible memory as well.
+TEST(KernelDmem, FlexibleMemoryLivesInTheMemfd) {
+    const std::uint64_t free_before = dmem::flexible_free();
+    void* p = nullptr;
+    ASSERT_EQ(map_anonymous(&p, 3 * page_size, 3, 0), 0);
+    const std::optional<vmem::Region> region = vmem::find(addr(p));
+    ASSERT_TRUE(region);
+    EXPECT_EQ(region->offset, 0u);  // what the mapping query reports
+    const std::uint64_t backing = region->backing;
+    EXPECT_GE(backing, total_size);
+    EXPECT_LE(backing + 3 * page_size, dmem::memfd_size);
+    EXPECT_EQ(dmem::flexible_free(), free_before - 3 * page_size);
+
+    auto* const bytes = static_cast<char*>(p);
+    std::strcpy(bytes + page_size + 8, "guest");
+    char read[6] = {};
+    ASSERT_EQ(::pread(dmem::fd(), read, sizeof read, static_cast<off_t>(backing + page_size + 8)),
+              6);
+    EXPECT_STREQ(read, "guest");
+    ASSERT_EQ(::pwrite(dmem::fd(), "memfd", 6, static_cast<off_t>(backing + 2 * page_size)), 6);
+    EXPECT_STREQ(bytes + 2 * page_size, "memfd");
+
+    // A partial unmap splits the backing with the region and gives back only its page.
+    ASSERT_EQ(sceKernelMunmap(bytes + page_size, page_size), 0);
+    EXPECT_EQ(vmem::find(addr(bytes) + 2 * page_size)->backing, backing + 2 * page_size);
+    EXPECT_EQ(dmem::flexible_free(), free_before - 2 * page_size);
+    ASSERT_EQ(::pread(dmem::fd(), read, sizeof read, static_cast<off_t>(backing + page_size + 8)),
+              6);
+    EXPECT_EQ(read[0], 0);
+    ASSERT_EQ(sceKernelMunmap(bytes, page_size), 0);
+    ASSERT_EQ(sceKernelMunmap(bytes + 2 * page_size, page_size), 0);
+    EXPECT_EQ(dmem::flexible_free(), free_before);
+
+    void* again = guest_mmap(nullptr, 3 * page_size, 3, 0x1000 | 0x2, -1, 0);  // MAP_ANON, PRIVATE
+    ASSERT_NE(again, reinterpret_cast<void*>(-1));
+    EXPECT_EQ(vmem::find(addr(again))->backing, backing);
+    EXPECT_EQ(static_cast<char*>(again)[2 * page_size], 0);
+    EXPECT_EQ(dmem::flexible_free(), free_before - 3 * page_size);
+    EXPECT_EQ(guest_munmap(again, 3 * page_size), 0);
+    EXPECT_EQ(dmem::flexible_free(), free_before);
+}
+
+// More flexible memory than the area holds is refused, and the area stays as it was.
+TEST(KernelDmem, FlexibleMemoryEndsWithItsArea) {
+    const std::uint64_t free_before = dmem::flexible_free();
+    void* p = nullptr;
+    EXPECT_EQ(map_anonymous(&p, dmem::flexible_size + page_size, 3, 0), sce_enomem);
+    EXPECT_EQ(dmem::flexible_free(), free_before);
+}
+
+// An observer that looks up the region table from another thread, as the GPU thread does while
+// the observer waits for it. It records whether the lookup finished, which it can't while the
+// kernel holds the table's lock. The lookups are kept until the probe goes, so that a lookup
+// still waiting for the lock never blocks the observer.
+struct LockProbe : vmem::MappingObserver {
+    std::vector<bool> finished;
+    std::vector<std::future<std::optional<vmem::Region>>> lookups;
+    void probe(std::uintptr_t address) {
+        lookups.push_back(
+            std::async(std::launch::async, [address] { return vmem::find(address); }));
+        finished.push_back(lookups.back().wait_for(std::chrono::seconds(5)) ==
+                           std::future_status::ready);
+    }
+    void mapped(std::uintptr_t a, std::uint64_t, std::uint64_t) override { probe(a); }
+    void unmapped(std::uintptr_t a, std::uint64_t, std::uint64_t) override { probe(a); }
+    void released(std::uint64_t, std::uint64_t) override {}
+};
+
+TEST(KernelDmem, TheObserverRunsWithoutTheRegionLock) {
+    LockProbe probe;
+    ASSERT_TRUE(vmem::add_mapping_observer(&probe));
+    const std::uint64_t offset = allocate(page_size, 0);
+    void* const direct = map(offset, page_size);
+    void* flexible = nullptr;
+    EXPECT_EQ(map_anonymous(&flexible, page_size, 3, 0), 0);
+    void* range = nullptr;
+    ASSERT_EQ(reserve_range(&range, page_size, 0, 0), 0);
+    BatchEntry entry{addr(range), offset, page_size, 3, {}, dmem::batch_map};
+    EXPECT_EQ(map_direct_batch(&entry, 1, nullptr), 0);
+    entry.operation = dmem::batch_unmap;  // reserved again
+    EXPECT_EQ(map_direct_batch(&entry, 1, nullptr), 0);
+    EXPECT_EQ(sceKernelMunmap(direct, page_size), 0);
+    EXPECT_EQ(sceKernelMunmap(flexible, page_size), 0);
+    EXPECT_EQ(sceKernelMunmap(range, page_size), 0);
+    EXPECT_EQ(release_direct(offset, page_size), 0);
+    vmem::remove_mapping_observer(&probe);
+    EXPECT_EQ(probe.finished, std::vector<bool>(6, true));
+}
+
+// Observers are kept side by side up to the limit, and a removed one sees nothing more.
+TEST(KernelDmem, ObserversAreAddedAndRemoved) {
+    struct Counter : vmem::MappingObserver {
+        int maps = 0;
+        void mapped(std::uintptr_t, std::uint64_t, std::uint64_t) override { ++maps; }
+        void unmapped(std::uintptr_t, std::uint64_t, std::uint64_t) override {}
+        void released(std::uint64_t, std::uint64_t) override {}
+    };
+    std::vector<Counter> counters(vmem::max_mapping_observers + 1);
+    for (std::size_t i = 0; i < vmem::max_mapping_observers; ++i) {
+        ASSERT_TRUE(vmem::add_mapping_observer(&counters[i]));
+    }
+    EXPECT_FALSE(vmem::add_mapping_observer(&counters.back()));
+    vmem::remove_mapping_observer(&counters[1]);
+    void* p = nullptr;
+    EXPECT_EQ(map_anonymous(&p, page_size, 3, 0), 0);
+    EXPECT_EQ(sceKernelMunmap(p, page_size), 0);
+    for (std::size_t i = 0; i < counters.size(); ++i) {
+        vmem::remove_mapping_observer(&counters[i]);
+        EXPECT_EQ(counters[i].maps, i == 1 || i == vmem::max_mapping_observers ? 0 : 1) << i;
+    }
 }
 
 TEST(KernelDmem, ImportsResolveToTheImplementations) {

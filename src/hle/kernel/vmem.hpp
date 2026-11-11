@@ -3,11 +3,13 @@
 // mappings through map() with its own fd, flags, offsets and alignment, and maps into the
 // reservations of reserve() (dmem.hpp).
 // Exceptions: mapped() is also the GNM submits' check (src/hle/video/gnm_driver.cpp, PM4 readable),
-// and DirectObserver is how the GPU memory mirror follows direct memory.
+// and MappingObserver is how the renderer's guest memory and the GPU memory mirror follow the
+// mappings of direct and flexible memory.
 #pragma once
 
 #include <sys/types.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -43,6 +45,9 @@ constexpr bool in_window(std::uintptr_t start, std::uintptr_t end) {
 inline constexpr std::uint32_t region_anonymous = 0x1;  // released with release_anonymous
 inline constexpr std::uint32_t region_direct = 0x2;     // direct memory (#97)
 
+// Region::backing of a mapping that the direct memory memfd doesn't back.
+inline constexpr std::uint64_t no_backing = ~std::uint64_t{0};
+
 // One guest mapping, or the part of one that a partial unmap or protect left.
 struct Region {
     std::uintptr_t start = 0, end = 0;  // end is exclusive
@@ -51,6 +56,9 @@ struct Region {
     std::uint64_t offset = 0;           // direct memory offset of start, else 0
     std::string name;
     bool reserved = false;  // a reservation from reserve(): PROT_NONE, flags 0
+    // The offset of start in the direct memory memfd (dmem::fd()), for direct memory (where it
+    // is `offset`) and flexible memory (at dmem::total_size and above); else no_backing.
+    std::uint64_t backing = no_backing;
     bool operator==(const Region&) const = default;
 };
 
@@ -72,30 +80,41 @@ struct Mapping {
     // congruent) where `alignment` allows it. A mapping at an address that isn't (the alignment
     // rules it out, or a fixed map) is logged.
     std::uint64_t congruent = 0;
+    // Flexible memory: map() takes the backing from the memfd's flexible area
+    // (dmem::allocate_flexible) and maps it MAP_SHARED in place of `fd`, `fd_offset` and
+    // MAP_ANONYMOUS or MAP_PRIVATE. Unmapping gives it back.
+    bool flexible = false;
     std::string name;
 };
 
-// Follows the views of direct memory for the GPU memory mirror (docs/design/graphics.md, "GPU
-// memory mirror"). Called under the region table's lock, so that no other map or unmap of the
-// range comes between the host's change and the call; it must not call into vmem.
-class DirectObserver {
+// Follows the guest mappings that the direct memory memfd backs: direct and flexible memory
+// (docs/design/renderer.md, "The mapping observer replaces the mirror's"). The kernel calls it
+// after it released the region table's lock, so it may query the table (find, mapped, regions),
+// and so may a thread it waits for. Maps and unmaps wait while it runs, so no other one changes
+// the range in between; it must not map, reserve or unmap.
+class MappingObserver {
 public:
-    virtual ~DirectObserver() = default;
-    // A direct region [address, address + length) that views direct memory at `offset` was
-    // mapped; once per map.
+    virtual ~MappingObserver() = default;
+    // [address, address + length), which views the memfd at `offset`, was mapped; once per map.
+    // An offset at or above dmem::total_size is flexible memory.
     virtual void mapped(std::uintptr_t address, std::uint64_t length, std::uint64_t offset) = 0;
-    // The part [address, address + length) of a direct region that views `offset` is about to be
-    // unmapped or reserved again.
+    // The part [address, address + length) of a mapping that views `offset` is about to be
+    // unmapped or reserved again; the host mapping is still there.
     virtual void unmapped(std::uintptr_t address, std::uint64_t length, std::uint64_t offset) = 0;
     // Direct memory [offset, offset + length) is about to be released (dmem.hpp), possibly still
     // mapped. Called under the allocation table's lock.
     virtual void released(std::uint64_t offset, std::uint64_t length) = 0;
 };
 
-// Sets the observer (null for none), before the first guest mapping. It must outlive the run.
-void set_direct_observer(DirectObserver* observer);
-// The observer, or null.
-DirectObserver* direct_observer();
+// Adds an observer, before the first guest mapping it is meant to see. Returns false when
+// max_mapping_observers are registered. It must stay alive until it is removed and no call to it
+// runs any more.
+inline constexpr std::size_t max_mapping_observers = 4;
+bool add_mapping_observer(MappingObserver* observer);
+// Removes an observer that was added; others stay.
+void remove_mapping_observer(MappingObserver* observer);
+// Tells every observer that direct memory [offset, offset + length) is about to be released.
+void notify_released(std::uint64_t offset, std::uint64_t length);
 
 // Maps at the lowest free `alignment`-aligned address of the guest window, at or above the hint
 // if it lies in the window (host MAP_32BIT: where the host picks), or at the fixed address, and

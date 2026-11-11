@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <cstring>
@@ -20,6 +21,7 @@
 #include "common/log.hpp"
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
+#include "hle/kernel/dmem.hpp"
 #include "hle/kernel/file.hpp"
 
 namespace bb::hle::kernel::vmem {
@@ -53,20 +55,30 @@ void* ptr(std::uintptr_t address) {
     return reinterpret_cast<void*>(address);
 }
 
+// Every change of the table that the observers see (map, unmap, reserve again, restore) holds
+// change_mutex from start to end, and table_mutex only while it reads or changes the table and
+// the host mappings: the observers run between, without table_mutex (MappingObserver). Lock
+// order: dmem's allocation lock, change_mutex, table_mutex.
+constinit std::mutex change_mutex;
+
 // The table, keyed by start. Regions never overlap. The maps are leaked, never destroyed: game
 // threads may call in during exit.
 constinit std::mutex table_mutex;
 std::map<std::uintptr_t, Region>& table = *new std::map<std::uintptr_t, Region>;
 
-constinit std::atomic<DirectObserver*> observer{nullptr};
+constinit std::array<std::atomic<MappingObserver*>, max_mapping_observers> observers{};
 
-// Tells the observer which parts of direct regions in [start, end) are about to go. Needs
-// table_mutex.
-void notify_unmapped(std::uintptr_t start, std::uintptr_t end) {
-    DirectObserver* const o = observer.load(std::memory_order_acquire);
-    if (o == nullptr) {
-        return;
-    }
+// A part of a region that the memfd backs.
+struct Backed {
+    std::uintptr_t address;
+    std::uint64_t length;
+    std::uint64_t backing;
+    bool flexible;  // its backing goes back to dmem's flexible area when it is unmapped
+};
+
+// The backed parts of the regions in [start, end). Needs table_mutex.
+std::vector<Backed> backed_parts(std::uintptr_t start, std::uintptr_t end) {
+    std::vector<Backed> out;
     auto it = table.upper_bound(start);
     if (it != table.begin()) {
         --it;
@@ -74,8 +86,36 @@ void notify_unmapped(std::uintptr_t start, std::uintptr_t end) {
     for (; it != table.end() && it->first < end; ++it) {
         const Region& r = it->second;
         const std::uintptr_t low = std::max(start, r.start), high = std::min(end, r.end);
-        if ((r.flags & region_direct) != 0 && low < high) {
-            o->unmapped(low, high - low, r.offset + (low - r.start));
+        if (r.backing != no_backing && low < high) {
+            out.push_back({low, high - low, r.backing + (low - r.start),
+                           (r.flags & region_direct) == 0});
+        }
+    }
+    return out;
+}
+
+// Calls `call` on every observer.
+template <typename Call>
+void each_observer(Call call) {
+    for (std::atomic<MappingObserver*>& slot : observers) {
+        if (MappingObserver* const o = slot.load(std::memory_order_acquire)) {
+            call(*o);
+        }
+    }
+}
+
+// Tells the observers that `parts` are about to go. Needs change_mutex, not table_mutex.
+void notify_unmapped(const std::vector<Backed>& parts) {
+    for (const Backed& p : parts) {
+        each_observer([&](MappingObserver& o) { o.unmapped(p.address, p.length, p.backing); });
+    }
+}
+
+// Gives the flexible memory of `parts` back, once no host mapping views it. Needs change_mutex.
+void free_flexible(const std::vector<Backed>& parts) {
+    for (const Backed& p : parts) {
+        if (p.flexible) {
+            dmem::free_flexible(p.backing, p.length);
         }
     }
 }
@@ -99,6 +139,9 @@ void split_at(std::uintptr_t at) {
     tail.start = at;
     if ((tail.flags & region_direct) != 0) {
         tail.offset += at - r.start;
+    }
+    if (tail.backing != no_backing) {
+        tail.backing += at - r.start;
     }
     r.end = at;
     table.emplace(at, std::move(tail));
@@ -165,9 +208,8 @@ int reserve_again(std::uintptr_t start, std::uintptr_t end) {
 // Gives guest memory back: unmaps the parts outside the window and reserves the part in it again
 // (reserve_again's rules), so the window keeps its whole range. The table drops each part outside
 // the window as soon as it is unmapped, so a failure on a later part leaves no region over memory
-// the host may reuse. Returns 0 or errno. Needs table_mutex.
+// the host may reuse. Returns 0 or errno. The observers must have been told. Needs table_mutex.
 int release(std::uintptr_t start, std::uintptr_t end) {
-    notify_unmapped(start, end);
     const std::uintptr_t low = std::clamp(start, window_start, window_end);
     const std::uintptr_t high = std::clamp(end, window_start, window_end);
     const auto unmap_outside = [](std::uintptr_t from, std::uintptr_t to) {
@@ -339,8 +381,10 @@ int check_range(std::uintptr_t start, std::uint64_t length, std::uintptr_t& end)
     return end > start && covered(start, end) ? 0 : EINVAL;
 }
 
-// The part of map_region under the lock, with the checked host protection. Needs table_mutex.
-int map_locked(const Mapping& m, int prot, bool reserved, std::uintptr_t& out) {
+// The part of map_region under the lock, with the checked host protection and, for flexible
+// memory, the memfd at `backing` in place of the mapping's own. Needs table_mutex.
+int map_locked(const Mapping& m, int prot, bool reserved, std::uint64_t backing,
+               std::uintptr_t& out) {
     if (const int error = reserve_window()) {
         return error;
     }
@@ -389,15 +433,11 @@ int map_locked(const Mapping& m, int prot, bool reserved, std::uintptr_t& out) {
         return errno;
     }
     out = reinterpret_cast<std::uintptr_t>(at);
-    table.insert_or_assign(out,
-                           Region{out, out + m.length, m.prot, m.flags, m.offset, m.name, reserved});
+    table.insert_or_assign(out, Region{out, out + m.length, m.prot, m.flags, m.offset, m.name,
+                                       reserved, backing});
     if (m.congruent != 0 && (out - m.offset) % m.congruent != 0) {
         log(LogLevel::warn, "map {:#x}-{:#x} of offset {:#x}{}: not congruent mod {:#x}", out,
             out + m.length, m.offset, m.fixed ? " (fixed)" : "", m.congruent);
-    }
-    DirectObserver* const o = observer.load(std::memory_order_acquire);
-    if (o != nullptr && (m.flags & region_direct) != 0) {
-        o->mapped(out, m.length, m.offset);
     }
     return 0;
 }
@@ -413,27 +453,60 @@ int map_region(const Mapping& m, bool reserved, std::uintptr_t& out) {
     if (!prot) {
         return EINVAL;
     }
+    const std::scoped_lock change(change_mutex);
+    std::uint64_t backing = (m.flags & region_direct) != 0 ? m.offset : no_backing;
+    Mapping host = m;
+    if (m.flexible) {
+        const std::optional<std::uint64_t> taken = dmem::allocate_flexible(m.length);
+        if (!taken) {
+            return ENOMEM;
+        }
+        backing = *taken;
+        host.fd = dmem::fd();
+        host.fd_offset = static_cast<off_t>(backing);
+        host.host_flags = (m.host_flags & ~(MAP_ANONYMOUS | MAP_PRIVATE)) | MAP_SHARED;
+    }
     int error = 0;
     {
         const std::scoped_lock lock(table_mutex);
-        error = map_locked(m, *prot, reserved, out);
+        error = map_locked(host, *prot, reserved, backing, out);
+    }
+    if (error != 0) {
+        if (m.flexible) {
+            dmem::free_flexible(backing, m.length);
+        }
+        return error;
     }
     // After the lock: threads may log out of table order (accepted, debug lines only).
-    if (error == 0) {
-        log(LogLevel::debug, "map {:#x}-{:#x} prot {:#x} flags {:#x} '{}'", out, out + m.length,
-            m.prot, m.flags, m.name);
+    log(LogLevel::debug, "map {:#x}-{:#x} prot {:#x} flags {:#x} '{}'", out, out + m.length,
+        m.prot, m.flags, m.name);
+    if (backing != no_backing) {
+        each_observer([&](MappingObserver& o) { o.mapped(out, m.length, backing); });
     }
-    return error;
+    return 0;
 }
 
 }  // namespace
 
-void set_direct_observer(DirectObserver* o) {
-    observer.store(o, std::memory_order_release);
+bool add_mapping_observer(MappingObserver* o) {
+    for (std::atomic<MappingObserver*>& slot : observers) {
+        MappingObserver* expected = nullptr;
+        if (slot.compare_exchange_strong(expected, o, std::memory_order_acq_rel)) {
+            return true;
+        }
+    }
+    return false;
 }
 
-DirectObserver* direct_observer() {
-    return observer.load(std::memory_order_acquire);
+void remove_mapping_observer(MappingObserver* o) {
+    for (std::atomic<MappingObserver*>& slot : observers) {
+        MappingObserver* expected = o;
+        slot.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
+    }
+}
+
+void notify_released(std::uint64_t offset, std::uint64_t length) {
+    each_observer([&](MappingObserver& o) { o.released(offset, length); });
 }
 
 int map(const Mapping& m, std::uintptr_t& out) {
@@ -452,36 +525,53 @@ int reserve(std::uintptr_t hint, std::uint64_t length, std::uint64_t alignment,
     return map_region(m, true, out);
 }
 
+// A failed host call may leave the backed parts mapped, so their flexible memory is only given
+// back on success (unmap and restore as well).
 int restore_reservation(std::uintptr_t start, std::uint64_t length) {
+    const std::scoped_lock change(change_mutex);
     std::uintptr_t end = 0;
+    std::vector<Backed> parts;
     {
         const std::scoped_lock lock(table_mutex);
         if (const int error = check_range(start, length, end)) {
             return error;
         }
-        notify_unmapped(start, end);
+        parts = backed_parts(start, end);
+    }
+    notify_unmapped(parts);
+    {
+        const std::scoped_lock lock(table_mutex);
         if (const int error = reserve_again(start, end)) {
             return error;
         }
         erase_range(start, end);
         table.emplace(start, Region{start, end, 0, 0, 0, "reserved", true});
     }
+    free_flexible(parts);
     log(LogLevel::debug, "reserve again {:#x}-{:#x}", start, end);  // after the lock, as in map
     return 0;
 }
 
 int unmap(std::uintptr_t start, std::uint64_t length) {
+    const std::scoped_lock change(change_mutex);
     std::uintptr_t end = 0;
+    std::vector<Backed> parts;
     {
         const std::scoped_lock lock(table_mutex);
         if (const int error = check_range(start, length, end)) {
             return error;
         }
+        parts = backed_parts(start, end);
+    }
+    notify_unmapped(parts);
+    {
+        const std::scoped_lock lock(table_mutex);
         if (const int error = release(start, end)) {
             return error;
         }
         erase_range(start, end);
     }
+    free_flexible(parts);
     log(LogLevel::debug, "unmap {:#x}-{:#x}", start, end);  // after the lock, as in map
     return 0;
 }
@@ -542,29 +632,40 @@ std::vector<Region> regions() {
 }
 
 int restore(const std::vector<Region>& baseline) {
-    const std::scoped_lock lock(table_mutex);
-    for (const Region& r : baseline) {
-        const auto it = table.find(r.start);
-        if (it == table.end() || it->second != r) {
-            log(LogLevel::warn, "restore: the baseline's region {:#x}-{:#x} '{}' changed",
-                r.start, r.end, r.name);
-            return EINVAL;
-        }
-    }
-    // Regions don't overlap, so every other region was mapped after the baseline.
+    const std::scoped_lock change(change_mutex);
     std::vector<std::pair<std::uintptr_t, std::uintptr_t>> added;
-    for (const auto& [start, r] : table) {
-        if (!std::ranges::binary_search(baseline, start, {}, &Region::start)) {
-            added.emplace_back(start, r.end);
+    std::vector<Backed> parts;
+    {
+        const std::scoped_lock lock(table_mutex);
+        for (const Region& r : baseline) {
+            const auto it = table.find(r.start);
+            if (it == table.end() || it->second != r) {
+                log(LogLevel::warn, "restore: the baseline's region {:#x}-{:#x} '{}' changed",
+                    r.start, r.end, r.name);
+                return EINVAL;
+            }
+        }
+        // Regions don't overlap, so every other region was mapped after the baseline.
+        for (const auto& [start, r] : table) {
+            if (!std::ranges::binary_search(baseline, start, {}, &Region::start)) {
+                added.emplace_back(start, r.end);
+                const std::vector<Backed> more = backed_parts(start, r.end);
+                parts.insert(parts.end(), more.begin(), more.end());
+            }
         }
     }
-    for (const auto& [start, end] : added) {
-        if (const int error = release(start, end)) {
-            return error;
+    notify_unmapped(parts);
+    {
+        const std::scoped_lock lock(table_mutex);
+        for (const auto& [start, end] : added) {
+            if (const int error = release(start, end)) {
+                return error;
+            }
+            erase_range(start, end);
+            log(LogLevel::debug, "restore: unmap {:#x}-{:#x}", start, end);
         }
-        erase_range(start, end);
-        log(LogLevel::debug, "restore: unmap {:#x}-{:#x}", start, end);
     }
+    free_flexible(parts);
     return 0;
 }
 
@@ -597,13 +698,14 @@ std::int32_t map_anonymous_named(void** address, std::uint64_t length, int prot,
     m.length = length;
     m.prot = prot;
     m.host_flags = MAP_PRIVATE | MAP_ANONYMOUS;
+    m.flexible = true;
     m.name = std::move(name);
     std::uintptr_t out = 0;
     if (const int error = vmem::map(m, out)) {
         return sce_fail(error);
     }
-    // Flexible memory is not direct memory, so the GPU memory mirror doesn't hold it. Which of
-    // these mappings the GPU reads is open until a run shows it.
+    // The GPU memory mirror holds direct memory only. Which of these mappings the GPU reads is
+    // open until a run shows it.
     if ((prot & vmem::prot_extra) == vmem::prot_extra) {
         log(LogLevel::info, "flexible memory {:#x}-{:#x} '{}' mapped with protection {:#x}", out,
             out + length, m.name, prot);
@@ -615,8 +717,9 @@ std::int32_t map_anonymous_named(void** address, std::uint64_t length, int prot,
 }  // namespace
 
 // A file mapping (no MAP_ANON) maps the host descriptor behind guest descriptor `fd` at `offset`,
-// which must be a multiple of the guest page size. The offset of an anonymous mapping is ignored.
-// Without MAP_SHARED or MAP_PRIVATE a mapping is private, so it never writes to its file.
+// which must be a multiple of the guest page size. An anonymous mapping is flexible memory, as
+// in the map calls below, and its offset is ignored. Without MAP_SHARED or MAP_PRIVATE a mapping
+// is private, so it never writes to its file.
 void* guest_mmap(void* address, std::uint64_t length, int prot, int flags, int fd,
                  std::int64_t offset) {
     const Flags host = host_map_flags(flags);
@@ -655,6 +758,8 @@ void* guest_mmap(void* address, std::uint64_t length, int prot, int flags, int f
         m.fd_offset = static_cast<off_t>(offset);
         m.flags = 0;
         m.name = std::format("fd {}", fd);
+    } else {
+        m.flexible = true;
     }
     std::uintptr_t out = 0;
     if (const int error = vmem::map(m, out)) {

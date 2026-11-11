@@ -86,7 +86,7 @@ protected:
             GTEST_SKIP() << "no mirror: " << why;
         }
         observer_ = std::make_unique<bb::tools::MirrorObserver>(*mirror_);
-        vmem::set_direct_observer(observer_.get());
+        ASSERT_TRUE(vmem::add_mapping_observer(observer_.get()));
         std::uint64_t offset = ~std::uint64_t{0};
         ASSERT_EQ(allocate_direct(0, direct_memory_size(), 256 * kib, 64 * kib, 0, &offset), 0);
         offset_ = offset;
@@ -137,7 +137,7 @@ protected:
             EXPECT_EQ(sceKernelMunmap(memory_, 256 * kib), 0);
             EXPECT_EQ(release_direct(offset_, 256 * kib), 0);
         }
-        vmem::set_direct_observer(nullptr);
+        vmem::remove_mapping_observer(observer_.get());
     }
 
     CodeReader reader() {
