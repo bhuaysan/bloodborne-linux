@@ -33,7 +33,8 @@ inline constexpr std::string_view run_usage =
     "  --mirror-size GIB    the part of the guest window that the GPU memory mirror holds: 2 to\n"
     "                       32 GiB in steps of 2 (default: 32)\n"
     "  --device NAME        the Vulkan device whose name contains NAME, ignoring case\n"
-    "                       (default: a discrete GPU first)\n";
+    "                       (default: video_core's choice, a discrete GPU first); the GPU memory\n"
+    "                       mirror chooses with the same rule\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
@@ -49,7 +50,7 @@ struct RunOptions {
     std::optional<std::string> log_spec;  // --log, checked with LogFilter::parse
     bool log_file = true;
     bool headless = false;  // --headless: no window and no presentation
-    std::string device;     // --device: the selector of bb::vk::choose_device, empty for any
+    std::string device;     // --device: a device name part (resolve_gpu_id), empty for any
     bool gpu_trace = false;  // --gpu-trace
     unsigned mirror_gib = max_mirror_gib;  // --mirror-size
     bool help = false;  // -h or --help: print run_usage and exit 0

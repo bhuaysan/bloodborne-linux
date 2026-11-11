@@ -7,3 +7,10 @@ add_library(bbhlevideo OBJECT video_out.cpp gnm_driver.cpp gnm_shader.cpp gnm_st
 target_include_directories(bbhlevideo SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/amd-gcn)
 target_link_libraries(bbhlevideo PUBLIC $<COMPILE_ONLY:bbhle> bbpm4 bbshadps4 PRIVATE bb_warnings)
 
+# video_core's presenter behind video out, for bb-run's window: Liverpool and the Presenter in
+# upstream's order (video_core_presenter.hpp). Only where bbvideocore is built.
+if(TARGET bbvideocore)
+    add_library(bbvideopresenter STATIC video_core_presenter.cpp)
+    target_link_libraries(bbvideopresenter PUBLIC bbvideocore bbshadps4 PRIVATE bbcommon bb_warnings)
+    target_include_directories(bbvideopresenter PUBLIC ${PROJECT_SOURCE_DIR}/src)
+endif()

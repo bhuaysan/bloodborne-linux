@@ -19,8 +19,12 @@ endif()
 add_executable(bb-run bb_run.cpp)
 target_link_libraries(bb-run PRIVATE bbrunoptions bbhle bbhlenet bbhlesystem bbhlevideo bbeboottls
     bbgame bbhook bbloader bbcommon bb_warnings)
-# No window for now: #432 replaces video out with shadPS4's driver, which presents in bb-run's
-# window over video_core. bb-run is headless until then.
+# The window and video_core's presenter, where bbvideocore is built; otherwise bb-run is headless
+# only.
+if(TARGET bbvideopresenter)
+    target_link_libraries(bb-run PRIVATE bbvideopresenter)
+    target_compile_definitions(bb-run PRIVATE BB_HAVE_WINDOW)
+endif()
 # The GPU memory mirror, with Vulkan (also without a window).
 if(TARGET bbmirrorobserver)
     target_link_libraries(bb-run PRIVATE bbmirrorobserver bbvk)

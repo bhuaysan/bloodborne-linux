@@ -2,9 +2,10 @@
 // docs/design/m3-core-os.md, "Entry").
 //
 // The initial thread sets up the runtime, maps and links the load set, applies the registered
-// hooks and starts the game's main thread. That thread runs the PRX initialisers and then the
-// eboot's entry. The initial thread waits for it, or for --timeout. bb-run has no window for now:
-// #432 brings it back with video out presenting over video_core.
+// hooks, opens the window and video_core's presenter (unless --headless), starts video out and
+// starts the game's main thread. That thread runs
+// the PRX initialisers and then the eboot's entry. The initial thread waits for it, or for
+// --timeout, and handles the window's events; closing the window ends the run with status 0.
 // The main-loop probe logs when the game reaches its main loop and, with --stop-at-main-loop,
 // ends the run there, on the game's main thread. Every way out after the load goes through
 // end_run, never std::exit: game threads may still run, and host atexit handlers, static
@@ -44,6 +45,7 @@
 #include "hle/system/save_data.hpp"
 #include "hle/system/system.hpp"
 #include "hle/video/video.hpp"
+#include "hle/video/video_out.hpp"
 #include "hook/hook.hpp"
 #include "loader/load_set.hpp"
 #include "tools/main_loop_probe.hpp"
@@ -66,6 +68,11 @@
 #endif
 #ifdef BB_HAVE_VIDEO_CORE
 #include "core/memory.h"
+#endif
+#ifdef BB_HAVE_WINDOW
+#include "core/emulator_settings.h"
+#include "hle/video/video_core_presenter.hpp"
+#include "sdl_window.h"
 #endif
 
 // The guest window lies in AddressSanitizer's shadow gap, which ASan keeps PROT_NONE without this
@@ -113,6 +120,10 @@ struct Mirror {
 Mirror* mirror = nullptr;
 #endif
 
+#ifdef BB_HAVE_WINDOW
+void log_presented();
+#endif
+
 // Flushes stdio and the log and ends the process without host atexit handlers or static
 // destructors, as the HLE _exit does.
 [[noreturn]] void end_run(int status) {
@@ -143,6 +154,9 @@ Mirror* mirror = nullptr;
         bb::common::log(LogLevel::info, channel, "draws: {} recorded, {} unsupported, {} failed",
                         stats.recorded, stats.unsupported, stats.failed);
     }
+#endif
+#ifdef BB_HAVE_WINDOW
+    log_presented();
 #endif
     std::fflush(nullptr);
     bb::common::log_flush();
@@ -203,7 +217,53 @@ void* game_main(void* p) {
     end_run(0);
 }
 
-// Starts game_main on a thread of its own and waits for it, at most `timeout_seconds`.
+#ifdef BB_HAVE_WINDOW
+// The window and video_core's presenter behind video out (docs/design/renderer.md, "Startup
+// order"). Never destroyed: the present thread presents until the process ends.
+struct Display {
+    std::unique_ptr<Frontend::WindowSDL> window;
+    std::unique_ptr<bb::hle::video::VideoCorePresenter> presenter;
+};
+Display* display = nullptr;
+
+// Opens the window and creates the presenter on it, or logs why not and leaves `display` null:
+// the run then goes on headless.
+void open_display(const std::string& device_selector) {
+    std::string why;
+    const std::optional<std::int32_t> gpu_id = bb::hle::video::resolve_gpu_id(device_selector, why);
+    if (!gpu_id) {
+        bb::common::log(LogLevel::warn, channel, "no window, running headless: {}", why);
+        return;
+    }
+    bb::shader::set_gpu_id(*gpu_id);
+    auto d = std::make_unique<Display>();
+    d->window = Frontend::WindowSDL::Open("Bloodborne", 1280, 720, why);
+    if (!d->window) {
+        bb::common::log(LogLevel::warn, channel, "no window, running headless: {}", why);
+        return;
+    }
+    d->presenter = std::make_unique<bb::hle::video::VideoCorePresenter>(*d->window);
+    display = d.release();
+}
+
+// Handles the window's events for up to `timeout_ms`; ends the run once it is closed.
+void pump_display(std::int32_t timeout_ms) {
+    if (!display->window->PumpEvents(timeout_ms)) {
+        bb::common::log(LogLevel::info, channel, "window closed");
+        end_run(0);
+    }
+}
+
+void log_presented() {
+    if (display != nullptr) {
+        bb::common::log(LogLevel::info, channel, "{} game frames presented",
+                        display->presenter->game_frames());
+    }
+}
+#endif
+
+// Starts game_main on a thread of its own and waits for it, at most `timeout_seconds`, handling
+// the window's events meanwhile.
 [[noreturn]] void run_game(Game& game, std::optional<unsigned> timeout_seconds) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -215,19 +275,37 @@ void* game_main(void* p) {
         end_run(1);
     }
     pthread_attr_destroy(&attr);
-    if (!timeout_seconds) {
+#ifdef BB_HAVE_WINDOW
+    const bool windowed = display != nullptr;
+#else
+    const bool windowed = false;
+#endif
+    if (!timeout_seconds && !windowed) {
         pthread_join(thread, nullptr);
         end_run(0);  // not reached: game_main ends the process
     }
     timespec deadline{};
     clock_gettime(CLOCK_MONOTONIC, &deadline);
-    deadline.tv_sec += *timeout_seconds;
+    deadline.tv_sec += timeout_seconds.value_or(0);
     while (true) {
-        const int err = pthread_clockjoin_np(thread, nullptr, CLOCK_MONOTONIC, &deadline);
-        if (err == ETIMEDOUT) {
+        timespec until = deadline;
+#ifdef BB_HAVE_WINDOW
+        if (windowed) {
+            pump_display(16);  // waits for events up to 16 ms, then checks the game
+            clock_gettime(CLOCK_MONOTONIC, &until);
+        }
+#endif
+        const bool past_deadline = timeout_seconds && (until.tv_sec > deadline.tv_sec ||
+                                                       (until.tv_sec == deadline.tv_sec &&
+                                                        until.tv_nsec >= deadline.tv_nsec));
+        if (past_deadline) {
+            until = deadline;
+        }
+        const int err = pthread_clockjoin_np(thread, nullptr, CLOCK_MONOTONIC, &until);
+        if (err == ETIMEDOUT && (!windowed || past_deadline)) {
             break;
         }
-        if (err == EINTR) {
+        if (err == ETIMEDOUT || err == EINTR) {
             continue;
         }
         end_run(0);  // not reached: game_main ends the process
@@ -390,6 +468,14 @@ int start(const bb::tools::RunOptions& options) {
             game->eboot->runtime(bb::tools::frame_pacer + bb::tools::frame_pacer_size)),
         options.stop_at_main_loop, start_time};
     bb::hle::kernel::set_gettimeofday_observer(&observe_gettimeofday);
+#ifdef BB_HAVE_WINDOW
+    if (!options.headless) {
+        open_display(options.device);
+    }
+    bb::hle::video::start_video_out(display != nullptr ? display->presenter.get() : nullptr);
+#else
+    bb::hle::video::start_video_out(nullptr);
+#endif
 #ifdef BB_HAVE_MIRROR
     open_mirror(nullptr, options.device, options.mirror_gib);
 #endif

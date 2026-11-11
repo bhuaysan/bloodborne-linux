@@ -4,18 +4,23 @@
 
 #include <dlfcn.h>
 
+#include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <gtest/gtest.h>
 #include <imgui.h>
 
+#include "hle/video/video_core_presenter.hpp"
 #include "imgui/renderer/imgui_impl_vulkan.h"
 #include "imgui/renderer/texture_manager.h"
 #include "sdl_window.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -114,4 +119,31 @@ TEST(VideoCore, CreatesAndDestroysRendererOnLavapipe) {
         }
     }
     liverpool.reset();
+}
+
+// --device: a name part, in any case, picks the device's index in the instance's order; no match
+// gives nothing and names the devices; no selector leaves the choice to the instance.
+TEST(VideoCore, ResolvesTheDeviceSelectorToAGpuIndex) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    std::string why;
+    EXPECT_EQ(bb::hle::video::resolve_gpu_id("", why), -1);
+    const vk::UniqueInstance instance =
+        Vulkan::CreateInstance(Frontend::WindowSystemType::Headless, false, false);
+    const auto [result, devices] = instance->enumeratePhysicalDevices();
+    ASSERT_EQ(result, vk::Result::eSuccess);
+    ASSERT_FALSE(devices.empty());
+    const vk::PhysicalDeviceProperties last = devices.back().getProperties();
+    std::string name = last.deviceName.data();
+    for (char& c : name) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    const std::optional<std::int32_t> id = bb::hle::video::resolve_gpu_id(name, why);
+    ASSERT_TRUE(id.has_value()) << why;
+    const vk::PhysicalDeviceProperties chosen = devices[*id].getProperties();
+    EXPECT_STRCASEEQ(chosen.deviceName.data(), last.deviceName.data());
+
+    EXPECT_EQ(bb::hle::video::resolve_gpu_id("no such device 0x5ca1ab1e", why), std::nullopt);
+    EXPECT_NE(why.find(last.deviceName.data()), std::string::npos) << why;
 }
