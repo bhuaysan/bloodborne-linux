@@ -287,7 +287,9 @@ TEST(GnmShaderGame, LayoutsAgreeWithTheShaderFiles) {
         }
     }
     EXPECT_EQ(failures, 0);
-    EXPECT_EQ(checked.size(), 3u);  // every stage written so far
+    // Every stage written so far, with the file counts of the full extraction (a truncated one
+    // must fail): VS 10585, PS 3209, CS 69.
+    EXPECT_EQ(checked, (std::map<int, int>{{1, 10585}, {2, 3209}, {4, 69}}));
 }
 
 }  // namespace
