@@ -56,6 +56,10 @@ VideoCorePresenter& liverpool() {
 
 TEST(GnmLiverpool, RunsCommandBuffersWithoutAWindow) {
     CommandProcessor& gpu = liverpool();
+    // As bb-run does before the game submits: start_gnm creates every interrupt's context, so the
+    // GPU thread's GpuIdle signal never inserts into the controller's map while this thread
+    // registers GfxEop.
+    start_gnm(&gpu);
     std::uint32_t* dwords = guest_page();
     const auto base = reinterpret_cast<std::uint64_t>(dwords);
     std::atomic<int> eops{0};
