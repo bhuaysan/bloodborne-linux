@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <chrono>
 #include <future>
+#include <memory>
 #include <optional>
 #include <cstdint>
 #include <cstring>
@@ -350,6 +351,21 @@ TEST(KernelDmem, BatchMapsIntoAReservationAndUndoes) {
     EXPECT_EQ(release_direct(offset, 2 * page_size), 0);
 }
 
+// Keeps an observer registered for its scope, so that a test that returns early never leaves one
+// behind.
+struct Registered {
+    vmem::MappingObserver* observer;
+    explicit Registered(vmem::MappingObserver* o) : observer(o) {
+        added = vmem::add_mapping_observer(o);
+    }
+    ~Registered() {
+        vmem::remove_mapping_observer(observer);
+    }
+    Registered(const Registered&) = delete;
+    Registered& operator=(const Registered&) = delete;
+    bool added = false;
+};
+
 // Records the calls of a mapping observer as {kind, address, length, offset}.
 struct Recorder : vmem::MappingObserver {
     struct Call {
@@ -371,7 +387,8 @@ struct Recorder : vmem::MappingObserver {
 // offsets, and releases, also of a range still mapped; reservations it doesn't see.
 TEST(KernelDmem, TheObserverFollowsDirectAndFlexibleMemory) {
     Recorder recorder;
-    ASSERT_TRUE(vmem::add_mapping_observer(&recorder));
+    const Registered registered(&recorder);
+    ASSERT_TRUE(registered.added);
     const std::uint64_t offset = allocate(3 * page_size, 0);
     const std::uintptr_t a = addr(map(offset, 3 * page_size));
     void* anonymous = nullptr;
@@ -545,16 +562,23 @@ TEST(KernelDmem, FlexibleMemoryEndsWithItsArea) {
 
 // An observer that looks up the region table from another thread, as the GPU thread does while
 // the observer waits for it. It records whether the lookup finished, which it can't while the
-// kernel holds the table's lock. The lookups are kept until the probe goes, so that a lookup
-// still waiting for the lock never blocks the observer.
+// kernel holds the table's lock, and whether it found the region still there: an unmap notice
+// comes before the region and its host mapping go. The lookups are kept until the probe goes, so
+// that a lookup still waiting for the lock never blocks the observer.
 struct LockProbe : vmem::MappingObserver {
     std::vector<bool> finished;
+    std::vector<bool> present;
     std::vector<std::future<std::optional<vmem::Region>>> lookups;
     void probe(std::uintptr_t address) {
         lookups.push_back(
             std::async(std::launch::async, [address] { return vmem::find(address); }));
-        finished.push_back(lookups.back().wait_for(std::chrono::seconds(5)) ==
-                           std::future_status::ready);
+        const bool ready =
+            lookups.back().wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+        finished.push_back(ready);
+        if (ready) {
+            const std::optional<vmem::Region> region = lookups.back().get();
+            present.push_back(region && !region->reserved && region->backing != vmem::no_backing);
+        }
     }
     void mapped(std::uintptr_t a, std::uint64_t, std::uint64_t) override { probe(a); }
     void unmapped(std::uintptr_t a, std::uint64_t, std::uint64_t) override { probe(a); }
@@ -563,7 +587,8 @@ struct LockProbe : vmem::MappingObserver {
 
 TEST(KernelDmem, TheObserverRunsWithoutTheRegionLock) {
     LockProbe probe;
-    ASSERT_TRUE(vmem::add_mapping_observer(&probe));
+    std::optional<Registered> registered(&probe);
+    ASSERT_TRUE(registered->added);
     const std::uint64_t offset = allocate(page_size, 0);
     void* const direct = map(offset, page_size);
     void* flexible = nullptr;
@@ -578,8 +603,9 @@ TEST(KernelDmem, TheObserverRunsWithoutTheRegionLock) {
     EXPECT_EQ(sceKernelMunmap(flexible, page_size), 0);
     EXPECT_EQ(sceKernelMunmap(range, page_size), 0);
     EXPECT_EQ(release_direct(offset, page_size), 0);
-    vmem::remove_mapping_observer(&probe);
+    registered.reset();
     EXPECT_EQ(probe.finished, std::vector<bool>(6, true));
+    EXPECT_EQ(probe.present, std::vector<bool>(6, true));
 }
 
 // Observers are kept side by side up to the limit, and a removed one sees nothing more.
@@ -591,10 +617,13 @@ TEST(KernelDmem, ObserversAreAddedAndRemoved) {
         void released(std::uint64_t, std::uint64_t) override {}
     };
     std::vector<Counter> counters(vmem::max_mapping_observers + 1);
+    std::vector<std::unique_ptr<Registered>> registered;
     for (std::size_t i = 0; i < vmem::max_mapping_observers; ++i) {
-        ASSERT_TRUE(vmem::add_mapping_observer(&counters[i]));
+        registered.push_back(std::make_unique<Registered>(&counters[i]));
+        ASSERT_TRUE(registered.back()->added);
     }
-    EXPECT_FALSE(vmem::add_mapping_observer(&counters.back()));
+    registered.push_back(std::make_unique<Registered>(&counters.back()));
+    EXPECT_FALSE(registered.back()->added);
     vmem::remove_mapping_observer(&counters[1]);
     void* p = nullptr;
     EXPECT_EQ(map_anonymous(&p, page_size, 3, 0), 0);
