@@ -10,7 +10,6 @@
 #include "common/log.hpp"
 #include "common/stb.h"
 #include "common/types.h"
-#include "sdl_window.h"
 #include "shadps4_host/failure.hpp"
 #include "video_core/cache_storage.h"
 #include "video_core/renderdoc.h"
@@ -69,16 +68,3 @@ u32 ConsumeWithOverlaysScreenshotRequests() { return 0; }
 ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 
 }  // namespace VideoCore
-
-// The window: #432. No native window behind it yet, so GetWindowInfo reports a headless one, with
-// which the instance creates its device without a surface.
-namespace Frontend {
-
-s32 WindowSDL::GetWidth() const { host_missing("Frontend::WindowSDL::GetWidth (#432)"); }
-s32 WindowSDL::GetHeight() const { host_missing("Frontend::WindowSDL::GetHeight (#432)"); }
-SDL_Window* WindowSDL::GetSDLWindow() const {
-    host_missing("Frontend::WindowSDL::GetSDLWindow (#432)");
-}
-WindowSystemInfo WindowSDL::GetWindowInfo() const { return {}; }
-
-}  // namespace Frontend

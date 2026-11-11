@@ -18,6 +18,11 @@ enum GpuReadbacksMode : int {
 
 namespace bb::shader {
 
+// The index of the Vulkan device the renderer's instance uses, -1 (the default) for its own
+// choice. Set before the instance is created.
+s32 gpu_id();
+void set_gpu_id(s32 id);
+
 struct FixedSettings {
     // Shader translation.
     static constexpr bool IsDumpShaders() { return false; }
@@ -39,8 +44,9 @@ struct FixedSettings {
     static constexpr bool IsRcasEnabled() { return true; }
     static constexpr int GetRcasAttenuation() { return 250; }
 
-    // Vulkan. GPU id -1 lets the instance pick the device.
-    static constexpr s32 GetGpuId() { return -1; }
+    // Vulkan. GPU id -1 lets the instance pick the device; bb-run sets the index --device names
+    // (set_gpu_id).
+    static s32 GetGpuId() { return gpu_id(); }
     static constexpr bool IsRenderdocEnabled() { return false; }
     static constexpr bool IsVkValidationEnabled() { return false; }
     static constexpr bool IsVkValidationCoreEnabled() { return true; }

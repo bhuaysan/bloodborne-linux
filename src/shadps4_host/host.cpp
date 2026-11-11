@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <map>
 #include <string>
 
@@ -16,6 +17,7 @@
 #include "common/path_util.h"
 #include "common/runtime_dirs.hpp"
 #include "common/thread.h"
+#include "core/emulator_settings.h"
 #include "shadps4_host/failure.hpp"
 
 namespace {
@@ -74,6 +76,13 @@ void assert_fail_impl() {
 [[noreturn]] void bb::shadps4::host_missing(std::string_view what) {
     bb::common::log_fatal("shadps4", fmt::format("not provided by the host layer: {}", what));
 }
+
+namespace {
+std::atomic<s32> chosen_gpu_id{-1};
+}  // namespace
+
+s32 bb::shader::gpu_id() { return chosen_gpu_id; }
+void bb::shader::set_gpu_id(s32 id) { chosen_gpu_id = id; }
 
 // Names the calling thread for debuggers. Linux takes at most 15 characters.
 void Common::SetCurrentThreadName(const char* name) {

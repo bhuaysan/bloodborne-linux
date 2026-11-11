@@ -113,7 +113,8 @@ if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
     list(FILTER BB_VIDEO_CORE_SOURCES EXCLUDE REGEX "/video_core/(cache_storage|renderdoc)\\.cpp$")
     # memory.cpp builds guest memory on the kernel's vmem and dmem, so every executable that links
     # bbvideocore also links bbhle (an OBJECT library, which only executables link).
-    add_library(bbvideocore STATIC ${BB_VIDEO_CORE_SOURCES} memory.cpp video_core_host.cpp)
+    add_library(bbvideocore STATIC ${BB_VIDEO_CORE_SOURCES} memory.cpp video_core_host.cpp
+        sdl_window.cpp imgui_impl_sdl3.cpp)
     add_dependencies(bbvideocore host_shaders)
     target_include_directories(bbvideocore SYSTEM PUBLIC ${HOST_SHADERS_INCLUDE})
     # Boost's pool/singleton_pool.hpp (for range_set.h) comes from the commit of third_party/boost
