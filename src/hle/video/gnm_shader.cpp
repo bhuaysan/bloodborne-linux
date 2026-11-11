@@ -140,10 +140,68 @@ std::int32_t sceGnmSetCsShader(std::uint32_t* cmd, std::uint32_t dwords,
     return p.pad(cs_shader_dwords);
 }
 
+std::int32_t sceGnmSetEsShader(std::uint32_t* cmd, std::uint32_t dwords,
+                               const std::uint32_t* regs, std::uint32_t modifier) {
+    if (!valid("ES", cmd, dwords, es_shader_dwords, regs, modifier)) {
+        return gnm_shader_error;
+    }
+    Packets p(cmd);
+    p.program(mmSPI_SHADER_PGM_LO_ES, mmSPI_SHADER_PGM_RSRC1_ES, regs,
+              modified(regs[2], modifier, rsrc1_modifier_bits));
+    return p.pad(es_shader_dwords);
+}
+
+std::int32_t sceGnmSetGsShader(std::uint32_t* cmd, std::uint32_t dwords,
+                               const std::uint32_t* regs) {
+    if (!valid("GS", cmd, dwords, gs_shader_dwords, regs)) {
+        return gnm_shader_error;
+    }
+    Packets p(cmd);
+    p.program(mmSPI_SHADER_PGM_LO_GS, mmSPI_SHADER_PGM_RSRC1_GS, regs, regs[2]);
+    p.context(mmVGT_STRMOUT_CONFIG, {regs[4]});
+    p.context(mmVGT_GS_OUT_PRIM_TYPE, {regs[5]});
+    p.context(mmVGT_GS_INSTANCE_CNT, {regs[6]});
+    return p.pad(gs_shader_dwords);
+}
+
+std::int32_t sceGnmSetHsShader(std::uint32_t* cmd, std::uint32_t dwords,
+                               const std::uint32_t* regs, std::uint32_t ls_hs_config) {
+    if (!valid("HS", cmd, dwords, hs_shader_dwords, regs)) {
+        return gnm_shader_error;
+    }
+    Packets p(cmd);
+    p.program(mmSPI_SHADER_PGM_LO_HS, mmSPI_SHADER_PGM_RSRC1_HS, regs, regs[2]);
+    p.context(mmVGT_HOS_MAX_TESS_LEVEL, {regs[5], regs[6]});  // and VGT_HOS_MIN_TESS_LEVEL
+    p.context(mmVGT_TF_PARAM, {regs[4]});
+    p.context(mmVGT_LS_HS_CONFIG, {ls_hs_config});
+    return p.pad(hs_shader_dwords);
+}
+
+std::int32_t sceGnmSetLsShader(std::uint32_t* cmd, std::uint32_t dwords,
+                               const std::uint32_t* regs, std::uint32_t modifier) {
+    // A modifier that sets only SGPRS replaces only that field; one that sets anything else
+    // (VGPR_COMP_CNT) replaces both.
+    const std::uint32_t fields =
+        (modifier & 0xfffffc3fu) == 0 ? 0x3c0u : rsrc1_modifier_bits;
+    if (!valid("LS", cmd, dwords, ls_shader_dwords, regs, modifier)) {
+        return gnm_shader_error;
+    }
+    Packets p(cmd);
+    p.program(mmSPI_SHADER_PGM_LO_LS, mmSPI_SHADER_PGM_RSRC1_LS, regs,
+              modified(regs[2], modifier, fields));
+    return p.pad(ls_shader_dwords);
+}
+
 BB_HLE_FUNCTION("libSceGnmDriver", "gAhCn6UiU4Y", sceGnmSetVsShader);
 BB_HLE_FUNCTION("libSceGnmDriver", "V31V01UiScY", sceGnmSetVsShader);  // sceGnmUpdateVsShader
 BB_HLE_FUNCTION("libSceGnmDriver", "bQVd5YzCal0", sceGnmSetPsShader);
 BB_HLE_FUNCTION("libSceGnmDriver", "4MgRw-bVNQU", sceGnmSetPsShader);  // sceGnmUpdatePsShader
 BB_HLE_FUNCTION("libSceGnmDriver", "KXltnCwEJHQ", sceGnmSetCsShader);
+BB_HLE_FUNCTION("libSceGnmDriver", "FUHG8sQ3R58", sceGnmSetEsShader);
+BB_HLE_FUNCTION("libSceGnmDriver", "UJwNuMBcUAk", sceGnmSetGsShader);
+BB_HLE_FUNCTION("libSceGnmDriver", "nLM2i2+65hA", sceGnmSetGsShader);  // sceGnmUpdateGsShader
+BB_HLE_FUNCTION("libSceGnmDriver", "VJNjFtqiF5w", sceGnmSetHsShader);
+BB_HLE_FUNCTION("libSceGnmDriver", "GNlx+y7xPdE", sceGnmSetHsShader);  // sceGnmUpdateHsShader
+BB_HLE_FUNCTION("libSceGnmDriver", "vckdzbQ46SI", sceGnmSetLsShader);
 
 }  // namespace bb::hle::video

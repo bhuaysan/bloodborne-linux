@@ -104,6 +104,59 @@ TEST(GnmShader, CsWritesItsRegisters) {
                                         sh(0x207, {0x20, 4, 1})}));
 }
 
+TEST(GnmShader, EsWritesItsRegistersAndAppliesTheModifier) {
+    const std::uint32_t regs[] = {0x55, 0, 0x30c00c5, 0x20, 0};
+    const auto es = [&](std::uint32_t modifier) {
+        return run(es_shader_dwords, [&](std::uint32_t* cmd, std::uint32_t n) {
+            return sceGnmSetEsShader(cmd, n, regs, modifier);
+        });
+    };
+    const auto expected = [](std::uint32_t rsrc1) {
+        return padded(es_shader_dwords, {sh(0xc8, {0x55, 0}), sh(0xca, {rsrc1, 0x20})});
+    };
+    EXPECT_EQ(es(0), expected(0x30c00c5));
+    EXPECT_EQ(es(0x40), expected(0xc0045));
+    EXPECT_EQ(es(0x1000380), expected(0x10c0385));
+}
+
+TEST(GnmShader, GsWritesItsRegisters) {
+    const std::uint32_t regs[] = {0x66, 0, 0xc0081, 0x30, 7, 1, 2};
+    EXPECT_EQ(run(gs_shader_dwords,
+                  [&](std::uint32_t* cmd, std::uint32_t n) {
+                      return sceGnmSetGsShader(cmd, n, regs);
+                  }),
+              padded(gs_shader_dwords,
+                     {sh(0x88, {0x66, 0}), sh(0x8a, {0xc0081, 0x30}), ctx(0x2e5, {7}),
+                      ctx(0x29b, {1}), ctx(0x2e4, {2})}));
+}
+
+TEST(GnmShader, HsWritesItsRegistersAndTheLsHsConfig) {
+    const std::uint32_t regs[] = {0x77, 0, 0xc0082, 0x40, 0x25, 0x42800000, 0x3f800000};
+    EXPECT_EQ(run(hs_shader_dwords,
+                  [&](std::uint32_t* cmd, std::uint32_t n) {
+                      return sceGnmSetHsShader(cmd, n, regs, 0x11e0);
+                  }),
+              padded(hs_shader_dwords,
+                     {sh(0x108, {0x77, 0}), sh(0x10a, {0xc0082, 0x40}),
+                      ctx(0x286, {0x42800000, 0x3f800000}), ctx(0x2db, {0x25}),
+                      ctx(0x2d6, {0x11e0})}));
+}
+
+TEST(GnmShader, LsReplacesOnlyTheFieldsTheModifierSets) {
+    const std::uint32_t regs[] = {0x88, 0, 0x30c00c5, 0x50};
+    const auto ls = [&](std::uint32_t modifier) {
+        return run(ls_shader_dwords, [&](std::uint32_t* cmd, std::uint32_t n) {
+            return sceGnmSetLsShader(cmd, n, regs, modifier);
+        });
+    };
+    const auto expected = [](std::uint32_t rsrc1) {
+        return padded(ls_shader_dwords, {sh(0x148, {0x88, 0}), sh(0x14a, {rsrc1, 0x50})});
+    };
+    EXPECT_EQ(ls(0), expected(0x30c00c5));
+    EXPECT_EQ(ls(0x80), expected(0x30c0085));       // SGPRS only: VGPR_COMP_CNT stays
+    EXPECT_EQ(ls(0x1000080), expected(0x10c0085));  // both fields replaced
+}
+
 TEST(GnmShader, BadArgumentsFailAndWriteNothing) {
     std::uint32_t regs[] = {0x44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     Words buffer(64, poison);
@@ -118,6 +171,22 @@ TEST(GnmShader, BadArgumentsFailAndWriteNothing) {
     regs[1] = 0xffffffff;  // the shader files' placeholder for the high address dword
     EXPECT_EQ(sceGnmSetPsShader(cmd, ps_shader_dwords, regs), gnm_shader_error);
     EXPECT_EQ(sceGnmSetCsShader(cmd, cs_shader_dwords, regs), gnm_shader_error);
+    regs[1] = 0;
+    EXPECT_EQ(sceGnmSetEsShader(cmd, es_shader_dwords - 1, regs, 0), gnm_shader_error);
+    EXPECT_EQ(sceGnmSetEsShader(cmd, es_shader_dwords, nullptr, 0), gnm_shader_error);
+    EXPECT_EQ(sceGnmSetEsShader(cmd, es_shader_dwords, regs, 0x400), gnm_shader_error);
+    EXPECT_EQ(sceGnmSetGsShader(cmd, gs_shader_dwords - 1, regs), gnm_shader_error);
+    EXPECT_EQ(sceGnmSetGsShader(nullptr, gs_shader_dwords, regs), gnm_shader_error);
+    EXPECT_EQ(sceGnmSetHsShader(cmd, hs_shader_dwords - 1, regs, 0), gnm_shader_error);
+    EXPECT_EQ(sceGnmSetHsShader(cmd, hs_shader_dwords, nullptr, 0), gnm_shader_error);
+    EXPECT_EQ(sceGnmSetLsShader(cmd, ls_shader_dwords - 1, regs, 0), gnm_shader_error);
+    EXPECT_EQ(sceGnmSetLsShader(cmd, ls_shader_dwords, regs, 0x400), gnm_shader_error);
+    EXPECT_EQ(sceGnmSetLsShader(cmd, ls_shader_dwords, regs, 0x4000000), gnm_shader_error);
+    regs[1] = 0xffffffff;
+    EXPECT_EQ(sceGnmSetEsShader(cmd, es_shader_dwords, regs, 0), gnm_shader_error);
+    EXPECT_EQ(sceGnmSetGsShader(cmd, gs_shader_dwords, regs), gnm_shader_error);
+    EXPECT_EQ(sceGnmSetHsShader(cmd, hs_shader_dwords, regs, 0), gnm_shader_error);
+    EXPECT_EQ(sceGnmSetLsShader(cmd, ls_shader_dwords, regs, 0), gnm_shader_error);
     EXPECT_EQ(buffer, Words(64, poison));
 }
 
@@ -247,12 +316,16 @@ TEST(GnmShaderGame, LayoutsAgreeWithTheShaderFiles) {
                 case 1: result = sceGnmSetVsShader(out.data(), 64, block.data(), 0); break;
                 case 2: result = sceGnmSetPsShader(out.data(), 64, block.data()); break;
                 case 4: result = sceGnmSetCsShader(out.data(), 64, block.data()); break;
-                default: continue;  // ES, GS, HS and LS: the second part of #271
+                case 3: result = sceGnmSetGsShader(out.data(), 64, block.data()); break;
+                case 5: result = sceGnmSetEsShader(out.data(), 64, block.data(), 0); break;
+                case 6: result = sceGnmSetLsShader(out.data(), 64, block.data(), 0); break;
+                case 7: result = sceGnmSetHsShader(out.data(), 64, block.data(), 0x11e0); break;
+                default: continue;
             }
             ASSERT_EQ(result, 0) << file.path();
             const auto r = registers(out);
             // PGM_LO by stage; RSRC1 follows it by two in the graphics stages.
-            const std::map<int, std::uint32_t> pgm_lo = {{1, 0x2c48}, {2, 0x2c08}, {4, 0x2e0c}};
+            const std::map<int, std::uint32_t> pgm_lo = {{1, 0x2c48}, {2, 0x2c08}, {3, 0x2c88}, {4, 0x2e0c}, {5, 0x2cc8}, {6, 0x2d48}, {7, 0x2d08}};
             const std::uint32_t lo = pgm_lo.at(stage);
             const std::uint32_t rsrc1 = r.at(stage == 4 ? 0x2e12 : lo + 2);
             bool ok = r.at(lo) == block[0] && r.at(lo + 1) == 0 && rsrc1 == block[2] &&
@@ -280,6 +353,15 @@ TEST(GnmShaderGame, LayoutsAgreeWithTheShaderFiles) {
                 ok = ok && r.at(0x2e07) == (u32(0x18) & 0xffff) &&
                      r.at(0x2e08) == u32(0x18) >> 16 && r.at(0x2e09) == (u32(0x1c) & 0xffff);
             }
+            if (stage == 3) {
+                // VGT_STRMOUT_CONFIG is set exactly for the 10 entries with stream-out records
+                // (not counted here); the primitive type is a small number.
+                ok = ok && r.at(0xa2e5) == block[4] && r.at(0xa29b) == block[5] && block[5] <= 2 &&
+                     r.at(0xa2e4) == block[6];
+            } else if (stage == 7) {
+                ok = ok && r.at(0xa2db) == block[4] && (block[4] & 3) == (u32(0x18) & 0xff) &&
+                     r.at(0xa286) == u32(0x20) && block[5] == u32(0x20) && r.at(0xa2d6) == 0x11e0;
+            }
             ++checked[stage];
             if (!ok && ++failures <= 20) {
                 ADD_FAILURE() << file.path() << ": registers disagree with the file";
@@ -288,8 +370,8 @@ TEST(GnmShaderGame, LayoutsAgreeWithTheShaderFiles) {
     }
     EXPECT_EQ(failures, 0);
     // Every stage written so far, with the file counts of the full extraction (a truncated one
-    // must fail): VS 10585, PS 3209, CS 69.
-    EXPECT_EQ(checked, (std::map<int, int>{{1, 10585}, {2, 3209}, {4, 69}}));
+    // must fail): VS 10585, PS 3209, GS 1701, CS 69, ES 1699, LS 850, HS 404.
+    EXPECT_EQ(checked, (std::map<int, int>{{1, 10585}, {2, 3209}, {3, 1701}, {4, 69}, {5, 1699}, {6, 850}, {7, 404}}));
 }
 
 }  // namespace

@@ -954,7 +954,7 @@ TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
         std::string_view library, nid;
         void* impl;
     };
-    const std::array<Expected, 26> expected{{
+    const std::array<Expected, 32> expected{{
         {"libSceVideoOut", "Up36PTk687E", reinterpret_cast<void*>(&sceVideoOutOpen)},
         {"libSceGnmDriver", "29oKvKXzEZo", reinterpret_cast<void*>(&gnm_map_compute_queue)},
         {"libSceGnmDriver", "ArSg-TGinhk", reinterpret_cast<void*>(&gnm_unmap_compute_queue)},
@@ -980,6 +980,12 @@ TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
         {"libSceGnmDriver", "bQVd5YzCal0", reinterpret_cast<void*>(&sceGnmSetPsShader)},
         {"libSceGnmDriver", "4MgRw-bVNQU", reinterpret_cast<void*>(&sceGnmSetPsShader)},
         {"libSceGnmDriver", "KXltnCwEJHQ", reinterpret_cast<void*>(&sceGnmSetCsShader)},
+        {"libSceGnmDriver", "FUHG8sQ3R58", reinterpret_cast<void*>(&sceGnmSetEsShader)},
+        {"libSceGnmDriver", "UJwNuMBcUAk", reinterpret_cast<void*>(&sceGnmSetGsShader)},
+        {"libSceGnmDriver", "nLM2i2+65hA", reinterpret_cast<void*>(&sceGnmSetGsShader)},
+        {"libSceGnmDriver", "VJNjFtqiF5w", reinterpret_cast<void*>(&sceGnmSetHsShader)},
+        {"libSceGnmDriver", "GNlx+y7xPdE", reinterpret_cast<void*>(&sceGnmSetHsShader)},
+        {"libSceGnmDriver", "vckdzbQ46SI", reinterpret_cast<void*>(&sceGnmSetLsShader)},
         {"libSceGnmDriver", "b0xyllnVY-I", reinterpret_cast<void*>(&sceGnmAddEqEvent)},
         {"libSceGnmDriver", "PVT+fuoS9gU", reinterpret_cast<void*>(&sceGnmDeleteEqEvent)},
         {"libSceGnmDriver", "UoYY0DWMC0U", reinterpret_cast<void*>(&sceGnmGetEqEventType)},

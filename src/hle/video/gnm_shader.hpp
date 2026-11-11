@@ -17,7 +17,6 @@
 // (0x108fbb0, 0x108fdd0) call them only when the context register dwords of the new block equal
 // those of the bound one, so writing those registers again sets the same state.
 //
-// The ES, GS, HS and LS imports follow in a second part of #271.
 #pragma once
 
 #include <cstdint>
@@ -32,6 +31,10 @@ inline constexpr std::uint32_t rsrc1_modifier_bits = ~0xfcfffc3fu;
 inline constexpr std::uint32_t vs_shader_dwords = 29;
 inline constexpr std::uint32_t ps_shader_dwords = 40;
 inline constexpr std::uint32_t cs_shader_dwords = 25;
+inline constexpr std::uint32_t es_shader_dwords = 20;
+inline constexpr std::uint32_t gs_shader_dwords = 29;
+inline constexpr std::uint32_t hs_shader_dwords = 30;
+inline constexpr std::uint32_t ls_shader_dwords = 23;
 
 // NIDs gAhCn6UiU4Y and V31V01UiScY. regs: PGM_LO, PGM_HI, RSRC1, RSRC2, SPI_VS_OUT_CONFIG,
 // SPI_SHADER_POS_FORMAT, PA_CL_VS_OUT_CNTL. A non-zero modifier replaces the rsrc1_modifier_bits
@@ -50,5 +53,25 @@ std::int32_t sceGnmSetPsShader(std::uint32_t* cmd, std::uint32_t dwords,
 // Z. Called for the graphics ring (0x1090020) and for compute command buffers (0x1090ec0).
 std::int32_t sceGnmSetCsShader(std::uint32_t* cmd, std::uint32_t dwords,
                                const std::uint32_t* regs);
+
+// NID FUHG8sQ3R58. regs: PGM_LO, PGM_HI, RSRC1, RSRC2. The modifier works as for the VS.
+std::int32_t sceGnmSetEsShader(std::uint32_t* cmd, std::uint32_t dwords,
+                               const std::uint32_t* regs, std::uint32_t modifier);
+
+// NIDs UJwNuMBcUAk and nLM2i2+65hA. regs: PGM_LO, PGM_HI, RSRC1, RSRC2, VGT_STRMOUT_CONFIG,
+// VGT_GS_OUT_PRIM_TYPE, VGT_GS_INSTANCE_CNT.
+std::int32_t sceGnmSetGsShader(std::uint32_t* cmd, std::uint32_t dwords,
+                               const std::uint32_t* regs);
+
+// NIDs VJNjFtqiF5w and GNlx+y7xPdE. regs: PGM_LO, PGM_HI, RSRC1, RSRC2, VGT_TF_PARAM,
+// VGT_HOS_MAX_TESS_LEVEL, VGT_HOS_MIN_TESS_LEVEL. `ls_hs_config` is the value of VGT_LS_HS_CONFIG.
+std::int32_t sceGnmSetHsShader(std::uint32_t* cmd, std::uint32_t dwords,
+                               const std::uint32_t* regs, std::uint32_t ls_hs_config);
+
+// NID vckdzbQ46SI. regs: PGM_LO, PGM_HI, RSRC1, RSRC2. A modifier that sets only SGPRS replaces
+// that field of RSRC1; one that sets VGPR_COMP_CNT replaces both. The packets write RSRC2 once
+// (shadPS4 writes it twice, the second time together with RSRC1).
+std::int32_t sceGnmSetLsShader(std::uint32_t* cmd, std::uint32_t dwords,
+                               const std::uint32_t* regs, std::uint32_t modifier);
 
 }  // namespace bb::hle::video
