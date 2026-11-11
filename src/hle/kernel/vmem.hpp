@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -102,7 +103,7 @@ public:
     // unmapped or reserved again; the host mapping is still there.
     virtual void unmapped(std::uintptr_t address, std::uint64_t length, std::uint64_t offset) = 0;
     // Direct memory [offset, offset + length) is about to be released (dmem.hpp), possibly still
-    // mapped. Called under the allocation table's lock.
+    // mapped. Called under the allocation table's lock; it may take the change lock.
     virtual void released(std::uint64_t offset, std::uint64_t length) = 0;
 };
 
@@ -115,6 +116,10 @@ bool add_mapping_observer(MappingObserver* observer);
 void remove_mapping_observer(MappingObserver* observer);
 // Tells every observer that direct memory [offset, offset + length) is about to be released.
 void notify_released(std::uint64_t offset, std::uint64_t length);
+
+// Runs `call` under the change lock, as the observers' mapped and unmapped run (not from them):
+// no map, unmap or restore changes the table meanwhile, and `call` must not do one either.
+void without_changes(const std::function<void()>& call);
 
 // Maps at the lowest free `alignment`-aligned address of the guest window, at or above the hint
 // if it lies in the window (host MAP_32BIT: where the host picks), or at the fixed address, and

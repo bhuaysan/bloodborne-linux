@@ -4,9 +4,10 @@
 // Changed for bloodborne-linux, 2026-11-11: the guest memory video_core reads and writes, on top
 // of our kernel's vmem and dmem (docs/design/renderer.md, "One backing for every page the GPU can
 // see", "The mapping observer replaces the mirror's"). The backing is dmem's memfd; the page table
-// follows the kernel's mapping observer instead of upstream's own map calls. CopySparseMemory and
-// Protect are upstream's; ClampRangeSize and TryWriteBacking keep upstream's rules on the kernel's
-// region table and the page table.
+// follows the kernel's mapping observer instead of upstream's own map calls, and SetRasterizer
+// replays the mappings made before it. CopySparseMemory and Protect are upstream's;
+// IsValidMapping, ClampRangeSize and TryWriteBacking keep upstream's rules on the kernel's guest
+// window, region table and the page table.
 // License texts: third_party/shadps4/LICENSES/
 
 #include "core/memory.h"
@@ -19,6 +20,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <fmt/format.h>
 
@@ -72,11 +74,23 @@ public:
         }
     }
 
-    // The mappings of a released range stay, and so do their backing entries: they point at the
-    // same memfd pages as the guest mapping, which read zeros once dmem punched the hole. The
-    // eboot unmaps before it releases, except on one clean-up path that drops the mapping
-    // (dmem.cpp, release_direct).
-    void released(std::uint64_t, std::uint64_t) override {}
+    // Upstream unmaps the direct mappings of a released range, the caches first. Ours stay mapped
+    // (dmem.cpp, release_direct) with their backing entries, which read zeros once dmem punched
+    // the hole; only the caches drop the range. A later unmap tells them again, to no effect.
+    void released(std::uint64_t offset, std::uint64_t length) override {
+        Vulkan::Rasterizer* const r = manager.rasterizer.load(std::memory_order_acquire);
+        vmem::without_changes([&] {
+            for (const vmem::Region& g : vmem::regions()) {
+                const u64 low = std::max(offset, g.backing);
+                const u64 high = std::min(offset + length, g.backing + (g.end - g.start));
+                const VAddr address = g.start + (low - g.backing);
+                if (r != nullptr && (g.flags & vmem::region_direct) != 0 && low < high &&
+                    manager.IsValidGpuMapping(address, high - low)) {
+                    r->UnmapMemory(address, high - low);
+                }
+            }
+        });
+    }
 
 private:
     MemoryManager& manager;
@@ -102,9 +116,43 @@ MemoryManager::~MemoryManager() {
     ::munmap(impl.backing_base, dmem::memfd_size);
 }
 
+// Upstream's memory map holds the whole guest address space, free ranges included, so a range is
+// valid when it lies in that space. Ours is the guest window, where the kernel places every
+// mapping that has no fixed address, and the guest mappings outside it.
 bool MemoryManager::IsValidMapping(VAddr virtual_addr, u64 size) {
     const VAddr end = virtual_addr + std::max<u64>(size, 1);
-    return end > virtual_addr && vmem::mapped(virtual_addr, end);
+    if (end <= virtual_addr) {
+        return false;
+    }
+    for (VAddr at = virtual_addr; at < end;) {
+        if (vmem::in_window(at, at + 1)) {
+            at = vmem::window_end;
+            continue;
+        }
+        const std::optional<vmem::Region> region = vmem::find(at);
+        if (!region) {
+            return false;
+        }
+        at = region->end;
+    }
+    return true;
+}
+
+void MemoryManager::SetRasterizer(Vulkan::Rasterizer* rasterizer_) {
+    // Ours: the rasterizer hears of the GPU-visible mappings made before it, and no map or unmap
+    // runs in between.
+    vmem::without_changes([&] {
+        rasterizer.store(rasterizer_, std::memory_order_release);
+        if (rasterizer_ == nullptr) {
+            return;
+        }
+        for (const vmem::Region& r : vmem::regions()) {
+            if (r.backing != vmem::no_backing && IsValidGpuMapping(r.start, r.end - r.start)) {
+                rasterizer_->RegisterMemory(r.start, r.end - r.start);
+                rasterizer_->MapMemory(r.start, r.end - r.start);
+            }
+        }
+    });
 }
 
 u64 MemoryManager::ClampRangeSize(VAddr virtual_addr, u64 size) {
@@ -117,9 +165,14 @@ u64 MemoryManager::ClampRangeSize(VAddr virtual_addr, u64 size) {
     ASSERT_MSG(IsValidMapping(virtual_addr), "Attempted to access invalid address {:#x}",
                virtual_addr);
 
-    // Clamp size to the remaining size of the current region.
+    // Clamp size to the remaining size of the current region. Upstream's free ranges are regions
+    // of their own; ours end at the next region or the end of the window.
     std::optional<vmem::Region> region = vmem::find(virtual_addr);
-    u64 clamped_size = region->end - virtual_addr;
+    VAddr region_end = region ? region->end : vmem::window_end;
+    for (const vmem::Region& r : region ? std::vector<vmem::Region>{} : vmem::regions()) {
+        region_end = r.start > virtual_addr ? std::min(region_end, r.start) : region_end;
+    }
+    u64 clamped_size = region_end - virtual_addr;
 
     // Keep adding to the size while there is contiguous mapped address space.
     while (clamped_size < size) {
@@ -158,7 +211,8 @@ void MemoryManager::CopySparseMemory(VAddr virtual_addr, u8* dest, u64 size) {
 }
 
 // Upstream writes the backed mappings from the start of the range on, up to the first that has
-// no backing, and fails if the first has none. Here the same goes page by page.
+// no backing, and fails if the first has none. Here the same goes page by page. A range that runs
+// past its mapping is valid, as upstream's; only its backed start is written.
 bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
     VAddr virtual_addr = std::bit_cast<VAddr>(address);
     ASSERT_MSG(IsValidMapping(virtual_addr, size), "Attempted to access invalid address {:#x}",
@@ -185,31 +239,36 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
 
 MemoryManager::Coverage MemoryManager::BackingCoverage() {
     Coverage out;
-    for (const vmem::Region& r : vmem::regions()) {
-        if (r.backing == vmem::no_backing || !IsValidGpuMapping(r.start, r.end - r.start)) {
-            continue;
+    // The observer changes the table only under the same serialization.
+    vmem::without_changes([&] {
+        const std::vector<vmem::Region> all = vmem::regions();
+        out.all_regions = all.size();
+        for (const vmem::Region& r : all) {
+            if (r.backing == vmem::no_backing || !IsValidGpuMapping(r.start, r.end - r.start)) {
+                continue;
+            }
+            ++out.regions;
+            bool covered = true;
+            for (VAddr at = r.start; at < r.end; at += GUEST_PAGE_SIZE) {
+                const auto* entry = impl.backing_pages.find(at >> GUEST_PAGE_BITS);
+                covered = covered && entry &&
+                          *entry == impl.backing_base + r.backing + (at - r.start);
+                ++out.pages;
+            }
+            out.covered += covered ? 1 : 0;
         }
-        ++out.regions;
-        bool covered = true;
-        for (VAddr at = r.start; at < r.end; at += GUEST_PAGE_SIZE) {
-            const auto* entry = impl.backing_pages.find(at >> GUEST_PAGE_BITS);
-            covered = covered && entry &&
-                      *entry == impl.backing_base + r.backing + (at - r.start);
-            ++out.pages;
+        // Every page of the GPU's 40 bits, a level-one page at a time.
+        constexpr u64 l2_pages = u64{1} << (AddressSpace::Traits::ADDRESS_SPACE_BITS -
+                                            AddressSpace::Traits::L1_BITS - GUEST_PAGE_BITS);
+        for (u64 l1 = 0; l1 < (u64{1} << AddressSpace::Traits::L1_BITS); ++l1) {
+            if (impl.backing_pages.find(l1 * l2_pages) == nullptr) {
+                continue;
+            }
+            for (u64 page = l1 * l2_pages; page < (l1 + 1) * l2_pages; ++page) {
+                out.table_pages += *impl.backing_pages.find(page) != nullptr ? 1 : 0;
+            }
         }
-        out.covered += covered ? 1 : 0;
-    }
-    // Every page of the GPU's 40 bits, a level-one page at a time.
-    constexpr u64 l2_pages = u64{1} << (AddressSpace::Traits::ADDRESS_SPACE_BITS -
-                                        AddressSpace::Traits::L1_BITS - GUEST_PAGE_BITS);
-    for (u64 l1 = 0; l1 < (u64{1} << AddressSpace::Traits::L1_BITS); ++l1) {
-        if (impl.backing_pages.find(l1 * l2_pages) == nullptr) {
-            continue;
-        }
-        for (u64 page = l1 * l2_pages; page < (l1 + 1) * l2_pages; ++page) {
-            out.table_pages += *impl.backing_pages.find(page) != nullptr ? 1 : 0;
-        }
-    }
+    });
     return out;
 }
 

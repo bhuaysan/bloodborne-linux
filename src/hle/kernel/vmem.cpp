@@ -509,6 +509,11 @@ void notify_released(std::uint64_t offset, std::uint64_t length) {
     each_observer([&](MappingObserver& o) { o.released(offset, length); });
 }
 
+void without_changes(const std::function<void()>& call) {
+    const std::scoped_lock change(change_mutex);
+    call();
+}
+
 int map(const Mapping& m, std::uintptr_t& out) {
     return map_region(m, false, out);
 }

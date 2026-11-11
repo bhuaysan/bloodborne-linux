@@ -81,10 +81,10 @@ public:
     MemoryManager();
     ~MemoryManager();
 
-    // The rasterizer registers itself when it is created. Ours: null unregisters it.
-    void SetRasterizer(Vulkan::Rasterizer* rasterizer_) {
-        rasterizer.store(rasterizer_, std::memory_order_release);
-    }
+    // The rasterizer registers itself when it is created. Ours: it hears of the GPU-visible
+    // mappings that are already there, and null unregisters it. A rasterizer unregisters before it
+    // goes; ~Rasterizer doesn't, as upstream's.
+    void SetRasterizer(Vulkan::Rasterizer* rasterizer_);
 
     AddressSpace& GetAddressSpace() {
         return impl;
@@ -96,8 +96,7 @@ public:
         return virtual_addr + size < max_gpu_address;
     }
 
-    // Whether guest mappings (reservations included) cover the range, or hold the address for
-    // size 0.
+    // Whether the range lies in the guest's address space, mapped or not (memory.cpp).
     bool IsValidMapping(VAddr virtual_addr, u64 size = 0);
     u64 ClampRangeSize(VAddr virtual_addr, u64 size);
     void CopySparseMemory(VAddr source, u8* dest, u64 size);
@@ -106,6 +105,7 @@ public:
     // Ours: how far the backing table covers the GPU-visible guest mappings (the direct and
     // flexible regions that IsValidGpuMapping accepts), for bb-run's log and the tests.
     struct Coverage {
+        u64 all_regions = 0;    // the regions in the kernel's table
         u64 regions = 0;        // GPU-visible regions in the kernel's table
         u64 covered = 0;        // of them, those whose every page points at its backing
         u64 pages = 0;          // their pages

@@ -4,6 +4,7 @@
 
 #include <dlfcn.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -118,8 +119,51 @@ TEST(GuestMemory, UnbackedPagesReadZerosAndTakeNoWrites) {
     memory().CopySparseMemory(addr(range), read.data(), read.size());
     EXPECT_EQ(read, std::vector<u8>(16, 0));
     EXPECT_EQ(sceKernelMunmap(range, page_size), 0);
-    EXPECT_FALSE(memory().IsValidMapping(addr(range), page_size));
-    EXPECT_FALSE(memory().IsValidMapping(addr(range)));
+}
+
+// As upstream's, a range is valid where it lies in the guest's address space, mapped or not: the
+// guest window and the guest mappings outside it. Nothing else is.
+TEST(GuestMemory, ValidRangesLieInTheGuestAddressSpace) {
+    memory();
+    void* range = nullptr;
+    ASSERT_EQ(reserve_range(&range, page_size, 0, 0), 0);
+    EXPECT_EQ(sceKernelMunmap(range, page_size), 0);
+    EXPECT_TRUE(memory().IsValidMapping(addr(range)));
+    EXPECT_TRUE(memory().IsValidMapping(addr(range), page_size));
+    EXPECT_TRUE(memory().IsValidMapping(vmem::window_start, vmem::window_end - vmem::window_start));
+    EXPECT_TRUE(memory().IsValidMapping(vmem::window_end - 1));
+    ASSERT_FALSE(vmem::find(vmem::window_end).has_value());
+    ASSERT_FALSE(vmem::find(vmem::window_start - 1).has_value());
+    EXPECT_FALSE(memory().IsValidMapping(vmem::window_end));
+    EXPECT_FALSE(memory().IsValidMapping(vmem::window_end - page_size, 2 * page_size));
+    EXPECT_FALSE(memory().IsValidMapping(vmem::window_start - 1, 2));
+    EXPECT_FALSE(memory().IsValidMapping(~std::uintptr_t{0} - 1, 4));  // wraps around
+}
+
+// A write or read that runs past its mapping into a reservation and free address space doesn't
+// fail: the backed start is written, and the rest reads zeros.
+TEST(GuestMemory, RangesPastAMappingUseTheirBackedStart) {
+    memory();
+    void* range = nullptr;
+    ASSERT_EQ(reserve_range(&range, 3 * page_size, 0, 0), 0);
+    const std::uintptr_t r = addr(range);
+    std::uint64_t offset = 0;
+    ASSERT_EQ(allocate_direct(0, direct_memory_size(), page_size, 0, 0, &offset), 0);
+    const BatchEntry entry{r, offset, page_size, 3, {}, dmem::batch_map};
+    ASSERT_EQ(map_direct_batch(&entry, 1, nullptr), 0);
+    ASSERT_EQ(sceKernelMunmap(reinterpret_cast<void*>(r + 2 * page_size), page_size), 0);
+    const std::uintptr_t at = r + page_size - 4;
+    std::vector<u8> data(2 * page_size + 4, 0x5a);
+    ASSERT_TRUE(memory().IsValidMapping(at, data.size()));
+    EXPECT_TRUE(memory().TryWriteBacking(reinterpret_cast<void*>(at), data.data(), data.size()));
+    EXPECT_EQ(std::memcmp(reinterpret_cast<const void*>(at), data.data(), 4), 0);
+    std::vector<u8> read(data.size(), 0xcc);
+    memory().CopySparseMemory(at, read.data(), read.size());
+    std::vector<u8> expected(data.size(), 0);
+    std::fill_n(expected.begin(), 4, u8{0x5a});
+    EXPECT_EQ(read, expected);
+    EXPECT_EQ(sceKernelMunmap(range, 2 * page_size), 0);
+    EXPECT_EQ(release_direct(offset, page_size), 0);
 }
 
 // A buffer of a GiB or more is clamped to the mapped regions that follow each other from its
@@ -143,15 +187,36 @@ TEST(GuestMemory, LargeRangesAreClampedToTheMappedRegions) {
     EXPECT_EQ(release_direct(offset, gib), 0);
 }
 
+// From free address space, as from upstream's free ranges, the clamp runs to the next region and
+// then on over the mapped ones.
+TEST(GuestMemory, LargeRangesFromFreeSpaceAreClampedToo) {
+    memory();
+    constexpr std::uint64_t gib = std::uint64_t{1} << 30;
+    void* range = nullptr;
+    ASSERT_EQ(reserve_range(&range, 3 * gib, 0, 0), 0);
+    const std::uintptr_t r = addr(range);
+    std::uint64_t offset = 0;
+    ASSERT_EQ(allocate_direct(0, direct_memory_size(), gib, 0, 0, &offset), 0);
+    const BatchEntry entry{r + gib, offset, gib, 3, {}, dmem::batch_map};
+    ASSERT_EQ(map_direct_batch(&entry, 1, nullptr), 0);
+    ASSERT_EQ(sceKernelMunmap(range, gib), 0);
+    ASSERT_FALSE(vmem::find(r + 0x100).has_value());
+    EXPECT_EQ(memory().ClampRangeSize(r + 0x100, 3 * gib), 2 * gib - 0x100);
+    EXPECT_EQ(sceKernelMunmap(reinterpret_cast<void*>(r + gib), 2 * gib), 0);
+    EXPECT_EQ(release_direct(offset, gib), 0);
+}
+
 // The coverage bb-run logs: every GPU-visible region is backed page by page, and the table holds
 // no other entries.
 TEST(GuestMemory, CoverageCountsTheBackedRegions) {
     const Core::MemoryManager::Coverage before = memory().BackingCoverage();
+    EXPECT_EQ(before.all_regions, vmem::regions().size());
     EXPECT_EQ(before.covered, before.regions);
     EXPECT_EQ(before.table_pages, before.pages);
     Direct d(3);
     void* const p = flexible(2);
     const Core::MemoryManager::Coverage during = memory().BackingCoverage();
+    EXPECT_EQ(during.all_regions, before.all_regions + 2);
     EXPECT_EQ(during.regions, before.regions + 2);
     EXPECT_EQ(during.covered, during.regions);
     EXPECT_EQ(during.pages, before.pages + 5);
@@ -220,8 +285,15 @@ void start_imgui(const Vulkan::Instance& instance) {
     ImGui::Core::TextureManager::StartWorker();
 }
 
-// The rasterizer hears of GPU-visible maps and unmaps of direct and flexible memory, and of
-// nothing once it unregistered.
+// Unregisters the rasterizer before it goes, also when a test returns early.
+struct Unregister {
+    ~Unregister() {
+        memory().SetRasterizer(nullptr);
+    }
+};
+
+// The rasterizer hears of the GPU-visible mappings of direct and flexible memory made before it,
+// then of each map, unmap and release, and of nothing once it unregistered.
 TEST(GuestMemory, TheRasterizerFollowsTheMappings) {
     if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
         GTEST_SKIP() << reason;
@@ -233,7 +305,31 @@ TEST(GuestMemory, TheRasterizerFollowsTheMappings) {
         start_imgui(instance);
         Vulkan::Scheduler scheduler{instance};
         Vulkan::Runtime runtime{instance, scheduler};
+        Direct early(1);
+        void* const early_flexible = flexible(1);
+        void* reservation = nullptr;
+        ASSERT_EQ(reserve_range(&reservation, page_size, 0, 0), 0);
         Vulkan::Rasterizer rasterizer{instance, scheduler, runtime, liverpool.get()};
+        const Unregister unregister;
+        EXPECT_TRUE(rasterizer.IsMapped(addr(early.address), early.length));
+        EXPECT_TRUE(rasterizer.IsMapped(addr(early_flexible), page_size));
+        EXPECT_FALSE(rasterizer.IsMapped(addr(reservation), page_size));
+        early.unmap();
+        EXPECT_EQ(sceKernelMunmap(early_flexible, page_size), 0);
+        EXPECT_EQ(sceKernelMunmap(reservation, page_size), 0);
+        EXPECT_FALSE(rasterizer.IsMapped(addr(early.address), early.length));
+        EXPECT_FALSE(rasterizer.IsMapped(addr(early_flexible), page_size));
+        // A released range that stays mapped leaves the caches, not the backing.
+        Direct released(2);
+        const std::uintptr_t kept = addr(released.address);
+        EXPECT_TRUE(rasterizer.IsMapped(kept, released.length));
+        EXPECT_EQ(release_direct(released.offset + page_size, page_size), 0);
+        EXPECT_TRUE(rasterizer.IsMapped(kept, page_size));
+        EXPECT_FALSE(rasterizer.IsMapped(kept + page_size, page_size));
+        EXPECT_NE(entry(kept + page_size), nullptr);
+        EXPECT_EQ(sceKernelMunmap(released.address, released.length), 0);
+        EXPECT_EQ(release_direct(released.offset, page_size), 0);
+        EXPECT_FALSE(rasterizer.IsMapped(kept, released.length));
         Direct d(2);
         void* const p = flexible(1);
         EXPECT_TRUE(rasterizer.IsMapped(addr(d.address), d.length));
