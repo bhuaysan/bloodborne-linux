@@ -27,6 +27,9 @@ set(BB_VIDEO_CORE_SOURCES ${BB_SHADPS4_SOURCES})
 set(BB_VIDEO_CORE_REGEX
     "/(imgui|video_core/(amdgpu/(liverpool|regs)|buffer_cache|texture_cache|renderer_vulkan|cache_storage|page_manager|renderdoc))")
 list(FILTER BB_SHADPS4_SOURCES EXCLUDE REGEX ${BB_VIDEO_CORE_REGEX})
+# The system libraries of R5 (docs/design/os-libraries.md) build once their host headers exist
+# (#456).
+list(FILTER BB_SHADPS4_SOURCES EXCLUDE REGEX "/(core/libraries/(ajm|audio|avplayer|ime|pad|system|videodec)|input)/")
 list(FILTER BB_VIDEO_CORE_SOURCES INCLUDE REGEX ${BB_VIDEO_CORE_REGEX})
 
 add_library(bbshadps4 STATIC ${BB_SHADPS4_SOURCES} host.cpp fault_handler.cpp)
