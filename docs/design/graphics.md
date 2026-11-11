@@ -1,5 +1,7 @@
 # Graphics design (M4)
 
+> **Historical.** The code this note describes (`src/gpu`, the memory mirror, `bb-gcn`, `bb-run --gpu-trace` and `--mirror-size`) was removed in #435. The renderer is shadPS4's `video_core` behind the host layer of [renderer.md](renderer.md). The note is kept as a record of what was built and why; its names no longer exist in the tree.
+
 > **Superseded.** On 2026-11-09 we decided to derive the renderer and the shader translator from shadPS4 (see [the roadmap](../roadmap.md)). This note describes the GPU path built before that. Don't extend it.
 
 How the game's GPU work reaches Vulkan: the shader translator (GCN → SPIR-V), how it is tested offline, how shaders are extracted from the game files, and a sketch of the command-buffer side. The first wave of M4 issues builds on this note and runs without the game booting. Change this note in the same PR when an implementation has to deviate.

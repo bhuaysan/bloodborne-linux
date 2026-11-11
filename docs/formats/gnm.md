@@ -300,7 +300,7 @@ Planned in [graphics.md](../design/graphics.md#command-buffers-to-the-first-fram
 
 What the note gives the PM4 and submission issues:
 
-1. **PM4 parser core** (`bbpm4`; the packet names are checked): type-3 headers and the type-2 filler, the four register spaces and the predicate/shader-type bits, `NOP` skipping, `INDIRECT_BUFFER`/`INDIRECT_BUFFER_CONST`, `REWIND` (wait for the valid bit), and a log of unknown opcodes. Tests with synthetic streams.
+1. **PM4 parser core** (`bbpm4`, removed in #435; the packet names are checked): type-3 headers and the type-2 filler, the four register spaces and the predicate/shader-type bits, `NOP` skipping, `INDIRECT_BUFFER`/`INDIRECT_BUFFER_CONST`, `REWIND` (wait for the valid bit), and a log of unknown opcodes. Tests with synthetic streams.
 2. **Constant engine**: CE RAM, `WRITE_CONST_RAM`/`DUMP_CONST_RAM`, the CE/DE counters, running a DCB and its CCB together.
 3. **Draw and dispatch state**: the draw packets in the table, index state, user data, and the snapshot for the backend.
 4. **`libSceGnmDriver` HLE, submission**: the three submits, the call after flip, default-state writers (standard packets from the AMD default, padded), markers (`NOP` with the string), the profiling queries returning 0, and logging stubs for the unreachable imports.

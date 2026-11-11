@@ -32,7 +32,7 @@ Each step is a GitHub milestone, and tasks are tracked as issues.
 | **R8 Performance and quality** | The best version of the game | Frame times stay even at the game's original frame rate on the reference machine. Shaders are translated ahead of time and pipelines are cached on disk, so a second visit to an area doesn't stutter. A resolution and a frame rate above the PS4's can be set and run without gameplay faults. Engine render functions are replaced with hooks where that measurably helps |
 | **Decomp** (continuous, as needed) | Replace game code where that helps | No end state of its own. A function is decompiled when an issue needs it for a bug, a crash, a bottleneck or a limit such as the frame rate. It passes its differential test and is hooked in. Progress is tracked in `symbols/functions.csv` |
 
-`src/gpu/gcn` stays through R3 because `src/gpu/vk` and tests still depend on it, so it goes in R4 (maintainer decision, 2026-11-09).
+`src/gpu` was removed in R4 (#435), with the memory mirror, `bb-gcn` and the options of the old path (maintainer decision, 2026-11-09).
 
 The maintainer tags each completed milestone after its review.
 
