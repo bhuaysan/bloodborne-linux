@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "common/log.hpp"
+#include "core/emulator_settings.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
 #include "video_core/amdgpu/liverpool.h"
@@ -76,14 +77,20 @@ bool VideoCorePresenter::must_keep_drawing() {
     return ImGui::Core::MustKeepDrawing();
 }
 
-std::optional<std::int32_t> resolve_gpu_id(std::string_view selector, std::string& why) {
+std::optional<std::int32_t> resolve_gpu_id(std::string_view selector,
+                                          Frontend::WindowSystemType window_type,
+                                          std::string& why) {
     if (selector.empty()) {
         return -1;
     }
-    // A headless instance enumerates the same devices in the same order as the renderer's (the
-    // loader's order). Not a Vulkan::Instance: its destructor needs a logical device.
+    // Created as the Presenter's Vulkan::Instance creates its own: the same window system type,
+    // so the same surface extension, and the same layers. The loader's implicit layers (Mesa's
+    // device_select) may order the devices by what the instance enables, so a headless instance
+    // could list them in another order. Not a Vulkan::Instance: its destructor needs a logical
+    // device.
     const vk::UniqueInstance instance =
-        Vulkan::CreateInstance(Frontend::WindowSystemType::Headless, false, false);
+        Vulkan::CreateInstance(window_type, EmulatorSettings.IsVkValidationEnabled(),
+                               EmulatorSettings.IsVkCrashDiagnosticEnabled());
     const auto [result, devices] = instance->enumeratePhysicalDevices();
     if (result != vk::Result::eSuccess) {
         why = "vkEnumeratePhysicalDevices: " + vk::to_string(result);

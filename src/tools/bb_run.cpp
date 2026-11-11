@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <exception>
 #include <filesystem>
@@ -226,22 +227,31 @@ struct Display {
 };
 Display* display = nullptr;
 
-// Opens the window and creates the presenter on it, or logs why not and leaves `display` null:
-// the run then goes on headless.
+// Opens the window and creates the presenter on it. Without a display (neither WAYLAND_DISPLAY
+// nor DISPLAY set) it logs that and leaves `display` null: the run then goes on headless. A window
+// that fails to open on a display ends the run with status 1, a --device that names no device
+// with status 2.
 void open_display(const std::string& device_selector) {
-    std::string why;
-    const std::optional<std::int32_t> gpu_id = bb::hle::video::resolve_gpu_id(device_selector, why);
-    if (!gpu_id) {
-        bb::common::log(LogLevel::warn, channel, "no window, running headless: {}", why);
+    if (std::getenv("WAYLAND_DISPLAY") == nullptr && std::getenv("DISPLAY") == nullptr) {
+        bb::common::log(LogLevel::warn, channel,
+                        "no window, running headless: neither WAYLAND_DISPLAY nor DISPLAY is set");
         return;
     }
-    bb::shader::set_gpu_id(*gpu_id);
+    std::string why;
     auto d = std::make_unique<Display>();
     d->window = Frontend::WindowSDL::Open("Bloodborne", 1280, 720, why);
     if (!d->window) {
-        bb::common::log(LogLevel::warn, channel, "no window, running headless: {}", why);
-        return;
+        bb::common::log(LogLevel::error, channel, "cannot open the window: {}", why);
+        end_run(1);
     }
+    // After the window: the device order depends on its window system type.
+    const std::optional<std::int32_t> gpu_id =
+        bb::hle::video::resolve_gpu_id(device_selector, d->window->GetWindowInfo().type, why);
+    if (!gpu_id) {
+        bb::common::log(LogLevel::error, channel, "--device: {}", why);
+        end_run(2);
+    }
+    bb::shader::set_gpu_id(*gpu_id);
     d->presenter = std::make_unique<bb::hle::video::VideoCorePresenter>(*d->window);
     display = d.release();
 }

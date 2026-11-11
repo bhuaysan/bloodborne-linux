@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -200,12 +201,13 @@ private:
 
 // Runs bb-run with `args` in `dir`, with the XDG base directories below it and without BB_LOG
 // and BB_GAME_DIR. Captures its standard output and standard error.
-Result run_bb_run(const TempDir& dir, const std::string& args) {
+// `env_args` go to env(1) before the XDG variables, e.g. "-u DISPLAY".
+Result run_bb_run(const TempDir& dir, const std::string& args, const std::string& env_args = "") {
     const std::string d = dir.path().string();
-    return bb::test::run(std::format("cd {} && env -u BB_LOG -u BB_GAME_DIR XDG_DATA_HOME={} "
+    return bb::test::run(std::format("cd {} && env -u BB_LOG -u BB_GAME_DIR {} XDG_DATA_HOME={} "
                                      "XDG_CACHE_HOME={} XDG_CONFIG_HOME={} XDG_STATE_HOME={} {} {} "
                                      "2>&1",
-                                     quote(d), quote(d + "/data"), quote(d + "/cache"),
+                                     quote(d), env_args, quote(d + "/data"), quote(d + "/cache"),
                                      quote(d + "/config"), quote(d + "/state"),
                                      quote(BB_RUN_PATH), args));
 }
@@ -310,6 +312,45 @@ TEST(BbRunGame, ReachesTheMainLoop) {
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_NE(r.output.find("run: main loop reached after "), std::string::npos) << r.output;
     EXPECT_NE(read_log_file(dir).find("run: main loop reached after "), std::string::npos);
+}
+
+// Without a display bb-run runs headless instead of failing, and --device then chooses nothing.
+TEST(BbRunGame, RunsHeadlessWithoutADisplay) {
+    BB_REQUIRE_GAME(game);
+    const TempDir dir;
+    const Result r = run_bb_run(dir,
+                                "--device 'no such device 0x5ca1ab1e' --timeout 10 --profile test "
+                                "--game-dir " +
+                                    quote(game.string()),
+                                "-u WAYLAND_DISPLAY -u DISPLAY");
+    ASSERT_NE(r.status, -1) << r.output;
+    EXPECT_NE(r.status, 1) << r.output;
+    EXPECT_NE(r.status, 2) << r.output;
+    EXPECT_NE(r.output.find(
+                  "no window, running headless: neither WAYLAND_DISPLAY nor DISPLAY is set"),
+              std::string::npos)
+        << r.output;
+    EXPECT_NE(r.output.find("run: calling the entry"), std::string::npos) << r.output;
+}
+
+// With a display, a --device that names no device ends the run with status 2 before the game
+// starts, and says which devices there are.
+TEST(BbRunGame, RejectsADeviceThatNamesNoDevice) {
+    BB_REQUIRE_GAME(game);
+    if (std::getenv("WAYLAND_DISPLAY") == nullptr && std::getenv("DISPLAY") == nullptr) {
+        GTEST_SKIP() << "no display";
+    }
+    const TempDir dir;
+    const Result r = run_bb_run(dir,
+                                "--device 'no such device 0x5ca1ab1e' --timeout 30 --profile test "
+                                "--game-dir " +
+                                    quote(game.string()));
+    EXPECT_EQ(r.status, 2) << r.output;
+    EXPECT_NE(r.output.find("run: --device: no Vulkan device name contains \"no such device "
+                            "0x5ca1ab1e\" (devices: "),
+              std::string::npos)
+        << r.output;
+    EXPECT_EQ(r.output.find("run: calling the entry"), std::string::npos) << r.output;
 }
 
 // The GPU memory mirror follows the game's direct mappings: the run binds them and ends cleanly

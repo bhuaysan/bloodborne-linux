@@ -27,14 +27,15 @@ inline constexpr std::string_view run_usage =
     "  --log SPEC           log filter, as BB_LOG: <channel>=<level> or <level>, comma-separated\n"
     "                       (replaces BB_LOG)\n"
     "  --no-log-file        log to stderr only, not to a file in the logs directory\n"
-    "  --headless           open no window; flips complete without being presented\n"
+    "  --headless           open no window; flips complete without being presented (also when\n"
+    "                       neither WAYLAND_DISPLAY nor DISPLAY is set)\n"
     "  --gpu-trace          write the GPU packets, draws and dispatches of each frame to a file\n"
     "                       in the logs directory\n"
     "  --mirror-size GIB    the part of the guest window that the GPU memory mirror holds: 2 to\n"
     "                       32 GiB in steps of 2 (default: 32)\n"
     "  --device NAME        the Vulkan device whose name contains NAME, ignoring case\n"
     "                       (default: video_core's choice, a discrete GPU first); the GPU memory\n"
-    "                       mirror chooses with the same rule\n";
+    "                       mirror chooses with the same rule; status 2 when none matches\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;

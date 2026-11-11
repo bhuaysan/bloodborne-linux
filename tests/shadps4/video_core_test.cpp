@@ -87,6 +87,12 @@ void start_imgui(const Vulkan::Instance& instance) {
     ImGui::Core::TextureManager::StartWorker();
 }
 
+vk::ArrayWrapper1D<std::uint8_t, VK_UUID_SIZE> device_uuid(vk::PhysicalDevice device) {
+    const auto chain =
+        device.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceIDProperties>();
+    return chain.get<vk::PhysicalDeviceIDProperties>().deviceUUID;
+}
+
 }  // namespace
 
 TEST(VideoCore, CreatesAndDestroysRendererOnLavapipe) {
@@ -121,29 +127,44 @@ TEST(VideoCore, CreatesAndDestroysRendererOnLavapipe) {
     liverpool.reset();
 }
 
-// --device: a name part, in any case, picks the device's index in the instance's order; no match
-// gives nothing and names the devices; no selector leaves the choice to the instance.
-TEST(VideoCore, ResolvesTheDeviceSelectorToAGpuIndex) {
+// --device: a name part, in any case, gives the index under which the Presenter's own instance,
+// created for the window's system type, holds the named device; no match gives nothing and names
+// the devices; no selector leaves the choice to the instance.
+TEST(VideoCore, ResolvesTheDeviceSelectorToTheIndexInThePresentersInstance) {
     if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
         GTEST_SKIP() << reason;
     }
+    Frontend::WindowSDL window;
+    const Frontend::WindowSystemType type = window.GetWindowInfo().type;
     std::string why;
-    EXPECT_EQ(bb::hle::video::resolve_gpu_id("", why), -1);
-    const vk::UniqueInstance instance =
-        Vulkan::CreateInstance(Frontend::WindowSystemType::Headless, false, false);
-    const auto [result, devices] = instance->enumeratePhysicalDevices();
-    ASSERT_EQ(result, vk::Result::eSuccess);
-    ASSERT_FALSE(devices.empty());
-    const vk::PhysicalDeviceProperties last = devices.back().getProperties();
+    EXPECT_EQ(bb::hle::video::resolve_gpu_id("", type, why), -1);
+    // The last device, so that the index is not 0 where there are several.
+    vk::PhysicalDeviceProperties last;
+    vk::ArrayWrapper1D<std::uint8_t, VK_UUID_SIZE> last_uuid;
+    {
+        const vk::UniqueInstance instance = Vulkan::CreateInstance(type, false, false);
+        const auto [result, devices] = instance->enumeratePhysicalDevices();
+        ASSERT_EQ(result, vk::Result::eSuccess);
+        ASSERT_FALSE(devices.empty());
+        last = devices.back().getProperties();
+        last_uuid = device_uuid(devices.back());
+    }
     std::string name = last.deviceName.data();
     for (char& c : name) {
         c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     }
-    const std::optional<std::int32_t> id = bb::hle::video::resolve_gpu_id(name, why);
+    const std::optional<std::int32_t> id = bb::hle::video::resolve_gpu_id(name, type, why);
     ASSERT_TRUE(id.has_value()) << why;
-    const vk::PhysicalDeviceProperties chosen = devices[*id].getProperties();
-    EXPECT_STRCASEEQ(chosen.deviceName.data(), last.deviceName.data());
+    {
+        // The instance the Presenter creates with that index (vk_presenter.cpp) uses this device.
+        Vulkan::Instance instance{window, *id};
+        start_imgui(instance);  // ~Instance shuts ImGui down
+        const vk::PhysicalDeviceProperties chosen = instance.GetPhysicalDevice().getProperties();
+        EXPECT_STRCASEEQ(chosen.deviceName.data(), last.deviceName.data());
+        EXPECT_EQ(device_uuid(instance.GetPhysicalDevice()), last_uuid);
+    }
 
-    EXPECT_EQ(bb::hle::video::resolve_gpu_id("no such device 0x5ca1ab1e", why), std::nullopt);
+    EXPECT_EQ(bb::hle::video::resolve_gpu_id("no such device 0x5ca1ab1e", type, why),
+              std::nullopt);
     EXPECT_NE(why.find(last.deviceName.data()), std::string::npos) << why;
 }
