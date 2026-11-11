@@ -1,0 +1,112 @@
+// The kernel pieces the system libraries use (docs/design/os-libraries.md): guest threads, the
+// process time, the SDK and system versions, and the user on pad slot 1. Each forwards to our
+// kernel or user service, or returns the fixed value its header names.
+
+#include <cstdio>
+#include <format>
+
+#include "common/log.hpp"
+#include "core/libraries/kernel/kernel.h"
+#include "core/libraries/kernel/orbis_error.h"
+#include "core/libraries/kernel/process.h"
+#include "core/libraries/kernel/threads.h"
+#include "core/libraries/kernel/time.h"
+#include "core/user_settings.h"
+#include "hle/kernel/thread.hpp"
+#include "hle/kernel/time.hpp"
+#include "hle/system/system.hpp"
+
+namespace Libraries::Kernel {
+
+namespace {
+// Upstream's default thread stack (ThrStackDefault). AvPlayer decodes video on these threads.
+constexpr std::size_t worker_stack_size = 0x100000;
+}  // namespace
+
+void Thread::Run(std::function<void(std::stop_token)>&& f) {
+    func = std::move(f);
+    bb::hle::kernel::ThreadAttributes attributes;
+    attributes.stack_size = worker_stack_size;
+    const int error =
+        bb::hle::kernel::create_thread_with(&thread, attributes, &Entry, this, nullptr);
+    if (error != 0) {
+        bb::common::log_fatal("shadps4",
+                              std::format("system library thread: create failed, errno {}", error));
+    }
+}
+
+void* Thread::Entry(void* self) {
+    auto* t = static_cast<Thread*>(self);
+    t->func(t->stop.get_token());
+    return nullptr;
+}
+
+void Thread::Join() {
+    if (thread == nullptr) {
+        return;
+    }
+    if (const int error = bb::hle::kernel::join_thread(thread, nullptr); error != 0) {
+        bb::common::log(bb::common::LogLevel::error, "shadps4",
+                        "system library thread: join failed, errno {}", error);
+    }
+    thread = nullptr;
+}
+
+void Thread::Stop() {
+    if (Joinable()) {
+        stop.request_stop();
+        Join();
+    }
+    func = nullptr;
+    stop = std::stop_source{};
+}
+
+u64 sceKernelGetProcessTime() {
+    return bb::hle::kernel::process_time_usec();
+}
+
+s32 sceKernelGetCompiledSdkVersion(s32* ver) {
+    if (ver == nullptr) {
+        return ORBIS_KERNEL_ERROR_EINVAL;
+    }
+    *ver = compiled_sdk_version;
+    return 0;
+}
+
+s32 sceKernelGetSystemSwVersion(SwVersionStruct* ret) {
+    if (ret == nullptr) {
+        return 0;
+    }
+    const u32 v = system_sw_version;
+    ret->hex_representation = v;
+    std::snprintf(ret->text_representation, sizeof(ret->text_representation), "%2x.%03x.%03x",
+                  v >> 24, (v >> 12) & 0xfff, v & 0xfff);
+    return 0;
+}
+
+}  // namespace Libraries::Kernel
+
+UserManager::UserManager() {
+    user.user_id = bb::hle::system::user_id;
+    user.player_index = 1;
+    user.logged_in = true;
+}
+
+User* UserManager::GetUserByID(s32 user_id) {
+    return user_id == user.user_id ? &user : nullptr;
+}
+
+User* UserManager::GetUserByPlayerIndex(s32 index) {
+    return index == user.player_index ? &user : nullptr;
+}
+
+void UserManager::LoginUser(User* u, s32 /*player_index*/) {
+    if (u != nullptr) {
+        u->logged_in = true;
+    }
+}
+
+UserManager& HostUserManager() {
+    static UserManager& manager = *new UserManager;  // leaked: game threads may call in at exit
+    return manager;
+}

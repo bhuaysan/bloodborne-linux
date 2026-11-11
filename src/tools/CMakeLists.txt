@@ -16,8 +16,9 @@ if(TARGET bbvideopresenter)
     target_link_libraries(bb-run PRIVATE bbvideopresenter)
     target_compile_definitions(bb-run PRIVATE BB_HAVE_WINDOW)
 endif()
-# video_core's guest memory (src/shadps4_host/memory.cpp), where bbvideocore is built.
+# video_core's guest memory (src/shadps4_host/memory.cpp) and the system libraries, where
+# bbvideocore is built.
 if(TARGET bbvideocore)
-    target_link_libraries(bb-run PRIVATE bbvideocore)
+    target_link_libraries(bb-run PRIVATE bbvideocore bbsyslibs)
     target_compile_definitions(bb-run PRIVATE BB_HAVE_VIDEO_CORE)
 endif()

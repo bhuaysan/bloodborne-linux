@@ -27,9 +27,11 @@ set(BB_VIDEO_CORE_SOURCES ${BB_SHADPS4_SOURCES})
 set(BB_VIDEO_CORE_REGEX
     "/(imgui|video_core/(amdgpu/(liverpool|regs)|buffer_cache|texture_cache|renderer_vulkan|cache_storage|page_manager|renderdoc))")
 list(FILTER BB_SHADPS4_SOURCES EXCLUDE REGEX ${BB_VIDEO_CORE_REGEX})
-# The system libraries of R5 (docs/design/os-libraries.md) build once their host headers exist
-# (#456).
-list(FILTER BB_SHADPS4_SOURCES EXCLUDE REGEX "/(core/libraries/(ajm|audio|avplayer|ime|pad|system|videodec)|input)/")
+# The system libraries of R5 (docs/design/os-libraries.md) go into bbsyslibs below.
+set(BB_SYSLIBS_REGEX "/(core/libraries/(ajm|audio|avplayer|ime|pad|system|videodec)|input)/")
+set(BB_SYSLIBS_SOURCES ${BB_SHADPS4_SOURCES})
+list(FILTER BB_SYSLIBS_SOURCES INCLUDE REGEX ${BB_SYSLIBS_REGEX})
+list(FILTER BB_SHADPS4_SOURCES EXCLUDE REGEX ${BB_SYSLIBS_REGEX})
 list(FILTER BB_VIDEO_CORE_SOURCES INCLUDE REGEX ${BB_VIDEO_CORE_REGEX})
 
 add_library(bbshadps4 STATIC ${BB_SHADPS4_SOURCES} host.cpp fault_handler.cpp)
@@ -137,6 +139,32 @@ if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
     # buffer, which x86-64 allows.
     set_source_files_properties(${BB_VIDEO_CORE_SOURCES} PROPERTIES
         COMPILE_OPTIONS "-w;$<$<BOOL:${BB_SANITIZE}>:-fno-sanitize=alignment>")
+
+    # The system libraries (docs/design/os-libraries.md): Pad, AudioOut, Ajm, AvPlayer, ImeDialog
+    # and CommonDialog on the host headers here. They draw through the ImGui core and play through
+    # SDL3, so they build where bbvideocore does. Codecs: LibAtrac9 and the system FFmpeg.
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(BB_FFMPEG REQUIRED IMPORTED_TARGET
+        libavcodec libavformat libavutil libswscale libswresample)
+    file(GLOB BB_ATRAC9_SOURCES ${BB_3P}/LibAtrac9/C/src/*.c)
+    add_library(bb_atrac9 STATIC ${BB_ATRAC9_SOURCES})
+    target_include_directories(bb_atrac9 SYSTEM PUBLIC ${BB_3P}/LibAtrac9/C/src)
+    set_target_properties(bb_atrac9 PROPERTIES C_STANDARD 99)
+    target_compile_options(bb_atrac9 PRIVATE -w)
+
+    add_library(bbsyslibs STATIC ${BB_SYSLIBS_SOURCES} syslibs/libs.cpp syslibs/kernel.cpp
+        syslibs/file_sys.cpp syslibs/left_out.cpp syslibs/thread.cpp)
+    target_link_libraries(bbsyslibs
+        PUBLIC bbvideocore bbshadps4
+        PRIVATE bb_atrac9 PkgConfig::BB_FFMPEG SDL3::SDL3 bbcommon bb_warnings)
+    # Our HLE headers (src/hle) for the registry, guest threads and paths. bbhle is an OBJECT
+    # library that executables link, so this takes only its compile settings.
+    target_link_libraries(bbsyslibs PRIVATE $<COMPILE_ONLY:bbhle>)
+    set_source_files_properties(${BB_SYSLIBS_SOURCES} PROPERTIES COMPILE_OPTIONS -w)
+    # Its sample conversion uses SSE4.1 intrinsics (upstream builds for x86-64-v3). The game's
+    # CPU, the PS4's Jaguar, has SSE4.1, so every host that runs the game has it too.
+    set_source_files_properties(${BB_SHADPS4_DIR}/core/libraries/audio/sdl_audio_out.cpp
+        PROPERTIES COMPILE_OPTIONS "-w;-msse4.1")
 else()
     # CI installs all three, so a missing one there would silently drop the video_core tests.
     # Set BB_REQUIRE_VIDEOCORE=OFF to configure without the renderer.

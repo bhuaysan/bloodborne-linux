@@ -53,6 +53,7 @@
 #include "tools/main_loop_probe.hpp"
 #include "tools/run_options.hpp"
 #ifdef BB_HAVE_VIDEO_CORE
+#include "core/libraries/libs.h"
 #include "core/memory.h"
 #include "hle/kernel/vmem.hpp"
 #include "shadps4_host/fault_handler.hpp"
@@ -321,6 +322,10 @@ int start(const bb::tools::RunOptions& options) {
     // tracking needs the fault handler (docs/design/renderer.md).
     guest_memory = Core::Memory::Instance();
     bb::shadps4::install_fault_handler();
+    // The imported system libraries (docs/design/os-libraries.md), before the imports are linked.
+    // A NID that src/hle registers too throws here.
+    Core::Loader::SymbolsResolver symbols;
+    Libraries::InitHLELibs(&symbols);
 #endif
     // Never destroyed: the game runs in it until the process ends.
     auto* game = new Game{bb::loader::map_load_set(*game_dir)};

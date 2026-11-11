@@ -21,4 +21,10 @@ if(TARGET bbvideocore)
     bb_add_test(shadps4_gnm_liverpool_test
         SOURCES gnm_liverpool_test.cpp
         LIBS bbvideopresenter bbvideocore bbhle bbhlevideo bbvktest bbtestguestwindow)
+    # The system libraries registered in the HLE registry, and their host pieces. Its own main
+    # (see syslibs_test.cpp), so gtest and not gtest_main.
+    add_executable(shadps4_syslibs_test syslibs_test.cpp)
+    target_link_libraries(shadps4_syslibs_test PRIVATE bbsyslibs bbvideocore bbhle bbhlesystem
+        bbvktest bbtestsupport GTest::gtest bb_warnings)
+    gtest_discover_tests(shadps4_syslibs_test PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
 endif()

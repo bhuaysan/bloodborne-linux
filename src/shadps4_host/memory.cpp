@@ -147,6 +147,10 @@ MemoryManager::~MemoryManager() {
     ::munmap(impl.backing_base, dmem::memfd_size);
 }
 
+void MemoryManager::InvalidateMemory(VAddr addr, u64 size) {
+    observer->host_writing(addr, size);
+}
+
 // Upstream's memory map holds the whole guest address space, free ranges included, so a range is
 // valid when it lies in that space. Ours is the guest window, where the kernel places every
 // mapping that has no fixed address, and the guest mappings outside it.

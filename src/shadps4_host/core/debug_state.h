@@ -11,7 +11,7 @@ namespace DebugStateType {
 
 class DebugStateImpl {
 public:
-    // Written by the presenter for the tools' statistics and never read here.
+    // Written by the presenter. ImeDialog sizes its window with them.
     std::pair<u32, u32> game_resolution{};
     std::pair<u32, u32> output_resolution{};
     bool is_using_fsr{};

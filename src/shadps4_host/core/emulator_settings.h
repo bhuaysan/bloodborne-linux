@@ -1,10 +1,13 @@
 // What src/shadps4 reads of shadPS4's settings object, fixed at the values this port runs with.
 // A port for one game has nothing to configure here. The values are upstream's defaults
 // (core/emulator_settings.h of v.0.21.0): DMA, inlined fetch shaders, readbacks, userfaultfd, the
-// null GPU, HDR, FSR and every debug aid off, RCAS on, present mode Mailbox. The pipeline cache
+// null GPU, HDR, FSR and every debug aid off, RCAS on, present mode Mailbox; for the system
+// libraries the SDL audio backend on the default device at full volume, the standard pad with
+// motion controls, and ImeDialog's accessibility and short URL panel off. The pipeline cache
 // stays off until R8 makes it work on disk (docs/design/renderer.md).
 #pragma once
 
+#include <string>
 #include <string_view>
 
 #include "common/types.h"
@@ -14,6 +17,12 @@ enum GpuReadbacksMode : int {
     Disabled,
     Relaxed,
     Precise,
+};
+
+// The values of upstream's audio_backend setting. OpenAL is not built (syslibs/left_out.cpp).
+enum AudioBackend : int {
+    SDL,
+    OpenAL,
 };
 
 namespace bb::shader {
@@ -57,6 +66,19 @@ struct FixedSettings {
     static constexpr bool IsVkGuestMarkersEnabled() { return false; }
     static constexpr bool IsPipelineCacheEnabled() { return false; }
     static constexpr bool IsPipelineCacheArchived() { return false; }
+
+    // Sound (AudioOut).
+    static constexpr u32 GetAudioBackend() { return AudioBackend::SDL; }
+    static constexpr int GetVolumeSlider() { return 100; }
+    static std::string GetSDLMainOutputDevice() { return "Default Device"; }
+    static std::string GetSDLPadSpkOutputDevice() { return "Default Device"; }
+
+    // Input (Pad, the controller, ImeDialog).
+    static constexpr bool IsUsingSpecialPad() { return false; }
+    static constexpr int GetSpecialPadClass() { return 1; }
+    static constexpr bool IsMotionControlsEnabled() { return true; }
+    static constexpr bool IsImeAccessibilityEnabled() { return false; }
+    static constexpr bool IsImeUrlMailShortPanel() { return false; }
 
     // The language of the ImGui fonts: 1, upstream's default (English).
     static constexpr int GetConsoleLanguage() { return 1; }
