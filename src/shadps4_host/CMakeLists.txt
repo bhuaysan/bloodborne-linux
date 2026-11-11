@@ -111,7 +111,9 @@ if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
     # cache_storage.cpp is the pipeline cache's storage, which needs miniz and stays off until R8.
     # renderdoc.cpp loads RenderDoc. video_core_host.cpp replaces both with fixed no-ops.
     list(FILTER BB_VIDEO_CORE_SOURCES EXCLUDE REGEX "/video_core/(cache_storage|renderdoc)\\.cpp$")
-    add_library(bbvideocore STATIC ${BB_VIDEO_CORE_SOURCES} video_core_host.cpp)
+    # memory.cpp builds guest memory on the kernel's vmem and dmem, so every executable that links
+    # bbvideocore also links bbhle (an OBJECT library, which only executables link).
+    add_library(bbvideocore STATIC ${BB_VIDEO_CORE_SOURCES} memory.cpp video_core_host.cpp)
     add_dependencies(bbvideocore host_shaders)
     target_include_directories(bbvideocore SYSTEM PUBLIC ${HOST_SHADERS_INCLUDE})
     # Boost's pool/singleton_pool.hpp (for range_set.h) comes from the commit of third_party/boost

@@ -64,6 +64,10 @@
 #include "hle/kernel/vmem.hpp"
 #include "tools/mirror_observer.hpp"
 #endif
+#ifdef BB_HAVE_VIDEO_CORE
+#include "core/memory.h"
+#include "hle/kernel/vmem.hpp"
+#endif
 #ifdef BB_HAVE_WINDOW
 #include "gpu/vk/presenter.hpp"
 #include "gpu/window/window.hpp"
@@ -112,6 +116,15 @@ Mirror* mirror = nullptr;
 // Flushes stdio and the log and ends the process without host atexit handlers or static
 // destructors, as the HLE _exit does.
 [[noreturn]] void end_run(int status) {
+#ifdef BB_HAVE_VIDEO_CORE
+    // How far video_core's backing covers what the game mapped (docs/design/renderer.md).
+    const Core::MemoryManager::Coverage backing = Core::Memory::Instance()->BackingCoverage();
+    bb::common::log(LogLevel::info, channel,
+                    "guest memory: {} regions, {} GPU-visible of which {} backed; {} pages, {} "
+                    "backing entries",
+                    bb::hle::kernel::vmem::regions().size(), backing.regions, backing.covered,
+                    backing.pages, backing.table_pages);
+#endif
 #ifdef BB_HAVE_MIRROR
     if (mirror != nullptr && mirror->observer) {
         bb::common::log(LogLevel::info, channel, "mirror: {} binds, {} unbinds, {} releases",
@@ -441,6 +454,10 @@ int start(const bb::tools::RunOptions& options) {
         bb::common::log(LogLevel::info, channel, "GPU trace {}", trace.string());
     }
 
+#ifdef BB_HAVE_VIDEO_CORE
+    // video_core's guest memory follows the kernel's mappings from the first one on.
+    Core::Memory::Instance();
+#endif
     // Never destroyed: the game runs in it until the process ends.
     auto* game = new Game{bb::loader::map_load_set(*game_dir)};
     game->eboot = &bb::hle::prepare(game->set, [](bb::loader::Image& eboot) {

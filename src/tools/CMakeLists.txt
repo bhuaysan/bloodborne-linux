@@ -29,3 +29,8 @@ if(TARGET bbmirrorobserver)
     target_link_libraries(bb-run PRIVATE bbmirrorobserver bbvk)
     target_compile_definitions(bb-run PRIVATE BB_HAVE_MIRROR)
 endif()
+# video_core's guest memory (src/shadps4_host/memory.cpp), where bbvideocore is built.
+if(TARGET bbvideocore)
+    target_link_libraries(bb-run PRIVATE bbvideocore)
+    target_compile_definitions(bb-run PRIVATE BB_HAVE_VIDEO_CORE)
+endif()

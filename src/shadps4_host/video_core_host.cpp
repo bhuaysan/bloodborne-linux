@@ -10,7 +10,6 @@
 #include "common/log.hpp"
 #include "common/stb.h"
 #include "common/types.h"
-#include "core/memory.h"
 #include "sdl_window.h"
 #include "shadps4_host/failure.hpp"
 #include "video_core/cache_storage.h"
@@ -70,34 +69,6 @@ u32 ConsumeWithOverlaysScreenshotRequests() { return 0; }
 ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 
 }  // namespace VideoCore
-
-// Guest memory: #430.
-namespace Core {
-
-[[noreturn]] static void no_memory(const char* what) {
-    host_missing(std::string("Core::") + what + " (#430)");
-}
-
-const AddressSpace::BackingPageTable& AddressSpace::BackingPages() const {
-    no_memory("AddressSpace::BackingPages");
-}
-void AddressSpace::Protect(VAddr, u64, MemoryPermission) { no_memory("AddressSpace::Protect"); }
-// Used only by the userfaultfd tracker, which EmulatorSettings keeps off.
-std::vector<AddressSpace::Region> AddressSpace::GetUsableRegions() {
-    no_memory("AddressSpace::GetUsableRegions");
-}
-AddressSpace& MemoryManager::GetAddressSpace() { no_memory("MemoryManager::GetAddressSpace"); }
-bool MemoryManager::IsValidGpuMapping(VAddr, u64) { no_memory("MemoryManager::IsValidGpuMapping"); }
-bool MemoryManager::IsValidMapping(VAddr, u64) { no_memory("MemoryManager::IsValidMapping"); }
-u64 MemoryManager::ClampRangeSize(VAddr, u64) { no_memory("MemoryManager::ClampRangeSize"); }
-void MemoryManager::CopySparseMemory(VAddr, u8*, u64) {
-    no_memory("MemoryManager::CopySparseMemory");
-}
-bool MemoryManager::TryWriteBacking(void*, const void*, u64) {
-    no_memory("MemoryManager::TryWriteBacking");
-}
-
-}  // namespace Core
 
 // The window: #432. No native window behind it yet, so GetWindowInfo reports a headless one, with
 // which the instance creates its device without a surface.

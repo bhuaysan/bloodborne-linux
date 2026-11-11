@@ -1,10 +1,14 @@
-// The interface video_core expects from shadPS4's memory manager (core/memory.h and
-// core/address_space.h of v.0.21.0), declared only. #430 implements it on top of vmem and dmem
-// (docs/design/renderer.md, "One backing for every page the GPU can see"). Until then every member
-// that is not defined here ends the process (video_core_host.cpp), so nothing reaches guest memory
-// through a stub that pretends to work.
+// SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Source: shadPS4 src/core/memory.h, src/core/address_space.h @11557f2eb60b3b00712c8887c30852de7615d6df
+// Changed for bloodborne-linux, 2026-11-11: only the part video_core uses, on top of our kernel's
+// vmem and dmem (memory.cpp) instead of upstream's address space and memory map
+// (docs/design/renderer.md, "One backing for every page the GPU can see").
+// License texts: third_party/shadps4/LICENSES/
 #pragma once
 
+#include <atomic>
+#include <memory>
 #include <vector>
 
 #include "common/enum.h"
@@ -51,27 +55,70 @@ public:
         VAddr upper() const { return end; }
     };
 
-    const BackingPageTable& BackingPages() const;
+    // The whole direct memory memfd, direct memory then flexible memory, mapped once.
+    [[nodiscard]] u8* BackingBase() const noexcept {
+        return backing_base;
+    }
+    // The backing of each guest page of direct and flexible memory below 1 << 40.
+    [[nodiscard]] const BackingPageTable& BackingPages() const noexcept {
+        return backing_pages;
+    }
+    // Sets the host protection of guest pages, as the write tracker needs it.
     void Protect(VAddr virtual_addr, u64 size, MemoryPermission perms);
     // Used only by the userfaultfd tracker, which EmulatorSettings keeps off.
     std::vector<Region> GetUsableRegions();
+
+private:
+    friend class MemoryManager;
+    u8* backing_base{};
+    BackingPageTable backing_pages;
 };
 
 class MemoryManager {
 public:
-    // The rasterizer registers itself when it is created.
-    void SetRasterizer(Vulkan::Rasterizer* rasterizer_) { rasterizer = rasterizer_; }
+    // Maps the backing and follows the kernel's mappings from then on, so it is created before
+    // the game maps memory.
+    MemoryManager();
+    ~MemoryManager();
 
-    AddressSpace& GetAddressSpace();
+    // The rasterizer registers itself when it is created. Ours: null unregisters it.
+    void SetRasterizer(Vulkan::Rasterizer* rasterizer_) {
+        rasterizer.store(rasterizer_, std::memory_order_release);
+    }
 
-    bool IsValidGpuMapping(VAddr virtual_addr, u64 size);
+    AddressSpace& GetAddressSpace() {
+        return impl;
+    }
+
+    bool IsValidGpuMapping(VAddr virtual_addr, u64 size) {
+        // The PS4's GPU can only handle 40 bit addresses.
+        const VAddr max_gpu_address{0x10000000000};
+        return virtual_addr + size < max_gpu_address;
+    }
+
+    // Whether guest mappings (reservations included) cover the range, or hold the address for
+    // size 0.
     bool IsValidMapping(VAddr virtual_addr, u64 size = 0);
     u64 ClampRangeSize(VAddr virtual_addr, u64 size);
     void CopySparseMemory(VAddr source, u8* dest, u64 size);
     bool TryWriteBacking(void* address, const void* data, u64 size);
 
+    // Ours: how far the backing table covers the GPU-visible guest mappings (the direct and
+    // flexible regions that IsValidGpuMapping accepts), for bb-run's log and the tests.
+    struct Coverage {
+        u64 regions = 0;        // GPU-visible regions in the kernel's table
+        u64 covered = 0;        // of them, those whose every page points at its backing
+        u64 pages = 0;          // their pages
+        u64 table_pages = 0;    // pages with a backing entry
+    };
+    Coverage BackingCoverage();
+
 private:
-    Vulkan::Rasterizer* rasterizer{};
+    class Observer;
+
+    AddressSpace impl;
+    std::atomic<Vulkan::Rasterizer*> rasterizer{};
+    std::unique_ptr<Observer> observer;
 };
 
 using Memory = Common::Singleton<MemoryManager>;

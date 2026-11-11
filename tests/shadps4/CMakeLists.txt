@@ -7,7 +7,12 @@ bb_add_test(shadps4_translate_test
 # runs on lavapipe and skips without a Vulkan device. bbvktest holds the LeakSanitizer
 # suppressions for Mesa's one-time allocations.
 if(TARGET bbvideocore)
+    # bbvideocore's guest memory sits on the kernel (bbhle).
     bb_add_test(shadps4_video_core_test
         SOURCES video_core_test.cpp
-        LIBS bbvideocore bbvktest)
+        LIBS bbvideocore bbhle bbvktest)
+    # Maps guest memory in the guest window (tests/support/guest_window_asan.cpp).
+    bb_add_test(shadps4_guest_memory_test
+        SOURCES guest_memory_test.cpp
+        LIBS bbvideocore bbhle bbvktest bbtestguestwindow)
 endif()
