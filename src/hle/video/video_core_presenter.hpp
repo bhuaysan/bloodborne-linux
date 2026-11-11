@@ -1,9 +1,9 @@
 // video_core's presenter behind video out and the GNM driver (docs/design/renderer.md, "Startup
 // order"): Liverpool, whose GPU thread starts with it, then the Presenter with its instance,
 // schedulers, swapchain and rasterizer, as upstream's GNM driver creates them. bb-run makes one
-// for its window and hands it to start_video_out. Without a window there is Liverpool only: it
-// runs the command buffers without a rasterizer, so nothing is drawn, and flips complete without
-// presenting.
+// for its window, or with --headless one without a window, and hands it to start_video_out and
+// start_gnm. Without a window there is Liverpool only: it runs the command buffers without a
+// rasterizer, so nothing is drawn, and flips complete without presenting.
 #pragma once
 
 #include <atomic>

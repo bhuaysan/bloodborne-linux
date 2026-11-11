@@ -1,6 +1,6 @@
-// The interface through which the GNM driver reaches Liverpool (docs/design/renderer.md, "GNM and
-// VideoOut glue is adapted"). Apart from video.hpp, so that video_core_presenter.hpp needs neither
-// src/gpu nor the kernel.
+// The GNM driver's side of Liverpool (docs/design/renderer.md, "GNM and VideoOut glue is
+// adapted"): the submit calls of video.hpp hand their command buffers to a CommandProcessor.
+// Apart from video.hpp, so that video_core_presenter.hpp needs neither src/gpu nor the kernel.
 #pragma once
 
 #include <cstdint>
@@ -30,5 +30,11 @@ public:
     // The ring of the queue at `index` (map_addr, ring_size_dw); empty for an index without one.
     virtual std::span<const std::uint32_t> queue_ring(std::uint32_t index) = 0;
 };
+
+// Starts the GNM driver on `gpu` (nullptr: the submits drop their buffers), as upstream's
+// RegisterLib: the submission lock ends at Liverpool's GpuIdle interrupt. bb-run calls it once
+// Liverpool exists, before the game starts. A later call replaces `gpu`: the tests switch it while
+// nothing is submitted.
+void start_gnm(CommandProcessor* gpu);
 
 }  // namespace bb::hle::video

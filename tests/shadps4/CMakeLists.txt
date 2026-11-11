@@ -17,8 +17,8 @@ if(TARGET bbvideocore)
     bb_add_test(shadps4_guest_memory_test
         SOURCES guest_memory_test.cpp
         LIBS bbvideocore bbhle bbvktest bbtestguestwindow)
-    # Liverpool behind the GNM driver's interface, without a window; needs no Vulkan device.
+    # Liverpool behind the GNM driver, without a window; needs no Vulkan device.
     bb_add_test(shadps4_gnm_liverpool_test
         SOURCES gnm_liverpool_test.cpp
-        LIBS bbvideopresenter bbvideocore bbhle bbvktest bbtestguestwindow)
+        LIBS bbvideopresenter bbvideocore bbhle bbhlevideo bbvktest bbtestguestwindow)
 endif()

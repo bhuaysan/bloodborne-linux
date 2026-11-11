@@ -2,6 +2,7 @@
 
 #include <sys/mman.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -9,9 +10,11 @@
 #include <cstring>
 #include <mutex>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -547,117 +550,313 @@ TEST(HleVideo, EopFlipIsQueuedAtTheFlipInterrupt) {
     start_video_out(nullptr);
 }
 
-TEST(HleVideo, GnmSubmitsSucceedAndSubmitAndFlipFlips) {
-    const std::array<std::uint64_t, 2> buffers{0x20000000, 0x20010000};  // unmapped: left out
-    const std::array<std::uint32_t, 2> sizes{0x100, 0x40};
-    EXPECT_EQ(gnm_submit(2, buffers.data(), sizes.data(), nullptr, nullptr), 0);
-    EXPECT_EQ(gnm_submit_other(1, buffers.data(), sizes.data(), nullptr, nullptr),
-              validation_not_enabled);
+// What the GNM driver hands to Liverpool, recorded. map_queue takes the lowest free of 8 slots.
+struct FakeGpu final : CommandProcessor {
+    struct Buffer {
+        const std::uint32_t* at;
+        std::size_t dwords;
+        bool operator==(const Buffer&) const = default;
+    };
+    struct Ring {
+        std::uint32_t* ring = nullptr;
+        std::uint32_t dwords = 0;
+        std::uint32_t* read_pointer = nullptr;
+        std::uint32_t pipe = 0;
+    };
+    void submit_gfx(std::span<const std::uint32_t> dcb,
+                    std::span<const std::uint32_t> ccb) override {
+        const std::scoped_lock lock{mutex};
+        draws.push_back({dcb.data(), dcb.size()});
+        constants.push_back({ccb.data(), ccb.size()});
+    }
+    void submit_asc(std::uint32_t gnm_vqid, std::span<const std::uint32_t> acb) override {
+        const std::scoped_lock lock{mutex};
+        computes.emplace_back(gnm_vqid, Buffer{acb.data(), acb.size()});
+    }
+    void submit_done() override { ++done; }
+    bool is_gpu_idle() override { return idle; }
+    std::uint32_t map_queue(std::uint32_t* ring, std::uint32_t dwords, std::uint32_t* read_pointer,
+                            std::uint32_t pipe) override {
+        const auto free = std::ranges::find(rings, nullptr, &Ring::ring);
+        *free = {ring, dwords, read_pointer, pipe};
+        return static_cast<std::uint32_t>(free - rings.begin());
+    }
+    bool unmap_queue(std::uint32_t index) override {
+        if (index >= rings.size() || rings[index].ring == nullptr) {
+            return false;
+        }
+        rings[index] = {};
+        return true;
+    }
+    std::span<const std::uint32_t> queue_ring(std::uint32_t index) override {
+        if (index >= rings.size() || rings[index].ring == nullptr) {
+            return {};
+        }
+        return {rings[index].ring, rings[index].dwords};
+    }
+    // The draw buffers since the last call.
+    std::vector<Buffer> take_draws() {
+        const std::scoped_lock lock{mutex};
+        std::vector<Buffer> taken;
+        taken.swap(draws);
+        return taken;
+    }
 
-    const Port port;
-    EXPECT_EQ(gnm_submit_and_flip(1, buffers.data(), sizes.data(), nullptr, nullptr, port.handle,
-                                  1, 1, 5),
-              0);
-    EXPECT_EQ(sceGnmSubmitDone(), 0);
-    const WaitOutcome w = wait_for(port.queue, nullptr);
-    EXPECT_EQ(event_flip_arg(w.event), 5);
-    EXPECT_EQ(flip_count(port.handle), 1u);
-    EXPECT_EQ(flip_status(port.handle).current_buffer, 1);
+    std::mutex mutex;
+    std::vector<Buffer> draws;
+    std::vector<Buffer> constants;
+    std::vector<std::pair<std::uint32_t, Buffer>> computes;
+    std::array<Ring, 8> rings{};
+    std::atomic<int> done{0};
+    std::atomic<bool> idle{true};
+};
+
+// Installs `gpu` for the GNM driver for one test, and ends the frame on entry so that the next
+// submit starts with the init sequence.
+struct UseGpu {
+    explicit UseGpu(FakeGpu& gpu) {
+        start_gnm(&gpu);
+        EXPECT_EQ(sceGnmSubmitDone(), 0);
+        gpu.done = 0;
+    }
+    ~UseGpu() { start_gnm(nullptr); }
+};
+
+// A page of guest memory.
+struct GuestPage {
+    GuestPage() {
+        bb::hle::kernel::vmem::Mapping m;
+        m.length = bb::hle::kernel::vmem::page_size;
+        m.prot = PROT_READ | PROT_WRITE;
+        m.host_flags = MAP_PRIVATE | MAP_ANONYMOUS;
+        EXPECT_EQ(bb::hle::kernel::vmem::map(m, base), 0);
+    }
+    ~GuestPage() { EXPECT_EQ(bb::hle::kernel::vmem::unmap(base, bb::hle::kernel::vmem::page_size), 0); }
+    std::uint32_t* dwords() const { return reinterpret_cast<std::uint32_t*>(base); }
+    std::uintptr_t base = 0;
+};
+
+// Upstream's init sequence for SDK 2.x starts with a CLEAR_STATE and is 0x78 dwords long.
+bool is_init_sequence(const FakeGpu::Buffer& b) {
+    return b.dwords == 0x78 && b.at[0] == 0xc0001200u;
 }
 
-// Command buffers in guest memory run on the GPU thread; validation queues nothing.
-TEST(HleVideo, GnmSubmitsQueueGuestBuffersOnTheGpuThread) {
-    namespace vmem = bb::hle::kernel::vmem;
-    vmem::Mapping m;
-    m.length = vmem::page_size;
-    m.prot = PROT_READ | PROT_WRITE;
-    m.host_flags = MAP_PRIVATE | MAP_ANONYMOUS;
-    std::uintptr_t base = 0;
-    ASSERT_EQ(vmem::map(m, base), 0);
-    auto* dwords = reinterpret_cast<std::uint32_t*>(base);
-    // Three streams, each one SET_CONTEXT_REG of 0xA000 + offset (header, offset, value).
-    const std::array<std::array<std::uint32_t, 3>, 3> streams{{
-        {bb::pm4::type3_header(IT_SET_CONTEXT_REG, 2), 0x300, 1},
-        {bb::pm4::type3_header(IT_SET_CONTEXT_REG, 2), 0x301, 2},
-        {bb::pm4::type3_header(IT_SET_CONTEXT_REG, 2), 0x300, 3},
-    }};
-    std::memcpy(dwords, streams.data(), sizeof streams);
-    const std::array<std::uint64_t, 3> buffers{base, base + 12, base + 24};
-    const std::array<std::uint32_t, 3> sizes{12, 12, 12};
+constexpr std::uint32_t prepare_flip_header = 0xc03e1000u;  // NOP of 64 dwords
+constexpr std::uint32_t write_data_header = 0xc0033700u;    // WRITE_DATA, 5 dwords
+constexpr std::uint32_t patched_flip = 0x68750776u;
 
-    ASSERT_TRUE(gpu_thread().wait_idle(5s));
-    const bb::pm4::GpuThread::Stats before = gpu_thread().stats();
-    EXPECT_EQ(gnm_submit_other(1, &buffers[2], &sizes[2], nullptr, nullptr),
+// Submits buffers to the GPU, the constant buffers beside them; the first submit of a frame sends
+// the init sequence before them, and validation submits nothing.
+TEST(HleVideo, GnmSubmitsHandTheBuffersToTheGpu) {
+    FakeGpu gpu;
+    const UseGpu use(gpu);
+    const GuestPage page;
+    const std::array<std::uint64_t, 2> draw{page.base, page.base + 0x100};
+    const std::array<std::uint32_t, 2> draw_sizes{12, 0x40};
+    const std::array<std::uint64_t, 2> ccb{page.base + 0x200, 0};
+    const std::array<std::uint32_t, 2> ccb_sizes{40, 0};
+    EXPECT_EQ(gnm_submit_other(2, draw.data(), draw_sizes.data(), nullptr, nullptr),
               validation_not_enabled);
-    EXPECT_EQ(gnm_submit(2, buffers.data(), sizes.data(), nullptr, nullptr), 0);
-    ASSERT_TRUE(gpu_thread().wait_idle(5s));
-    EXPECT_EQ(gpu_thread().registers().get(0xA300), 1u);
-    EXPECT_EQ(gpu_thread().registers().get(0xA301), 2u);
+    EXPECT_TRUE(gpu.take_draws().empty());
 
-    const Port port;
-    EXPECT_EQ(gnm_submit_and_flip(1, &buffers[2], &sizes[2], nullptr, nullptr, port.handle, 0, 1,
-                                  0),
-              0);
-    ASSERT_TRUE(gpu_thread().wait_idle(5s));
-    EXPECT_EQ(gpu_thread().registers().get(0xA300), 3u);
-    const bb::pm4::GpuThread::Stats after = gpu_thread().stats();
-    EXPECT_EQ(after.submitted - before.submitted, 3u);
-    EXPECT_EQ(after.errors, before.errors);
-    EXPECT_EQ(vmem::unmap(base, vmem::page_size), 0);
-}
-
-// A CCB runs on the constant queue beside its DCB; a pair with an unreadable buffer is left out.
-TEST(HleVideo, GnmSubmitsRunConstantCommandBuffers) {
-    namespace vmem = bb::hle::kernel::vmem;
-    vmem::Mapping m;
-    m.length = vmem::page_size;
-    m.prot = PROT_READ | PROT_WRITE;
-    m.host_flags = MAP_PRIVATE | MAP_ANONYMOUS;
-    std::uintptr_t base = 0;
-    ASSERT_EQ(vmem::map(m, base), 0);
-    auto* dwords = reinterpret_cast<std::uint32_t*>(base);
-    const auto out = base + 0x100;  // where the CCB dumps CE RAM
-    // DCB (7 dwords): WAIT_ON_CE_COUNTER, SET_CONTEXT_REG 0xA302 = 4, INCREMENT_DE_COUNTER.
-    // CCB (10 dwords): WRITE_CONST_RAM, DUMP_CONST_RAM to `out`, INCREMENT_CE_COUNTER.
-    const std::array<std::uint32_t, 17> streams{
-        bb::pm4::type3_header(IT_WAIT_ON_CE_COUNTER, 1), 1,
-        bb::pm4::type3_header(IT_SET_CONTEXT_REG, 2), 0x302, 4,
-        bb::pm4::type3_header(IT_INCREMENT_DE_COUNTER, 1), 1,
-        bb::pm4::type3_header(IT_WRITE_CONST_RAM, 2), 0x20, 0x5A,
-        bb::pm4::type3_header(IT_DUMP_CONST_RAM, 4), 0x20, 1, static_cast<std::uint32_t>(out),
-        static_cast<std::uint32_t>(out >> 32),
-        bb::pm4::type3_header(IT_INCREMENT_CE_COUNTER, 1), 1};
-    std::memcpy(dwords, streams.data(), sizeof streams);
-    const std::array<std::uint64_t, 2> draw{base, base};
-    const std::array<std::uint32_t, 2> draw_sizes{28, 28};
-    const std::array<std::uint64_t, 2> ccb{base + 28, 0x10};  // the second is unmapped
-    const std::array<std::uint32_t, 2> ccb_sizes{40, 40};
-
-    ASSERT_TRUE(gpu_thread().wait_idle(5s));
-    const bb::pm4::GpuThread::Stats before = gpu_thread().stats();
     EXPECT_EQ(gnm_submit(2, draw.data(), draw_sizes.data(), ccb.data(), ccb_sizes.data()), 0);
-    ASSERT_TRUE(gpu_thread().wait_idle(5s));
-    EXPECT_EQ(gpu_thread().registers().get(0xA302), 4u);
-    EXPECT_EQ(dwords[0x40], 0x5Au);
-    const bb::pm4::GpuThread::Stats after = gpu_thread().stats();
-    EXPECT_EQ(after.submitted - before.submitted, 2u);
-    EXPECT_EQ(after.errors, before.errors);
-    EXPECT_EQ(vmem::unmap(base, vmem::page_size), 0);
+    EXPECT_EQ(gnm_submit(1, draw.data(), draw_sizes.data(), nullptr, nullptr), 0);
+    const std::vector<FakeGpu::Buffer> draws = gpu.take_draws();
+    ASSERT_EQ(draws.size(), 4u);
+    EXPECT_TRUE(is_init_sequence(draws[0]));
+    EXPECT_EQ(draws[1], (FakeGpu::Buffer{page.dwords(), 3}));
+    EXPECT_EQ(draws[2], (FakeGpu::Buffer{page.dwords() + 0x40, 0x10}));
+    EXPECT_EQ(draws[3], (FakeGpu::Buffer{page.dwords(), 3}));  // no init sequence: same frame
+    {
+        const std::scoped_lock lock{gpu.mutex};
+        ASSERT_EQ(gpu.constants.size(), 4u);
+        EXPECT_EQ(gpu.constants[0].dwords, 0u);
+        EXPECT_EQ(gpu.constants[1], (FakeGpu::Buffer{page.dwords() + 0x80, 10}));
+        EXPECT_EQ(gpu.constants[2].dwords, 0u);  // a null CCB
+        EXPECT_EQ(gpu.constants[3].dwords, 0u);
+    }
+
+    // A new frame starts with the init sequence again.
+    EXPECT_EQ(sceGnmSubmitDone(), 0);
+    EXPECT_EQ(gpu.done, 1);
+    EXPECT_EQ(gnm_submit(1, draw.data(), draw_sizes.data(), nullptr, nullptr), 0);
+    const std::vector<FakeGpu::Buffer> next = gpu.take_draws();
+    ASSERT_EQ(next.size(), 2u);
+    EXPECT_TRUE(is_init_sequence(next[0]));
+}
+
+// The checks of upstream's submits: nothing is submitted for a call that fails one.
+TEST(HleVideo, GnmSubmitsRefuseBadArguments) {
+    FakeGpu gpu;
+    const UseGpu use(gpu);
+    const GuestPage page;
+    const std::uint64_t draw = page.base;
+    const std::array<std::uint32_t, 3> sizes{0, 0x400000, 12};
+    const std::uint32_t big = 0x400000;
+    EXPECT_EQ(gnm_submit(1, nullptr, &sizes[2], nullptr, nullptr), submission_invalid_argument);
+    EXPECT_EQ(gnm_submit(1, &draw, nullptr, nullptr, nullptr), submission_invalid_argument);
+    EXPECT_EQ(gnm_submit(1, &draw, &sizes[0], nullptr, nullptr), submission_invalid_argument);
+    EXPECT_EQ(gnm_submit(1, &draw, &sizes[1], nullptr, nullptr), submission_invalid_argument);
+    EXPECT_EQ(gnm_submit(1, &draw, &sizes[2], nullptr, &sizes[2]), submission_invalid_argument);
+    EXPECT_EQ(gnm_submit(1, &draw, &sizes[2], &draw, &big), submission_invalid_argument);
+    EXPECT_EQ(gnm_submit_and_flip(0, &draw, &sizes[2], nullptr, nullptr, main_port_handle, 0, 1, 0),
+              submission_invalid_argument);
+    EXPECT_EQ(gnm_submit_and_flip(1, &draw, &sizes[0], nullptr, nullptr, main_port_handle, 0, 1, 0),
+              submission_invalid_argument);
+    std::array<std::uint32_t, 0x40> small{};
+    EXPECT_EQ(gnm_request_flip_and_submit_done(small.data(), 0xfc, main_port_handle, 0, 1, 0),
+              submission_not_enough_resources);
+    EXPECT_EQ(small[0], 0u);
+    EXPECT_TRUE(gpu.take_draws().empty());
+    EXPECT_EQ(gpu.done, 0);
+}
+
+// Submit-and-flip turns the flip packet at the end of the last buffer into a write of the
+// buffer's flip label and a PatchedFlip packet. When the GPU reaches it (the GfxFlip interrupt),
+// the flip is prepared on the GPU's thread, not sent as a command, and completes with its event.
+TEST(HleVideo, SubmitAndFlipPatchesTheFlipPacketAndFlipsAtItsInterrupt) {
+    FakeGpu gpu;
+    const UseGpu use(gpu);
+    static FakePresenter fake;
+    start_video_out(&fake);
+    const Port port;
+    const GuestPage page;
+    std::uint32_t* cmd = page.dwords() + 0x100;  // 4 dwords of work, then the flip packet
+    cmd[4] = prepare_flip_header;
+    cmd[5] = 0x68750777u;  // PrepareFlip
+    const std::uint64_t draw = page.base + 0x400;
+    const std::uint32_t bytes = (4 + 64) * 4;
+    EXPECT_EQ(gnm_submit_and_flip(1, &draw, &bytes, nullptr, nullptr, port.handle, 1, 1, 42), 0);
+    std::uintptr_t labels = 0;
+    ASSERT_EQ(get_buffer_label_address(port.handle, &labels), 16);
+    const std::uint64_t label = labels + 8;
+    EXPECT_EQ(cmd[4], write_data_header);
+    EXPECT_EQ(cmd[5], 0x500u);
+    EXPECT_EQ(cmd[6] | std::uint64_t{cmd[7]} << 32, label);
+    EXPECT_EQ(cmd[8], 1u);
+    EXPECT_EQ(cmd[9], 0xc0391000u);  // NOP over the rest of the packet
+    EXPECT_EQ(cmd[10], patched_flip);
+    const std::vector<FakeGpu::Buffer> draws = gpu.take_draws();
+    ASSERT_EQ(draws.size(), 2u);
+    EXPECT_TRUE(is_init_sequence(draws[0]));
+    EXPECT_EQ(draws[1], (FakeGpu::Buffer{cmd, 68}));
+    EXPECT_EQ(flip_status(port.handle).flip_pending_num, 0);  // not before the GPU gets there
+
+    // What Liverpool does with the two packets.
+    *reinterpret_cast<std::uint64_t*>(label) = 1;
+    Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip);
+    const std::uint32_t timeout_us = 1'000'000;
+    const WaitOutcome w = wait_for(port.queue, &timeout_us);
+    EXPECT_EQ(w.result, 0);
+    EXPECT_EQ(event_flip_arg(w.event), 42);
+    const FlipStatus status = flip_status(port.handle);
+    EXPECT_EQ(status.count, 1u);
+    EXPECT_EQ(status.current_buffer, 1);
+    EXPECT_EQ(status.flip_pending_num, 0);
+    EXPECT_EQ(status.gc_queue_num, 0);
+    EXPECT_EQ(fake.commands, 0);
+    {
+        const std::scoped_lock lock{fake.mutex};
+        EXPECT_EQ(fake.prepared, (std::vector<std::uint64_t>{Port::buffers[1]}));
+    }
+    start_video_out(nullptr);
+}
+
+// The label variant of the flip packet also writes the game's label after the flip.
+TEST(HleVideo, SubmitAndFlipKeepsTheLabelOfTheFlipPacket) {
+    FakeGpu gpu;
+    const UseGpu use(gpu);
+    const Port port;
+    const GuestPage page;
+    std::uint32_t* cmd = page.dwords();
+    const std::uint64_t game_label = page.base + 0x800;
+    cmd[0] = prepare_flip_header;
+    cmd[1] = 0x68750778u;  // PrepareFlipLabel
+    cmd[2] = static_cast<std::uint32_t>(game_label);
+    cmd[3] = static_cast<std::uint32_t>(game_label >> 32);
+    cmd[4] = 0x1234;
+    const std::uint64_t draw = page.base;
+    const std::uint32_t bytes = 64 * 4;
+    EXPECT_EQ(gnm_submit_and_flip(1, &draw, &bytes, nullptr, nullptr, port.handle, 0, 1, 3), 0);
+    EXPECT_EQ(cmd[0], write_data_header);
+    EXPECT_EQ(cmd[5], 0xc0341000u);
+    EXPECT_EQ(cmd[6], patched_flip);
+    EXPECT_EQ(cmd[0x3b], write_data_header);
+    EXPECT_EQ(cmd[0x3c], 0x500u);
+    EXPECT_EQ(cmd[0x3d], static_cast<std::uint32_t>(game_label));
+    EXPECT_EQ(cmd[0x3e], static_cast<std::uint32_t>(game_label >> 32));
+    EXPECT_EQ(cmd[0x3f], 0x1234u);
+    std::uintptr_t labels = 0;
+    ASSERT_EQ(get_buffer_label_address(port.handle, &labels), 16);
+    *reinterpret_cast<std::uint64_t*>(labels) = 1;
+    Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip);
+    EXPECT_EQ(event_flip_arg(wait_for(port.queue, nullptr).event), 3);
+}
+
+// RequestFlipAndSubmitDone writes the flip packet itself, submits it and ends the frame.
+TEST(HleVideo, RequestFlipAndSubmitDoneSubmitsAFlipPacket) {
+    FakeGpu gpu;
+    const UseGpu use(gpu);
+    const Port port;
+    const GuestPage page;
+    std::uint32_t* cmd = page.dwords();
+    EXPECT_EQ(gnm_request_flip_and_submit_done(cmd, 0x100, port.handle, 0, 1, 8), 0);
+    EXPECT_EQ(cmd[0], write_data_header);
+    EXPECT_EQ(cmd[5], 0xc0391000u);
+    EXPECT_EQ(cmd[6], patched_flip);
+    const std::vector<FakeGpu::Buffer> draws = gpu.take_draws();
+    ASSERT_EQ(draws.size(), 1u);  // without the init sequence, as upstream
+    EXPECT_EQ(draws.back(), (FakeGpu::Buffer{cmd, 0x40}));
+    EXPECT_EQ(gpu.done, 1);
+    std::uintptr_t labels = 0;
+    ASSERT_EQ(get_buffer_label_address(port.handle, &labels), 16);
+    *reinterpret_cast<std::uint64_t*>(labels) = 1;
+    Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip);
+    EXPECT_EQ(event_flip_arg(wait_for(port.queue, nullptr).event), 8);
+}
+
+// SubmitDone while the GPU is busy takes the submission lock: the next submit waits until the GPU
+// reports that it is idle.
+TEST(HleVideo, SubmitDoneBlocksSubmitsUntilTheGpuIsIdle) {
+    FakeGpu gpu;
+    const UseGpu use(gpu);
+    const GuestPage page;
+    const std::uint64_t draw = page.base;
+    const std::uint32_t bytes = 12;
+    EXPECT_EQ(sceGnmAreSubmitsAllowed(), 1);
+    gpu.idle = false;
+    EXPECT_EQ(sceGnmSubmitDone(), 0);
+    EXPECT_EQ(gpu.done, 1);
+    EXPECT_EQ(sceGnmAreSubmitsAllowed(), 0);
+    std::atomic<bool> submitted{false};
+    std::thread submitter([&] {
+        EXPECT_EQ(gnm_submit(1, &draw, &bytes, nullptr, nullptr), 0);
+        submitted = true;
+    });
+    std::this_thread::sleep_for(50ms);
+    EXPECT_FALSE(submitted);
+    EXPECT_TRUE(gpu.take_draws().empty());
+    Platform::IrqC::Instance()->Signal(Platform::InterruptId::GpuIdle);
+    submitter.join();
+    EXPECT_EQ(sceGnmAreSubmitsAllowed(), 1);
+    EXPECT_EQ(gpu.take_draws().size(), 2u);  // the init sequence and the buffer
+
+    gpu.idle = true;
+    EXPECT_EQ(sceGnmSubmitDone(), 0);
+    EXPECT_EQ(sceGnmAreSubmitsAllowed(), 1);
 }
 
 // A map checks its arguments as shadPS4 does and hands out positive ids (the game treats 0 as a
-// failed map, 0x108c7b0); a doorbell runs the ring and the read offset comes back.
-TEST(HleVideo, ComputeQueuesRunTheirRing) {
-    namespace vmem = bb::hle::kernel::vmem;
-    vmem::Mapping m;
-    m.length = vmem::page_size;
-    m.prot = PROT_READ | PROT_WRITE;
-    m.host_flags = MAP_PRIVATE | MAP_ANONYMOUS;
-    std::uintptr_t base = 0;
-    ASSERT_EQ(vmem::map(m, base), 0);
-    auto* ring = reinterpret_cast<std::uint32_t*>(base);
+// failed map, 0x108c7b0); a doorbell submits the ring from the previous offset on, in two parts
+// when the writer wrapped.
+TEST(HleVideo, ComputeQueuesSubmitTheirRing) {
+    const GuestPage page;
+    auto* ring = page.dwords();
     auto* read_pointer = ring + 0x100;
     *read_pointer = 7;
+    EXPECT_EQ(gnm_map_compute_queue(0, 0, ring, 0x40, read_pointer), compute_queue_internal);
+    FakeGpu gpu;
+    const UseGpu use(gpu);
     EXPECT_EQ(gnm_map_compute_queue(7, 0, ring, 0x40, read_pointer), compute_queue_invalid_pipe);
     EXPECT_EQ(gnm_map_compute_queue(0, 8, ring, 0x40, read_pointer), compute_queue_invalid_queue);
     EXPECT_EQ(gnm_map_compute_queue(0, 0, ring, 0x30, read_pointer), compute_queue_invalid_size);
@@ -667,70 +866,81 @@ TEST(HleVideo, ComputeQueuesRunTheirRing) {
               compute_queue_invalid_ring);  // alignment is checked before the size
     EXPECT_EQ(gnm_map_compute_queue(0, 0, ring, 0x40, reinterpret_cast<std::uint32_t*>(0x10)),
               compute_queue_invalid_read_pointer);
+    EXPECT_EQ(*read_pointer, 7u);
     const std::int32_t first = gnm_map_compute_queue(0, 0, ring, 0x40, read_pointer);
-    const std::int32_t second = gnm_map_compute_queue(1, 0, ring, 0x40, read_pointer);
-    EXPECT_GT(first, 0);
-    EXPECT_GT(second, first);
+    const std::int32_t second = gnm_map_compute_queue_with_priority(3, 1, ring, 0x40, read_pointer,
+                                                                    2);
+    EXPECT_EQ(first, 1);
+    EXPECT_EQ(second, 2);
     EXPECT_EQ(*read_pointer, 0u);
+    EXPECT_EQ(gpu.rings[1].pipe, 3u);
+    EXPECT_EQ(gpu.rings[1].read_pointer, read_pointer);
 
-    const std::array<std::uint32_t, 4> set{bb::pm4::type3_header(IT_SET_CONTEXT_REG, 3), 0x306,
-                                           6, 0};
-    std::memcpy(ring, set.data(), sizeof set);
     gnm_ding_dong(first, 4);
-    gnm_ding_dong(0, 4);  // logged and ignored
-    ASSERT_TRUE(gpu_thread().wait_idle(5s));
-    EXPECT_EQ(gpu_thread().registers().get(0xA306), 6u);
-    EXPECT_EQ(std::atomic_ref(*read_pointer).load(), 4u);
+    gnm_ding_dong(first, 4);     // nothing new
+    gnm_ding_dong(first, 0x3c);
+    gnm_ding_dong(first, 8);     // wrapped
+    gnm_ding_dong(first, 0);     // up to the end
+    gnm_ding_dong(first, 0x41);  // past the ring: logged and ignored
+    gnm_ding_dong(0, 4);         // logged and ignored
+    gnm_ding_dong(5, 4);         // not mapped
+    using Submit = std::pair<std::uint32_t, FakeGpu::Buffer>;
+    EXPECT_EQ(gpu.computes, (std::vector<Submit>{
+                                {1, {ring, 4}},
+                                {1, {ring + 4, 0x38}},
+                                {1, {ring + 0x3c, 4}},
+                                {1, {ring, 8}},
+                                {1, {ring + 8, 0x38}},
+                            }));
     EXPECT_EQ(gnm_unmap_compute_queue(first), 0);
-    EXPECT_EQ(gnm_unmap_compute_queue(second), 0);
+    EXPECT_EQ(gpu.rings[0].ring, nullptr);
     EXPECT_EQ(gnm_unmap_compute_queue(first), 0);  // unknown: logged
-    EXPECT_EQ(vmem::unmap(base, vmem::page_size), 0);
+    EXPECT_EQ(gnm_unmap_compute_queue(0), 0);
+    EXPECT_EQ(gnm_unmap_compute_queue(second), 0);
+    EXPECT_EQ(gpu.rings[1].ring, nullptr);
 }
 
-// An EVENT_WRITE_EOP with an interrupt writes its label and wakes the queue registered for it.
-TEST(HleVideo, EndOfPipeInterruptTriggersGnmEvents) {
-    namespace vmem = bb::hle::kernel::vmem;
-    vmem::Mapping m;
-    m.length = vmem::page_size;
-    m.prot = PROT_READ | PROT_WRITE;
-    m.host_flags = MAP_PRIVATE | MAP_ANONYMOUS;
-    std::uintptr_t base = 0;
-    ASSERT_EQ(vmem::map(m, base), 0);
-    auto* dwords = reinterpret_cast<std::uint32_t*>(base);
-    const auto label = base + 0x100;
-    const std::array<std::uint32_t, 6> eop{bb::pm4::type3_header(IT_EVENT_WRITE_EOP, 5), 0x504,
-                                           static_cast<std::uint32_t>(label),
-                                           1u << 29 | 2u << 24 |
-                                               static_cast<std::uint32_t>(label >> 32),
-                                           0x77, 0};
-    std::memcpy(dwords, eop.data(), sizeof eop);
-    const std::uint64_t buffer = base;
-    const std::uint32_t size = sizeof eop;
+// The end-of-pipe and compute interrupts wake the queues registered for them; other interrupts
+// trigger nothing.
+TEST(HleVideo, GpuInterruptsTriggerGnmEvents) {
+    auto* const irq = Platform::IrqC::Instance();
     std::uint64_t queue = 0;
     ASSERT_EQ(bb::hle::kernel::equeue_create(&queue, "GnmEop"), 0);
-    EXPECT_LT(sceGnmAddEqEvent(queue + 1000, bb::pm4::gfx_eop_interrupt, 0), 0);
-    EXPECT_EQ(sceGnmAddEqEvent(queue, bb::pm4::gfx_eop_interrupt, 0x99), 0);
+    EXPECT_LT(sceGnmAddEqEvent(queue + 1000, gfx_eop_event, 0), 0);
+    EXPECT_LT(sceGnmAddEqEvent(queue, 0x41, 0), 0);
+    EXPECT_EQ(sceGnmAddEqEvent(queue, gfx_eop_event, 0x98), 0);
+    EXPECT_EQ(sceGnmAddEqEvent(queue, gfx_eop_event, 0x99), 0);  // replaces the first
+    EXPECT_EQ(sceGnmAddEqEvent(queue, 3, 0x33), 0);
+    EXPECT_EQ(sceGnmAddEqEvent(queue, 9, 0x9), 0);  // GpuIdle: no GPU event
 
-    EXPECT_EQ(gnm_submit(1, &buffer, &size, nullptr, nullptr), 0);
-    const std::uint32_t timeout = 5'000'000;
-    const WaitOutcome w = wait_for(queue, &timeout);
+    irq->Signal(Platform::InterruptId::GfxEop);
+    const std::uint32_t timeout = 1'000'000;
+    WaitOutcome w = wait_for(queue, &timeout);
     EXPECT_EQ(w.result, 0);
     EXPECT_EQ(w.count, 1);
+    EXPECT_EQ(w.event.id, gfx_eop_event);
     EXPECT_EQ(w.event.kind, gnm_event_kind);
     EXPECT_EQ(w.event.user_data, 0x99u);
     EXPECT_EQ(sceGnmGetEqEventType(&w.event), 0x40);
-    ASSERT_TRUE(gpu_thread().wait_idle(5s));
-    EXPECT_EQ(dwords[0x40], 0x77u);
+    irq->Signal(Platform::InterruptId::Compute3RelMem);
+    w = wait_for(queue, &timeout);
+    EXPECT_EQ(w.event.id, 3u);
+    EXPECT_EQ(w.event.user_data, 0x33u);
+    EXPECT_EQ(sceGnmGetEqEventType(&w.event), 3);
 
-    // Without the registration the interrupt triggers nothing.
-    EXPECT_EQ(sceGnmDeleteEqEvent(queue, bb::pm4::gfx_eop_interrupt), 0);
-    EXPECT_EQ(gnm_submit(1, &buffer, &size, nullptr, nullptr), 0);
-    ASSERT_TRUE(gpu_thread().wait_idle(5s));
     const std::uint32_t no_wait = 0;
     const auto timed_out = static_cast<std::int32_t>(0x8002003c);  // ETIMEDOUT
+    irq->Signal(Platform::InterruptId::GpuIdle);
+    EXPECT_EQ(wait_for(queue, &no_wait).result, timed_out);
+    // Without the registration the interrupt triggers nothing.
+    EXPECT_LT(sceGnmDeleteEqEvent(queue + 1000, gfx_eop_event), 0);
+    EXPECT_EQ(sceGnmDeleteEqEvent(queue, gfx_eop_event), 0);
+    EXPECT_EQ(sceGnmDeleteEqEvent(queue, 3), 0);
+    EXPECT_EQ(sceGnmDeleteEqEvent(queue, 9), 0);
+    irq->Signal(Platform::InterruptId::GfxEop);
+    irq->Signal(Platform::InterruptId::Compute3RelMem);
     EXPECT_EQ(wait_for(queue, &no_wait).result, timed_out);
     EXPECT_EQ(bb::hle::kernel::equeue_delete(queue), 0);
-    EXPECT_EQ(vmem::unmap(base, vmem::page_size), 0);
 }
 
 // The eboot imports each of them under the library it is registered for, so relocating it puts
@@ -744,7 +954,7 @@ TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
         std::string_view library, nid;
         void* impl;
     };
-    const std::array<Expected, 23> expected{{
+    const std::array<Expected, 26> expected{{
         {"libSceVideoOut", "Up36PTk687E", reinterpret_cast<void*>(&sceVideoOutOpen)},
         {"libSceGnmDriver", "29oKvKXzEZo", reinterpret_cast<void*>(&gnm_map_compute_queue)},
         {"libSceGnmDriver", "ArSg-TGinhk", reinterpret_cast<void*>(&gnm_unmap_compute_queue)},
@@ -760,6 +970,11 @@ TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
         {"libSceGnmDriver", "iCO804ZgzdA", reinterpret_cast<void*>(&gnm_submit_other)},
         {"libSceGnmDriver", "xbxNatawohc", reinterpret_cast<void*>(&gnm_submit_and_flip)},
         {"libSceGnmDriver", "yvZ73uQUqrk", reinterpret_cast<void*>(&sceGnmSubmitDone)},
+        {"libSceGnmDriver", "gObODli-OH8",
+         reinterpret_cast<void*>(&gnm_request_flip_and_submit_done)},
+        {"libSceGnmDriver", "A+uGq+3KFtQ",
+         reinterpret_cast<void*>(&gnm_map_compute_queue_with_priority)},
+        {"libSceGnmDriver", "b08AgtPlHPg", reinterpret_cast<void*>(&sceGnmAreSubmitsAllowed)},
         {"libSceGnmDriver", "gAhCn6UiU4Y", reinterpret_cast<void*>(&sceGnmSetVsShader)},
         {"libSceGnmDriver", "V31V01UiScY", reinterpret_cast<void*>(&sceGnmSetVsShader)},
         {"libSceGnmDriver", "bQVd5YzCal0", reinterpret_cast<void*>(&sceGnmSetPsShader)},

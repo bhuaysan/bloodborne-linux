@@ -1,8 +1,8 @@
 // Video out and GPU submission. Video out is shadPS4's driver adapted (video_out.hpp,
 // docs/design/renderer.md): one port takes buffers, and a submitted flip completes at the first
 // vblank after it was queued: the presenter (if any) presents it, the flip status counts it, and
-// every queue registered for the port's flip event gets an event. The GPU submit calls queue their
-// draw command buffers on the GPU thread (gpu_thread()), which parses them; nothing is drawn yet.
+// every queue registered for the port's flip event gets an event. The GPU submit calls are
+// shadPS4's GNM driver adapted (gnm_driver.cpp): they hand the command buffers to Liverpool.
 //
 // Addresses in the comments are the eboot call sites whose use fixed each result. Two code paths
 // drive video out: 0x11e488e..0x11e4915 (open, flip event, two 1920x1080 buffers) with flips
@@ -17,13 +17,16 @@
 
 #include "gpu/pm4/gpu_thread.hpp"
 #include "hle/kernel/equeue.hpp"
+#include "hle/video/gnm_driver.hpp"
 #include "hle/video/video_out.hpp"
 
 namespace bb::hle::video {
 
 // The GPU events (sceGnmAddEqEvent): id and data are the interrupt source, kind is
-// gnm_event_kind, user_data the value given at registration.
-inline constexpr std::int16_t gnm_event_kind = 2;
+// gnm_event_kind (Filter::GraphicsCore of upstream's equeue.h), user_data the value given at
+// registration. gfx_eop_event is the source of the graphics queue's end-of-pipe interrupts.
+inline constexpr std::int16_t gnm_event_kind = -14;
+inline constexpr std::uint64_t gfx_eop_event = 0x40;
 
 // libSceVideoOut. The errors and the flip status are in video_out.hpp; callers check only the
 // sign of a result.
@@ -73,22 +76,30 @@ std::int32_t sceVideoOutSubmitFlip(std::int32_t handle, std::int32_t index, std:
 // Copies the port's 64-byte FlipStatus to `status` and returns 0. 0x26d6f06 reads flip_arg.
 std::int32_t sceVideoOutGetFlipStatus(std::int32_t handle, void* status);
 
-// libSceGnmDriver. The submits queue each draw command buffer (DCB) that lies in guest memory and
-// is whole dwords long as one stream on the graphics queue of gpu_thread(), and each constant
-// command buffer (CCB) as one stream on its constant queue; a pair with a buffer that doesn't
-// qualify is logged and left out. The submits return before the GPU thread runs the buffers.
+// libSceGnmDriver: upstream's submit calls (gnm_driver.cpp, docs/design/renderer.md, "GNM and
+// VideoOut glue is adapted"). They hand the command buffers to the CommandProcessor given to
+// start_gnm (gnm_driver.hpp) and return before it runs them; without one they are logged and
+// dropped.
 
-// The GPU thread, started on first use. INDIRECT_BUFFER targets are checked against the guest
-// mappings.
+// The GPU thread of src/gpu, started on first use; #435 removes it. The submits no longer feed it:
+// bb-run only attaches the memory mirror's backends to it.
 pm4::GpuThread& gpu_thread();
 
-// Starts the GPU trace (gpu_trace.hpp) into a new file at `path`. Call it before the first use of
-// gpu_thread(). False if the file can't be created or a trace is already on.
+// Starts the GPU trace (gpu_trace.hpp) of gpu_thread() into a new file at `path`, which stays
+// without frames now. False if the file can't be created or a trace is already on.
 bool enable_gpu_trace(const std::filesystem::path& path);
+
+// The errors of the submits (gnm_error.h).
+inline constexpr std::int32_t submission_invalid_argument = static_cast<std::int32_t>(0x80d11000u);
+inline constexpr std::int32_t submission_not_enough_resources =
+    static_cast<std::int32_t>(0x80d11001u);
+inline constexpr std::int32_t submission_flip_queue_full = static_cast<std::int32_t>(0x80d11081u);
 
 // NID zwY0YV91TTI, sceGnmSubmitCommandBuffers. Submits `count` draw command buffers (addresses and
 // sizes in bytes) and as many optional constant command buffers (null at 0x26b0c23). Called from
-// 12 sites, e.g. 0x1094a02 and 0x26b0c23. Returns 0.
+// 12 sites, e.g. 0x1094a02 and 0x26b0c23. Waits while the submission lock is held, sends upstream's
+// init sequence before the first buffer of a frame, and returns 0, or
+// submission_invalid_argument for null arrays, an empty draw buffer or one above 0x3ffffc bytes.
 std::int32_t gnm_submit(std::uint32_t count, const std::uint64_t* draw,
                         const std::uint32_t* draw_sizes, const std::uint64_t* ccb,
                         const std::uint32_t* ccb_sizes);
@@ -104,15 +115,24 @@ std::int32_t gnm_submit_other(std::uint32_t count, const std::uint64_t* draw,
                               const std::uint32_t* draw_sizes, const std::uint64_t* ccb,
                               const std::uint32_t* ccb_sizes);
 
-// NID xbxNatawohc, sceGnmSubmitAndFlipCommandBuffers. gnm_submit followed by
-// sceVideoOutSubmitFlip(handle, index, mode, arg). It has 8 call sites (0x1094f98, 0x10953a8,
+// NID xbxNatawohc, sceGnmSubmitAndFlipCommandBuffers. It has 8 call sites (0x1094f98, 0x10953a8,
 // 0x1096775, 0x109c300, 0x11fb4f8, 0x11fb644, 0x26b0dff, 0x26b0ee2); 0x26b0dd5..0x26b0dff,
-// 0x26b0eba..0x26b0ee2 and 0x1094f98 pass the port handle in r9 and the rest on the stack. Returns
-// the flip's result. The flip doesn't wait for this GPU thread; #433 moves the submits to Liverpool.
+// 0x26b0eba..0x26b0ee2 and 0x1094f98 pass the port handle in r9 and the rest on the stack. Checks
+// as gnm_submit, then turns the flip packet in the last 64 dwords of the last draw buffer into a
+// write of the buffer's flip label and a PatchedFlip packet (upstream's PatchFlipRequest), at
+// which the GPU queues the flip with sceVideoOutSubmitFlip(handle, index, mode, arg)'s effect.
+// Returns 0 or the error of the checks.
 std::int32_t gnm_submit_and_flip(std::uint32_t count, const std::uint64_t* draw,
                                  const std::uint32_t* draw_sizes, const std::uint64_t* ccb,
                                  const std::uint32_t* ccb_sizes, std::int32_t handle,
                                  std::int32_t index, std::int32_t mode, std::int64_t arg);
+
+// NID gObODli-OH8, sceGnmRequestFlipAndSubmitDone (upstream's ...ForWorkload). Writes a flip
+// packet of 64 dwords at `cmd`, patches it as gnm_submit_and_flip does, submits it and ends the
+// frame as sceGnmSubmitDone. submission_not_enough_resources for less than 0x100 bytes.
+std::int32_t gnm_request_flip_and_submit_done(std::uint32_t* cmd, std::uint32_t bytes,
+                                              std::int32_t handle, std::uint32_t index,
+                                              std::uint32_t mode, std::int64_t arg);
 
 // The errors of sceGnmMapComputeQueue (values from shadPS4's gnm_error.h).
 inline constexpr std::int32_t compute_queue_invalid_pipe = static_cast<std::int32_t>(0x80d17000u);
@@ -128,30 +148,44 @@ inline constexpr std::int32_t compute_queue_internal = static_cast<std::int32_t>
 // read-pointer address)`. Its wrapper 0x1089a80 stores a non-negative result as the queue id and
 // clears the read pointer; 0x108c7b0 then treats id 0 as a failed map, and the render thread's
 // device creation gives up (0x26b1216). Checks as shadPS4 does: pipe below 7, queue below 8, the
-// ring 256-byte aligned with a power-of-two size, the read pointer dword aligned; both must lie in
-// guest memory. Maps a ring of gpu_thread() (its interrupts report the pipe) and returns its
-// index + 1, or one of the errors above.
+// ring 256-byte aligned with a power-of-two size, the read pointer dword aligned; and, unlike
+// upstream, that both lie in guest memory. Maps a queue of the CommandProcessor, clears the read
+// pointer and returns the queue's slot index + 1, or one of the errors above
+// (compute_queue_internal without a CommandProcessor).
 std::int32_t gnm_map_compute_queue(std::uint32_t pipe, std::uint32_t queue, const void* ring,
                                    std::uint32_t ring_dwords, std::uint32_t* read_pointer);
 
-// NID ArSg-TGinhk, sceGnmUnmapComputeQueue (thunk 0x1089b10, from 0x108c810). Unmaps the queue;
-// its queued ring streams are dropped. Returns 0, also for an unknown id (logged).
+// NID A+uGq+3KFtQ, sceGnmMapComputeQueueWithPriority: gnm_map_compute_queue; the priority is
+// ignored, as upstream does.
+std::int32_t gnm_map_compute_queue_with_priority(std::uint32_t pipe, std::uint32_t queue,
+                                                 const void* ring, std::uint32_t ring_dwords,
+                                                 std::uint32_t* read_pointer,
+                                                 std::uint32_t priority);
+
+// NID ArSg-TGinhk, sceGnmUnmapComputeQueue (thunk 0x1089b10, from 0x108c810). Unmaps the queue.
+// Returns 0, also for an unknown id (logged; upstream would erase a free slot).
 std::int32_t gnm_unmap_compute_queue(std::uint32_t id);
 
 // NID bX5IbRvECXk, sceGnmDingDong (thunk 0x1089b20, from 0x108c830). The ring of queue `id` is
-// written up to `write_offset` dwords (0 after the writer wrapped at the ring's end): the GPU
-// thread runs it from the previous offset on and writes the read offset back. An unknown id or an
-// offset past the ring is logged and ignored.
+// written up to `write_offset` dwords (0 after the writer wrapped at the ring's end): submits the
+// ring from the previous offset on, in two parts when it wrapped. Waits while the submission lock
+// is held. An unknown id or an offset past the ring is logged and ignored.
 void gnm_ding_dong(std::uint32_t id, std::uint32_t write_offset);
 
-// Returns 0 and does nothing else: the GPU thread needs no signal that a frame's submissions are
-// complete. Called through 0x1089b50 after the submit-and-flip at 0x26b0dff and 0x26b0ee2.
+// NID yvZ73uQUqrk. Ends the frame's submissions: when the GPU is still busy, takes the submission
+// lock, which the next submit waits on until the GPU has run everything. The next submit sends
+// the init sequence again. Called through 0x1089b50 after the submit-and-flip at 0x26b0dff and
+// 0x26b0ee2. Returns 0.
 std::int32_t sceGnmSubmitDone();
 
-// NID b0xyllnVY-I. Registers queue `equeue` for the GPU interrupts of source `id`
-// (pm4::gfx_eop_interrupt, 0x40, for the EVENT_WRITE_EOP and RELEASE_MEM interrupts of the
-// graphics queue), with `user_data` for the events; a second registration replaces the user data.
-// Fails with EBADF for a queue that doesn't exist.
+// NID b08AgtPlHPg. 1 when the submission lock is free, 0 while it is held.
+std::int32_t sceGnmAreSubmitsAllowed();
+
+// NID b0xyllnVY-I. Registers queue `equeue` for the GPU interrupts of source `id` (gfx_eop_event
+// for the EVENT_WRITE_EOP and RELEASE_MEM interrupts of the graphics queue, 0..6 for the compute
+// pipes), with `user_data` for the events; a second registration replaces the user data. Fails
+// with EBADF for a queue that doesn't exist. Other sources are accepted and trigger nothing, as
+// upstream.
 std::int32_t sceGnmAddEqEvent(std::uint64_t equeue, std::uint64_t id, std::uint64_t user_data);
 
 // NID PVT+fuoS9gU. Ends that registration. EBADF for a queue that doesn't exist.

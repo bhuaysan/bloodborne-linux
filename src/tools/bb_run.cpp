@@ -2,8 +2,8 @@
 // docs/design/m3-core-os.md, "Entry").
 //
 // The initial thread sets up the runtime, maps and links the load set, applies the registered
-// hooks, opens the window and video_core's presenter (unless --headless), starts video out and
-// starts the game's main thread. That thread runs
+// hooks, opens the window and video_core's presenter (unless --headless; Liverpool alone then),
+// starts video out and the GNM driver on them and starts the game's main thread. That thread runs
 // the PRX initialisers and then the eboot's entry. The initial thread waits for it, or for
 // --timeout, and handles the window's events; closing the window ends the run with status 0.
 // The main-loop probe logs when the game reaches its main loop and, with --stop-at-main-loop,
@@ -263,6 +263,16 @@ void open_display(const std::string& device_selector) {
     display = d.release();
 }
 
+// Video out's presenter and the GNM driver's Liverpool: the display's, or without one Liverpool
+// alone (docs/design/renderer.md, "Startup order"). Never destroyed, like the display.
+bb::hle::video::VideoCorePresenter* video_core() {
+    if (display != nullptr) {
+        return display->presenter.get();
+    }
+    static auto* const headless = new bb::hle::video::VideoCorePresenter(nullptr);
+    return headless;
+}
+
 // Handles the window's events for up to `timeout_ms`; ends the run once it is closed.
 void pump_display(std::int32_t timeout_ms) {
     if (!display->window->PumpEvents(timeout_ms)) {
@@ -494,9 +504,11 @@ int start(const bb::tools::RunOptions& options) {
     if (!options.headless) {
         open_display(options.device);
     }
-    bb::hle::video::start_video_out(display != nullptr ? display->presenter.get() : nullptr);
+    bb::hle::video::start_video_out(video_core());
+    bb::hle::video::start_gnm(video_core());
 #else
     bb::hle::video::start_video_out(nullptr);
+    bb::hle::video::start_gnm(nullptr);
 #endif
 #ifdef BB_HAVE_MIRROR
     open_mirror(nullptr, options.device, options.mirror_gib);

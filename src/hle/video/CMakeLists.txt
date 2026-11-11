@@ -6,6 +6,10 @@
 add_library(bbhlevideo OBJECT video_out.cpp gnm_driver.cpp gnm_shader.cpp gnm_state.cpp)
 target_include_directories(bbhlevideo SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/amd-gcn)
 target_link_libraries(bbhlevideo PUBLIC $<COMPILE_ONLY:bbhle> bbpm4 bbshadps4 PRIVATE bb_warnings)
+# The GNM driver writes the PM4 packet structs, some with 64-bit members, at any dword of a command
+# buffer, as upstream does; x86-64 allows it.
+set_source_files_properties(gnm_driver.cpp PROPERTIES
+    COMPILE_OPTIONS "$<$<BOOL:${BB_SANITIZE}>:-fno-sanitize=alignment>")
 
 # video_core's presenter behind video out, for bb-run's window: Liverpool and the Presenter in
 # upstream's order (video_core_presenter.hpp). Only where bbvideocore is built.
