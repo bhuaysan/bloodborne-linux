@@ -1,10 +1,14 @@
 // The guest memory video_core sees (src/shadps4_host/memory.cpp): the backing is the direct memory
 // memfd, its page table follows the kernel's mappings of direct and flexible memory, and the
-// rasterizer hears of each GPU-visible map and unmap.
+// rasterizer hears of each GPU-visible map and unmap. Its write tracking takes the faults on the
+// pages the caches protected, and the kernel's reads into guest memory lift the protection first.
 
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -15,17 +19,21 @@
 #include <gtest/gtest.h>
 #include <imgui.h>
 
+#include "core/libraries/videoout/buffer.h"
 #include "core/memory.h"
 #include "hle/kernel/dmem.hpp"
+#include "hle/kernel/file.hpp"
 #include "hle/kernel/vmem.hpp"
 #include "imgui/renderer/imgui_impl_vulkan.h"
 #include "imgui/renderer/texture_manager.h"
 #include "sdl_window.h"
+#include "shadps4_host/fault_handler.hpp"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/texture_cache/texture_cache.h"
 
 namespace {
 
@@ -343,6 +351,74 @@ TEST(GuestMemory, TheRasterizerFollowsTheMappings) {
         void* const late = flexible(1);
         EXPECT_FALSE(rasterizer.IsMapped(addr(late), page_size));
         EXPECT_EQ(sceKernelMunmap(late, page_size), 0);
+    }
+    liverpool.reset();
+}
+
+// The page manager write-protects the pages of an image the texture cache uploaded from guest
+// memory. A guest write there faults; the fault handler passes it to the page manager, which
+// claims it, and the image is marked as written by the CPU. A read(2) into such a page fails with
+// EFAULT, but sceKernelRead lifts the protection first (docs/design/renderer.md, "System calls
+// into tracked memory").
+TEST(GuestMemory, GuestWritesToTrackedPagesAreClaimed) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    bb::shadps4::install_fault_handler();
+    auto liverpool = std::make_unique<AmdGpu::Liverpool>();
+    Frontend::WindowSDL window;
+    {
+        Vulkan::Instance instance{window, -1};
+        start_imgui(instance);
+        Vulkan::Scheduler scheduler{instance};
+        Vulkan::Runtime runtime{instance, scheduler};
+        Vulkan::Rasterizer rasterizer{instance, scheduler, runtime, liverpool.get()};
+        const Unregister unregister;
+        Direct d(2);
+        auto* const bytes = static_cast<char*>(d.address);
+        // A 64 x 64 linear display buffer at the start of the mapping.
+        Libraries::VideoOut::BufferAttributeGroup group{};
+        group.is_occupied = true;
+        group.attrib.pixel_format = Libraries::VideoOut::PixelFormat::A8R8G8B8Srgb;
+        group.attrib.tiling_mode = Libraries::VideoOut::TilingMode::Linear;
+        group.attrib.width = group.attrib.height = group.attrib.pitch_in_pixel = 64;
+        auto& textures = rasterizer.GetTextureCache();
+        VideoCore::TextureCache::ImageDesc desc{group, addr(d.address)};
+        const VideoCore::ImageId image = textures.FindImage(desc);
+        ASSERT_LE(textures.GetImage(image).info.guest_size, d.length);
+        const auto cpu_dirty = [&] {
+            return True(textures.GetImage(image).flags & VideoCore::ImageFlagBits::CpuDirty);
+        };
+        // Uploads the image, after which the page manager tracks writes to its pages.
+        textures.UpdateImage(image);
+        ASSERT_FALSE(cpu_dirty());
+
+        char path[] = "/tmp/bb-tracked-XXXXXX";
+        const int host = ::mkstemp(path);
+        ASSERT_GE(host, 0);
+        ::unlink(path);
+        ASSERT_EQ(::write(host, "file data", 9), 9);
+        // Protected: the host kernel can't write it.
+        EXPECT_EQ(::pread(host, bytes + 0x40, 9, 0), -1);
+        EXPECT_EQ(errno, EFAULT);
+
+        const std::uint64_t claimed = bb::shadps4::claimed_faults();
+        static_cast<volatile char*>(d.address)[0x100] = 'g';
+        EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 1);
+        EXPECT_EQ(bytes[0x100], 'g');
+        EXPECT_TRUE(cpu_dirty());
+
+        textures.UpdateImage(image);
+        ASSERT_FALSE(cpu_dirty());
+        ASSERT_EQ(::pread(host, bytes + 0x40, 9, 0), -1);  // protected again
+        ASSERT_EQ(::lseek(host, 0, SEEK_SET), 0);
+        const std::int32_t fd = bb::hle::kernel::fd_table().insert(host);
+        EXPECT_EQ(bb::hle::kernel::sceKernelRead(fd, bytes + 0x40, 9), 9);
+        EXPECT_EQ(std::string(bytes + 0x40, 9), "file data");
+        EXPECT_TRUE(cpu_dirty());
+        EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 1);  // lifted first, no fault
+        bb::hle::kernel::sceKernelClose(fd);
+        d.unmap();
     }
     liverpool.reset();
 }
