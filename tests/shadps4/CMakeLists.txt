@@ -2,6 +2,8 @@ bb_add_test(shadps4_translate_test
     SOURCES corpus_test.cpp host_test.cpp program_state.cpp signals_test.cpp
         translate_test.cpp translate.cpp
     LIBS bbshadps4 bbcorpus bbcommon)
+# The process's fault handler and the game threads' signal stacks, without a GPU.
+bb_add_test(shadps4_fault_handler_test SOURCES fault_handler_test.cpp LIBS bbshadps4 bbcommon)
 
 # The renderer on the host layer and video out's presenter over it, where bbvideocore is built
 # (Vulkan headers, SDL3, glslang). It runs on lavapipe and skips without a Vulkan device. bbvktest holds the LeakSanitizer

@@ -29,7 +29,7 @@ set(BB_VIDEO_CORE_REGEX
 list(FILTER BB_SHADPS4_SOURCES EXCLUDE REGEX ${BB_VIDEO_CORE_REGEX})
 list(FILTER BB_VIDEO_CORE_SOURCES INCLUDE REGEX ${BB_VIDEO_CORE_REGEX})
 
-add_library(bbshadps4 STATIC ${BB_SHADPS4_SOURCES} host.cpp)
+add_library(bbshadps4 STATIC ${BB_SHADPS4_SOURCES} host.cpp fault_handler.cpp)
 target_include_directories(bbshadps4 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # SYSTEM, so that our own targets that include the derived headers keep their warnings on.
 target_include_directories(bbshadps4 SYSTEM PUBLIC

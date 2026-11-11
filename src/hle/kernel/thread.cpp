@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "common/log.hpp"
+#include "common/signal_stack.hpp"
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
 #include "hle/kernel/guest_object.hpp"
@@ -84,6 +85,7 @@ void* start(void* argument) {
     auto* thread = static_cast<Thread*>(argument);
     current = thread;
     check_eboot_tls();
+    common::ensure_signal_stack();  // for the fault handler (common/signal_stack.hpp)
     {
         // Under the lock, so that a rename from another thread comes either before or after.
         const std::lock_guard lock(table().mutex);
