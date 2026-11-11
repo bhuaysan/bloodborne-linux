@@ -66,7 +66,6 @@
 #endif
 #ifdef BB_HAVE_VIDEO_CORE
 #include "core/memory.h"
-#include "hle/kernel/vmem.hpp"
 #endif
 #ifdef BB_HAVE_WINDOW
 #include "gpu/vk/presenter.hpp"
@@ -90,6 +89,11 @@ constexpr std::string_view channel = "run";
 // thread gets for HLE calls, the logger and the sanitizers ("Threads").
 constexpr std::size_t main_stack_size =
     (std::size_t{16} << 20) + bb::hle::kernel::thread_stack_reserve;
+
+#ifdef BB_HAVE_VIDEO_CORE
+// video_core's guest memory. Set once before the game starts, never destroyed.
+Core::MemoryManager* guest_memory = nullptr;
+#endif
 
 #ifdef BB_HAVE_MIRROR
 // The GPU memory mirror and what keeps it in step with direct memory. Set once before the game
@@ -118,12 +122,13 @@ Mirror* mirror = nullptr;
 [[noreturn]] void end_run(int status) {
 #ifdef BB_HAVE_VIDEO_CORE
     // How far video_core's backing covers what the game mapped (docs/design/renderer.md).
-    const Core::MemoryManager::Coverage backing = Core::Memory::Instance()->BackingCoverage();
-    bb::common::log(LogLevel::info, channel,
-                    "guest memory: {} regions, {} GPU-visible of which {} backed; {} pages, {} "
-                    "backing entries",
-                    bb::hle::kernel::vmem::regions().size(), backing.regions, backing.covered,
-                    backing.pages, backing.table_pages);
+    if (guest_memory != nullptr) {
+        const Core::MemoryManager::Coverage b = guest_memory->BackingCoverage();
+        bb::common::log(LogLevel::info, channel,
+                        "guest memory: {} regions, {} GPU-visible of which {} backed; {} pages, "
+                        "{} backing entries",
+                        b.all_regions, b.regions, b.covered, b.pages, b.table_pages);
+    }
 #endif
 #ifdef BB_HAVE_MIRROR
     if (mirror != nullptr && mirror->observer) {
@@ -456,7 +461,7 @@ int start(const bb::tools::RunOptions& options) {
 
 #ifdef BB_HAVE_VIDEO_CORE
     // video_core's guest memory follows the kernel's mappings from the first one on.
-    Core::Memory::Instance();
+    guest_memory = Core::Memory::Instance();
 #endif
     // Never destroyed: the game runs in it until the process ends.
     auto* game = new Game{bb::loader::map_load_set(*game_dir)};
