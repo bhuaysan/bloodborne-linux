@@ -3,7 +3,7 @@
 
   rig.py setup                          download and check the reference (shadPS4 v.0.21.0)
   rig.py run reference new-game-to-clinic    a scenario from tools/rig/scenarios/ on the reference
-  rig.py run bb-run --time 120          our program under the same limits, with no input
+  rig.py run bb-run --time 120          our program under the same limits, with the same virtual gamepad
   rig.py run reference --user-from DIR ...   start with a copy of an earlier user/ directory
   rig.py compare REF_RUN REF_RUN OUR_RUN     our menu captures and time against two reference runs
 
@@ -186,6 +186,8 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
     # analysis/. They are per run, so runs never share or inherit save data.
     env = {f"XDG_{kind}_HOME": str(work_root / kind.lower())
            for kind in ("DATA", "CACHE", "CONFIG", "STATE")}
+    # As for the reference: the virtual gamepad's events count while the window has no focus.
+    env["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = "1"
     argv = [str(find_bb_run(preset)), "--game-dir", str(game_dir), "--profile", "rig",
             "--no-log-file"]
     if not window:

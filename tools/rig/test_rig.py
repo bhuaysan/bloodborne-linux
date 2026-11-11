@@ -52,6 +52,7 @@ class CommandTests(unittest.TestCase):
             program = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"))
         self.assertEqual(program.env["XDG_DATA_HOME"], "/w/data")
         self.assertEqual(program.env["XDG_STATE_HOME"], "/w/state")
+        self.assertEqual(program.env["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"], "1")
         self.assertEqual(program.argv[:3], ["/b/bb-run", "--game-dir", "/g"])
         self.assertIn("--headless", program.argv)
         with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):

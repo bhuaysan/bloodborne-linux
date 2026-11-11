@@ -1,0 +1,33 @@
+# From the title through Play Offline to the main menu (New Game, Continue, ...), on both targets.
+# Needs the virtual gamepad, so it checks that bb-run's pad works the way the reference's does.
+# Captures for `rig.py compare` as in main-menu.scn: several, to average over the menu's glow.
+limit time=300
+
+log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
+mark logos
+stable seconds=6 delta=1 timeout=120
+shot title
+
+dpad D                  # Play Offline
+tap A
+# The menu replaces the title within a second, so no wait for a change: the stable wait below
+# runs on the menu, whose entry glows but whose picture settles.
+sleep 2
+stable seconds=4 delta=1 timeout=60
+mark menu
+shot menu-1
+sleep 1.5
+shot menu-2
+sleep 1.5
+shot menu-3
+sleep 1.5
+shot menu-4
+sleep 1.5
+shot menu-5
+sleep 1.5
+shot menu-6
+sleep 1.5
+shot menu-7
+sleep 1.5
+shot menu-8
+sleep 1
