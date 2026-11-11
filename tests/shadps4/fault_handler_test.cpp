@@ -32,8 +32,14 @@ namespace {
 // page it protected, and how often that happened.
 void* tracked_page = nullptr;
 int tracked_faults = 0;
+// Set in a death test's child: the test handler then writes "dispatched" to stderr on each call.
+volatile sig_atomic_t report_dispatch = 0;
 
 bool claim_tracked(void*, void* fault_address) {
+    if (report_dispatch != 0) {
+        static constexpr char line[] = "dispatched\n";
+        (void)::write(STDERR_FILENO, line, sizeof line - 1);
+    }
     const auto start = reinterpret_cast<std::uintptr_t>(tracked_page);
     const auto at = reinterpret_cast<std::uintptr_t>(fault_address);
     if (tracked_page == nullptr || at < start || at - start >= std::uintptr_t(::getpagesize())) {
@@ -123,11 +129,22 @@ void* overflow(void*) {
 }
 
 // A game thread that runs out of stack ends the process: the handler runs on the alternate
-// signal stack and passes the fault on.
+// signal stack, dispatches the fault and passes it on. Without the stack the kernel can't
+// deliver the signal and kills the process unseen, so the child must have written "dispatched".
+// In sanitizer builds AddressSanitizer gives each thread a stack of its own, so only the other
+// builds show that ensure_signal_stack installs one.
+#ifdef BB_TEST_ASAN
+#define OVERFLOW_EXIT ::testing::ExitedWithCode(1)
+#define OVERFLOW_REPORT "dispatched.*AddressSanitizer: stack-overflow"
+#else
+#define OVERFLOW_EXIT ::testing::KilledBySignal(SIGSEGV)
+#define OVERFLOW_REPORT "dispatched"
+#endif
 TEST(FaultHandlerDeathTest, AStackOverflowEndsTheProcess) {
     install();
-    EXPECT_FAULT_DEATH(
+    EXPECT_EXIT(
         {
+            report_dispatch = 1;
             pthread_attr_t attr;
             pthread_attr_init(&attr);
             pthread_attr_setstacksize(&attr, std::size_t{256} << 10);
@@ -135,7 +152,7 @@ TEST(FaultHandlerDeathTest, AStackOverflowEndsTheProcess) {
             pthread_create(&thread, &attr, overflow, nullptr);
             pthread_join(thread, nullptr);
         },
-        "AddressSanitizer: stack-overflow");
+        OVERFLOW_EXIT, OVERFLOW_REPORT);
 }
 
 struct AltStack {
