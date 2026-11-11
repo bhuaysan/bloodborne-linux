@@ -28,7 +28,7 @@ BYTES_PER_SECOND = RATE * CHANNELS * 4
 
 def windows(path: Path, seconds: float | None = None, channels: int = CHANNELS,
             rate: int = RATE, window_s: int = WINDOW_S):
-    """Yield (start second, rms, peak) per window of float32 samples, the last one may be short."""
+    """Yield (start second, rms, peak, sample count) per window, the last one may be short."""
     frame_bytes = channels * 4
     limit = None if seconds is None else int(seconds * rate) * frame_bytes
     window_bytes = window_s * rate * frame_bytes
@@ -46,17 +46,17 @@ def windows(path: Path, seconds: float | None = None, channels: int = CHANNELS,
             squares = math.fsum(s * s for s in samples)
             yield (done // frame_bytes // rate,
                    math.sqrt(squares / len(samples)) if samples else 0.0,
-                   max((abs(s) for s in samples), default=0.0))
+                   max((abs(s) for s in samples), default=0.0), len(samples))
             done += len(data)
 
 
 def summary(path: Path, seconds: float | None = None) -> dict:
-    """RMS over the span (energy-weighted over the windows), the peak and the silent windows."""
+    """RMS over the span (windows weighted by their sample count), the peak, the silent windows."""
     energy, count, peak, silent, total, levels = 0.0, 0, 0.0, 0, 0, []
-    for _, rms, top in windows(path, seconds):
-        energy += rms * rms
+    for _, rms, top, n in windows(path, seconds):
+        energy += rms * rms * n
         levels.append(round(rms, 5))
-        count += 1
+        count += n
         peak = max(peak, top)
         silent += rms < 1e-4
         total += 1

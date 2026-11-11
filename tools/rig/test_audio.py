@@ -43,6 +43,29 @@ class AudioTests(unittest.TestCase):
             result = audio.summary(path, seconds=12)
         self.assertEqual(result["windows"], 2)
 
+    def test_short_last_window_is_weighted_by_length(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = write(d, 10, 0.1)
+            with open(path, "ab") as f:
+                f.write(array.array("f", [0.4, -0.4] * (audio.RATE * audio.CHANNELS // 2)).tobytes())
+            result = audio.summary(path)
+        self.assertEqual(result["windows"], 2)
+        self.assertAlmostEqual(result["rms"], math.sqrt((0.01 * 10 + 0.16) / 11), places=5)
+
+    def test_span_not_a_multiple_of_the_window(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = write(d, 12, 0.1)
+            result = audio.summary(path, seconds=10.5)
+        self.assertEqual(result["windows"], 2)
+
+    def test_partial_trailing_frame_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = write(d, 1, 0.2)
+            with open(path, "ab") as f:
+                f.write(b"\x01\x02\x03")
+            result = audio.summary(path)
+        self.assertAlmostEqual(result["rms"], 0.2, places=5)
+
     def test_empty_file(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "e.raw"
@@ -52,7 +75,7 @@ class AudioTests(unittest.TestCase):
     def test_ratio(self) -> None:
         self.assertAlmostEqual(audio.ratio({"rms": 0.02}, {"rms": 0.04}), 0.5)
         self.assertIsNone(audio.ratio({"rms": 0.02}, {"rms": 0.0}))
-        self.assertTrue(math.isfinite(audio.ratio({"rms": 0.0}, {"rms": 1.0})))
+        self.assertEqual(audio.ratio({"rms": 0.0}, {"rms": 1.0}), 0.0)
 
 
 if __name__ == "__main__":

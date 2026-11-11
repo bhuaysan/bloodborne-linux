@@ -479,8 +479,11 @@ def run_target(args: argparse.Namespace) -> int:
         "zenity_called": zenity.exists(), "shot_errors": conversion_errors,
     }
     if args.audio and audio_file.exists():
-        summary["audio"] = audio.summary(audio_file)
-        audio_file.unlink()  # 1.5 MB per second of play, the levels are what matters
+        try:
+            # The time limit is the span, so two runs of different length stay comparable.
+            summary["audio"] = audio.summary(audio_file, seconds)
+        finally:
+            audio_file.unlink()  # 1.5 MB per second of play, the levels are what matters
     (run / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2))
     print(f"\noutput: {run}")
