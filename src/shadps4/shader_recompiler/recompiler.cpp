@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/shader_recompiler/recompiler.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/logging/classes.h"
@@ -108,10 +108,8 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
         Shader::Optimization::DomainShaderTransform(program, runtime_info);
     }
     Shader::Optimization::RingAccessElimination(program, runtime_info);
-    Shader::IR::DumpProgram(program, info, "pre-res-discover.");
     auto resources = Shader::Optimization::ResourceDiscoverPass(program, profile);
     Shader::Optimization::FlattenExtendedUserdataPass(program);
-    Shader::IR::DumpProgram(program, info, "pre-res-patch.");
     Shader::Optimization::ResourcePatchingPass(program.info, resources, profile);
     Shader::Optimization::LowerBufferFormatToRaw(program);
     Shader::Optimization::SharedMemorySimplifyPass(program, profile);
@@ -119,7 +117,6 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
     Shader::Optimization::LowerUserClipPlanes(program, runtime_info);
     Shader::Optimization::PhiSimplificationPass(program);
     Shader::Optimization::InverseBallotEliminationPass(program);
-    Shader::IR::DumpProgram(program, info, "pre-lower-phi.");
 
     // Prepare for structurization by clearing flow graph and lowering phis
     for (auto* ir_block : program.blocks) {
@@ -144,7 +141,6 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
     Shader::Optimization::ConstantPropagationPass(program.post_order_blocks);
     Shader::Optimization::DeadCodeEliminationPass(program);
     Shader::Optimization::CollectShaderInfoPass(program, profile);
-    Shader::IR::DumpProgram(program, info);
 
     return program;
 }

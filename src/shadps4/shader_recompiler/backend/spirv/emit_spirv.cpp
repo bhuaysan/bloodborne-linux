@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/shader_recompiler/backend/spirv/emit_spirv.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include <mutex>
@@ -596,9 +596,6 @@ void SetupRoundingMode(EmitContext& ctx, const Profile& profile, const RuntimeIn
 
 void SetupInfNanPreserveMode(EmitContext& ctx, const Profile& profile,
                              const RuntimeInfo& runtime_info, Id main_func) {
-    if (profile.fast_shader_math) {
-        return;
-    }
     if (profile.support_fp16_signed_zero_inf_nan_preserve ||
         profile.support_fp32_signed_zero_inf_nan_preserve ||
         profile.support_fp64_signed_zero_inf_nan_preserve) {

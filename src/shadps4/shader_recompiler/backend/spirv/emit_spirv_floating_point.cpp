@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/shader_recompiler/backend/spirv/emit_spirv_floating_point.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
@@ -10,12 +10,7 @@
 namespace Shader::Backend::SPIRV {
 
 Id Decorate(EmitContext& ctx, IR::Inst* inst, Id op) {
-    // Pre-rasterization stages keep it, so position math stays the same across pipelines.
-    const bool can_contract = ctx.profile.fast_shader_math && (ctx.sw_stage == SwStage::Fragment ||
-                                                               ctx.sw_stage == SwStage::Compute);
-    if (!can_contract) {
-        ctx.Decorate(op, spv::Decoration::NoContraction);
-    }
+    ctx.Decorate(op, spv::Decoration::NoContraction);
     return op;
 }
 

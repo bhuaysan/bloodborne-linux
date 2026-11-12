@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/shader_recompiler/ir/program.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
 
-#include <string>
 #include "shader_recompiler/frontend/instruction.h"
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/ir/abstract_syntax_list.h"
@@ -24,7 +23,5 @@ struct Program {
     u32 next_reg_index{};
     Info& info;
 };
-
-void DumpProgram(const Program& program, const Info& info, const std::string& type = "");
 
 } // namespace Shader::IR

@@ -1,13 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/shader_recompiler/frontend/translate/translate.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
-#include "common/io_file.h"
-#include "common/path_util.h"
-#include "core/emulator_settings.h"
-#include "shader_recompiler/frontend/decode.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/frontend/translate/translate.h"
 #include "shader_recompiler/info.h"
@@ -1156,39 +1152,9 @@ template void Translator::SetDstPk<IR::F32, false>(const InstOperand& operand,
 void Translator::EmitFetch(const GcnInst& inst) {
     const auto code_sgpr_base = inst.src[0].code;
 
-    if (EmulatorSettings.IsInlineFetchShader()) {
-        // Translate fetch shader inline using regular buffer bindings; useful for debugging.
-        const auto* code = GetFetchShaderCode(info, code_sgpr_base);
-        GcnCodeSlice slice(code, code + std::numeric_limits<u32>::max());
-        GcnDecodeContext decoder;
-
-        // Decode and save instructions
-        while (!slice.atEnd()) {
-            const auto sub_inst = decoder.decodeInstruction(slice);
-            if (sub_inst.opcode == Opcode::S_SETPC_B64) {
-                // Assume we're swapping back to the main shader.
-                break;
-            }
-            TranslateInstruction(sub_inst);
-        }
-        return;
-    }
-
     info.has_fetch_shader = true;
     info.fetch_shader_sgpr_base = code_sgpr_base;
     ASSERT(ParseFetchShader(info, fetch_data));
-
-    if (EmulatorSettings.IsDumpShaders()) {
-        using namespace Common::FS;
-        const auto dump_dir = GetUserPath(PathType::ShaderDir) / "dumps";
-        if (!std::filesystem::exists(dump_dir)) {
-            std::filesystem::create_directories(dump_dir);
-        }
-        const auto filename = fmt::format("vs_{:#018x}.fetch.bin", info.pgm_hash);
-        const auto file = IOFile{dump_dir / filename, FileAccessMode::Create};
-        const auto* code = GetFetchShaderCode(info, code_sgpr_base);
-        file.WriteRaw<u8>(code, fetch_data.size);
-    }
 
     for (u32 semantic = 0; semantic < fetch_data.attributes.size(); ++semantic) {
         const auto& attrib = fetch_data.attributes[semantic];
