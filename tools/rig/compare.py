@@ -120,6 +120,17 @@ def verdict(reference_1: list[Picture], reference_2: list[Picture], ours: list[P
     }
 
 
+def run_scenario(run: Path) -> str:
+    """The scenario of a run, from its summary.json; refuses a run whose scenario failed."""
+    try:
+        summary = json.loads((run / "summary.json").read_text())
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"{run}: no readable summary.json: {e}") from e
+    if summary.get("scenario_ok") is not True:
+        raise SystemExit(f"{run}: the scenario did not finish ({summary.get('failure')})")
+    return str(summary.get("scenario"))
+
+
 def load_run(run: Path, shots: str) -> tuple[list[Picture], float]:
     paths = sorted((run / "shots").glob(shots))
     if not paths:
@@ -128,6 +139,9 @@ def load_run(run: Path, shots: str) -> tuple[list[Picture], float]:
 
 
 def run_compare(reference_1: Path, reference_2: Path, ours: Path, shots: str) -> int:
+    scenarios = {run_scenario(run) for run in (reference_1, reference_2, ours)}
+    if len(scenarios) != 1:
+        raise SystemExit(f"the runs are of different scenarios: {', '.join(sorted(scenarios))}")
     try:
         (r1, t1), (r2, t2), (o, t) = (load_run(run, shots)
                                       for run in (reference_1, reference_2, ours))

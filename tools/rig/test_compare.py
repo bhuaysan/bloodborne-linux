@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import struct
 import subprocess
 import sys
@@ -129,10 +130,13 @@ class TimeTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
-    def make_run(self, root: Path, name: str, value: int, menu_s: int) -> Path:
+    def make_run(self, root: Path, name: str, value: int, menu_s: int, scenario: str = "menu",
+                 ok: bool = True) -> Path:
         run = root / name
         (run / "shots").mkdir(parents=True)
         write_png(run / "shots" / "menu-1.png", 2, 2, bytes([value, value, value, 255]) * 4)
+        (run / "summary.json").write_text(json.dumps(
+            {"scenario": scenario, "scenario_ok": ok, "failure": None if ok else "timed out"}))
         write_png(run / "shots" / "other.png", 2, 2, bytes(16))  # not a menu shot
         write_events(run / "events.csv", [(0, "start", name),
                                           (menu_s * 1_000_000_000, "stable",
@@ -163,6 +167,24 @@ class CommandTests(unittest.TestCase):
                 compare.run_compare(a, b, c, "menu-*.png")
             self.assertIn("different numbers of shots", str(caught.exception))
             self.assertNotEqual(self.run_rig(a, b, c).returncode, 0)
+
+    def test_a_failed_run_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a, b = self.make_run(root, "a", 10, 20), self.make_run(root, "b", 12, 30)
+            ours = self.make_run(root, "ours", 13, 40, ok=False)
+            with self.assertRaises(SystemExit) as caught:
+                compare.run_compare(a, b, ours, "menu-*.png")
+            self.assertIn("did not finish", str(caught.exception))
+
+    def test_runs_of_different_scenarios_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a, b = self.make_run(root, "a", 10, 20), self.make_run(root, "b", 12, 30)
+            ours = self.make_run(root, "ours", 13, 40, scenario="other")
+            with self.assertRaises(SystemExit) as caught:
+                compare.run_compare(a, b, ours, "menu-*.png")
+            self.assertIn("different scenarios", str(caught.exception))
 
     def test_identical_reference_runs_are_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
