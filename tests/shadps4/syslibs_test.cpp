@@ -272,13 +272,18 @@ TEST(SysLibsHost, PadFollowsAVirtualSDLGamepad) {
     EXPECT_TRUE(held(pressed, OrbisPadButtonDataOffset::R2));
     EXPECT_FALSE(held(pressed, OrbisPadButtonDataOffset::L2));
     EXPECT_EQ(pressed.axes[static_cast<int>(Input::Axis::TriggerRight)], 255);
+    // Full left: -32768 / 256 = -128, which the deadzone keeps, and GetAxis maps to 0.
+    EXPECT_EQ(pressed.axes[static_cast<int>(Input::Axis::LeftX)], 0);
 
     SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_SOUTH, false);
     // Released is the bottom of the raw range: SDL maps it up to 0..32767.
     SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, -32768);
+    // 511 / 256 = 1, the last byte value inside the deadzone: the stick reads as centre (128).
+    SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, 511);
     SDL_UpdateJoysticks();
     pump();
     Input::State released = state();
+    EXPECT_EQ(released.axes[static_cast<int>(Input::Axis::LeftX)], 128);
     EXPECT_FALSE(held(released, OrbisPadButtonDataOffset::Cross));
     EXPECT_FALSE(held(released, OrbisPadButtonDataOffset::R2));
 
