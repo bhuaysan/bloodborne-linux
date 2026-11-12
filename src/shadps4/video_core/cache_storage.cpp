@@ -84,48 +84,22 @@ bool WriteAtomic(const std::filesystem::path& path, u32 schema, const std::vecto
     tmp += std::format(".tmp{}-{}", ::getpid(), counter++);
     const BlobHeader header{BlobMagic, schema, payload.size(),
                             Checksum(payload.data(), payload.size())};
+    bool ok = false;
     {
         std::ofstream out{tmp, std::ios::binary | std::ios::trunc};
         out.write(reinterpret_cast<const char*>(&header), sizeof(header));
         out.write(reinterpret_cast<const char*>(payload.data()),
                   static_cast<std::streamsize>(payload.size()));
         out.flush();
-        if (!out) {
-            out.close();
-            std::error_code ec;
-            std::filesystem::remove(tmp, ec);
-            return false;
-        }
+        ok = static_cast<bool>(out);
     }
     std::error_code ec;
-    std::filesystem::rename(tmp, path, ec);
-    if (ec) {
+    if (ok) {
+        std::filesystem::rename(tmp, path, ec);
+    }
+    if (!ok || ec) {
         std::filesystem::remove(tmp, ec);
         return false;
-    }
-    return true;
-}
-
-template <typename T>
-void ToBytes(std::vector<T>&& v, std::vector<u8>& out) {
-    if constexpr (sizeof(T) == 1) {
-        out = std::move(v);
-    } else {
-        out.resize(v.size() * sizeof(T));
-        std::memcpy(out.data(), v.data(), out.size());
-    }
-}
-
-template <typename T>
-bool FromBytes(std::vector<u8>&& bytes, std::vector<T>& v) {
-    if (bytes.size() % sizeof(T) != 0) {
-        return false;
-    }
-    if constexpr (sizeof(T) == 1) {
-        v = std::move(bytes);
-    } else {
-        v.resize(bytes.size() / sizeof(T));
-        std::memcpy(v.data(), bytes.data(), bytes.size());
     }
     return true;
 }
@@ -212,10 +186,8 @@ void DataBase::Clear() {
     Flush();
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator{cache_path, ec}) {
-        const auto ext = entry.path().extension().string();
-        for (const auto type : {BlobType::ShaderMeta, BlobType::ShaderBinary, BlobType::PipelineKey,
-                                BlobType::ShaderProfile, BlobType::DriverCache}) {
-            if (ext == "." + GetBlobFileExtension(type)) {
+        for (const char* ext : {".meta", ".spv", ".key", ".bin", ".vkc"}) {
+            if (entry.path().extension() == ext) {
                 std::filesystem::remove(entry.path(), ec);
             }
         }
@@ -245,8 +217,8 @@ bool DataBase::Save(BlobType type, const std::string& name, std::vector<u8>&& da
 }
 
 bool DataBase::Save(BlobType type, const std::string& name, std::vector<u32>&& data) {
-    std::vector<u8> bytes;
-    ToBytes(std::move(data), bytes);
+    std::vector<u8> bytes(data.size() * sizeof(u32));
+    std::memcpy(bytes.data(), data.data(), bytes.size());
     return Enqueue(type, name, std::move(bytes));
 }
 
@@ -297,10 +269,9 @@ void DataBase::Load(BlobType type, const std::string& name, std::vector<u32>& da
         return;
     }
     std::vector<u8> payload;
-    if (ReadBlob(BlobPath(cache_path, type, name), payload) &&
-        !FromBytes(std::move(payload), data)) {
-        data.clear();
-        ++dropped;
+    if (ReadBlob(BlobPath(cache_path, type, name), payload) && payload.size() % sizeof(u32) == 0) {
+        data.resize(payload.size() / sizeof(u32));
+        std::memcpy(data.data(), payload.data(), payload.size());
     }
 }
 

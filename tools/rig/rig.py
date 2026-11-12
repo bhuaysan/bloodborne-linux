@@ -190,7 +190,7 @@ def bb_run_profile_data(work_root: Path) -> Path:
 
 
 def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_root: Path,
-                   cache_home: Path | None = None, pipeline_cache: bool = True) -> Program:
+                   cache_home: Path | None = None) -> Program:
     # bb-run refuses runtime directories inside the source checkout, so its XDG roots are outside
     # analysis/. They are per run, so runs never share or inherit save data.
     env = {f"XDG_{kind}_HOME": str(work_root / kind.lower())
@@ -204,8 +204,6 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
             "--no-log-file"]
     if not window:
         argv.append("--headless")
-    if not pipeline_cache:
-        argv.append("--no-pipeline-cache")
     return Program(argv, env, run)
 
 
@@ -420,8 +418,7 @@ def run_target(args: argparse.Namespace) -> int:
     else:
         work_root = Path(tempfile.mkdtemp(prefix="bb-rig-",
                                           dir=os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"))
-        program = bb_run_program(run, game_dir, args.preset, args.window, work_root,
-                                 args.cache_home, not args.no_pipeline_cache)
+        program = bb_run_program(run, game_dir, args.preset, args.window, work_root, args.cache_home)
         if args.user_from:
             shutil.copytree(args.user_from, bb_run_profile_data(work_root))
 
@@ -550,8 +547,6 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--cache-home", type=Path,
                      help="bb-run's XDG_CACHE_HOME, so its shader and pipeline cache persists "
                           "from run to run (default: a fresh directory per run, so every run is cold)")
-    run.add_argument("--no-pipeline-cache", action="store_true",
-                     help="bb-run without the on-disk shader and pipeline cache")
     run.add_argument("--audio", action="store_true",
                      help="record the sound with SDL's disk driver and report its level")
     run.add_argument("--no-layer", action="store_true",

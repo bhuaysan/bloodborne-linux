@@ -64,12 +64,8 @@ class CommandTests(unittest.TestCase):
             cold = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"))
             warm = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"),
                                       Path("/c"))
-            off = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"),
-                                     pipeline_cache=False)
         self.assertEqual(cold.env["XDG_CACHE_HOME"], "/w/cache")
         self.assertEqual(warm.env["XDG_CACHE_HOME"], "/c")
-        self.assertNotIn("--no-pipeline-cache", cold.argv)
-        self.assertIn("--no-pipeline-cache", off.argv)
 
     def test_zenity_stub_answers_without_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
