@@ -60,7 +60,6 @@
 #include "shadps4_host/fault_handler.hpp"
 #endif
 #ifdef BB_HAVE_WINDOW
-#include "core/emulator_settings.h"
 #include "hle/video/video_core_presenter.hpp"
 #include "sdl_window.h"
 #endif
@@ -185,7 +184,7 @@ Display* display = nullptr;
 // nor DISPLAY set) it logs that and leaves `display` null: the run then goes on headless. A window
 // that fails to open on a display ends the run with status 1, a --device that names no device
 // with status 2.
-void open_display(const std::string& device_selector) {
+void open_display(const bb::tools::RunOptions& options) {
     if (std::getenv("WAYLAND_DISPLAY") == nullptr && std::getenv("DISPLAY") == nullptr) {
         bb::common::log(LogLevel::warn, channel,
                         "no window, running headless: neither WAYLAND_DISPLAY nor DISPLAY is set");
@@ -203,15 +202,23 @@ void open_display(const std::string& device_selector) {
     Frontend::WindowSDL::SetGamepadEventHandler(&Libraries::Pad::HandleGamepadEvent);
     Libraries::Pad::StartPolling();
     // After the window: the device order depends on its window system type.
+    const Vulkan::ValidationOptions validation{options.validation, options.validation_sync,
+                                               options.validation_gpu};
     const std::optional<std::int32_t> gpu_id =
-        bb::hle::video::resolve_gpu_id(device_selector, d->window->GetWindowInfo().type, why);
+        bb::hle::video::resolve_gpu_id(options.device, d->window->GetWindowInfo().type, why,
+                                       validation);
     if (!gpu_id) {
         bb::common::log(LogLevel::error, channel, "--device: {}", why);
         end_run(2);
     }
-    bb::shader::set_gpu_id(*gpu_id);
+    Vulkan::RendererOptions renderer{*gpu_id, validation, Vulkan::PresentMode::Mailbox};
+    if (options.present_mode == "fifo") {
+        renderer.present_mode = Vulkan::PresentMode::Fifo;
+    } else if (options.present_mode == "immediate") {
+        renderer.present_mode = Vulkan::PresentMode::Immediate;
+    }
     d->presenter = std::make_unique<bb::hle::video::VideoCorePresenter>(d->window.get(),
-                                                                         *guest_memory);
+                                                                         *guest_memory, renderer);
     display = d.release();
 }
 
@@ -355,7 +362,7 @@ int start(const bb::tools::RunOptions& options) {
     bb::hle::kernel::set_gettimeofday_observer(&observe_gettimeofday);
 #ifdef BB_HAVE_WINDOW
     if (!options.headless) {
-        open_display(options.device);
+        open_display(options);
     }
     bb::hle::video::start_video_out(video_core());
     bb::hle::video::start_gnm(video_core());

@@ -1,13 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/pad/pad.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "common/singleton.h"
-#include "core/emulator_settings.h"
 #include "core/libraries/libs.h"
 #include "core/libraries/pad/pad_errors.h"
 #include "core/user_settings.h"
@@ -73,9 +72,6 @@ int PS4_SYSV_ABI scePadDeviceClassGetExtendedInformation(
     }
     LOG_ERROR(Lib_Pad, "(STUBBED) called");
     std::memset(pExtInfo, 0, sizeof(OrbisPadDeviceClassExtendedInformation));
-    if (EmulatorSettings.IsUsingSpecialPad()) {
-        pExtInfo->deviceClass = (OrbisPadDeviceClass)EmulatorSettings.GetSpecialPadClass();
-    }
     return ORBIS_OK;
 }
 
@@ -153,11 +149,6 @@ int PS4_SYSV_ABI scePadGetControllerInformation(s32 handle, OrbisPadControllerIn
     pInfo->connectedCount = state.connected_count;
     pInfo->deviceClass = OrbisPadDeviceClass::Standard;
     pInfo->connected = state.connected;
-    if (state.connected) {
-        pInfo->deviceClass = EmulatorSettings.IsUsingSpecialPad()
-                                 ? (OrbisPadDeviceClass)EmulatorSettings.GetSpecialPadClass()
-                                 : OrbisPadDeviceClass::Standard;
-    }
     LOG_DEBUG(Lib_Pad, "c: {} cc: {}, ct: {}, dc: {}", pInfo->connected, pInfo->connectedCount,
               pInfo->connectionType, std::to_underlying(pInfo->deviceClass));
     return ORBIS_OK;
@@ -341,7 +332,7 @@ int PS4_SYSV_ABI scePadOpen(Libraries::UserService::OrbisUserServiceUserId userI
     pad_handle_map[{userId, type, index}] = new_handle;
 
     handle_to_controller_map[new_handle] =
-        controllers[type == (EmulatorSettings.IsUsingSpecialPad() ? 2 : 0)
+        controllers[type == 0
                         ? UserManagement.GetUserByID(userId)->player_index - 1
                         : 4];
     LOG_INFO(Lib_Pad,

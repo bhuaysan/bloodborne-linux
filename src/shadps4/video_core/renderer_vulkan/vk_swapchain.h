@@ -10,6 +10,7 @@
 #include <vector>
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
+#include "video_core/renderer_vulkan/vk_options.h"
 
 namespace Frontend {
 class WindowSDL;
@@ -22,7 +23,8 @@ class Scheduler;
 
 class Swapchain {
 public:
-    explicit Swapchain(const Instance& instance, const Frontend::WindowSDL& window);
+    explicit Swapchain(const Instance& instance, const Frontend::WindowSDL& window,
+                       PresentMode requested_present_mode);
     ~Swapchain();
 
     /// Creates (or recreates) the swapchain with a given size.
@@ -107,6 +109,7 @@ private:
 private:
     const Instance& instance;
     const Frontend::WindowSDL& window;
+    PresentMode requested_present_mode;
     vk::SwapchainKHR swapchain{};
     vk::SurfaceKHR surface{};
     vk::SurfaceFormatKHR surface_format;

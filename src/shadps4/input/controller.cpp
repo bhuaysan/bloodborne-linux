@@ -1,7 +1,7 @@
 ﻿// SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/input/controller.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -14,7 +14,6 @@
 #include <SDL3/SDL.h>
 
 #include "common/logging/log.h"
-#include "core/emulator_settings.h"
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/system/userservice.h"
 #include "core/user_settings.h"
@@ -328,23 +327,21 @@ void GameControllers::TryOpenSDLControllers() {
                 c->user_id = u->user_id;
                 UserManagement.LoginUser(u, i + 1);
                 c->ConnectController(pad);
-                if (EmulatorSettings.IsMotionControlsEnabled()) {
-                    if (SDL_SetGamepadSensorEnabled(c->m_sdl_gamepad, SDL_SENSOR_GYRO, true)) {
-                        const float poll_rate =
-                            SDL_GetGamepadSensorDataRate(c->m_sdl_gamepad, SDL_SENSOR_GYRO);
-                        LOG_INFO(Input, "Gyro initialized, poll rate: {}", poll_rate);
-                    } else {
-                        LOG_ERROR(Input, "Failed to initialize gyro controls for gamepad {}",
-                                  c->user_id);
-                    }
-                    if (SDL_SetGamepadSensorEnabled(c->m_sdl_gamepad, SDL_SENSOR_ACCEL, true)) {
-                        const float poll_rate =
-                            SDL_GetGamepadSensorDataRate(c->m_sdl_gamepad, SDL_SENSOR_ACCEL);
-                        LOG_INFO(Input, "Accel initialized, poll rate: {}", poll_rate);
-                    } else {
-                        LOG_ERROR(Input, "Failed to initialize accel controls for gamepad {}",
-                                  c->user_id);
-                    }
+                if (SDL_SetGamepadSensorEnabled(c->m_sdl_gamepad, SDL_SENSOR_GYRO, true)) {
+                    const float poll_rate =
+                        SDL_GetGamepadSensorDataRate(c->m_sdl_gamepad, SDL_SENSOR_GYRO);
+                    LOG_INFO(Input, "Gyro initialized, poll rate: {}", poll_rate);
+                } else {
+                    LOG_ERROR(Input, "Failed to initialize gyro controls for gamepad {}",
+                              c->user_id);
+                }
+                if (SDL_SetGamepadSensorEnabled(c->m_sdl_gamepad, SDL_SENSOR_ACCEL, true)) {
+                    const float poll_rate =
+                        SDL_GetGamepadSensorDataRate(c->m_sdl_gamepad, SDL_SENSOR_ACCEL);
+                    LOG_INFO(Input, "Accel initialized, poll rate: {}", poll_rate);
+                } else {
+                    LOG_ERROR(Input, "Failed to initialize accel controls for gamepad {}",
+                              c->user_id);
                 }
                 break;
             }

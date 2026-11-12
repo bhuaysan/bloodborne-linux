@@ -6,7 +6,6 @@
 
 #include "common/log.hpp"
 #include "core/gpu_stats.h"
-#include "core/emulator_settings.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
 #include "video_core/amdgpu/liverpool.h"
@@ -29,10 +28,11 @@ bool contains_ignoring_case(std::string_view text, std::string_view part) {
 
 }  // namespace
 
-VideoCorePresenter::VideoCorePresenter(Frontend::WindowSDL* window, Core::MemoryManager& memory)
+VideoCorePresenter::VideoCorePresenter(Frontend::WindowSDL* window, Core::MemoryManager& memory,
+                                       const Vulkan::RendererOptions& options)
     : liverpool_(std::make_unique<AmdGpu::Liverpool>(memory)),
       presenter_(window != nullptr
-                     ? std::make_unique<Vulkan::Presenter>(*window, liverpool_.get())
+                     ? std::make_unique<Vulkan::Presenter>(*window, liverpool_.get(), options)
                      : nullptr) {}
 
 // In reverse: the presenter's rasterizer is bound to Liverpool, whose GPU thread stops last.
@@ -143,7 +143,8 @@ std::uint64_t VideoCorePresenter::dispatches() {
 
 std::optional<std::int32_t> resolve_gpu_id(std::string_view selector,
                                           Frontend::WindowSystemType window_type,
-                                          std::string& why) {
+                                          std::string& why,
+                                          const Vulkan::ValidationOptions& validation) {
     if (selector.empty()) {
         return -1;
     }
@@ -153,7 +154,7 @@ std::optional<std::int32_t> resolve_gpu_id(std::string_view selector,
     // could list them in another order. Not a Vulkan::Instance: its destructor needs a logical
     // device.
     const vk::UniqueInstance instance =
-        Vulkan::CreateInstance(window_type, EmulatorSettings.IsVkValidationEnabled());
+        Vulkan::CreateInstance(window_type, validation);
     const auto [result, devices] = instance->enumeratePhysicalDevices();
     if (result != vk::Result::eSuccess) {
         why = "vkEnumeratePhysicalDevices: " + vk::to_string(result);

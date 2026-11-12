@@ -13,7 +13,6 @@
 #include "common/polyfill_thread.h"
 #include "common/stb.h"
 #include "common/thread.h"
-#include "core/emulator_settings.h"
 #include "imgui_impl_vulkan.h"
 #include "texture_manager.h"
 
@@ -36,12 +35,6 @@ using namespace Core::TextureManager;
 
 RefCountedTexture::RefCountedTexture(Inner* inner) : inner(inner) {
     ++inner->count;
-}
-
-RefCountedTexture RefCountedTexture::DecodePngTexture(std::vector<u8> data) {
-    const auto core = new Inner;
-    Core::TextureManager::DecodePngTexture(std::move(data), core);
-    return RefCountedTexture(core);
 }
 
 RefCountedTexture RefCountedTexture::DecodePngFile(std::filesystem::path path) {
@@ -196,17 +189,6 @@ void StartWorker() {
 void StopWorker() {
     ASSERT(g_is_worker_running);
     g_is_worker_running = false;
-    g_worker_cv.notify_one();
-}
-
-void DecodePngTexture(std::vector<u8> data, Inner* core) {
-    ++core->count;
-    Job job{
-        .core = core,
-        .data = std::move(data),
-    };
-    std::unique_lock lk{g_job_list_mtx};
-    g_job_list.push_back(std::move(job));
     g_worker_cv.notify_one();
 }
 

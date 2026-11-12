@@ -49,7 +49,8 @@ class Rasterizer;
 
 class Presenter {
 public:
-    Presenter(Frontend::WindowSDL& window, AmdGpu::Liverpool* liverpool);
+    Presenter(Frontend::WindowSDL& window, AmdGpu::Liverpool* liverpool,
+              const RendererOptions& options);
     ~Presenter();
 
     HostPasses::PostProcessingPass::Settings& GetPPSettingsRef() {

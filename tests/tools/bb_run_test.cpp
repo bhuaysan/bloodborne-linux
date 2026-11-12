@@ -56,6 +56,10 @@ TEST(RunOptions, Defaults) {
     EXPECT_TRUE(o.log_file);
     EXPECT_FALSE(o.headless);
     EXPECT_EQ(o.device, "");
+    EXPECT_FALSE(o.validation);
+    EXPECT_FALSE(o.validation_sync);
+    EXPECT_FALSE(o.validation_gpu);
+    EXPECT_EQ(o.present_mode, "mailbox");
     EXPECT_FALSE(o.help);
 }
 
@@ -75,6 +79,23 @@ TEST(RunOptions, ParsesEveryOption) {
     EXPECT_TRUE(parse({"--help"}).help);
     // A later value replaces an earlier one.
     EXPECT_EQ(parse({"--timeout", "1", "--timeout", "86400"}).timeout_seconds, 86400U);
+}
+
+TEST(RunOptions, ParsesTheRendererOptions) {
+    const RunOptions o = parse({"--validation", "--validation-sync", "--validation-gpu",
+                                "--present-mode", "fifo"});
+    EXPECT_TRUE(o.validation);
+    EXPECT_TRUE(o.validation_sync);
+    EXPECT_TRUE(o.validation_gpu);
+    EXPECT_EQ(o.present_mode, "fifo");
+    EXPECT_EQ(parse({"--present-mode", "immediate"}).present_mode, "immediate");
+    EXPECT_EQ(parse_error({"--present-mode", "vsync"}),
+              "--present-mode: expected fifo, mailbox or immediate");
+    EXPECT_EQ(parse_error({"--present-mode"}), "--present-mode needs a value");
+    EXPECT_EQ(parse_error({"--validation-sync"}),
+              "--validation-sync and --validation-gpu need --validation");
+    EXPECT_EQ(parse_error({"--validation-gpu"}),
+              "--validation-sync and --validation-gpu need --validation");
 }
 
 TEST(RunOptions, RefusesBadArguments) {

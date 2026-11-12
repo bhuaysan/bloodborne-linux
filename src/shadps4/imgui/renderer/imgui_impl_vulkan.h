@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/imgui/renderer/imgui_impl_vulkan.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 // Based on imgui_impl_vulkan.h from Dear ImGui repository
@@ -73,6 +73,5 @@ void RenderDrawData(ImDrawData& draw_data, vk::CommandBuffer command_buffer,
                     vk::Pipeline pipeline = VK_NULL_HANDLE);
 
 void SetBlendEnabled(bool enabled);
-void OnSurfaceFormatChange(vk::Format surface_format);
 
 } // namespace ImGui::Vulkan

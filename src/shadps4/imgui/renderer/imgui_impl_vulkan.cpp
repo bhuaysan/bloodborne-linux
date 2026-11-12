@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/imgui/renderer/imgui_impl_vulkan.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 // Based on imgui_impl_vulkan.cpp from Dear ImGui repository
@@ -1263,22 +1263,6 @@ void Shutdown() {
     io.BackendFlags &=
         ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures);
     IM_DELETE(bd);
-}
-
-void OnSurfaceFormatChange(vk::Format surface_format) {
-    VkData* bd = GetBackendData();
-    const InitInfo& v = bd->init_info;
-    auto& pl_format = const_cast<vk::Format&>(
-        bd->init_info.pipeline_rendering_create_info.pColorAttachmentFormats[0]);
-    if (pl_format != surface_format) {
-        pl_format = surface_format;
-        if (bd->pipeline) {
-            v.device.destroyPipeline(bd->pipeline, v.allocator);
-            bd->pipeline = VK_NULL_HANDLE;
-            CreatePipeline(v.device, v.allocator, v.pipeline_cache, nullptr, &bd->pipeline,
-                           v.subpass);
-        }
-    }
 }
 
 } // namespace ImGui::Vulkan

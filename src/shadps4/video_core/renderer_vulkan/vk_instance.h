@@ -21,9 +21,9 @@ namespace Vulkan {
 
 class Instance {
 public:
-    explicit Instance(bool validation = false);
+    explicit Instance(const ValidationOptions& validation = {});
     explicit Instance(Frontend::WindowSDL& window, s32 physical_device_index,
-                      bool enable_validation = false);
+                      const ValidationOptions& validation = {});
     ~Instance();
 
     /// Returns a formatted string for the driver version

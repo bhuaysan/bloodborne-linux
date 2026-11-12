@@ -8,7 +8,6 @@
 #include <limits>
 #include "common/assert.h"
 #include "common/logging/log.h"
-#include "core/emulator_settings.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -16,8 +15,10 @@
 
 namespace Vulkan {
 
-Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& window_)
-    : instance{instance_}, window{window_}, surface{CreateSurface(instance.GetInstance(), window)} {
+Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& window_,
+                     PresentMode requested_present_mode)
+    : instance{instance_}, window{window_}, requested_present_mode{requested_present_mode},
+      surface{CreateSurface(instance.GetInstance(), window)} {
     FindPresentFormat();
     FindPresentMode();
 
@@ -168,17 +169,16 @@ void Swapchain::FindPresentMode() {
         return;
     }
 
-    const auto requested_mode = EmulatorSettings.GetPresentMode();
-    if (requested_mode == "Mailbox") {
-        present_mode = vk::PresentModeKHR::eMailbox;
-    } else if (requested_mode == "Fifo") {
+    switch (requested_present_mode) {
+    case PresentMode::Fifo:
         present_mode = vk::PresentModeKHR::eFifo;
-    } else if (requested_mode == "Immediate") {
+        break;
+    case PresentMode::Immediate:
         present_mode = vk::PresentModeKHR::eImmediate;
-    } else {
-        LOG_ERROR(Render_Vulkan, "Unknown present mode {}, defaulting to Mailbox.",
-                  EmulatorSettings.GetPresentMode());
+        break;
+    case PresentMode::Mailbox:
         present_mode = vk::PresentModeKHR::eMailbox;
+        break;
     }
 
     if (std::ranges::find(modes, present_mode) == modes.cend()) {
@@ -188,6 +188,7 @@ void Swapchain::FindPresentMode() {
                     vk::to_string(present_mode), vk::to_string(fallback));
         present_mode = fallback;
     }
+    LOG_INFO(Render, "Present mode {}", vk::to_string(present_mode));
 }
 
 void Swapchain::SetSurfaceProperties() {

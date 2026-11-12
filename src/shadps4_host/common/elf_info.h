@@ -1,10 +1,9 @@
 // What src/shadps4 reads of shadPS4's information about the running game: its serial, for the
-// names of screenshots and cache files, the splash image, which the port doesn't show, and the
-// firmware version it needs, which selects Pad's touch data layout.
+// names of screenshots and cache files, and the firmware version it needs, which selects Pad's
+// touch data layout.
 #pragma once
 
 #include <string_view>
-#include <vector>
 
 #include "common/singleton.h"
 #include "common/types.h"
@@ -24,12 +23,6 @@ public:
     // The firmware the game needs: SYSTEM_VER of its sce_sys/param.sfo (0x04500000, 4.50), with
     // the low 20 bits cleared as upstream does.
     u32 FirmwareVer() const { return 0x04500000; }
-
-    // Empty: no splash.
-    const std::vector<u8>& GetSplashData() const { return splash_data; }
-
-private:
-    std::vector<u8> splash_data;
 };
 
 }  // namespace Common

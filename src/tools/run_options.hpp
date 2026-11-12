@@ -17,6 +17,8 @@ namespace bb::tools {
 inline constexpr std::string_view run_usage =
     "usage: bb-run [--game-dir DIR] [--profile NAME] [--timeout SECONDS] [--stop-at-main-loop]\n"
     "              [--log SPEC] [--no-log-file] [--headless] [--device NAME]\n"
+    "              [--validation] [--validation-sync] [--validation-gpu]\n"
+    "              [--present-mode fifo|mailbox|immediate]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
@@ -30,7 +32,12 @@ inline constexpr std::string_view run_usage =
     "                       neither WAYLAND_DISPLAY nor DISPLAY is set)\n"
     "  --device NAME        the Vulkan device whose name contains NAME, ignoring case\n"
     "                       (default: video_core's choice, a discrete GPU first); status 2 when\n"
-    "                       none matches\n";
+    "                       none matches\n"
+    "  --validation         load the Vulkan validation layer (core checks)\n"
+    "  --validation-sync    with --validation: synchronization validation\n"
+    "  --validation-gpu     with --validation: GPU-assisted validation\n"
+    "  --present-mode MODE  the swapchain's present mode, falling back to fifo when the device\n"
+    "                       lacks it (default: mailbox)\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
@@ -44,12 +51,17 @@ struct RunOptions {
     bool log_file = true;
     bool headless = false;  // --headless: no window and no presentation
     std::string device;     // --device: a device name part (resolve_gpu_id), empty for any
+    bool validation = false;       // --validation
+    bool validation_sync = false;  // --validation-sync, only with --validation
+    bool validation_gpu = false;   // --validation-gpu, only with --validation
+    std::string present_mode{"mailbox"};  // --present-mode: fifo, mailbox or immediate
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 
 // Parses the arguments after argv[0]. Throws std::invalid_argument, naming the argument, for an
 // unknown option, a missing value, a profile name that valid_profile_name refuses, a timeout that
-// isn't a whole number from 1 to 86400 and a log spec that LogFilter::parse refuses.
+// isn't a whole number from 1 to 86400 and a log spec that LogFilter::parse refuses, a --present-mode that is none of
+// fifo, mailbox and immediate, and --validation-sync or --validation-gpu without --validation.
 RunOptions parse_run_options(std::span<const std::string_view> args);
 
 // The eboot's entry reads argc from +0 of its first argument and takes argv at +8 (link address

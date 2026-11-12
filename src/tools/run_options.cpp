@@ -67,9 +67,25 @@ RunOptions parse_run_options(std::span<const std::string_view> args) {
             options.headless = true;
         } else if (arg == "--device") {
             options.device = value();
+        } else if (arg == "--validation") {
+            options.validation = true;
+        } else if (arg == "--validation-sync") {
+            options.validation_sync = true;
+        } else if (arg == "--validation-gpu") {
+            options.validation_gpu = true;
+        } else if (arg == "--present-mode") {
+            options.present_mode = value();
+            if (options.present_mode != "fifo" && options.present_mode != "mailbox" &&
+                options.present_mode != "immediate") {
+                throw std::invalid_argument(
+                    "--present-mode: expected fifo, mailbox or immediate");
+            }
         } else {
             throw std::invalid_argument(std::format("unknown argument \"{}\"", arg));
         }
+    }
+    if ((options.validation_sync || options.validation_gpu) && !options.validation) {
+        throw std::invalid_argument("--validation-sync and --validation-gpu need --validation");
     }
     return options;
 }

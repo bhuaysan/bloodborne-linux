@@ -15,6 +15,7 @@
 
 #include "hle/video/gnm_driver.hpp"
 #include "hle/video/video_out.hpp"
+#include "video_core/renderer_vulkan/vk_options.h"
 
 namespace AmdGpu {
 class Liverpool;
@@ -34,9 +35,11 @@ namespace bb::hle::video {
 
 class VideoCorePresenter final : public FlipPresenter, public CommandProcessor {
 public:
-    // Creates Liverpool and, with a `window`, the Presenter on it, on the Vulkan device of
-    // GetGpuId(). Fails as upstream does (an assertion) when Vulkan can't.
-    VideoCorePresenter(Frontend::WindowSDL* window, Core::MemoryManager& memory);
+    // Creates Liverpool and, with a `window`, the Presenter on it, on the Vulkan device,
+    // with the validation and present mode `options` name. Fails as upstream does (an assertion)
+    // when Vulkan can't.
+    VideoCorePresenter(Frontend::WindowSDL* window, Core::MemoryManager& memory,
+                       const Vulkan::RendererOptions& options = {});
     ~VideoCorePresenter() override;
 
     void set_vo_port(VideoOutPort* port) override;
@@ -71,12 +74,13 @@ private:
     std::atomic<std::uint64_t> game_frames_{0};
 };
 
-// The index GetGpuId() takes for the --device selector: the first Vulkan device whose name
+// The index RendererOptions::gpu_id takes for the --device selector: the first Vulkan device whose name
 // contains `selector` ignoring case, in the order in which the Presenter's instance on a window of
 // `window_type` enumerates them; -1 (the instance's own choice) for an empty selector. Nothing
 // when no device matches; `why` then lists the names.
 std::optional<std::int32_t> resolve_gpu_id(std::string_view selector,
                                           Frontend::WindowSystemType window_type,
-                                          std::string& why);
+                                          std::string& why,
+                                          const Vulkan::ValidationOptions& validation = {});
 
 }  // namespace bb::hle::video

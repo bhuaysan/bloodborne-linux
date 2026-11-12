@@ -5,7 +5,6 @@
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/assert.h"
-#include "core/emulator_settings.h"
 #include "video_core/host_shaders/fsr_easu_comp.h"
 #include "video_core/host_shaders/fsr_rcas_comp.h"
 #include "video_core/renderer_vulkan/host_passes/fsr_pass.h"
@@ -132,8 +131,7 @@ void FsrPass::Create(vk::Device device, VmaAllocator allocator, u32 num_images) 
 }
 
 vk::ImageView FsrPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView input,
-                              vk::Extent2D input_size, vk::Extent2D output_size, Settings settings,
-                              bool hdr) {
+                              vk::Extent2D input_size, vk::Extent2D output_size, Settings settings) {
     if (!settings.enable) {
         return input;
     }
@@ -187,7 +185,7 @@ vk::ImageView FsrPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView input,
                static_cast<AF1>(input_size.width), static_cast<AF1>(input_size.height),
                static_cast<AF1>(input_size.width), static_cast<AF1>(input_size.height), (AF1)width,
                (AF1)height);
-    consts.Sample[0] = hdr && !settings.use_rcas ? 1 : 0;
+    consts.Sample[0] = 0;
 
     if (settings.use_rcas) {
 
@@ -265,7 +263,7 @@ vk::ImageView FsrPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView input,
         { // rcas
             consts = {};
             FsrRcasCon(reinterpret_cast<AU1*>(&consts.Const0), settings.rcas_attenuation);
-            consts.Sample[0] = hdr ? 1 : 0;
+            consts.Sample[0] = 0;
 
             std::array<vk::DescriptorImageInfo, 3> img_info{{
                 {

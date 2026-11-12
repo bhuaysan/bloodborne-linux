@@ -90,15 +90,15 @@ std::string GetReadableVersion(u32 version) {
 
 } // Anonymous namespace
 
-Instance::Instance(bool enable_validation)
-    : instance{CreateInstance(Frontend::WindowSystemType::Headless, enable_validation)},
+Instance::Instance(const ValidationOptions& validation)
+    : instance{CreateInstance(Frontend::WindowSystemType::Headless, validation)},
       physical_devices{EnumeratePhysicalDevices(instance)} {}
 
 Instance::Instance(Frontend::WindowSDL& window, s32 physical_device_index,
-                   bool enable_validation /*= false*/)
-    : instance{CreateInstance(window.GetWindowInfo().type, enable_validation)},
+                   const ValidationOptions& validation)
+    : instance{CreateInstance(window.GetWindowInfo().type, validation)},
       physical_devices{EnumeratePhysicalDevices(instance)} {
-    if (enable_validation) {
+    if (validation.enable) {
         debug_callback = CreateDebugCallback(*instance);
     }
     const std::size_t num_physical_devices = static_cast<u16>(physical_devices.size());

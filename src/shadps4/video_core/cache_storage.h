@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/cache_storage.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -15,6 +15,11 @@
 #include <vector>
 
 namespace Storage {
+
+// The pipeline cache stays off until R8 makes it work on disk (docs/design/rewrite.md). Its code
+// stays in place behind these two switches, as shadPS4's defaults have them.
+constexpr bool pipeline_cache_enabled = false;
+constexpr bool pipeline_cache_archived = false;
 
 enum class BlobType : u32 {
     ShaderMeta,

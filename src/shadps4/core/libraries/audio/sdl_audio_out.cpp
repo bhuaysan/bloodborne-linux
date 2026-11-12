@@ -13,7 +13,6 @@
 #include <SDL3/SDL_hints.h>
 
 #include "common/logging/log.h"
-#include "core/emulator_settings.h"
 #include "core/libraries/audio/audioout.h"
 #include "core/libraries/audio/audioout_backend.h"
 #include "core/libraries/kernel/threads.h"
@@ -32,6 +31,8 @@ namespace Libraries::AudioOut {
 constexpr float VOLUME_0DB = 32768.0f; // 1 << 15
 constexpr float INV_VOLUME_0DB = 1.0f / VOLUME_0DB;
 constexpr float VOLUME_EPSILON = 0.001f;
+// The output volume at full scale, 100 on the slider of shadPS4's settings.
+constexpr float VOLUME_SLIDER = 1.0f;
 // Timing constants
 constexpr u64 VOLUME_CHECK_INTERVAL_US = 50000; // Check every 50ms
 constexpr u64 MIN_SLEEP_THRESHOLD_US = 10;
@@ -114,7 +115,7 @@ public:
         }
         game_gain.store(max_channel_gain, std::memory_order_release);
 
-        const float slider_gain = EmulatorSettings.GetVolumeSlider() * 0.01f; // Faster than /100.0f
+        const float slider_gain = VOLUME_SLIDER; // Faster than /100.0f
         const float total_gain = max_channel_gain * slider_gain;
 
         const float current = current_gain.load(std::memory_order_acquire);
@@ -156,7 +157,7 @@ private:
         }
 
         // Initialize current gain
-        current_gain.store(EmulatorSettings.GetVolumeSlider() * 0.01f, std::memory_order_relaxed);
+        current_gain.store(VOLUME_SLIDER, std::memory_order_relaxed);
 
         if (!OpenDevice(type)) {
             FreeAlignedBuffer();
@@ -197,7 +198,7 @@ private:
         last_volume_check_time = current_time;
 
         const float config_volume =
-            EmulatorSettings.GetVolumeSlider() * 0.01f * game_gain.load(std::memory_order_acquire);
+            VOLUME_SLIDER * game_gain.load(std::memory_order_acquire);
         const float stored_gain = current_gain.load(std::memory_order_acquire);
 
         // Only update if the difference is significant
@@ -386,11 +387,9 @@ private:
         switch (type) {
         case OrbisAudioOutPort::Main:
         case OrbisAudioOutPort::Bgm:
-            return EmulatorSettings.GetSDLMainOutputDevice();
         case OrbisAudioOutPort::PadSpk:
-            return EmulatorSettings.GetSDLPadSpkOutputDevice();
         default:
-            return EmulatorSettings.GetSDLMainOutputDevice();
+            return "Default Device";
         }
     }
 

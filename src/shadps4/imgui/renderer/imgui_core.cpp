@@ -12,7 +12,6 @@
 #include <imgui.h>
 
 #include "common/path_util.h"
-#include "core/emulator_settings.h"
 #include "font_data.h"
 #include "font_stack.h"
 #include "imgui/imgui_layer.h"
@@ -89,7 +88,7 @@ void Initialize(const ::Vulkan::Instance& instance, const Frontend::WindowSDL& w
     font_cfg.OversampleH = 2;
     font_cfg.OversampleV = 1;
     io.Fonts->Flags |= ImFontAtlasFlags_NoPowerOfTwoHeight;
-    const int console_language = EmulatorSettings.GetConsoleLanguage();
+    constexpr int console_language = 1; // English, upstream's default.
     io.FontDefault = FontStack::AddPrimaryUiFont(io.Fonts, 32.0f, console_language, font_cfg, true);
 
     io.Fonts->AddFontFromMemoryCompressedTTF(imgui_font_proggyvector_regular_compressed_data,
@@ -100,7 +99,7 @@ void Initialize(const ::Vulkan::Instance& instance, const Frontend::WindowSDL& w
     FontStack::AddPrimaryUiFont(io.Fonts, 128.0f, console_language, font_cfg, false);
 
     // Big Picture
-    FontStack::AddPrimaryUiFont(ImGui::GetIO().Fonts, 64.0f, EmulatorSettings.GetConsoleLanguage(),
+    FontStack::AddPrimaryUiFont(ImGui::GetIO().Fonts, 64.0f, console_language,
                                 font_cfg, true);
 
     // Let the atlas size grow to the largest image the device can create,
@@ -144,10 +143,6 @@ void Initialize(const ::Vulkan::Instance& instance, const Frontend::WindowSDL& w
 
 void OnResize() {
     Sdl::OnResize();
-}
-
-void OnSurfaceFormatChange(vk::Format surface_format) {
-    Vulkan::OnSurfaceFormatChange(surface_format);
 }
 
 void Shutdown(const vk::Device& device) {

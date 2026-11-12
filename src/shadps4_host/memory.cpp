@@ -322,7 +322,7 @@ void AddressSpace::Protect(VAddr virtual_addr, u64 size, MemoryPermission perms)
     ASSERT_MSG(ret == 0, "mprotect failed: {}", std::strerror(errno));
 }
 
-// Used only by the userfaultfd tracker, which EmulatorSettings keeps off.
+// Used only by the userfaultfd tracker, which is removed.
 std::vector<AddressSpace::Region> AddressSpace::GetUsableRegions() {
     bb::shadps4::host_missing("Core::AddressSpace::GetUsableRegions (userfaultfd is off)");
 }

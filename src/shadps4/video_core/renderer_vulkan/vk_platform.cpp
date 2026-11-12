@@ -13,7 +13,6 @@
 
 #include "common/assert.h"
 #include "common/logging/log.h"
-#include "core/emulator_settings.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 
@@ -166,7 +165,7 @@ std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window
     return extensions;
 }
 
-std::vector<const char*> GetInstanceLayers(bool enable_validation) {
+std::vector<const char*> GetInstanceLayers(const ValidationOptions& validation) {
     const auto [properties_result, properties] = vk::enumerateInstanceLayerProperties();
     if (properties_result != vk::Result::eSuccess || properties.empty()) {
         LOG_ERROR(Render_Vulkan, "Failed to query layer properties: {}",
@@ -177,7 +176,7 @@ std::vector<const char*> GetInstanceLayers(bool enable_validation) {
     std::vector<const char*> layers;
     layers.reserve(2);
 
-    if (enable_validation) {
+    if (validation.enable) {
         layers.push_back(VALIDATION_LAYER_NAME);
     }
 
@@ -196,7 +195,8 @@ std::vector<const char*> GetInstanceLayers(bool enable_validation) {
     return layers;
 }
 
-vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool enable_validation) {
+vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type,
+                                  const ValidationOptions& validation) {
     LOG_INFO(Render_Vulkan, "Creating vulkan instance");
 
     static vk::detail::DynamicLoader dl;
@@ -214,7 +214,7 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
                VK_VERSION_MAJOR(TargetVulkanApiVersion), VK_VERSION_MINOR(TargetVulkanApiVersion),
                VK_VERSION_MAJOR(available_version), VK_VERSION_MINOR(available_version));
 
-    const auto layers = GetInstanceLayers(enable_validation);
+    const auto layers = GetInstanceLayers(validation);
     const auto extensions = GetLayerExtensions(GetInstanceExtensions(window_type, true), layers);
 
     const vk::ApplicationInfo application_info = {
@@ -231,9 +231,9 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
     LOG_INFO(Render_Vulkan, "Enabled instance layers: {}", layers_string);
 
     // Validation settings
-    vk::Bool32 enable_core = EmulatorSettings.IsVkValidationCoreEnabled() ? vk::True : vk::False;
-    vk::Bool32 enable_sync = EmulatorSettings.IsVkValidationSyncEnabled() ? vk::True : vk::False;
-    vk::Bool32 enable_gpuav = EmulatorSettings.IsVkValidationGpuEnabled() ? vk::True : vk::False;
+    vk::Bool32 enable_core = vk::True; // Only read when the layer is enabled.
+    vk::Bool32 enable_sync = validation.sync ? vk::True : vk::False;
+    vk::Bool32 enable_gpuav = validation.gpu_assisted ? vk::True : vk::False;
 
     const std::array layer_setings = {
         vk::LayerSettingEXT{

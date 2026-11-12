@@ -25,8 +25,8 @@ stbi_uc* stbi_load_from_memory(const stbi_uc*, int, int*, int*, int*, int) {
 }
 void stbi_image_free(void*) { host_missing("stbi_image_free: PNG decoding is not built"); }
 
-// The pipeline cache's storage (cache_storage.cpp, left out with miniz). EmulatorSettings keeps
-// the cache off, so the storage is never opened: Close has nothing to do and the rest is
+// The pipeline cache's storage (cache_storage.cpp, left out with miniz). Storage::pipeline_cache_enabled
+// keeps the cache off, so the storage is never opened: Close has nothing to do and the rest is
 // unreachable.
 namespace Storage {
 

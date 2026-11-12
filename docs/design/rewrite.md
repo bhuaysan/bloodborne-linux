@@ -23,7 +23,7 @@ Every R6 change is a refactor: the game must behave as before. Each PR shows:
 
 | Area | Change |
 |---|---|
-| Settings | `EmulatorSettings` (`FixedSettings`, all constants) goes. Dead branches are deleted. The options worth having (Vulkan validation, present mode) become `bb-run` options in `src/tools/run_options.*` |
+| Settings | `EmulatorSettings` (`FixedSettings`, all constants) is gone (#487). Dead branches are deleted. Vulkan validation (`--validation`, `--validation-sync`, `--validation-gpu`), the present mode (`--present-mode`) and the device (`--device`) are `bb-run` options in `src/tools/run_options.*`, handed to the renderer as `Vulkan::RendererOptions` (`vk_options.h`). Pad, IME, audio and font constants sit in the code that uses them. What stays: the pipeline cache switches `Storage::pipeline_cache_enabled` and `pipeline_cache_archived` (`cache_storage.h`, both off until R8), and FSR and RCAS as constants in `vk_presenter.cpp` |
 | Debug state and tools | `DebugState` register dumps, devtools layers, the friends, invitation and notification layers, Tracy, RenderDoc, the presenter's screenshot path, host and guest GPU markers. Draw and dispatch counters move to a plain stats struct that `bb-run` logs |
 | Shader debugging | Dumping, hash-keyed shader patches and shader collection |
 | Other platforms and consoles | `_WIN32` and `__APPLE__` branches, MoltenVK, PS4 Pro (`sceKernelIsNeoMode`) paths. Readbacks, `userfaultfd` tracking, null GPU, direct memory access and copied GPU buffers, which are all off |

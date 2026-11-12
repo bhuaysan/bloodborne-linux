@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/host_shaders/post_process.frag @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #version 450
@@ -13,7 +13,6 @@ layout (binding = 0) uniform sampler2D texSampler;
 
 layout (push_constant) uniform settings {
     float gamma;
-    bool hdr;
     bool srgb_input;
 } pp;
 
@@ -38,10 +37,6 @@ vec3 degamma(vec3 rgb) {
 
 void main() {
     vec4 color_linear = texture(texSampler, uv);
-    if (pp.hdr) {
-        color = color_linear;
-    } else {
-        if (pp.srgb_input) color_linear.rgb = degamma(color_linear.rgb);
-        color = vec4(gamma(color_linear.rgb), color_linear.a);
-    }
+    if (pp.srgb_input) color_linear.rgb = degamma(color_linear.rgb);
+    color = vec4(gamma(color_linear.rgb), color_linear.a);
 }
