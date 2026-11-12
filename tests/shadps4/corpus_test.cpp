@@ -42,7 +42,8 @@ using namespace bb::test::shadps4;
 
 constexpr std::string_view ok_marker = "RESULT ok";
 // What follows ok_marker on its line: the SHA-256 of the SPIR-V module, so two reports show
-// whether a translator change altered any module.
+// whether a translator change altered any module. Some domain shaders translate differently with
+// the heap at other addresses, so compare runs made under `setarch -R` (address randomization off).
 constexpr std::string_view spirv_marker = " spirv=";
 // A copy shader never becomes a module of its own: it is read while translating its geometry shader.
 constexpr std::string_view copy_marker = "RESULT copy-parsed";
