@@ -189,17 +189,23 @@ def bb_run_profile_data(work_root: Path) -> Path:
     return work_root / "data" / "bloodborne-linux" / "profiles" / "rig"
 
 
-def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_root: Path) -> Program:
+def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_root: Path,
+                   cache_home: Path | None = None, pipeline_cache: bool = True) -> Program:
     # bb-run refuses runtime directories inside the source checkout, so its XDG roots are outside
     # analysis/. They are per run, so runs never share or inherit save data.
     env = {f"XDG_{kind}_HOME": str(work_root / kind.lower())
            for kind in ("DATA", "CACHE", "CONFIG", "STATE")}
+    if cache_home:
+        # The shader and pipeline cache of an earlier run, or of several runs in a row (--cache-home).
+        env["XDG_CACHE_HOME"] = str(cache_home)
     # As for the reference: the virtual gamepad's events count while the window has no focus.
     env["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = "1"
     argv = [str(find_bb_run(preset)), "--game-dir", str(game_dir), "--profile", "rig",
             "--no-log-file"]
     if not window:
         argv.append("--headless")
+    if not pipeline_cache:
+        argv.append("--no-pipeline-cache")
     return Program(argv, env, run)
 
 
@@ -414,7 +420,8 @@ def run_target(args: argparse.Namespace) -> int:
     else:
         work_root = Path(tempfile.mkdtemp(prefix="bb-rig-",
                                           dir=os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"))
-        program = bb_run_program(run, game_dir, args.preset, args.window, work_root)
+        program = bb_run_program(run, game_dir, args.preset, args.window, work_root,
+                                 args.cache_home, not args.no_pipeline_cache)
         if args.user_from:
             shutil.copytree(args.user_from, bb_run_profile_data(work_root))
 
@@ -540,6 +547,11 @@ def main(argv: list[str] | None = None) -> int:
                      help="copy this user/ directory (the reference's, or an earlier bb-run's)")
     run.add_argument("--preset", default="relwithdebinfo", help="bb-run build preset")
     run.add_argument("--window", action="store_true", help="let bb-run open its window")
+    run.add_argument("--cache-home", type=Path,
+                     help="bb-run's XDG_CACHE_HOME, so its shader and pipeline cache persists "
+                          "from run to run (default: a fresh directory per run, so every run is cold)")
+    run.add_argument("--no-pipeline-cache", action="store_true",
+                     help="bb-run without the on-disk shader and pipeline cache")
     run.add_argument("--audio", action="store_true",
                      help="record the sound with SDL's disk driver and report its level")
     run.add_argument("--no-layer", action="store_true",

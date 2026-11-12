@@ -59,6 +59,18 @@ class CommandTests(unittest.TestCase):
             windowed = rig.bb_run_program(Path("/run"), Path("/g"), "debug", True, Path("/w"))
         self.assertNotIn("--headless", windowed.argv)
 
+    def test_bb_run_cache_is_cold_unless_asked(self) -> None:
+        with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
+            cold = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"))
+            warm = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"),
+                                      Path("/c"))
+            off = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"),
+                                     pipeline_cache=False)
+        self.assertEqual(cold.env["XDG_CACHE_HOME"], "/w/cache")
+        self.assertEqual(warm.env["XDG_CACHE_HOME"], "/c")
+        self.assertNotIn("--no-pipeline-cache", cold.argv)
+        self.assertIn("--no-pipeline-cache", off.argv)
+
     def test_zenity_stub_answers_without_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             stub = Path(temp) / "zenity"
