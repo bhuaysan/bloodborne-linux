@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/texture_cache/texture_cache.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -131,9 +131,6 @@ public:
 
     /// Evicts any images that overlap the unmapped range.
     void UnmapMemory(VAddr cpu_addr, size_t size);
-
-    /// Schedules a copy of pending images for download back to CPU memory.
-    void ProcessDownloadImages();
 
     /// Retrieves the image handle of the image with the provided attributes.
     [[nodiscard]] ImageId FindImage(ImageDesc& desc, bool exact_fmt = false);
@@ -414,7 +411,6 @@ private:
     BlitHelper blit_helper;
     TileManager tile_manager;
     absl::flat_hash_map<u64, SamplerId> samplers;
-    absl::flat_hash_set<ImageId> download_images;
     u64 total_used_memory = 0;
     u64 trigger_gc_memory = 0;
     u64 pressure_gc_memory = 0;
@@ -426,8 +422,6 @@ private:
     u64 gc_tick = 0;
     Common::LRUCache<Image> image_lru_cache;
     Common::LRUCache<Sampler> sampler_lru_cache;
-    const bool readback_linear_images;
-    std::mutex download_images_mutex;
     absl::flat_hash_map<VAddr, MetaDataInfo> surface_metas;
 };
 DECLARE_ENUM_FLAG_OPERATORS(TextureCache::DownloadMemoryFlags)

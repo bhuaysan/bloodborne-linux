@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/memory_tracker.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -22,8 +22,7 @@ public:
     static constexpr u64 MANAGER_POOL_SIZE = 32;
 
 public:
-    explicit MemoryTracker(PageManager& tracker_)
-        : tracker{&tracker_}, readbacks_mode{EmulatorSettings.GetReadbacksMode()} {}
+    explicit MemoryTracker(PageManager& tracker_) : tracker{&tracker_} {}
     ~MemoryTracker() = default;
 
     /// Returns true if a region has been modified from the GPU
@@ -63,28 +62,6 @@ public:
         IteratePages(cpu_addr, size, [](RegionManager* manager, u64 offset, u64 size) {
             manager->template ChangeRegionState<StateOp::Set, StateOp::None>(offset, size);
         });
-    }
-
-    /// Removes all protection from a page and ensures GPU data has been flushed if requested
-    void InvalidateRegion(VAddr cpu_addr, u64 size, auto&& on_flush) noexcept {
-        if (readbacks_mode == GpuReadbacksMode::Disabled) {
-            return MarkRegionAsCpuModified(cpu_addr, size);
-        }
-        bool should_flush = false;
-        IteratePages(cpu_addr, size, [&should_flush](RegionManager* manager, u64 offset, u64 size) {
-            const auto bounds = manager->GetBounds(offset, size);
-            manager->Lock(bounds);
-            const bool modified = manager->template IsRegionModified<Type::GPU>(offset, size);
-            if (!modified) {
-                manager->template ChangeRegionState<StateOp::Set, StateOp::None, false>(offset,
-                                                                                        size);
-            }
-            should_flush |= modified;
-            manager->Unlock(bounds);
-        });
-        if (should_flush) {
-            on_flush();
-        }
     }
 
     /// Call 'func' for each CPU modified range and unmark those pages as CPU modified
@@ -165,7 +142,6 @@ private:
     }
 
     PageManager* tracker;
-    const u32 readbacks_mode;
     std::deque<std::array<RegionManager, MANAGER_POOL_SIZE>> manager_pool;
     std::vector<RegionManager*> free_managers;
     std::array<RegionManager*, NUM_HIGH_PAGES> top_tier{};

@@ -391,13 +391,8 @@ void Rasterizer::Finish() {
 
 void Rasterizer::OnSubmit() {
     buffer_cache.TickFrame();
-    texture_cache.ProcessDownloadImages();
     texture_cache.RunGarbageCollector();
     runtime.TickFrame();
-}
-
-void Rasterizer::OnFence() {
-    texture_cache.ProcessDownloadImages();
 }
 
 bool Rasterizer::BindResources(const Pipeline* pipeline) {
@@ -1256,22 +1251,13 @@ u32 Rasterizer::ReadDataFromGds(u32 gds_offset) {
     return value;
 }
 
-bool Rasterizer::InvalidateMemory(VAddr addr, u64 size, bool assume_locks) {
+bool Rasterizer::InvalidateMemory(VAddr addr, u64 size) {
     if (!IsMapped(addr, size)) {
         // Not GPU mapped memory, can skip invalidation logic entirely.
         return false;
     }
-    buffer_cache.InvalidateMemory(addr, size, assume_locks);
+    buffer_cache.InvalidateMemory(addr, size);
     texture_cache.InvalidateMemory(addr, size);
-    return true;
-}
-
-bool Rasterizer::ReadMemory(VAddr addr, u64 size, bool assume_locks) {
-    if (!IsMapped(addr, size)) {
-        // Not GPU mapped memory, can skip invalidation logic entirely.
-        return false;
-    }
-    buffer_cache.ReadMemory(addr, size, false, false, assume_locks);
     return true;
 }
 
@@ -1562,15 +1548,5 @@ void Rasterizer::UpdateColorBlendingState(const GraphicsPipeline* pipeline) cons
     dynamic_state.SetColorWriteMasks(pipeline->GetGraphicsKey().write_masks);
     dynamic_state.SetAttachmentFeedbackLoopEnabled(attachment_feedback_loop);
 }
-
-std::thread::id Rasterizer::GetGpuCommandProcessorThread() {
-    return liverpool->GetGpuCommandProcessorThread();
-}
-
-#ifdef __linux__
-u32 Rasterizer::GetGpuCommandProcessorThreadId() {
-    return liverpool->GetGpuCommandProcessorThreadId();
-}
-#endif
 
 } // namespace Vulkan

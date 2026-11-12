@@ -1,24 +1,17 @@
 // What src/shadps4 reads of shadPS4's settings object, fixed at the values this port runs with.
 // A port for one game has nothing to configure here. The values are upstream's defaults
-// (core/emulator_settings.h of v.0.21.0): readbacks, userfaultfd, FSR and every debug aid off,
-// RCAS on, present mode Mailbox; for the system libraries the default audio device at full volume,
-// the standard pad with motion controls, and ImeDialog's accessibility and short URL panel off. The
-// pipeline cache stays off until R8 makes it work on disk (docs/design/renderer.md). The null GPU,
-// HDR, the OpenAL backend, DMA and copied command buffers were off too; they are gone together
-// with their paths.
+// (core/emulator_settings.h of v.0.21.0): FSR and every debug aid off, RCAS on, present mode
+// Mailbox; for the system libraries the default audio device at full volume, the standard pad
+// with motion controls, and ImeDialog's accessibility and short URL panel off. The pipeline cache
+// stays off until R8 makes it work on disk (docs/design/renderer.md). The settings that were off
+// and only selected code paths (DMA, readbacks, userfaultfd, the null GPU, copied command
+// buffers, HDR, the OpenAL backend) are gone together with those paths.
 #pragma once
 
 #include <string>
 #include <string_view>
 
 #include "common/types.h"
-
-// The values of upstream's readbacks_mode setting, which the buffer cache compares against.
-enum GpuReadbacksMode : int {
-    Disabled,
-    Relaxed,
-    Precise,
-};
 
 namespace bb::shader {
 
@@ -29,9 +22,6 @@ void set_gpu_id(s32 id);
 
 struct FixedSettings {
     // GPU.
-    static constexpr u32 GetReadbacksMode() { return GpuReadbacksMode::Disabled; }
-    static constexpr bool IsReadbackLinearImagesEnabled() { return false; }
-    static constexpr bool IsUserfaultfdTracking() { return false; }
     static constexpr std::string_view GetPresentMode() { return "Mailbox"; }
     static constexpr bool IsFsrEnabled() { return false; }
     static constexpr bool IsRcasEnabled() { return true; }

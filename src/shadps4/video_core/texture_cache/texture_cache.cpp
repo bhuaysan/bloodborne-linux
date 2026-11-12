@@ -12,7 +12,6 @@
 #include "common/debug.h"
 #include "common/div_ceil.h"
 #include "common/hash.h"
-#include "core/emulator_settings.h"
 #include "core/memory.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/page_manager.h"
@@ -59,8 +58,7 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
       buffer_cache{buffer_cache_}, page_manager{page_manager_}, slot_images{MAX_IMAGES},
       slot_image_views{MAX_IMAGE_VIEWS}, slot_samplers{MAX_SAMPLERS},
       blit_helper{instance, scheduler},
-      tile_manager{instance, scheduler, runtime, buffer_cache.GetStreamBuffer()},
-      readback_linear_images{EmulatorSettings.IsReadbackLinearImagesEnabled()} {
+      tile_manager{instance, scheduler, runtime, buffer_cache.GetStreamBuffer()} {
 
     u32 max_samplers = instance.GetMaxSamplerAllocationCount();
     trigger_gc_samplers = max_samplers * 3 / 4;
@@ -95,14 +93,6 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
 }
 
 TextureCache::~TextureCache() = default;
-
-void TextureCache::ProcessDownloadImages() {
-    std::unique_lock lk{download_images_mutex};
-    for (const ImageId image_id : download_images) {
-        DownloadImageMemory(image_id, DownloadMemoryFlags::Sync);
-    }
-    download_images.clear();
-}
 
 void TextureCache::DownloadImageMemory(ImageId image_id, DownloadMemoryFlags flags) {
     Image& image = slot_images[image_id];
@@ -707,11 +697,6 @@ ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc) {
     Image& image = slot_images[image_id];
     if (desc.type == BindingType::Storage) {
         image.flags |= ImageFlagBits::GpuModified;
-        if (readback_linear_images && (!image.info.props.is_tiled || image.info.size.width <= 8) &&
-            image.info.guest_address != 0) {
-            std::unique_lock lk{download_images_mutex};
-            download_images.emplace(image_id);
-        }
     }
     UpdateImage(image_id);
     return image.FindView(desc.view_info);
@@ -745,10 +730,6 @@ void TextureCache::UnregisterMeta(VAddr address, u64 owner_uid) {
 ImageView& TextureCache::FindRenderTarget(ImageId image_id, const ImageDesc& desc) {
     Image& image = slot_images[image_id];
     image.flags |= ImageFlagBits::GpuModified;
-    if (readback_linear_images && (!image.info.props.is_tiled || image.info.size.width <= 8)) {
-        std::unique_lock lk{download_images_mutex};
-        download_images.emplace(image_id);
-    }
     image.usage.render_target = 1u;
     UpdateImage(image_id);
 
@@ -1108,8 +1089,8 @@ void TextureCache::GarbageCollectImages() {
             UntrackImage(image_id);
             UnregisterImage(image_id);
             if (image.gpu_hash != 0) {
-                buffer_cache.ReadMemory(image.info.guest_address, image.info.guest_size, false,
-                                        true, true);
+                buffer_cache.ReadMemory(image.info.guest_address, image.info.guest_size, true,
+                                        true);
                 maybe_download.push_back(image_id);
             } else {
                 download_queue.push_back(image_id);
@@ -1242,13 +1223,6 @@ void TextureCache::DeleteImage(ImageId image_id) {
     }
     if (meta_info.htile_addr) {
         UnregisterMeta(meta_info.htile_addr, image.image_uid);
-    }
-
-    {
-        std::unique_lock lk{download_images_mutex};
-        if (download_images.contains(image_id)) {
-            download_images.erase(image_id);
-        }
     }
 
     // Reclaim image and any image views it references.

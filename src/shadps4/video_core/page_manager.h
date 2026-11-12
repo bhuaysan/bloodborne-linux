@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/page_manager.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -18,7 +18,6 @@ class Rasterizer;
 
 namespace VideoCore {
 
-struct UffdImpl;
 struct SignalImpl;
 
 enum class PageOp : s8 {
@@ -44,10 +43,9 @@ public:
     /// Updates watches in the pages touching the specified region.
     void UpdatePageWatchers(VAddr addr, u64 size, PageOp write_op) const;
 
-    /// Updates watches in the pages touching the inclusive bounds using a mask.
+    /// Updates write watches in the pages touching the inclusive bounds using a mask.
     void UpdatePageWatchersForRegion(VAddr base_addr, const Bounds& bounds,
-                                     const RegionBits& write_mask, const RegionBits& read_mask,
-                                     PageOp write_op, PageOp read_op) const;
+                                     const RegionBits& write_mask, PageOp write_op) const;
 
     /// Returns page aligned address.
     static constexpr VAddr GetPageAddr(VAddr addr) {
@@ -64,7 +62,6 @@ public:
     }
 
 private:
-    friend struct UffdImpl;
     friend struct SignalImpl;
     struct Impl;
     std::unique_ptr<Impl> impl;

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/region_manager.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -10,7 +10,6 @@
 
 #include "common/adaptive_mutex.h"
 #include "common/types.h"
-#include "core/emulator_settings.h"
 #include "video_core/buffer_cache/region_definitions.h"
 #include "video_core/page_manager.h"
 
@@ -29,8 +28,7 @@ using LockType = std::mutex;
 class RegionManager {
 public:
     explicit RegionManager(PageManager* tracker_, VAddr cpu_addr_)
-        : tracker{tracker_}, cpu_addr{cpu_addr_},
-          readbacks_mode{EmulatorSettings.GetReadbacksMode()} {
+        : tracker{tracker_}, cpu_addr{cpu_addr_} {
         cpu.Fill(true);
         gpu.Fill(false);
     }
@@ -91,21 +89,16 @@ public:
         }
         bool update_watchers{};
         RegionBits write_prot;
-        RegionBits read_prot;
         Bounds watcher_bounds = MIN_BOUNDS;
         if constexpr (locked) {
             mutex.lock();
         }
         IterateWords(bounds, [&](u64 index, u64 mask) {
-            update_watchers |= UpdateProtection<cpu_op, gpu_op>(write_prot, read_prot,
-                                                                watcher_bounds, index, mask);
+            update_watchers |= UpdateProtection<cpu_op>(write_prot, watcher_bounds, index, mask);
         });
-        const auto write_op = GetPageOp<Type::CPU>(cpu_op);
-        const auto read_op = GetPageOp<Type::GPU>(gpu_op);
-        update_watchers &= write_op != PageOp::None || read_op != PageOp::None;
         if (update_watchers) {
-            tracker->UpdatePageWatchersForRegion(cpu_addr, watcher_bounds, write_prot, read_prot,
-                                                 write_op, read_op);
+            tracker->UpdatePageWatchersForRegion(cpu_addr, watcher_bounds, write_prot,
+                                                 GetPageOp(cpu_op));
         }
         IterateWords(bounds,
                      [&](u64 index, u64 mask) { UpdateState<cpu_op, gpu_op>(index, mask); });
@@ -123,7 +116,6 @@ public:
         auto& state = GetRegionBits<type>();
         bool update_watchers{};
         RegionBits write_prot;
-        RegionBits read_prot;
         u64 start_page{};
         u64 end_page{};
         Bounds watcher_bounds = MIN_BOUNDS;
@@ -133,8 +125,7 @@ public:
         IterateWords(bounds, [&](u64 index, u64 mask) {
             const u64 base_page = index * PAGES_PER_WORD;
             const u64 word = state[index] & mask;
-            update_watchers |= UpdateProtection<cpu_op, gpu_op>(write_prot, read_prot,
-                                                                watcher_bounds, index, mask);
+            update_watchers |= UpdateProtection<cpu_op>(write_prot, watcher_bounds, index, mask);
             IteratePages(word, [&](u64 pages_offset, u64 pages_size) {
                 if (end_page == base_page + pages_offset) {
                     end_page += pages_size;
@@ -151,12 +142,9 @@ public:
         if (end_page) {
             func(cpu_addr + start_page * BYTES_PER_PAGE, (end_page - start_page) * BYTES_PER_PAGE);
         }
-        const auto write_op = GetPageOp<Type::CPU>(cpu_op);
-        const auto read_op = GetPageOp<Type::GPU>(gpu_op);
-        update_watchers &= write_op != PageOp::None || read_op != PageOp::None;
         if (update_watchers) {
-            tracker->UpdatePageWatchersForRegion(cpu_addr, watcher_bounds, write_prot, read_prot,
-                                                 write_op, read_op);
+            tracker->UpdatePageWatchersForRegion(cpu_addr, watcher_bounds, write_prot,
+                                                 GetPageOp(cpu_op));
         }
         IterateWords(bounds,
                      [&](u64 index, u64 mask) { UpdateState<cpu_op, gpu_op>(index, mask); });
@@ -185,14 +173,6 @@ public:
         }
     }
 
-    void Lock(const Bounds& bounds) noexcept {
-        mutex.lock();
-    }
-
-    void Unlock(const Bounds& bounds) noexcept {
-        mutex.unlock();
-    }
-
 private:
     template <StateOp op>
     constexpr static u64 Apply(u64 word, u64 mask) {
@@ -205,21 +185,16 @@ private:
         }
     }
 
-    template <StateOp cpu_op, StateOp gpu_op>
-    constexpr bool UpdateProtection(RegionBits& write_prot, RegionBits& read_prot, Bounds& bounds,
-                                    u64 index, u64 mask) {
+    // Records the pages whose CPU state cpu_op changes, the only pages whose write watchers move.
+    // GPU state changes move no watchers: with readbacks off, pages are never read protected.
+    template <StateOp cpu_op>
+    constexpr bool UpdateProtection(RegionBits& write_prot, Bounds& bounds, u64 index, u64 mask) {
         u64 prot_word = 0;
         if constexpr (cpu_op != StateOp::None) {
             const u64 prev = cpu[index];
             const u64 next = Apply<cpu_op>(prev, mask);
             write_prot[index] = (next ^ prev) & mask;
             prot_word |= write_prot[index];
-        }
-        if constexpr (gpu_op != StateOp::None) {
-            const u64 prev = gpu[index];
-            const u64 next = Apply<gpu_op>(prev, mask);
-            read_prot[index] = (next ^ prev) & mask;
-            prot_word |= read_prot[index];
         }
         if (prot_word) {
             if (index <= bounds.start_word) {
@@ -303,21 +278,12 @@ private:
         }
     }
 
-    template <Type type>
-        requires(std::popcount(std::to_underlying(type)) == 1)
-    constexpr PageOp GetPageOp(StateOp state_op) {
-        if constexpr (type == Type::CPU) {
-            if (state_op == StateOp::Set) {
-                return PageOp::Untrack;
-            } else if (state_op == StateOp::Clear) {
-                return PageOp::Track;
-            }
-        } else if (type == Type::GPU && readbacks_mode == GpuReadbacksMode::Precise) {
-            if (state_op == StateOp::Set) {
-                return PageOp::Track;
-            } else if (state_op == StateOp::Clear) {
-                return PageOp::Untrack;
-            }
+    // A CPU modified page needs no write watch, a page the GPU holds again does.
+    static constexpr PageOp GetPageOp(StateOp cpu_op) {
+        if (cpu_op == StateOp::Set) {
+            return PageOp::Untrack;
+        } else if (cpu_op == StateOp::Clear) {
+            return PageOp::Track;
         }
         return PageOp::None;
     }
@@ -334,7 +300,6 @@ private:
 
     PageManager* tracker;
     VAddr cpu_addr{};
-    u32 readbacks_mode;
     RegionBits cpu;
     RegionBits gpu;
     LockType mutex;
