@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/texture_cache/image_info.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/assert.h"
-#include "core/libraries/kernel/process.h"
 #include "core/libraries/videoout/buffer.h"
 #include "shader_recompiler/resource.h"
 #include "video_core/amdgpu/pixel_format.h"
@@ -90,7 +89,6 @@ ImageInfo::ImageInfo(const AmdGpu::ColorBuffer& buffer, AmdGpu::CbDbExtent hint)
         guest_size *= resources.layers;
         mips_layout[0] = MipInfo(guest_size, pitch, size.height, 0);
     }
-    alt_tile = Libraries::Kernel::sceKernelIsNeoMode() && buffer.info.alt_tile_mode;
 }
 
 ImageInfo::ImageInfo(const AmdGpu::DepthBuffer& buffer, u32 num_slices, VAddr htile_address,
@@ -173,7 +171,6 @@ ImageInfo::ImageInfo(const AmdGpu::Image& sharp, const Shader::ImageResource& de
     guest_address = image.Address();
     if (image.alt_tile_mode) {
         bank_swizzle = sharp.GetBankSwizzle();
-        alt_tile = Libraries::Kernel::sceKernelIsNeoMode();
     }
     UpdateSize();
 }
@@ -189,7 +186,7 @@ void ImageInfo::UpdateSize() noexcept {
                "Unhandled array mode: ArrayLinearGeneral");
     if (std::has_single_bit(pitch) && std::bit_width(pitch) <= MAX_DIM_LOG2 &&
         pitch == size.height && size.depth == 1 && resources.levels == std::bit_width(pitch) &&
-        resources.layers == 1 && num_samples == 1 && props.is_block && props.is_pow2 && !alt_tile &&
+        resources.layers == 1 && num_samples == 1 && props.is_block && props.is_pow2 &&
         tile_mode == AmdGpu::TileMode::Thin1DThin) {
         if (num_bits == 128) {
             const auto& entry = Pow2Bcn128ImageTable[std::bit_width(pitch) - 1];
@@ -206,7 +203,7 @@ void ImageInfo::UpdateSize() noexcept {
         }
     }
     ComputeImageSize(pitch, size.height, size.depth, resources.levels, resources.layers, num_bits,
-                     num_samples, props.is_block, props.is_pow2, alt_tile, tile_mode, array_mode,
+                     num_samples, props.is_block, props.is_pow2, tile_mode, array_mode,
                      &guest_size, &micro_tiled_mips, mips_layout.data());
 }
 

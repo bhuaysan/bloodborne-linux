@@ -214,7 +214,8 @@ private:
     u32 num_mapped_queues{1u}; // GFX is always available
 
     VAddr indirect_args_addr{};
-    u32 num_counter_pairs{};
+    // The occlusion counter pairs a ZpassDone pixel stat dump writes: 8 on the base PS4.
+    static constexpr u32 NumCounterPairs = 8;
     u64 pixel_counter{};
     u32 vgt_strmout_buffer_filled_size[4]{};
 

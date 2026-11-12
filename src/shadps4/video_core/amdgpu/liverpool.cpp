@@ -12,7 +12,6 @@
 #include "common/scope_exit.h"
 #include "common/thread.h"
 #include "core/emulator_settings.h"
-#include "core/libraries/kernel/process.h"
 #include "core/libraries/videoout/driver.h"
 #include "core/memory.h"
 #include "core/platform.h"
@@ -68,7 +67,6 @@ static std::span<const u32> NextPacket(std::span<const u32> span, size_t offset)
 }
 
 Liverpool::Liverpool() {
-    num_counter_pairs = Libraries::Kernel::sceKernelIsNeoMode() ? 16 : 8;
     process_thread = std::jthread{std::bind_front(&Liverpool::Process, this)};
 }
 
@@ -611,7 +609,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                         static constexpr u64 OcclusionCounterValidMask = 0x8000000000000000ULL;
                         static constexpr u64 OcclusionCounterStep = 0x2FFFFFFULL;
                         u64* results = event->Address<u64*>();
-                        for (s32 i = 0; i < num_counter_pairs; ++i, results += 2) {
+                        for (u32 i = 0; i < NumCounterPairs; ++i, results += 2) {
                             *results = pixel_counter | OcclusionCounterValidMask;
                         }
                         pixel_counter += OcclusionCounterStep;
