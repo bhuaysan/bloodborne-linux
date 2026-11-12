@@ -53,14 +53,6 @@ public:
               const RendererOptions& options);
     ~Presenter();
 
-    HostPasses::PostProcessingPass::Settings& GetPPSettingsRef() {
-        return pp_settings;
-    }
-
-    HostPasses::FsrPass::Settings& GetFsrSettingsRef() {
-        return fsr_settings;
-    }
-
     Frontend::WindowSDL& GetWindow() const {
         return window;
     }
