@@ -81,7 +81,7 @@ public:
         }
     }
 
-    template <StateOp cpu_op, StateOp gpu_op, bool locked = true>
+    template <StateOp cpu_op, StateOp gpu_op>
     void ChangeRegionState(u64 offset, u64 size) {
         auto bounds = GetBounds(offset, size);
         if (!HasEffect<cpu_op, gpu_op>(bounds)) {
@@ -90,9 +90,7 @@ public:
         bool update_watchers{};
         RegionBits write_prot;
         Bounds watcher_bounds = MIN_BOUNDS;
-        if constexpr (locked) {
-            mutex.lock();
-        }
+        mutex.lock();
         IterateWords(bounds, [&](u64 index, u64 mask) {
             update_watchers |= UpdateProtection<cpu_op>(write_prot, watcher_bounds, index, mask);
         });
@@ -102,9 +100,7 @@ public:
         }
         IterateWords(bounds,
                      [&](u64 index, u64 mask) { UpdateState<cpu_op, gpu_op>(index, mask); });
-        if constexpr (locked) {
-            mutex.unlock();
-        }
+        mutex.unlock();
     }
 
     template <Type type, StateOp cpu_op, StateOp gpu_op, bool locked = true>
