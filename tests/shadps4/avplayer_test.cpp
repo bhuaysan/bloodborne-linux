@@ -146,6 +146,14 @@ bool reference_frames(const std::string& path, std::vector<Nv12Frame>& out, int&
     return ok;
 }
 
+// The guest memory the library invalidates the GPU caches of the frames it writes in. It outlives
+// the test, so a failed assertion that returns early can't leave the player's threads using a
+// destroyed manager.
+Core::MemoryManager& guest_memory() {
+    static Core::MemoryManager memory;
+    return memory;
+}
+
 TEST(AvPlayerGame, OpeningMovieFramesMatchFfmpeg) {
     BB_REQUIRE_GAME(game);
     const std::filesystem::path movie = game / "dvdroot_ps4/movie/sprj_opening.mp4";
@@ -165,10 +173,8 @@ TEST(AvPlayerGame, OpeningMovieFramesMatchFfmpeg) {
     // The game opens its files under /app0/dvdroot_ps4, in the dump.
     bb::hle::kernel::path_map().mount_game(game);
 
-    // The library invalidates the GPU caches of the frames it writes, in this guest memory.
-    Core::MemoryManager memory;
     Core::Loader::SymbolsResolver symbols;
-    RegisterLib(&symbols, memory);
+    RegisterLib(&symbols, guest_memory());
 
     AvPlayerInitData init{};
     init.memory_replacement = {nullptr, allocate, deallocate, allocate, deallocate};
