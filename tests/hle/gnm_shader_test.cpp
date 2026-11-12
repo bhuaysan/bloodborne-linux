@@ -283,6 +283,8 @@ TEST(GnmShaderGame, LayoutsAgreeWithTheShaderFiles) {
     BB_REQUIRE_GAME_DATA(root, "tools/shaderbnd");
     std::map<int, int> checked;
     int failures = 0;
+    int gs_strmout = 0;
+    std::set<std::uint32_t> gs_prim_types;
     for (const auto& archive : std::filesystem::directory_iterator(root)) {
         if (!std::filesystem::is_directory(archive.path() / "entries")) {
             continue;
@@ -354,10 +356,12 @@ TEST(GnmShaderGame, LayoutsAgreeWithTheShaderFiles) {
                      r.at(0x2e08) == u32(0x18) >> 16 && r.at(0x2e09) == (u32(0x1c) & 0xffff);
             }
             if (stage == 3) {
-                // VGT_STRMOUT_CONFIG is set exactly for the 10 entries with stream-out records
-                // (not counted here); the primitive type is a small number.
-                ok = ok && r.at(0xa2e5) == block[4] && r.at(0xa29b) == block[5] && block[5] <= 2 &&
+                // VGT_STRMOUT_CONFIG is set exactly for the entries with stream-out records
+                // (counted below); the primitive type is one of a few values (collected below).
+                ok = ok && r.at(0xa2e5) == block[4] && r.at(0xa29b) == block[5] &&
                      r.at(0xa2e4) == block[6];
+                gs_strmout += block[4] != 0;
+                gs_prim_types.insert(block[5]);
             } else if (stage == 7) {
                 ok = ok && r.at(0xa2db) == block[4] && (block[4] & 3) == (u32(0x18) & 0xff) &&
                      r.at(0xa286) == u32(0x20) && block[5] == u32(0x20) && r.at(0xa2d6) == 0x11e0;
@@ -369,6 +373,8 @@ TEST(GnmShaderGame, LayoutsAgreeWithTheShaderFiles) {
         }
     }
     EXPECT_EQ(failures, 0);
+    EXPECT_EQ(gs_strmout, 10);
+    EXPECT_EQ(gs_prim_types, (std::set<std::uint32_t>{0, 1, 2}));
     // Every stage written so far, with the file counts of the full extraction (a truncated one
     // must fail): VS 10585, PS 3209, GS 1701, CS 69, ES 1699, LS 850, HS 404.
     EXPECT_EQ(checked, (std::map<int, int>{{1, 10585}, {2, 3209}, {3, 1701}, {4, 69}, {5, 1699}, {6, 850}, {7, 404}}));
