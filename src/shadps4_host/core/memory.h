@@ -47,13 +47,6 @@ public:
     };
     using BackingPageTable = Common::MultiLevelPageTable<Traits>;
 
-    // One mapped range, as the userfaultfd tracker registers them.
-    struct Region {
-        VAddr base, end;
-        VAddr lower() const { return base; }
-        VAddr upper() const { return end; }
-    };
-
     // The whole direct memory memfd, direct memory then flexible memory, mapped once.
     [[nodiscard]] u8* BackingBase() const noexcept {
         return backing_base;
@@ -64,8 +57,6 @@ public:
     }
     // Sets the host protection of guest pages, as the write tracker needs it.
     void Protect(VAddr virtual_addr, u64 size, MemoryPermission perms);
-    // Used only by the userfaultfd tracker, which is removed.
-    std::vector<Region> GetUsableRegions();
 
 private:
     friend class MemoryManager;
