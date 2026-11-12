@@ -4,7 +4,6 @@
 // Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
-#include "common/debug.h"
 #include "core/gpu_stats.h"
 #include "core/memory.h"
 #include "shader_recompiler/resource.h"
@@ -178,7 +177,6 @@ void Rasterizer::EliminateFastClear() {
 }
 
 void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
-    RENDERER_TRACE;
 
     scheduler.PopPendingOperations();
 
@@ -233,7 +231,6 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
 void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u32 stride,
                               u32 max_count, VAddr count_address, u16 vertex_sgpr_offset,
                               u16 instance_sgpr_offset) {
-    RENDERER_TRACE;
 
     scheduler.PopPendingOperations();
 
@@ -313,7 +310,6 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
 }
 
 void Rasterizer::DispatchDirect() {
-    RENDERER_TRACE;
 
     scheduler.PopPendingOperations();
 
@@ -348,7 +344,6 @@ void Rasterizer::DispatchDirect() {
 }
 
 void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
-    RENDERER_TRACE;
 
     scheduler.PopPendingOperations();
 
