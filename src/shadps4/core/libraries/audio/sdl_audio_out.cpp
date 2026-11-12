@@ -115,7 +115,7 @@ public:
         }
         game_gain.store(max_channel_gain, std::memory_order_release);
 
-        const float slider_gain = VOLUME_SLIDER; // Faster than /100.0f
+        const float slider_gain = VOLUME_SLIDER;
         const float total_gain = max_channel_gain * slider_gain;
 
         const float current = current_gain.load(std::memory_order_acquire);

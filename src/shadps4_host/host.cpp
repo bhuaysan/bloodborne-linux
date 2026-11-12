@@ -48,6 +48,8 @@ namespace Common::Log {
 std::array<Level, NUM_LOG_CLASSES> g_class_levels = [] {
     std::array<Level, NUM_LOG_CLASSES> levels{};
     levels.fill(Level::Warning);
+    // The swapchain logs the present mode it ended up with at info (bb-run --present-mode).
+    levels[static_cast<std::size_t>(Class::Render)] = Level::Info;
     return levels;
 }();
 

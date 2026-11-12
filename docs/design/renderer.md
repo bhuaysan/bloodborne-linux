@@ -13,7 +13,7 @@ R4 runs shadPS4's `video_core` (v.0.21.0, the same pin as R3's translator) on ou
 | Flips, labels, vblank pacing | `videoout/driver.cpp` and `video_out.cpp` | `src/hle/video`, adapted from upstream |
 | Window and surface | `Frontend::WindowSDL` | host `sdl_window.h` over our SDL3 window |
 | Getting the frame to the swapchain | Dear ImGui (`imgui_core`, `imgui_impl_vulkan`) | imported, layers replaced with empty ones |
-| Settings, paths, game serial, SDK version | `EmulatorSettings`, `path_util`, `ElfInfo`, `process.h` | host headers with fixed values |
+| Paths, game serial, SDK version | `path_util`, `ElfInfo`, `process.h` | host headers with fixed values |
 
 ## Decisions
 

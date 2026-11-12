@@ -74,10 +74,10 @@ private:
     std::atomic<std::uint64_t> game_frames_{0};
 };
 
-// The index RendererOptions::gpu_id takes for the --device selector: the first Vulkan device whose name
-// contains `selector` ignoring case, in the order in which the Presenter's instance on a window of
-// `window_type` enumerates them; -1 (the instance's own choice) for an empty selector. Nothing
-// when no device matches; `why` then lists the names.
+// The index RendererOptions::gpu_id takes for the --device selector: the first Vulkan device whose
+// name contains `selector` ignoring case, in the order in which the Presenter's instance on a
+// window of `window_type` enumerates them; -1 (the instance's own choice) for an empty
+// selector. Nothing when no device matches; `why` then lists the names.
 std::optional<std::int32_t> resolve_gpu_id(std::string_view selector,
                                           Frontend::WindowSystemType window_type,
                                           std::string& why,
