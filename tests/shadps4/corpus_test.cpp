@@ -41,6 +41,9 @@ using namespace bb::test::gcn;
 using namespace bb::test::shadps4;
 
 constexpr std::string_view ok_marker = "RESULT ok";
+// What follows ok_marker on its line: the SHA-256 of the SPIR-V module, so two reports show
+// whether a translator change altered any module.
+constexpr std::string_view spirv_marker = " spirv=";
 // A copy shader never becomes a module of its own: it is read while translating its geometry shader.
 constexpr std::string_view copy_marker = "RESULT copy-parsed";
 constexpr unsigned time_limit_seconds = 120;
@@ -103,7 +106,8 @@ struct Running {
                                       user_data_of(job.program, form));
         const std::string invalid = validate(module);
         if (invalid.empty()) {
-            finish_job(ok_marker);
+            const auto digest = bb::common::sha256(std::as_bytes(std::span(module)));
+            finish_job(std::string(ok_marker) + std::string(spirv_marker) + bb::common::to_hex(digest));
         }
         report_failure("spirv-val: " + invalid);
     } catch (const bb::shader::TranslationFailure& failure) {
@@ -181,6 +185,16 @@ std::string outcome_of(const std::string& output, int status) {
         return output.substr(from, output.find('\n', from) - from);
     }
     return crash_reason(output, status);
+}
+
+// The SPIR-V hash a translated program printed, or nothing.
+std::string spirv_hash_of(const std::string& output) {
+    const auto at = output.find(std::string(ok_marker) + std::string(spirv_marker));
+    if (at == std::string::npos) {
+        return {};
+    }
+    const std::size_t from = at + ok_marker.size() + spirv_marker.size();
+    return output.substr(from, output.find('\n', from) - from);
 }
 
 // Groups messages by cause: numbers, addresses and paths up to the last '/' go.
@@ -270,14 +284,15 @@ TEST(ShaderCorpus, EveryProgramTranslatesOrHasAReason) {
     std::ofstream report(bb::test::analysis_dir() / (!filtered ? "shadps4-corpus-report.txt"
                                                                        : "shadps4-corpus-report-filtered.txt"));
 
-    const auto finish = [&](const Running& running, const std::string& outcome) {
+    const auto finish = [&](const Running& running, const std::string& outcome,
+                            const std::string& spirv_hash) {
         const std::string stage = program_type_name(running.job->program.type);
         ++total_by_stage[stage];
         if (outcome.empty()) {
             ++ok_by_stage[stage];
             report << "ok     " << running.job->file.string()
                    << (running.form == TessConstantsForm::through_pointer ? " (second V# form)" : "")
-                   << '\n';
+                   << (spirv_hash.empty() ? "" : " spirv " + spirv_hash) << '\n';
             return;
         }
         const std::string reason = reason_of(outcome);
@@ -306,7 +321,7 @@ TEST(ShaderCorpus, EveryProgramTranslatesOrHasAReason) {
             running.push_back(start_job(*current.job, TessConstantsForm::through_pointer));
             continue;
         }
-        finish(current, outcome);
+        finish(current, outcome, spirv_hash_of(output));
     }
 
     std::vector<std::pair<std::uint64_t, std::string>> reasons;
