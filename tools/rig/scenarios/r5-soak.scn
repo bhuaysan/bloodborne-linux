@@ -2,7 +2,7 @@
 # and play there for 25 minutes with simple scripted input: the stick back and forth, the lock-on
 # and the camera. Start it with --user-from the user/ directory of an r5-acceptance run. A picture
 # a minute shows that the game still draws.
-limit time=2100
+limit time=2200
 
 log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
 sleep 1
@@ -11,21 +11,11 @@ mark logos
 stable seconds=6 delta=1 timeout=120
 dpad D                  # Play Offline
 tap A
-sleep 2
-stable seconds=1.5 delta=1 timeout=40
-tap A                   # the network notice
-sleep 2
-stable seconds=1.5 delta=1 timeout=40
-lognow
-tap A                   # the offline notice; the menu appears once the game has read the save
-log 'mount SPRJ0005 at /savedata0 \(mode 0xa,' timeout=30
-sleep 1
-stable seconds=1.5 delta=1 timeout=40
-lognow
-tap A                   # Continue
+# Notices (the network, offline mode, an unclean end of the last session) come and go, so these
+# presses may hit a notice or Continue, the first entry. Once in the clinic they do nothing.
+tap A count=6 gap=3
 mark continue
-log 'mount SPRJ0005 at /savedata0 \(mode 0x1,' timeout=30
-log 'mount SPRJ0005 at /savedata0 \(mode 0xa,' timeout=60
+sleep 20                # the load
 stable seconds=3 delta=1 timeout=60
 sleep 10                # the loading page, if it is still up, goes
 stable seconds=3 delta=1 timeout=60
@@ -44,6 +34,6 @@ neutral
 tap R3
 sleep 2
 tap R3
-sleep 41
+sleep 45
 shot minute-{i}
 end

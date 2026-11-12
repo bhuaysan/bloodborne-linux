@@ -10,6 +10,8 @@ tools/rig/rig.py run bb-run main-menu --window      # our program to the title m
 tools/rig/rig.py run reference --audio --time 100   # and bb-run the same: the sound level of the first 100 s
 tools/rig/rig.py compare REF_RUN REF_RUN OUR_RUN    # its menu against two reference runs
 tools/rig/rig.py run bb-run main-menu-offline --window   # on to the main menu, with the pad
+tools/rig/rig.py run bb-run r5-acceptance --window --audio   # a new game to the clinic, exit, continue
+tools/rig/rig.py run bb-run r5-soak --window --time 2200 --user-from RUN/user   # 25 minutes in the clinic
 ```
 
 A run writes `target.log`, `events.csv` (what the rig did, tied to places in the log), `frames.csv` (one line per present), `memory.csv` (`peak_program_bytes` in the summary leaves out the page cache of the game's files), `shots/*.png`, `kernel.log` and `summary.json`. The exit status is 0 when the scenario finished with no kernel GPU fault and an unchanged game directory.
@@ -63,3 +65,31 @@ The disk driver replaces the device, so this measures what the game hands to SDL
 ## The name dialog of character creation
 
 `new-game-name.scn` goes from the title through New Game and the opening video to the character editor, opens the name dialog (the game's ImeDialog), types one letter with the pad, presses Done and Finish, and ends once the game saves. It needs no code of ours beyond the imported ImeDialog, whose ImGui layer the imported presenter draws over the game frame, and the pad of `pad_input.cpp`: on 2026-11-11 `bb-run` (relwithdebinfo) and the reference both logged `ImeDialog OK text(len=1): "g"` and `GetResult -> endstatus=0`, and the editor shows the name afterwards. The debug preset stops earlier: UBSan aborts in LibAtrac9 (`utility.c:14`, shift by 32) when the opening video's audio starts (#469). After Finish the game saves and starts loading, but `bb-run` does not yet show the intro: its picture `13-intro` is black (run `20261111-230644-bb-run-new-game-name`, which the scenario ends one second after the save), while the reference shows the loading page. A longer earlier run (`20261111-230429-bb-run-new-game-name`) stops about 8 s into the loading on `Unimplemented PM4 type 0`, because the tessellation and geometry shader setup calls (`sceGnmSetLsShader`, `SetHsShader`, `SetEsShader`, `SetGsShader`) are still logging stubs. The hand-over to the intro is therefore not shown on `bb-run` and is left to #468. A `log` step matches only text logged after the previous `log` step's match, so the final save step cannot match the mounts at game start.
+
+## The R5 acceptance run
+
+`r5-acceptance.scn` goes from the title through New Game, the opening movie, the name dialog and the intro to the clinic, moves the character with the stick, exits to the title through Options, System and Exit Game (the game saves as it exits), and continues from the save back into the clinic. `r5-soak.scn` continues from that save (`--user-from` takes the `user/` directory the acceptance run leaves in its run directory, for `bb-run` as for the reference) and plays in the clinic for 25 minutes: the stick back and forth, the camera and the lock-on button, and one picture a minute. `r5-soak` ran on both targets, since its waits use the picture and log text the two share. `r5-acceptance` ran on `bb-run` only.
+
+Measured on 2026-11-12 (RADV, `relwithdebinfo`, `--window`), `bb-run` in the run `20261112-011305-bb-run-r5-acceptance`, with `--audio`:
+
+- The run finished its scenario in 321 s with no kernel GPU fault, no out-of-memory kill and an unchanged game directory. The opening movie plays (picture `05-movie`) with sound: the sound of the whole run has an RMS of 0.029 and a peak of 0.74, and its only silent 10 s window is the first one, before the first sound.
+- The intro cutscene ends in the clinic (`10-clinic`) with the HUD, the stick moves the character (`11-moved`), the game saves on exit (two mounts of `SPRJ0005` in mode 0xa, right after the answer Yes), plays its logos again and shows the title. Continue loads the save into the clinic (`16-clinic-loaded`) with the character where the save left it, and the stick moves it again (`17-moved-again`).
+- Frame interval over the whole run: median 33.33 ms, p99 50.11 ms, longest 633 ms (18 intervals over twice the median, all in the intro and the loads). The six reference runs of `new-game-to-clinic` of 2026-11-09 give a median of 33.33 ms, a p99 of 49.9 to 50.1 ms and a longest of 483 to 517 ms. Peak program memory is 3.97 GB, the reference's 3.79 GB. In the clinic itself both show a p99 of about 50 ms in a window of 540 frames (a few 50 ms intervals in 18 s).
+
+The 25-minute run of `bb-run` (`20261112-014654-bb-run-r5-soak`) and of the reference with a save of its own from 2026-11-09 (`20261112-021319-reference-r5-soak`), both 1500 s in the clinic:
+
+| | `bb-run` | reference |
+|---|---|---|
+| frames in the clinic | 44012 | 44014 |
+| median, p99 of the interval | 33.33 ms, 33.39 ms | 33.33 ms, 50.03 ms |
+| longest interval | 66.7 ms | 50.2 ms |
+| peak program memory | 3.50 GB | 3.87 GB |
+| program memory, start to end | 3.4957 to 3.4967 GB | 3.8655 to 3.8658 GB |
+| kernel GPU faults, crashes | none | none |
+
+The kernel log of the `bb-run` run is empty (no `amdgpu` line). Both are held at 30 frames a second by the game's own frame pacing, so the interval says nothing about how much headroom there is.
+
+**The scenarios wait on log lines and pictures, and not all dialogs come every time.** The notices after Play Offline ("Unable to connect to the network", "Starting game in offline mode") and the one about an unclean end of the last session appear in different numbers from run to run, and a press that meets none of them lands on a menu entry. The acceptance run takes the save mount that follows the last notice as the sign that the menu is up (`lognow` makes a `log` step ignore everything logged until then, since the mounts of earlier phases would match at once), and the soak presses A six times three seconds apart, which is harmless once the game is running. A loading page stands still like the title, so "loaded" is a still picture after a fixed 10 s for the page to go, and the shots show which one it was.
+
+**`repeat COUNT` and `lognow` are scenario steps** (`tools/rig/scenario.py`). `repeat` writes the lines to the matching `end` out COUNT times and replaces `{i}` by the number, so a shot can be named per round. A mark inside it still can't be used twice.
+
