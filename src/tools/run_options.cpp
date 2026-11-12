@@ -73,6 +73,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args) {
             options.validation_sync = true;
         } else if (arg == "--validation-gpu") {
             options.validation_gpu = true;
+        } else if (arg == "--no-pipeline-cache") {
+            options.pipeline_cache = false;
         } else if (arg == "--present-mode") {
             const std::string_view mode = value();
             if (mode == "fifo") {

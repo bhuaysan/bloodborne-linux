@@ -12,6 +12,7 @@
 // destructors and LeakSanitizer must not run under them.
 
 #include <pthread.h>
+#include <signal.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -31,6 +32,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "common/env.hpp"
@@ -57,6 +59,8 @@
 #include "core/libraries/pad_input.h"
 #include "core/memory.h"
 #include "hle/kernel/vmem.hpp"
+#include "video_core/cache_storage.h"
+#include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "shadps4_host/fault_handler.hpp"
 #endif
 #ifdef BB_HAVE_WINDOW
@@ -96,6 +100,8 @@ void log_presented();
 // destructors, as the HLE _exit does.
 [[noreturn]] void end_run(int status) {
 #ifdef BB_HAVE_VIDEO_CORE
+    // The driver's pipeline cache is saved here and by a timer, never by a destructor.
+    Vulkan::PipelineCache::FlushActive();
     // How far video_core's backing covers what the game mapped (docs/design/renderer.md).
     if (guest_memory != nullptr) {
         const Core::MemoryManager::Coverage b = guest_memory->BackingCoverage();
@@ -115,6 +121,29 @@ void log_presented();
     bb::common::log_flush();
     ::_exit(status);
 }
+
+#ifdef BB_HAVE_VIDEO_CORE
+// SIGTERM (the rig's `systemctl stop`, timeout(1)) and SIGINT end the run through end_run, which
+// saves the pipeline cache. Blocked in every thread, taken by one that waits for them; so it runs
+// before any other thread starts.
+void stop_on_signals() {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGTERM);
+    sigaddset(&set, SIGINT);
+    pthread_sigmask(SIG_BLOCK, &set, nullptr);
+    std::thread([set] {
+        bb::common::set_thread_name("bb-run-signal");
+        int sig = 0;
+        if (sigwait(&set, &sig) == 0) {
+            bb::common::log(LogLevel::info, channel, "signal {}, ending the run", sig);
+            end_run(128 + sig);
+        }
+    }).detach();
+}
+#else
+void stop_on_signals() {}
+#endif
 
 struct Game {
     bb::loader::LoadSet set;
@@ -211,6 +240,7 @@ void open_display(const bb::tools::RunOptions& options) {
         bb::common::log(LogLevel::error, channel, "--device: {}", why);
         end_run(2);
     }
+    Storage::pipeline_cache_enabled = options.pipeline_cache;
     Vulkan::RendererOptions renderer{*gpu_id, validation, Vulkan::PresentMode::Mailbox};
     const char* present_mode_name = "mailbox";
     switch (options.present_mode) {
@@ -399,6 +429,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     bb::common::set_thread_name("bb-run");
+    stop_on_signals();
     try {
         return start(options);
     } catch (const std::exception& e) {

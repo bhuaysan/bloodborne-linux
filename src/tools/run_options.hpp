@@ -18,7 +18,7 @@ inline constexpr std::string_view run_usage =
     "usage: bb-run [--game-dir DIR] [--profile NAME] [--timeout SECONDS] [--stop-at-main-loop]\n"
     "              [--log SPEC] [--no-log-file] [--headless] [--device NAME]\n"
     "              [--validation] [--validation-sync] [--validation-gpu]\n"
-    "              [--present-mode fifo|mailbox|immediate]\n"
+    "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
@@ -37,7 +37,10 @@ inline constexpr std::string_view run_usage =
     "  --validation-sync    with --validation: synchronization validation\n"
     "  --validation-gpu     with --validation: GPU-assisted validation\n"
     "  --present-mode MODE  the swapchain's present mode, falling back to fifo when the device\n"
-    "                       lacks it (default: mailbox)\n";
+    "                       lacks it (default: mailbox)\n"
+    "  --no-pipeline-cache  neither read nor write the shader and pipeline cache on disk (below\n"
+    "                       $XDG_CACHE_HOME/bloodborne-linux); every shader is translated and\n"
+    "                       every pipeline built again, for comparison runs\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
@@ -58,6 +61,7 @@ struct RunOptions {
     bool validation_sync = false;  // --validation-sync, only with --validation
     bool validation_gpu = false;   // --validation-gpu, only with --validation
     PresentMode present_mode = PresentMode::mailbox;  // --present-mode
+    bool pipeline_cache = true;  // false with --no-pipeline-cache
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 

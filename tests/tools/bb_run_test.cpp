@@ -61,7 +61,12 @@ TEST(RunOptions, Defaults) {
     EXPECT_FALSE(o.validation_sync);
     EXPECT_FALSE(o.validation_gpu);
     EXPECT_EQ(o.present_mode, PresentMode::mailbox);
+    EXPECT_TRUE(o.pipeline_cache);
     EXPECT_FALSE(o.help);
+}
+
+TEST(RunOptions, NoPipelineCacheTurnsTheDiskCacheOff) {
+    EXPECT_FALSE(parse({"--no-pipeline-cache"}).pipeline_cache);
 }
 
 TEST(RunOptions, ParsesEveryOption) {
