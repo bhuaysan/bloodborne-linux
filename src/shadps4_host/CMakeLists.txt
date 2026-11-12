@@ -25,7 +25,7 @@ set(BB_SHADPS4_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../shadps4)
 file(GLOB_RECURSE BB_SHADPS4_SOURCES CONFIGURE_DEPENDS ${BB_SHADPS4_DIR}/*.cpp)
 set(BB_VIDEO_CORE_SOURCES ${BB_SHADPS4_SOURCES})
 set(BB_VIDEO_CORE_REGEX
-    "/(imgui|video_core/(amdgpu/(liverpool|regs)|buffer_cache|texture_cache|renderer_vulkan|cache_storage|page_manager|renderdoc))")
+    "/(imgui|video_core/(amdgpu/(liverpool|regs)|buffer_cache|texture_cache|renderer_vulkan|cache_storage|page_manager))")
 list(FILTER BB_SHADPS4_SOURCES EXCLUDE REGEX ${BB_VIDEO_CORE_REGEX})
 # The system libraries of R5 (docs/design/os-libraries.md) go into bbsyslibs below.
 set(BB_SYSLIBS_REGEX "/(core/libraries/(ajm|audio|avplayer|ime|pad|system|videodec)|input)/")
@@ -65,8 +65,6 @@ target_include_directories(bb_vma SYSTEM INTERFACE ${BB_3P}/vma/include)
 add_library(bb_robin_map INTERFACE)
 target_include_directories(bb_robin_map SYSTEM INTERFACE ${BB_3P}/robin-map/include)
 
-add_library(bb_stb INTERFACE)
-target_include_directories(bb_stb SYSTEM INTERFACE ${BB_3P}/stb)
 
 enable_language(C)
 add_library(bb_xxhash STATIC ${BB_3P}/xxhash/xxhash.c)
@@ -112,8 +110,8 @@ if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
     add_subdirectory(${BB_SHADPS4_DIR}/video_core/host_shaders ${CMAKE_CURRENT_BINARY_DIR}/host_shaders)
 
     # cache_storage.cpp is the pipeline cache's storage, which needs miniz and stays off until R8.
-    # renderdoc.cpp loads RenderDoc. video_core_host.cpp replaces both with fixed no-ops.
-    list(FILTER BB_VIDEO_CORE_SOURCES EXCLUDE REGEX "/video_core/(cache_storage|renderdoc)\\.cpp$")
+    # video_core_host.cpp replaces it with fixed no-ops.
+    list(FILTER BB_VIDEO_CORE_SOURCES EXCLUDE REGEX "/video_core/cache_storage\\.cpp$")
     # memory.cpp builds guest memory on the kernel's vmem and dmem, so every executable that links
     # bbvideocore also links bbhle (an OBJECT library, which only executables link).
     add_library(bbvideocore STATIC ${BB_VIDEO_CORE_SOURCES} memory.cpp video_core_host.cpp
@@ -130,7 +128,7 @@ if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
         TLS_VERIFY ON)
     target_include_directories(bbvideocore SYSTEM PUBLIC ${BB_BOOST_FETCHED})
     target_link_libraries(bbvideocore
-        PUBLIC bbshadps4 bb_vma bb_robin_map bb_stb bb_xxhash bb_imgui Vulkan::Headers SDL3::SDL3
+        PUBLIC bbshadps4 bb_vma bb_robin_map bb_xxhash bb_imgui Vulkan::Headers SDL3::SDL3
         PRIVATE bbcommon bb_warnings ${CMAKE_DL_LIBS})
     # Liverpool reads the PM4 packet structs, some with 64-bit members, at any dword of a command
     # buffer, which x86-64 allows.

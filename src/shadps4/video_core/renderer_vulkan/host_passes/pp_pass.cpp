@@ -270,7 +270,6 @@ void PostProcessingPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView input,
         .imageMemoryBarrierCount = 1,
         .pImageMemoryBarriers = &post_barrier,
     });
-
 }
 
 } // namespace Vulkan::HostPasses

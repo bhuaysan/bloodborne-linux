@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/common/path_util.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -91,15 +91,6 @@ constexpr auto LOG_FILE = "shad_log.txt";
  * @returns The filesystem path associated with the PathType enum.
  */
 [[nodiscard]] const std::filesystem::path& GetUserPath(PathType user_path);
-
-/**
- * Gets the filesystem path associated with the PathType enum as a UTF-8 encoded std::string.
- *
- * @param user_path PathType enum
- *
- * @returns The filesystem path associated with the PathType enum as a UTF-8 encoded std::string.
- */
-[[nodiscard]] std::string GetUserPathString(PathType user_path);
 
 /**
  * Sets a new filesystem path associated with the PathType enum.

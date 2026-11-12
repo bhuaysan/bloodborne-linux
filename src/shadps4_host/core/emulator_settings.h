@@ -51,7 +51,6 @@ struct FixedSettings {
     // Vulkan. GPU id -1 lets the instance pick the device; bb-run sets the index --device names
     // (set_gpu_id).
     static s32 GetGpuId() { return gpu_id(); }
-    static constexpr bool IsRenderdocEnabled() { return false; }
     static constexpr bool IsVkValidationEnabled() { return false; }
     static constexpr bool IsVkValidationCoreEnabled() { return true; }
     static constexpr bool IsVkValidationSyncEnabled() { return false; }

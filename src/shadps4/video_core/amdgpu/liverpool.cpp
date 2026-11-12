@@ -19,7 +19,6 @@
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
-#include "video_core/renderdoc.h"
 
 namespace AmdGpu {
 
@@ -140,8 +139,6 @@ void Liverpool::Process(std::stop_token stoken) {
             break;
         }
 
-        VideoCore::StartCapture();
-
         curr_qid = -1;
 
         while ((num_submits || num_commands) && !stoken.stop_requested()) {
@@ -175,7 +172,6 @@ void Liverpool::Process(std::stop_token stoken) {
         }
 
         if (submit_done) {
-            VideoCore::EndCapture();
             if (rasterizer) {
                 rasterizer->OnSubmit();
                 rasterizer->Flush();
@@ -478,8 +474,8 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                     break;
                 }
                 rasterizer->DrawIndirect(false, indirect_args_addr, offset, stride, 1, 0,
-                    draw_indirect->base_vtx_loc,
-                    draw_indirect->start_inst_loc);
+                                         draw_indirect->base_vtx_loc,
+                                         draw_indirect->start_inst_loc);
                 break;
             }
             case PM4ItOpcode::DrawIndirectCountMulti: {
@@ -503,10 +499,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                 if (!rasterizer) {
                     break;
                 }
-                rasterizer->DrawIndirect(false, indirect_args_addr, offset,
-                    draw_indirect->stride, draw_indirect->count, 0,
-                    draw_indirect->base_vtx_loc,
-                    draw_indirect->start_inst_loc);
+                rasterizer->DrawIndirect(false, indirect_args_addr, offset, draw_indirect->stride,
+                                         draw_indirect->count, 0, draw_indirect->base_vtx_loc,
+                                         draw_indirect->start_inst_loc);
                 break;
             }
             case PM4ItOpcode::DrawIndexIndirect: {
@@ -519,8 +514,8 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                     break;
                 }
                 rasterizer->DrawIndirect(true, indirect_args_addr, offset, stride, 1, 0,
-                    draw_index_indirect->base_vtx_loc,
-                    draw_index_indirect->start_inst_loc);
+                                         draw_index_indirect->base_vtx_loc,
+                                         draw_index_indirect->start_inst_loc);
                 break;
             }
             case PM4ItOpcode::DrawIndexIndirectMulti: {

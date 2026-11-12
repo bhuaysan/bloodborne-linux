@@ -113,10 +113,6 @@ const std::filesystem::path& GetUserPath(PathType user_path) {
     return it->second;
 }
 
-std::string GetUserPathString(PathType user_path) {
-    return GetUserPath(user_path).string();
-}
-
 // Files are written only by screenshots and read only by the pipeline cache and PNG icons.
 // The port builds none of them.
 IOFile::IOFile(const std::filesystem::path&, FileAccessMode, FileType, FileShareFlag) {

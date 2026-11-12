@@ -2,7 +2,6 @@
 // bbvideocore (docs/design/renderer.md). Fixed no-ops where the port leaves a feature out, and
 // host_missing() where a later R4 issue provides the real thing, so that reaching one is loud.
 
-#include <filesystem>
 #include <functional>
 #include <string>
 #include <vector>
@@ -12,10 +11,6 @@
 #include "common/types.h"
 #include "shadps4_host/failure.hpp"
 #include "video_core/cache_storage.h"
-#include "video_core/renderdoc.h"
-
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <stb_image_write.h>
 
 using bb::shadps4::host_missing;
 
@@ -51,20 +46,3 @@ void DataBase::ForEachBlob(BlobType, const std::function<void(std::vector<u8>&&)
 }
 
 }  // namespace Storage
-
-// RenderDoc (renderdoc.cpp, left out) and the screenshot requests that live in the same file.
-// Nothing in the port requests a screenshot.
-namespace VideoCore {
-
-void LoadRenderDoc() {}
-void StartCapture() {}
-void EndCapture() {}
-void TriggerCapture() {}
-void SetOutputDir(const std::filesystem::path&, const std::string&) {}
-bool IsRenderDocLoaded() { return false; }
-void RequestScreenshot(ScreenshotRequest) { host_missing("VideoCore::RequestScreenshot"); }
-u32 ConsumeGameOnlyScreenshotRequests() { return 0; }
-u32 ConsumeWithOverlaysScreenshotRequests() { return 0; }
-ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
-
-}  // namespace VideoCore
