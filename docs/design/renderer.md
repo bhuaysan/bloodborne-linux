@@ -13,7 +13,7 @@ R4 runs shadPS4's `video_core` (v.0.21.0, the same pin as R3's translator) on ou
 | Flips, labels, vblank pacing | `videoout/driver.cpp` and `video_out.cpp` | `src/hle/video`, adapted from upstream |
 | Window and surface | `Frontend::WindowSDL` | host `sdl_window.h` over our SDL3 window |
 | Getting the frame to the swapchain | Dear ImGui (`imgui_core`, `imgui_impl_vulkan`) | imported, layers replaced with empty ones |
-| Settings, debug state, paths, game serial, Neo mode | `EmulatorSettings`, `DebugState`, `path_util`, `ElfInfo`, `process.h` | host headers with fixed values |
+| Settings, paths, game serial, SDK version | `EmulatorSettings`, `path_util`, `ElfInfo`, `process.h` | host headers with fixed values |
 
 ## Decisions
 
@@ -31,11 +31,11 @@ Alternative: keep upstream's `AddressSpace`, which reserves its own address spac
 
 The VideoOut driver reaches the presenter and `Liverpool` through a small interface, `FlipPresenter` (`video_out.hpp`), instead of upstream's globals. `bbhlevideo` then builds and its tests run without Vulkan. The GNM driver reaches `Liverpool` the same way, through `CommandProcessor` (`gnm_driver.hpp`). `bbvideopresenter` implements the interface over `Vulkan::Presenter` and `Liverpool` where `bbvideocore` is built. Vblanks run on a fixed 60 Hz grid with `sleep_until`, not upstream's `AccurateTimer` (from `common/thread.cpp`, which we don't import), and a flip waits for the first vblank after it was queued, as a display does.
 
-**Keep ImGui as the presenter's path to the swapchain.** The frame reaches the swapchain only as an ImGui image (`vk_presenter.cpp`, the "Display" window). Removing ImGui means rewriting `Present`, and that waits for R6 under "derive first". ImGui's core and its Vulkan backend are imported. The developer tools and the overlay layers (friends, notifications, invitations, splash) become empty host classes.
+**ImGui only for the IME.** Until R6 the frame reached the swapchain only as an ImGui image, kept under "derive first". R6 replaced that with a letterboxed blit (`docs/design/rewrite.md`, "The present path"). ImGui's core and its Vulkan backend stay imported for the IME dialog. The developer tools and the overlay layers are gone.
 
 **The window is ours, the surface is upstream's.** `vk_platform.cpp` builds the surface from native X11 or Wayland handles. A host `Frontend::WindowSDL` wraps the SDL3 window that `bb-run` already opens and returns those handles. Upstream's `sdl_window.cpp` carries input and settings that R5 will judge on their own. `--device` (a name substring) is resolved to the index `GetGpuId()` returns.
 
-**Settings are fixed in the host header.** Defaults come from upstream: present mode Mailbox, FSR off, RCAS on. The pipeline cache stays off until R8 makes it work on disk under `$XDG_CACHE_HOME/bloodborne-linux/`. Debug state, RenderDoc and Tracy become no-ops. R6 removed the code behind the settings that were off (readbacks, `userfaultfd`, null GPU, direct memory access, copied command buffers, HDR) and the PS4 Pro paths, because we run the base PS4 game on Linux only.
+**Settings are fixed in the host header.** Defaults come from upstream: present mode Mailbox, FSR off, RCAS on. The pipeline cache stays off until R8 makes it work on disk under `$XDG_CACHE_HOME/bloodborne-linux/`. R6 removed debug state, RenderDoc and Tracy, and the code behind the settings that were off (readbacks, `userfaultfd`, null GPU, direct memory access, copied command buffers, HDR) and the PS4 Pro paths, because we run the base PS4 game on Linux only.
 
 **Dependencies.** We take each at shadPS4's submodule commit and under a license on our allow-list: VulkanMemoryAllocator (MIT), xxHash (BSD-2-Clause), robin-map (MIT), half (MIT, for `common/number_utils.cpp`), Dear ImGui (MIT) and stb (MIT option), plus more of the Boost headers we already take (ICL, Pool, ContainerHash). Vulkan-Headers come under their MIT option, as a system package where its version is at least upstream's 1.4.330. glslang is a system package, used only at build time to compile the host shaders. Abseil is Apache-2.0, which our GPL-2.0-or-later program can't take, so host `absl/container` headers map the three uses in `texture_cache.h` onto `std::unordered_map` and `std::unordered_set`. `tsl::robin_map` is not a drop-in there: `texture_cache.cpp` assigns through `it->second`, and robin-map's iterators give only const access to the value. miniz, used only by the archived pipeline cache, is left out with that cache.
 
