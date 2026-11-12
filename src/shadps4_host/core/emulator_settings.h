@@ -1,10 +1,11 @@
 // What src/shadps4 reads of shadPS4's settings object, fixed at the values this port runs with.
 // A port for one game has nothing to configure here. The values are upstream's defaults
-// (core/emulator_settings.h of v.0.21.0): DMA, readbacks, userfaultfd, FSR and every debug aid
-// off, RCAS on, present mode Mailbox; for the system libraries the default audio device at full
-// volume, the standard pad with motion controls, and ImeDialog's accessibility and short URL panel
-// off. The pipeline cache stays off until R8 makes it work on disk (docs/design/renderer.md). The
-// null GPU, HDR and the OpenAL backend were off too; they are gone together with their paths.
+// (core/emulator_settings.h of v.0.21.0): readbacks, userfaultfd, FSR and every debug aid off,
+// RCAS on, present mode Mailbox; for the system libraries the default audio device at full volume,
+// the standard pad with motion controls, and ImeDialog's accessibility and short URL panel off. The
+// pipeline cache stays off until R8 makes it work on disk (docs/design/renderer.md). The null GPU,
+// HDR, the OpenAL backend, DMA and copied command buffers were off too; they are gone together
+// with their paths.
 #pragma once
 
 #include <string>
@@ -27,11 +28,7 @@ s32 gpu_id();
 void set_gpu_id(s32 id);
 
 struct FixedSettings {
-    // Shader translation.
-    static constexpr bool IsDirectMemoryAccessEnabled() { return false; }
-
     // GPU.
-    static constexpr bool IsCopyGpuBuffers() { return false; }
     static constexpr u32 GetReadbacksMode() { return GpuReadbacksMode::Disabled; }
     static constexpr bool IsReadbackLinearImagesEnabled() { return false; }
     static constexpr bool IsUserfaultfdTracking() { return false; }
