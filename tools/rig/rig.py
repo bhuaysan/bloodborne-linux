@@ -11,8 +11,8 @@ Output of each run goes to analysis/rig/runs/<stamp>-<target>-<scenario>/: targe
 frames.csv, memory.csv, shots/*.png, kernel.log, summary.json. Exit status 0 means the scenario
 finished (or a run without one reached its time limit) with no kernel GPU fault and an unchanged
 game directory. The run fails on an out-of-memory kill, an unreadable kernel log, a target that
-exits before the scenario ends, a shot step without its picture, and (with the layer) no frame
-presented at all.
+exits before the scenario ends, a shot step without its picture, and no frame presented at all
+by a target that should present (the reference, or bb-run with --window, with the layer on).
 
 The game directory is mounted read-only for the target. Nothing this tool writes is ever committed:
 analysis/ is excluded from git.
@@ -379,11 +379,11 @@ def missing_shots(run: Path, names: list[str]) -> list[str]:
     return [n for n in names if not (run / "shots" / f"{n}.png").is_file()]
 
 
-def output_failure(failure: str | None, layer: bool, frames: dict | None,
+def output_failure(failure: str | None, expects_frames: bool, frames: dict | None,
                    missing: list[str]) -> str | None:
-    """The run's failure with the two checks that need the output: the layer saw a present, and
-    every shot step left its picture. An earlier failure stays."""
-    if layer and frames is None:
+    """The run's failure with the two checks that need the output: the layer saw a present when
+    the target should present, and every shot step left its picture. An earlier failure stays."""
+    if expects_frames and frames is None:
         failure = failure or "no frames: the layer saw no present"
     if missing:
         failure = failure or "missing shots: " + ", ".join(missing)
@@ -477,7 +477,9 @@ def run_target(args: argparse.Namespace) -> int:
     conversion_errors = convert_shots(run)
     frame_summary = report.frame_stats(frames)
     missing = missing_shots(run, shot_names)
-    failure = output_failure(failure, not args.no_layer, frame_summary, missing)
+    # A headless bb-run never presents, so only the reference and a windowed bb-run owe frames.
+    expects_frames = not args.no_layer and (args.target == "reference" or args.window)
+    failure = output_failure(failure, expects_frames, frame_summary, missing)
     journal = kernel_journal(started)
     (run / "kernel.log").write_text(journal or "")
     faults = report.kernel_faults(journal or "")
