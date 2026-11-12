@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_presenter.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -9,7 +9,6 @@
 #include <condition_variable>
 
 #include "core/libraries/videoout/buffer.h"
-#include "imgui/imgui_texture.h"
 #include "video_core/renderer_vulkan/host_passes/fsr_pass.h"
 #include "video_core/renderer_vulkan/host_passes/pp_pass.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -37,10 +36,7 @@ struct Frame {
     vk::Fence present_done;
     vk::Semaphore ready_semaphore;
     u64 ready_tick;
-    bool is_hdr{false};
     u8 id{};
-
-    ImTextureID imgui_texture;
 };
 
 enum SchedulerType {
@@ -70,18 +66,6 @@ public:
 
     Rasterizer& GetRasterizer() const {
         return *rasterizer.get();
-    }
-
-    bool IsHDRSupported() const {
-        return swapchain.HasHDR();
-    }
-
-    void SetHDR(bool enable) {
-        if (!IsHDRSupported()) {
-            return;
-        }
-        swapchain.SetHDR(enable);
-        pp_settings.hdr = enable ? 1 : 0;
     }
 
     VideoCore::Image& RegisterVideoOutSurface(
@@ -137,7 +121,6 @@ private:
     std::mutex free_mutex;
     std::condition_variable free_cv;
     std::condition_variable_any frame_cv;
-    std::optional<ImGui::RefCountedTexture> splash_img;
     std::vector<VAddr> vo_buffers_addr;
 };
 

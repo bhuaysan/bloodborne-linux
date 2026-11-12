@@ -4,12 +4,9 @@
 // Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
-#include "common/elf_info.h"
 #include "core/display_state.h"
 #include "core/emulator_settings.h"
-#include "core/libraries/system/systemservice.h"
 #include "imgui/renderer/imgui_core.h"
-#include "imgui/renderer/imgui_impl_vulkan.h"
 #include "sdl_window.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
@@ -29,59 +26,6 @@
 #include <vk_mem_alloc.h>
 
 namespace Vulkan {
-
-bool CanBlitToSwapchain(const vk::PhysicalDevice physical_device, vk::Format format) {
-    const vk::FormatProperties props{physical_device.getFormatProperties(format)};
-    return static_cast<bool>(props.optimalTilingFeatures & vk::FormatFeatureFlagBits::eBlitDst);
-}
-
-[[nodiscard]] vk::ImageSubresourceLayers MakeImageSubresourceLayers() {
-    return vk::ImageSubresourceLayers{
-        .aspectMask = vk::ImageAspectFlagBits::eColor,
-        .mipLevel = 0,
-        .baseArrayLayer = 0,
-        .layerCount = 1,
-    };
-}
-
-[[nodiscard]] vk::ImageBlit MakeImageBlit(s32 frame_width, s32 frame_height, s32 dst_width,
-                                          s32 dst_height, s32 offset_x, s32 offset_y) {
-    return vk::ImageBlit{
-        .srcSubresource = MakeImageSubresourceLayers(),
-        .srcOffsets =
-            std::array{
-                vk::Offset3D{
-                    .x = 0,
-                    .y = 0,
-                    .z = 0,
-                },
-                vk::Offset3D{
-                    .x = frame_width,
-                    .y = frame_height,
-                    .z = 1,
-                },
-            },
-        .dstSubresource = MakeImageSubresourceLayers(),
-        .dstOffsets =
-            std::array{
-                vk::Offset3D{
-                    .x = offset_x,
-                    .y = offset_y,
-                    .z = 0,
-                },
-                vk::Offset3D{
-                    .x = offset_x + dst_width,
-                    .y = offset_y + dst_height,
-                    .z = 1,
-                },
-            },
-    };
-}
-
-[[nodiscard]] vk::ImageBlit MakeImageBlitStretch(s32 frame_width, s32 frame_height,
-                                                 s32 swapchain_width, s32 swapchain_height) {
-    return MakeImageBlit(frame_width, frame_height, swapchain_width, swapchain_height, 0, 0);
-}
 
 static vk::Rect2D FitImage(s32 frame_width, s32 frame_height, s32 swapchain_width,
                            s32 swapchain_height) {
@@ -103,12 +47,28 @@ static vk::Rect2D FitImage(s32 frame_width, s32 frame_height, s32 swapchain_widt
     return vk::Rect2D{{offset_x, offset_y}, {dst_width, dst_height}};
 }
 
-[[nodiscard]] vk::ImageBlit MakeImageBlitFit(s32 frame_width, s32 frame_height, s32 swapchain_width,
-                                             s32 swapchain_height) {
-    const auto& dst_rect = FitImage(frame_width, frame_height, swapchain_width, swapchain_height);
+[[nodiscard]] static vk::ImageSubresourceLayers ColorLayers() {
+    return vk::ImageSubresourceLayers{
+        .aspectMask = vk::ImageAspectFlagBits::eColor,
+        .mipLevel = 0,
+        .baseArrayLayer = 0,
+        .layerCount = 1,
+    };
+}
 
-    return MakeImageBlit(frame_width, frame_height, dst_rect.extent.width, dst_rect.extent.height,
-                         dst_rect.offset.x, dst_rect.offset.y);
+// Blits the whole frame into the letterboxed rectangle of the swapchain image.
+[[nodiscard]] static vk::ImageBlit MakeImageBlitFit(s32 frame_width, s32 frame_height,
+                                                    s32 swapchain_width, s32 swapchain_height) {
+    const vk::Rect2D dst = FitImage(frame_width, frame_height, swapchain_width, swapchain_height);
+    return vk::ImageBlit{
+        .srcSubresource = ColorLayers(),
+        .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{frame_width, frame_height, 1}},
+        .dstSubresource = ColorLayers(),
+        .dstOffsets =
+            std::array{vk::Offset3D{dst.offset.x, dst.offset.y, 0},
+                       vk::Offset3D{dst.offset.x + static_cast<s32>(dst.extent.width),
+                                    dst.offset.y + static_cast<s32>(dst.extent.height), 1}},
+    };
 }
 
 Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_)
@@ -163,9 +123,6 @@ bool Presenter::IsVideoOutSurface(const AmdGpu::ColorBuffer& color_buffer) const
 
 void Presenter::RecreateFrame(Frame* frame, u32 width, u32 height) {
     const vk::Device device = instance.GetDevice();
-    if (frame->imgui_texture) {
-        ImGui::Vulkan::RemoveTexture(frame->imgui_texture);
-    }
     if (frame->image_view) {
         device.destroyImageView(frame->image_view);
     }
@@ -224,9 +181,6 @@ void Presenter::RecreateFrame(Frame* frame, u32 width, u32 height) {
     frame->image_view = view;
     frame->width = width;
     frame->height = height;
-
-    frame->imgui_texture = ImGui::Vulkan::AddTexture(view, vk::ImageLayout::eShaderReadOnlyOptimal);
-    frame->is_hdr = swapchain.GetHDR();
 }
 
 Frame* Presenter::PrepareLastFrame() {
@@ -266,7 +220,7 @@ Frame* Presenter::PrepareLastFrame() {
                                 .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentRead,
                                 .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                                 .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
-                                .oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+                                .oldLayout = vk::ImageLayout::eGeneral,
                                 .newLayout = vk::ImageLayout::eGeneral,
                                 .image = frame->image,
                                 .subresourceRange{frame_subresources}};
@@ -352,7 +306,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     runtime.FlushBarriers();
 
     image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
-                                 fsr_settings, frame->is_hdr);
+                                 fsr_settings, false);
 
     // Vulkan has no sRGB variant of the 10-bit format, so an A2R10G10B10Srgb buffer reaches
     // the post process pass still sRGB encoded and has to be decoded there instead.
@@ -477,126 +431,119 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     ASSERT_MSG(reset_result == vk::Result::eSuccess,
                "Unexpected error resetting present done fence: {}", vk::to_string(reset_result));
 
-    ImGuiID dockId = ImGui::Core::NewFrame(is_reusing_frame);
-
     const vk::Image swapchain_image = swapchain.Image();
-    const vk::ImageView swapchain_image_view = swapchain.ImageView();
+    const vk::Extent2D extent = swapchain.GetExtent();
+    SetExpectedGameSize(extent.width, extent.height);
 
     auto& scheduler = present_scheduler;
     const auto cmdbuf = scheduler.CommandBuffer();
 
-    {
-        const vk::Extent2D extent = swapchain.GetExtent();
-        const std::array pre_barriers{
-            vk::ImageMemoryBarrier{
-                .srcAccessMask = vk::AccessFlagBits::eNone,
-                .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
-                .oldLayout = vk::ImageLayout::eUndefined,
-                .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .image = swapchain_image,
-                .subresourceRange{
-                    .aspectMask = vk::ImageAspectFlagBits::eColor,
-                    .baseMipLevel = 0,
-                    .levelCount = 1,
-                    .baseArrayLayer = 0,
-                    .layerCount = VK_REMAINING_ARRAY_LAYERS,
-                },
-            },
-            vk::ImageMemoryBarrier{
-                .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
-                .dstAccessMask = vk::AccessFlagBits::eShaderRead,
-                .oldLayout = vk::ImageLayout::eGeneral,
-                .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .image = frame->image,
-                .subresourceRange{
-                    .aspectMask = vk::ImageAspectFlagBits::eColor,
-                    .baseMipLevel = 0,
-                    .levelCount = 1,
-                    .baseArrayLayer = 0,
-                    .layerCount = VK_REMAINING_ARRAY_LAYERS,
-                },
-            },
-        };
+    constexpr vk::ImageSubresourceRange color_range{
+        .aspectMask = vk::ImageAspectFlagBits::eColor,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = VK_REMAINING_ARRAY_LAYERS,
+    };
 
-        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                               vk::PipelineStageFlagBits::eColorAttachmentOutput |
-                                   vk::PipelineStageFlagBits::eFragmentShader,
-                               {}, {}, {}, pre_barriers);
-
-        { // Draw the game
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.0f});
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
-            ImGui::SetNextWindowDockID(dockId, ImGuiCond_Once);
-            if (ImGui::Begin("Display##game_display", nullptr, ImGuiWindowFlags_NoNav)) {
-                auto game_texture = frame->imgui_texture;
-                auto game_width = frame->width;
-                auto game_height = frame->height;
-
-                if (Libraries::SystemService::IsSplashVisible()) { // draw splash
-                    if (!splash_img.has_value()) {
-                        splash_img.emplace();
-                        const auto& splash_data = Common::ElfInfo::Instance().GetSplashData();
-                        if (!splash_data.empty()) {
-                            splash_img = ImGui::RefCountedTexture::DecodePngTexture(splash_data);
-                        }
-                    }
-                    if (auto& splash_image = this->splash_img.value()) {
-                        auto [im_id, width, height] = splash_image.GetTexture();
-                        game_texture = im_id;
-                        game_width = width;
-                        game_height = height;
-                    }
-                }
-
-                ImVec2 contentArea = ImGui::GetContentRegionAvail();
-                SetExpectedGameSize((s32)contentArea.x, (s32)contentArea.y);
-
-                const auto imgRect =
-                    FitImage(game_width, game_height, (s32)contentArea.x, (s32)contentArea.y);
-                ImVec2 offset{
-                    static_cast<float>(imgRect.offset.x),
-                    static_cast<float>(imgRect.offset.y),
-                };
-                ImVec2 size{
-                    static_cast<float>(imgRect.extent.width),
-                    static_cast<float>(imgRect.extent.height),
-                };
-
-                ImGui::SetCursorPos(ImGui::GetCursorStartPos() + offset);
-                ImGui::Image(game_texture, size);
-            }
-            ImGui::End();
-            ImGui::PopStyleVar(3);
-            ImGui::PopStyleColor();
-        }
-        ImGui::Core::Render(cmdbuf, swapchain_image_view, swapchain.GetExtent());
-
-        const vk::ImageMemoryBarrier post_barrier{
-            .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
-            .dstAccessMask = vk::AccessFlagBits::eNone,
-            .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
-            .newLayout = vk::ImageLayout::ePresentSrcKHR,
+    // The frame stays in the general layout, the swapchain image becomes the blit target.
+    const std::array pre_barriers{
+        vk::ImageMemoryBarrier2{
+            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcAccessMask = vk::AccessFlagBits2::eNone,
+            .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eTransferDstOptimal,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image = swapchain_image,
-            .subresourceRange{
-                .aspectMask = vk::ImageAspectFlagBits::eColor,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = VK_REMAINING_ARRAY_LAYERS,
-            },
+            .subresourceRange = color_range,
+        },
+        vk::ImageMemoryBarrier2{
+            .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+            .oldLayout = vk::ImageLayout::eGeneral,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = frame->image,
+            .subresourceRange = color_range,
+        },
+    };
+    cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+        .imageMemoryBarrierCount = pre_barriers.size(),
+        .pImageMemoryBarriers = pre_barriers.data(),
+    });
+
+    // Black bars around the letterboxed frame.
+    const vk::ClearColorValue black{std::array{0.0f, 0.0f, 0.0f, 1.0f}};
+    cmdbuf.clearColorImage(swapchain_image, vk::ImageLayout::eTransferDstOptimal, black,
+                           color_range);
+    const vk::MemoryBarrier2 clear_barrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eClear,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+    };
+    cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+        .memoryBarrierCount = 1,
+        .pMemoryBarriers = &clear_barrier,
+    });
+
+    const vk::ImageBlit blit = MakeImageBlitFit(frame->width, frame->height, extent.width,
+                                                extent.height);
+    cmdbuf.blitImage(frame->image, vk::ImageLayout::eGeneral, swapchain_image,
+                     vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
+
+    // ImGui draws on top only while a layer (the IME dialog) is open.
+    const bool draw_imgui = ImGui::Core::HasLayers();
+    vk::ImageLayout swapchain_layout = vk::ImageLayout::eTransferDstOptimal;
+    vk::PipelineStageFlags2 swapchain_stage = vk::PipelineStageFlagBits2::eBlit;
+    vk::AccessFlags2 swapchain_access = vk::AccessFlagBits2::eTransferWrite;
+    if (draw_imgui) {
+        const vk::ImageMemoryBarrier2 to_attachment{
+            .srcStageMask = swapchain_stage,
+            .srcAccessMask = swapchain_access,
+            .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentRead |
+                             vk::AccessFlagBits2::eColorAttachmentWrite,
+            .oldLayout = swapchain_layout,
+            .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = swapchain_image,
+            .subresourceRange = color_range,
         };
-        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
-                               vk::PipelineStageFlagBits::eAllCommands,
-                               vk::DependencyFlagBits::eByRegion, {}, {}, post_barrier);
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &to_attachment,
+        });
+        ImGui::Core::NewFrame(is_reusing_frame);
+        ImGui::Core::Render(cmdbuf, swapchain.ImageView(), extent);
+        swapchain_layout = vk::ImageLayout::eColorAttachmentOptimal;
+        swapchain_stage = vk::PipelineStageFlagBits2::eColorAttachmentOutput;
+        swapchain_access = vk::AccessFlagBits2::eColorAttachmentWrite;
     }
+
+    const vk::ImageMemoryBarrier2 post_barrier{
+        .srcStageMask = swapchain_stage,
+        .srcAccessMask = swapchain_access,
+        .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .dstAccessMask = vk::AccessFlagBits2::eNone,
+        .oldLayout = swapchain_layout,
+        .newLayout = vk::ImageLayout::ePresentSrcKHR,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = swapchain_image,
+        .subresourceRange = color_range,
+    };
+    cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &post_barrier,
+    });
 
     // Flush vulkan commands.
     SubmitInfo info{};
@@ -648,8 +595,7 @@ Frame* Presenter::GetRenderFrame() {
         }
     }
 
-    if (frame->width != expected_frame_width || frame->height != expected_frame_height ||
-        frame->is_hdr != swapchain.GetHDR()) {
+    if (frame->width != expected_frame_width || frame->height != expected_frame_height) {
         RecreateFrame(frame, expected_frame_width, expected_frame_height);
     }
 

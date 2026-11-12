@@ -36,7 +36,6 @@ static std::vector<ImGui::Layer*> layers;
 static std::deque<std::pair<bool, ImGui::Layer*>> change_layers{};
 static std::mutex change_layers_mutex{};
 
-static ImGuiID dock_id;
 static std::atomic<std::uint32_t> force_gamepad_input_capture_count{0};
 
 namespace ImGui {
@@ -73,7 +72,6 @@ void Initialize(const ::Vulkan::Instance& instance, const Frontend::WindowSDL& w
     ImGuiIO& io = GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.DisplaySize = ImVec2((float)window.GetWidth(), (float)window.GetHeight());
     PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f); // Makes the window edges rounded
 
@@ -137,10 +135,6 @@ void Initialize(const ::Vulkan::Instance& instance, const Frontend::WindowSDL& w
 
     TextureManager::StartWorker();
 
-    char label[32];
-    ImFormatString(label, IM_ARRAYSIZE(label), "WindowOverViewport_%08X", GetMainViewport()->ID);
-    dock_id = ImHashStr(label);
-
     if (const auto dpi = SDL_GetWindowDisplayScale(window.GetSDLWindow()); dpi > 0.0f) {
         GetIO().FontGlobalScale *= dpi;
     }
@@ -197,8 +191,7 @@ bool ProcessEvent(SDL_Event* event) {
             return false;
         }
         const auto& io = GetIO();
-        return io.WantCaptureKeyboard && io.Ctx->NavWindow != nullptr &&
-               io.Ctx->NavWindow->ID != dock_id;
+        return io.WantCaptureKeyboard && io.Ctx->NavWindow != nullptr;
     }
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
@@ -213,42 +206,37 @@ bool ProcessEvent(SDL_Event* event) {
             return false;
         }
         const auto& io = GetIO();
-        return io.NavActive && io.Ctx->NavWindow != nullptr && io.Ctx->NavWindow->ID != dock_id;
+        return io.NavActive && io.Ctx->NavWindow != nullptr;
     }
     default:
         return false;
     }
 }
 
-ImGuiID NewFrame(bool is_reusing_frame) {
-    {
-        std::scoped_lock lock{change_layers_mutex};
-        while (!change_layers.empty()) {
-            const auto [to_be_added, layer] = change_layers.front();
-            if (to_be_added) {
-                layers.push_back(layer);
-            } else {
-                const auto [begin, end] = std::ranges::remove(layers, layer);
-                layers.erase(begin, end);
-            }
-            change_layers.pop_front();
+bool HasLayers() {
+    // Layer changes queued from other threads take effect here, between two frames.
+    std::scoped_lock lock{change_layers_mutex};
+    while (!change_layers.empty()) {
+        const auto [to_be_added, layer] = change_layers.front();
+        if (to_be_added) {
+            layers.push_back(layer);
+        } else {
+            const auto [begin, end] = std::ranges::remove(layers, layer);
+            layers.erase(begin, end);
         }
+        change_layers.pop_front();
     }
+    return !layers.empty();
+}
 
+void NewFrame(bool is_reusing_frame) {
     Sdl::NewFrame(is_reusing_frame);
     ImGui::NewFrame();
     SetKeyOwner(ImGuiKey_GamepadFaceUp, ImHashStr("shadps4/pad"));
 
-    const ImGuiWindowFlags flags = ImGuiDockNodeFlags_PassthruCentralNode |
-                                   ImGuiDockNodeFlags_AutoHideTabBar |
-                                   ImGuiDockNodeFlags_NoTabBar;
-    ImGuiID dockId = DockSpaceOverViewport(0, GetMainViewport(), flags);
-
     for (auto* layer : layers) {
         layer->Draw();
     }
-
-    return dockId;
 }
 
 void Render(const vk::CommandBuffer& cmdbuf, const vk::ImageView& image_view,
@@ -265,7 +253,7 @@ void Render(const vk::CommandBuffer& cmdbuf, const vk::ImageView& image_view,
         {
             .imageView = image_view,
             .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-            .loadOp = vk::AttachmentLoadOp::eClear,
+            .loadOp = vk::AttachmentLoadOp::eLoad, // on top of the blitted frame
             .storeOp = vk::AttachmentStoreOp::eStore,
         },
     };

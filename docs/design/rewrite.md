@@ -30,13 +30,17 @@ Every R6 change is a refactor: the game must behave as before. Each PR shows:
 | Singletons | `Core::Memory` (the `MemoryManager` singleton) is passed by reference to `Liverpool`, the rasterizer, the caches and `PageManager` |
 | Presenter | The frame goes to the swapchain with a direct letterboxed blit instead of an ImGui image. ImGui draws only while the IME dialog is open |
 
+## The present path
+
+`Presenter::Present` clears the swapchain image to black and blits the frame image into the letterboxed rectangle (`FitImage`). The post-processing pass stays in `PrepareFrame`, in front of the blit. It is not only a gamma step: it is the one place that converts the game's buffer format to the frame image (the A2R10G10B10 formats have no sRGB variant in Vulkan, so an sRGB-encoded 10-bit buffer is decoded there) and that writes the scaled FSR output into the window-sized frame image. A blit cannot do either, and R8's resolution work needs the pass. The blit only moves the finished frame to the swapchain. ImGui is recorded on top (load, not clear) only while a layer, the IME dialog, is open.
+
 ## What stays in shadPS4's shape, and why
 
 | Kept | Reason |
 |---|---|
 | Driver quirks in `Profile` and `vk_instance` (NVIDIA, Intel, KosmicKrisp, AMD proprietary) | They are keyed by driver ID, cost nothing on RADV and keep the port running on other Linux drivers |
 | The pipeline cache and `cache_storage.cpp` (off) | R8 makes it work on disk |
-| FSR and the post-processing pass | Presenter scaling for R8's resolution work. The blit issue decides whether the post-processing pass stays in the present path |
+| FSR and the post-processing pass | Presenter scaling for R8's resolution work. The post-processing pass stays in the present path (see below) |
 | ImGui core and its Vulkan backend | The IME dialog (the name entry in character creation) is an ImGui UI of about 5,500 lines. Rewriting it gains nothing for play |
 | `Core::Signals`, `Input::GameControllers`, `Common::Decoder`, `IrqC` singletons | One instance per process by nature, few readers, and our runtime owns their lifetime already |
 | SDL3 for the window, gamepads and audio | One backend, and the rig's virtual gamepad and audio capture build on it |
