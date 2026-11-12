@@ -3,10 +3,13 @@
 // where there is no Vulkan loader or device.
 
 #include <dlfcn.h>
+#include <unistd.h>
 
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -20,13 +23,20 @@
 #include "imgui/renderer/texture_manager.h"
 #include "sdl_window.h"
 #include "video_core/amdgpu/liverpool.h"
+#include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
 namespace {
+
+// These tests run without the on-disk pipeline cache, so they never read or write the user's
+// cache directory. The cache's own test (video_core_test.cpp) opens a directory of its own.
+[[maybe_unused]] const bool no_disk_cache = (Storage::pipeline_cache_enabled = false);
 
 // Selects lavapipe unless the caller chose drivers, and returns why video_core can't run, or an
 // empty string. Asks the plain loader first, so that a missing loader or device skips instead of
@@ -168,4 +178,70 @@ TEST(VideoCore, ResolvesTheDeviceSelectorToTheIndexInThePresentersInstance) {
     EXPECT_EQ(bb::hle::video::resolve_gpu_id("no such device 0x5ca1ab1e", type, why),
               std::nullopt);
     EXPECT_NE(why.find(last.deviceName.data()), std::string::npos) << why;
+}
+
+// The disk cache across runs: the first run writes it, the next loads it, and a cache that is
+// truncated, damaged, of an older schema or from another driver is dropped and rebuilt without a
+// crash, with one warning, and the run after that loads clean again.
+TEST(VideoCore, PipelineCacheSurvivesDamageAndOldVersions) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    namespace fs = std::filesystem;
+    const fs::path dir =
+        fs::temp_directory_path() / ("bb-pipeline-cache-" + std::to_string(::getpid()));
+    fs::remove_all(dir);
+    Core::MemoryManager memory;
+    auto liverpool = std::make_unique<AmdGpu::Liverpool>(memory);
+    Frontend::WindowSDL window;
+    Vulkan::Instance instance{window, -1};
+    start_imgui(instance);
+
+    // One run: opens the store on `dir` under `schema`, creates the renderer's PipelineCache and
+    // destroys it. Returns how many files the store dropped.
+    const auto run = [&](u32 schema) {
+        auto& db = Storage::DataBase::Instance();
+        EXPECT_TRUE(db.Open(dir, schema));
+        u32 dropped = 0;
+        {
+            Vulkan::Scheduler scheduler{instance};
+            Vulkan::PipelineCache cache{instance, scheduler, liverpool.get()};
+            dropped = db.DroppedBlobs();
+        }
+        EXPECT_FALSE(db.IsOpened()); // the destructor saved and closed it
+        return dropped;
+    };
+    const u32 schema = Vulkan::CacheSchema();
+
+    EXPECT_EQ(run(schema), 0u); // cold
+    ASSERT_TRUE(fs::exists(dir / "profile.bin"));
+    ASSERT_TRUE(fs::exists(dir / "vk_pipeline_cache.vkc"));
+    EXPECT_EQ(run(schema), 0u); // warm: everything loads
+
+    // A cache written under another schema (an older ShaderMetaVersion): dropped, then rebuilt.
+    EXPECT_GE(run(schema + 1), 1u);
+    EXPECT_EQ(run(schema + 1), 0u);
+
+    // Truncated and damaged files.
+    fs::resize_file(dir / "vk_pipeline_cache.vkc", fs::file_size(dir / "vk_pipeline_cache.vkc") / 2);
+    {
+        std::fstream f{dir / "profile.bin", std::ios::in | std::ios::out | std::ios::binary};
+        f.seekp(-1, std::ios::end);
+        f.put('\x7f');
+    }
+    EXPECT_GE(run(schema + 1), 2u);
+    EXPECT_EQ(run(schema + 1), 0u);
+
+    // A driver cache of another device is not handed to this one: the file is valid, the key
+    // inside it is not.
+    {
+        auto& db = Storage::DataBase::Instance();
+        ASSERT_TRUE(db.Open(dir, schema + 1));
+        db.Save(Storage::BlobType::DriverCache, "vk_pipeline_cache",
+                std::vector<u8>(256, 0xab));
+        db.Close();
+    }
+    EXPECT_EQ(run(schema + 1), 0u);
+    EXPECT_EQ(run(schema + 1), 0u);
+    fs::remove_all(dir);
 }

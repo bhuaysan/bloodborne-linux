@@ -30,6 +30,7 @@
 #include "sdl_window.h"
 #include "shadps4_host/fault_handler.hpp"
 #include "video_core/amdgpu/liverpool.h"
+#include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -37,6 +38,10 @@
 #include "video_core/texture_cache/texture_cache.h"
 
 namespace {
+
+// These tests run without the on-disk pipeline cache, so they never read or write the user's
+// cache directory. The cache's own test (video_core_test.cpp) opens a directory of its own.
+[[maybe_unused]] const bool no_disk_cache = (Storage::pipeline_cache_enabled = false);
 
 using namespace bb::hle::kernel;
 using vmem::page_size;

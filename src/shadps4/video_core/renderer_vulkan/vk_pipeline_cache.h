@@ -6,6 +6,10 @@
 
 #pragma once
 
+#include <atomic>
+#include <chrono>
+#include <mutex>
+
 #include <tsl/robin_map.h>
 #include "shader_recompiler/profile.h"
 #include "shader_recompiler/recompiler.h"
@@ -72,7 +76,12 @@ public:
     ~PipelineCache();
 
     void WarmUp();
+    // Saves the driver's cache, writes everything queued and closes the store.
     void Sync();
+
+    // Saves the driver's cache of the one live PipelineCache, if any, and waits for the writes.
+    // For the end of a run that skips destructors (bb-run).
+    static void FlushActive();
 
     bool LoadComputePipeline(Serialization::Archive& ar);
     bool LoadGraphicsPipeline(Serialization::Archive& ar);
@@ -107,6 +116,13 @@ private:
         return num_new_pipelines > 0;
     }
 
+    // The driver's cache (VkPipelineCache data) on disk. Saving may run on any thread.
+    std::vector<u8> LoadDriverCache();
+    void SaveDriverCache();
+    void SaveDriverCacheIfDue();
+    void RegisterActive();
+    void UnregisterActive();
+
 private:
     const Instance& instance;
     Scheduler& scheduler;
@@ -126,7 +142,12 @@ private:
     Shader::Gcn::FetchShaderData* fetch_shader{};
     GraphicsPipelineKey graphics_key{};
     ComputePipelineKey compute_key{};
-    u32 num_new_pipelines{}; // new pipelines added to the cache since the game start
+    std::atomic<u32> num_new_pipelines{}; // new pipelines added to the cache since the game start
+    std::atomic<u32> num_new_shaders{}; // shader modules translated since the game start
+    u32 num_preloaded{};                // pipelines loaded from the disk cache at start
+    std::mutex save_mutex;
+    u32 saved_pipelines{}; // num_new_pipelines at the last save of the driver's cache
+    std::chrono::steady_clock::time_point last_save{};
 };
 
 } // namespace Vulkan

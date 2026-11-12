@@ -4,6 +4,9 @@
 // Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
+#include <chrono>
+#include <mutex>
+
 #include "common/serdes.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/info.h"
@@ -15,7 +18,7 @@
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 static constexpr u32 ShaderBinaryVersion = 11u;
-static constexpr u32 ShaderMetaVersion = 6u;
+static constexpr u32 ShaderMetaVersion = 7u; // 7: InfoPersistent changed (R8.1)
 static constexpr u32 PipelineKeyVersion = 3u;
 } // namespace Serialization
 
@@ -303,49 +306,150 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
     return true;
 }
 
-void PipelineCache::WarmUp() {
-    if (!Storage::pipeline_cache_enabled) {
+u32 CacheSchema() {
+    // The versions above, and the sizes of the structs that are written as raw bytes: a layout
+    // change that nobody remembered to put in a version still gives the cache a new schema.
+    u64 hash = 0xcbf29ce484222325ull;
+    for (const u64 v : {u64{Serialization::ShaderBinaryVersion}, u64{Serialization::ShaderMetaVersion},
+                        u64{Serialization::PipelineKeyVersion}, u64{sizeof(Shader::InfoPersistent)},
+                        u64{sizeof(GraphicsPipelineKey)}, u64{sizeof(Shader::StageSpecialization)},
+                        u64{sizeof(Shader::Profile)}}) {
+        hash = (hash ^ v) * 0x100000001b3ull;
+    }
+    return static_cast<u32>(hash ^ (hash >> 32));
+}
+
+namespace {
+// What a VkPipelineCache's data is valid for: the driver checks its own header, this adds the
+// driver version, which the header leaves out.
+struct DriverCacheKey {
+    u32 vendor_id;
+    u32 device_id;
+    u32 driver_version;
+    std::array<u8, VK_UUID_SIZE> uuid;
+    bool operator==(const DriverCacheKey&) const = default;
+};
+constexpr const char* DriverCacheName = "vk_pipeline_cache";
+constexpr auto SaveInterval = std::chrono::seconds(10);
+
+DriverCacheKey GetDriverCacheKey(const Instance& instance) {
+    DriverCacheKey key{instance.GetVendorID(), instance.GetDeviceID(), instance.GetDriverVersion(),
+                       {}};
+    const auto uuid = instance.GetPipelineCacheUUID();
+    std::copy(uuid.begin(), uuid.end(), key.uuid.begin());
+    return key;
+}
+
+std::mutex active_mutex;
+PipelineCache* active_cache = nullptr;
+} // namespace
+
+std::vector<u8> PipelineCache::LoadDriverCache() {
+    auto& db = Storage::DataBase::Instance();
+    std::vector<u8> blob;
+    db.Load(Storage::BlobType::DriverCache, DriverCacheName, blob);
+    if (blob.empty()) {
+        return {};
+    }
+    DriverCacheKey stored{};
+    if (blob.size() < sizeof(stored)) {
+        LOG_WARNING(Render, "Driver pipeline cache is truncated, rebuilding it");
+        return {};
+    }
+    std::memcpy(&stored, blob.data(), sizeof(stored));
+    if (stored != GetDriverCacheKey(instance)) {
+        LOG_INFO(Render, "Driver pipeline cache is from another device or driver, rebuilding it");
+        return {};
+    }
+    blob.erase(blob.begin(), blob.begin() + sizeof(stored));
+    return blob;
+}
+
+void PipelineCache::SaveDriverCache() {
+    auto& db = Storage::DataBase::Instance();
+    if (!db.IsOpened() || !pipeline_cache) {
         return;
     }
+    std::scoped_lock lock{save_mutex};
+    saved_pipelines = num_new_pipelines.load();
+    LOG_INFO(Render, "Pipeline cache: {} pipelines preloaded, {} built and {} shaders translated "
+                     "since start",
+             num_preloaded, saved_pipelines, num_new_shaders.load());
+    last_save = std::chrono::steady_clock::now();
+    auto [result, data] = instance.GetDevice().getPipelineCacheData(*pipeline_cache);
+    if (result != vk::Result::eSuccess || data.empty()) {
+        return;
+    }
+    std::vector<u8> blob(sizeof(DriverCacheKey) + data.size());
+    const auto key = GetDriverCacheKey(instance);
+    std::memcpy(blob.data(), &key, sizeof(key));
+    std::memcpy(blob.data() + sizeof(key), data.data(), data.size());
+    db.Save(Storage::BlobType::DriverCache, DriverCacheName, std::move(blob));
+}
 
-    Storage::DataBase::Instance().Open();
+void PipelineCache::SaveDriverCacheIfDue() {
+    if (num_new_pipelines.load() == saved_pipelines ||
+        std::chrono::steady_clock::now() - last_save < SaveInterval) {
+        return;
+    }
+    SaveDriverCache();
+}
+
+void PipelineCache::RegisterActive() {
+    std::scoped_lock lock{active_mutex};
+    active_cache = this;
+}
+
+void PipelineCache::UnregisterActive() {
+    std::scoped_lock lock{active_mutex};
+    if (active_cache == this) {
+        active_cache = nullptr;
+    }
+}
+
+void PipelineCache::FlushActive() {
+    std::scoped_lock lock{active_mutex};
+    if (active_cache) {
+        active_cache->SaveDriverCache();
+        Storage::DataBase::Instance().Flush();
+    }
+}
+
+void PipelineCache::WarmUp() {
+    auto& db = Storage::DataBase::Instance();
+    if (!db.IsOpened()) {
+        return;
+    }
 
     // Check if cache is compatible
     std::vector<u8> profile_data{};
-    Storage::DataBase::Instance().Load(Storage::BlobType::ShaderProfile, "profile", profile_data);
-    if (profile_data.empty()) {
-        Storage::DataBase::Instance().FinishPreload();
-
+    db.Load(Storage::BlobType::ShaderProfile, "profile", profile_data);
+    Shader::Profile cached_profile{};
+    bool compatible = profile_data.size() == sizeof(Shader::Profile);
+    if (compatible) {
+        std::memcpy(&cached_profile, profile_data.data(), sizeof(cached_profile));
+        compatible = cached_profile == profile;
+    }
+    if (!compatible) {
+        if (!profile_data.empty() || db.DroppedBlobs() > 0) {
+            LOG_WARNING(Render, "Pipeline cache does not match this system, rebuilding it");
+        }
+        // Blobs of another profile must not be trusted under the new one.
+        db.Clear();
         profile_data.resize(sizeof(profile));
         std::memcpy(profile_data.data(), &profile, sizeof(profile));
-        Storage::DataBase::Instance().Save(Storage::BlobType::ShaderProfile, "profile",
-                                           std::move(profile_data));
-        return;
-    }
-    if (profile_data.size() != sizeof(Shader::Profile)) {
-        LOG_WARNING(Render,
-                    "Pipeline cache profile has unexpected size ({} != {}). Ignoring the cache",
-                    profile_data.size(), sizeof(Shader::Profile));
-        Storage::DataBase::Instance().Close();
-        return;
-    }
-
-    Shader::Profile cached_profile{};
-    std::memcpy(&cached_profile, profile_data.data(), sizeof(cached_profile));
-    if (cached_profile != profile) {
-        LOG_WARNING(Render,
-                    "Pipeline cache isn't compatible with current system. Ignoring the cache");
-        Storage::DataBase::Instance().Close();
+        db.Save(Storage::BlobType::ShaderProfile, "profile", std::move(profile_data));
         return;
     }
 
     u32 num_pipelines{};
     u32 num_total_pipelines{};
 
-    Storage::DataBase::Instance().ForEachBlob(
-        Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data) {
-            ++num_total_pipelines;
+    db.ForEachBlob(Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data) {
+        ++num_total_pipelines;
 
+        bool result{};
+        try {
             Serialization::Archive ar{std::move(data)};
             Serialization::Reader pldata{ar};
 
@@ -358,28 +462,31 @@ void PipelineCache::WarmUp() {
             u32 is_compute{};
             pldata.Read(is_compute);
 
-            bool result{};
-            if (is_compute) {
-                result = LoadComputePipeline(ar);
-            } else {
-                result = LoadGraphicsPipeline(ar);
-            }
+            result = is_compute ? LoadComputePipeline(ar) : LoadGraphicsPipeline(ar);
+        } catch (const std::exception& e) {
+            // A blob that passed its checksum but does not parse: rebuilt at run time.
+            LOG_WARNING(Render_Vulkan, "Dropped a cached pipeline: {}", e.what());
+        }
+        if (!result) {
+            infos.fill(nullptr);
+            modules.fill(nullptr);
+            fetch_shader = nullptr;
+            return;
+        }
+        ++num_pipelines;
+    });
 
-            if (result) {
-                ++num_pipelines;
-            }
-        });
-
+    num_preloaded = num_pipelines;
     LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines);
-    if (num_total_pipelines > num_pipelines) {
-        LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",
-                    num_total_pipelines - num_pipelines);
+    if (num_total_pipelines > num_pipelines || db.DroppedBlobs() > 0) {
+        LOG_WARNING(Render,
+                    "{} cached pipelines and {} cache files were stale or damaged, rebuilding them",
+                    num_total_pipelines - num_pipelines, db.DroppedBlobs());
     }
-
-    Storage::DataBase::Instance().FinishPreload();
 }
 
 void PipelineCache::Sync() {
+    SaveDriverCache();
     Storage::DataBase::Instance().Close();
 }
 

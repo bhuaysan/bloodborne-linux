@@ -108,9 +108,6 @@ if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
     set(GLSLANG_COMPILER ${BB_GLSLANG})
     add_subdirectory(${BB_SHADPS4_DIR}/video_core/host_shaders ${CMAKE_CURRENT_BINARY_DIR}/host_shaders)
 
-    # cache_storage.cpp is the pipeline cache's storage, which needs miniz and stays off until R8.
-    # video_core_host.cpp replaces it with fixed no-ops.
-    list(FILTER BB_VIDEO_CORE_SOURCES EXCLUDE REGEX "/video_core/cache_storage\\.cpp$")
     # memory.cpp builds guest memory on the kernel's vmem and dmem, so every executable that links
     # bbvideocore also links bbhle (an OBJECT library, which only executables link).
     add_library(bbvideocore STATIC ${BB_VIDEO_CORE_SOURCES} memory.cpp video_core_host.cpp

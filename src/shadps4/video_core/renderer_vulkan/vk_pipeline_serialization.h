@@ -21,4 +21,8 @@ void RegisterShaderMeta(const Shader::Info& info,
                         const Shader::StageSpecialization& spec, size_t perm_hash, size_t perm_idx);
 void RegisterShaderBinary(std::vector<u32>&& spv, u64 pgm_hash, size_t perm_idx);
 
+// The schema of the cache files (Storage::DataBase::Open): changes with the serialization
+// versions and the sizes of the structs written as raw bytes.
+u32 CacheSchema();
+
 } // namespace Vulkan

@@ -325,15 +325,35 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
         .support_bda = instance_.IsBufferDeviceAddressSupported(),
     };
-    WarmUp();
-
-    auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({});
+    // The store first: the driver's cache starts from its data, and WarmUp builds pipelines on it.
+    // A store opened before (by a test or a tool, on a directory of its own) is used as it is.
+    if (Storage::pipeline_cache_enabled && !Storage::DataBase::Instance().IsOpened()) {
+        Storage::DataBase::Instance().Open(CacheSchema());
+    }
+    const std::vector<u8> initial = Storage::DataBase::Instance().IsOpened()
+                                        ? LoadDriverCache()
+                                        : std::vector<u8>{};
+    vk::PipelineCacheCreateInfo cache_info{.initialDataSize = initial.size(),
+                                           .pInitialData = initial.data()};
+    auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique(cache_info);
+    if (cache_result != vk::Result::eSuccess && !initial.empty()) {
+        LOG_WARNING(Render, "The driver refused its cached data, rebuilding it");
+        auto retry = instance.GetDevice().createPipelineCacheUnique({});
+        cache_result = retry.result;
+        cache = std::move(retry.value);
+    }
     ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
                vk::to_string(cache_result));
     pipeline_cache = std::move(cache);
+    last_save = std::chrono::steady_clock::now();
+    WarmUp();
+    RegisterActive();
 }
 
-PipelineCache::~PipelineCache() = default;
+PipelineCache::~PipelineCache() {
+    UnregisterActive();
+    Sync();
+}
 
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectParams params) {
     draw_indirect_params = params;
@@ -352,6 +372,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
 
         RegisterPipelineData(graphics_key, pipeline_hash, sdata);
         ++num_new_pipelines;
+        SaveDriverCacheIfDue();
     }
     return it->second.get();
 }
@@ -371,6 +392,7 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
                                                        modules[0], sdata, false);
         RegisterPipelineData(compute_key, sdata);
         ++num_new_pipelines;
+        SaveDriverCacheIfDue();
     }
     return it->second.get();
 }
@@ -610,6 +632,7 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
     LOG_INFO(Render_Vulkan, "Compiling {} shader {:#x} {}", info.hw_stage, info.pgm_hash,
              perm_idx != 0 ? "(permutation)" : "");
 
+    ++num_new_shaders;
     const auto ir_program = Shader::TranslateProgram(code, pools, info, runtime_info, profile);
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);
 
