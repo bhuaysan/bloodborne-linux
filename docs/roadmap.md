@@ -19,7 +19,7 @@ On 2026-11-09 the plan changed. M0 to M4.3 gave us a loader and an OS layer that
 | **R4 Renderer** | `video_core` runs behind a thin host layer, `bb-run` shows the main menu and matches the reference frame, and `src/gpu` and the memory mirror are gone |
 | **R5 OS gaps** | Pad, audio with ATRAC9, movies and the name dialog work: `bb-run` goes through a new game to the clinic, saves and continues, and plays 25 minutes without a crash or GPU fault, matching the reference |
 
-R1 and R2 have no tag and no milestone review. M4.4 to M4.6 and the old M5 to M7 are dropped, and R1 closed or moved their open issues.
+R1 has no tag and no milestone review: it changed only rules and docs. R2 was reviewed and tagged after R5. M4.4 to M4.6 and the old M5 to M7 are dropped, and R1 closed or moved their open issues.
 
 ## Plan
 
