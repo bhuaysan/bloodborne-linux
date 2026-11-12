@@ -1076,8 +1076,7 @@ void TextureCache::GarbageCollectImages() {
             UntrackImage(image_id);
             UnregisterImage(image_id);
             if (image.gpu_hash != 0) {
-                buffer_cache.ReadMemory(image.info.guest_address, image.info.guest_size, true,
-                                        true);
+                buffer_cache.ReadMemory(image.info.guest_address, image.info.guest_size);
                 maybe_download.push_back(image_id);
             } else {
                 download_queue.push_back(image_id);

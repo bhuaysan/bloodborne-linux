@@ -84,7 +84,8 @@ public:
     void UnmarkRegionAsGpuModified(VAddr device_addr, u64 size, bool is_write = false);
 
     /// Flushes any GPU modified buffer in the logical page range back to CPU memory.
-    void ReadMemory(VAddr device_addr, u64 size, bool async = false, bool assume_locks = false);
+    /// Called with the GPU locks held, so the download is queued asynchronously.
+    void ReadMemory(VAddr device_addr, u64 size);
 
     /// Flushes GPU modified ranges of the uncovered part of the edge pages of an image.
     void ReadEdgeImagePages(const Image& image);

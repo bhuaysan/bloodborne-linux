@@ -119,8 +119,8 @@ void BufferCache::UnmarkRegionAsGpuModified(VAddr device_addr, u64 size, bool is
     gpu_modified_ranges.Subtract(device_addr, size);
 }
 
-void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool async, bool assume_locks) {
-    const auto flush_request = [this, device_addr, size, async] {
+void BufferCache::ReadMemory(VAddr device_addr, u64 size) {
+    {
         const u32 first_block = device_addr >> block_shift;
         const u32 last_block = (device_addr + size - 1) >> block_shift;
         const auto* arena = GetArena(first_block, last_block);
@@ -133,12 +133,7 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool async, bool assum
             std::max<VAddr>(Common::AlignDown(device_addr, WindowSize), arena->cpu_addr);
         const VAddr window_end = std::min<VAddr>(
             std::max<VAddr>(window_start + WindowSize, device_addr + size), arena_end);
-        DownloadMemory(arena, window_start, window_end - window_start, async);
-    };
-    if (assume_locks) {
-        flush_request();
-    } else {
-        liverpool->SendCommand<true>(std::move(flush_request));
+        DownloadMemory(arena, window_start, window_end - window_start, true);
     }
 }
 
