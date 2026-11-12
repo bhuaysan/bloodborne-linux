@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/shader_recompiler/resource.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -80,8 +80,6 @@ enum class SharpFetchPostOp : u8 {
 enum class BufferType : u8 {
     Guest,
     Flatbuf,
-    BdaPagetable,
-    FaultBuffer,
     GdsBuffer,
     SharedMemory,
     ClipPlanes,

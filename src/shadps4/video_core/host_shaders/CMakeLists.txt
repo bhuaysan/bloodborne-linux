@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2023 Citra Emulator Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Source: shadPS4 src/video_core/host_shaders/CMakeLists.txt @11557f2eb60b3b00712c8887c30852de7615d6df
-# Changed for bloodborne-linux, 2026-11-09
+# Changed for bloodborne-linux, 2026-11-12
 # License texts: third_party/shadps4/LICENSES/
 
 if (TARGET glslang-standalone)
@@ -44,7 +44,6 @@ endfunction()
 add_host_shader(color_to_ms_depth.frag color_to_ms_depth_frag)
 add_host_shader(ms_image_blit.frag ms_image_blit_frag)
 add_host_shader(ms_image_blit.frag ms_image_blit_msaa_frag SRC_MSAA=1)
-add_host_shader(fault_buffer_process.comp fault_buffer_process_comp)
 add_host_shader(fs_tri.vert fs_tri_vert)
 add_host_shader(fsr.comp fsr_easu_comp SAMPLE_EASU=1)
 add_host_shader(fsr.comp fsr_rcas_comp SAMPLE_RCAS=1)

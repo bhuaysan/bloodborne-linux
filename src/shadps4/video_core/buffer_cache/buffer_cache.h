@@ -13,7 +13,6 @@
 #include "common/interval_set.h"
 #include "common/types.h"
 #include "video_core/buffer_cache/buffer.h"
-#include "video_core/buffer_cache/fault_manager.h"
 #include "video_core/buffer_cache/range_set.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 #include "video_core/texture_cache/image.h"
@@ -73,27 +72,10 @@ public:
         return null_index_buffer.get();
     }
 
-    /// Retrieves the device local DBA page table buffer.
-    [[nodiscard]] Buffer* GetBdaPageTableBuffer() noexcept {
-        return bda_pagetable_buffer.get();
-    }
-
-    /// Retrieves the fault buffer.
-    [[nodiscard]] Buffer* GetFaultBuffer() noexcept {
-        return fault_manager->GetFaultBuffer();
-    }
-
     /// Retrieves the stream buffer.
     [[nodiscard]] StreamBuffer& GetStreamBuffer() noexcept {
         return stream_buffer;
     }
-
-    /// Returns minimum granularity of a sparse memory bind.
-    u32 GetSparsePageShift() const noexcept {
-        return block_shift;
-    }
-
-    void TickFrame();
 
     /// Invalidates any buffer in the logical page range.
     void InvalidateMemory(VAddr device_addr, u64 size);
@@ -122,9 +104,6 @@ public:
 
     /// Mark region as modified from the GPU
     void MarkRegionAsGpuModified(VAddr addr, size_t size);
-
-    /// Synchronizes all buffers needed for DMA.
-    void SynchronizeDmaBuffers();
 
     /// Commits pending sparse buffer memory binds. Must be called before every scheduler submit.
     void SubmitPendingArenaBinds(Vulkan::SubmitInfo& info);
@@ -167,10 +146,6 @@ private:
     Buffer gds_buffer;
     std::unique_ptr<Buffer> null_index_buffer;
     RangeSet gpu_modified_ranges;
-
-    std::unique_ptr<FaultManager> fault_manager;
-    std::unique_ptr<Buffer> bda_pagetable_buffer;
-    bool fault_process_pending{};
 
     std::array<const Buffer*, NUM_ARENA_PAGES> address_space{};
     std::deque<Buffer> arenas;

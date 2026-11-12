@@ -101,13 +101,6 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                        reqs.memoryTypeBits)
             .value();
 
-    const u64 bda_pagetable_size =
-        (blocks_per_arena_page * NUM_ARENA_PAGES) * sizeof(vk::DeviceAddress);
-    fault_manager = std::make_unique<FaultManager>(instance, scheduler, *this, block_shift,
-                                                   blocks_per_arena_page * NUM_ARENA_PAGES);
-    bda_pagetable_buffer = std::make_unique<Buffer>(
-        instance, 0, bda_pagetable_size, MemoryType::DeviceLocal, "BDA Page Table Buffer");
-    runtime.FillBuffer(bda_pagetable_buffer.get(), 0u, bda_pagetable_size, 0u);
     if (!instance.IsMaintenance6Supported()) {
         null_index_buffer = std::make_unique<Buffer>(instance, 0, NULL_INDEX_BUFFER_SIZE,
                                                      MemoryType::DeviceLocal, "Null Index Buffer");
@@ -116,12 +109,6 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
 }
 
 BufferCache::~BufferCache() = default;
-
-void BufferCache::TickFrame() {
-    if (std::exchange(fault_process_pending, false)) {
-        fault_manager->ProcessFaultBuffer();
-    }
-}
 
 void BufferCache::InvalidateMemory(VAddr device_addr, u64 size) {
     memory_tracker->MarkRegionAsCpuModified(device_addr, size);
@@ -313,16 +300,6 @@ void BufferCache::ReadEdgeImagePages(const Image& image) {
         });
 }
 
-void BufferCache::SynchronizeDmaBuffers() {
-    fault_process_pending = true;
-    for (const auto& range : resident_ranges) {
-        const u64 page = range.start >> (ARENA_PAGE_BITS - block_shift);
-        const VAddr device_addr = range.start << block_shift;
-        const u64 size = (range.end - range.start) << block_shift;
-        SynchronizeMemory(address_space[page], device_addr, size, false, false);
-    }
-}
-
 const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     const u64 first_page = first_block >> blocks_per_arena_page_shift;
     const u64 last_page = last_block >> blocks_per_arena_page_shift;
@@ -400,14 +377,8 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     };
     const auto device_memory = Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
 
-    boost::container::small_vector<vk::BufferCopy, 8> copies;
-    const auto staging =
-        staging_pool.Request(resident_blocks * sizeof(vk::DeviceAddress), MemoryType::HostUncached);
-
     u64 memory_offset{};
     ArenaBinds* binds = BindsForArena(arena);
-    auto* bda_addrs = reinterpret_cast<vk::DeviceAddress*>(staging.mapped);
-    u64 offset = staging.offset;
     for (const auto& range : bind_ranges) {
         Backing backing;
         backing.start = range.start;
@@ -425,21 +396,6 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
             .memoryOffset = memory_offset,
         });
         memory_offset += bind.size;
-
-        if (!has_bda) {
-            continue;
-        }
-        for (u32 block = 0; block < bind.size; block += block_size) {
-            *(bda_addrs++) = arena->BufferDeviceAddress() + bind.resourceOffset + block;
-        }
-        const u64 copy_size = (backing.end - backing.start) * sizeof(vk::DeviceAddress);
-        copies.emplace_back(offset, backing.start * sizeof(vk::DeviceAddress), copy_size);
-        offset += copy_size;
-    }
-
-    if (has_bda) {
-        staging.Flush();
-        runtime.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), copies);
     }
 }
 

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/shader_recompiler/info.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -60,7 +60,6 @@ struct InfoPersistent {
     u8 mrt_mask{};
     bool has_fetch_shader{};
     bool has_bitwise_xor{};
-    bool uses_dma{};
 
     InfoPersistent() = default;
     InfoPersistent(HwStage hw_stage_, SwStage sw_stage_, u64 pgm_hash_)
@@ -92,12 +91,6 @@ struct Info : InfoPersistent {
         std::array<u8, IR::NumAttributes> flags;
     };
 
-    enum class ReadConstType {
-        None = 0,
-        Immediate = 1 << 0,
-        Dynamic = 1 << 1,
-    };
-
     struct Interpolation {
         Qualifier primary;
         Qualifier auxiliary;
@@ -110,7 +103,6 @@ struct Info : InfoPersistent {
     AttributeFlags loads{};
     AttributeFlags stores{};
 
-    ReadConstType readconst_types{};
     CopyShaderData gs_copy_data;
     u32 uses_patches{};
 
@@ -189,6 +181,5 @@ struct Info : InfoPersistent {
     void Serialize(Serialization::Archive& ar) const;
     bool Deserialize(Serialization::Archive& ar);
 };
-DECLARE_ENUM_FLAG_OPERATORS(Info::ReadConstType);
 
 } // namespace Shader
