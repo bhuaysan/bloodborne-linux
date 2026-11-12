@@ -74,9 +74,14 @@ RunOptions parse_run_options(std::span<const std::string_view> args) {
         } else if (arg == "--validation-gpu") {
             options.validation_gpu = true;
         } else if (arg == "--present-mode") {
-            options.present_mode = value();
-            if (options.present_mode != "fifo" && options.present_mode != "mailbox" &&
-                options.present_mode != "immediate") {
+            const std::string_view mode = value();
+            if (mode == "fifo") {
+                options.present_mode = PresentMode::fifo;
+            } else if (mode == "mailbox") {
+                options.present_mode = PresentMode::mailbox;
+            } else if (mode == "immediate") {
+                options.present_mode = PresentMode::immediate;
+            } else {
                 throw std::invalid_argument(
                     "--present-mode: expected fifo, mailbox or immediate");
             }

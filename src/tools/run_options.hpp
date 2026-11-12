@@ -42,6 +42,9 @@ inline constexpr std::string_view run_usage =
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
 
+// --present-mode. Same order and meaning as Vulkan::PresentMode, which bb-run maps it to.
+enum class PresentMode { fifo, mailbox, immediate };
+
 struct RunOptions {
     std::optional<std::filesystem::path> game_dir;  // --game-dir, else the environment
     std::string profile{common::default_profile};
@@ -54,7 +57,7 @@ struct RunOptions {
     bool validation = false;       // --validation
     bool validation_sync = false;  // --validation-sync, only with --validation
     bool validation_gpu = false;   // --validation-gpu, only with --validation
-    std::string present_mode{"mailbox"};  // --present-mode: fifo, mailbox or immediate
+    PresentMode present_mode = PresentMode::mailbox;  // --present-mode
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 

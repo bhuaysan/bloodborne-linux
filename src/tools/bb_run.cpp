@@ -212,13 +212,21 @@ void open_display(const bb::tools::RunOptions& options) {
         end_run(2);
     }
     Vulkan::RendererOptions renderer{*gpu_id, validation, Vulkan::PresentMode::Mailbox};
-    if (options.present_mode == "fifo") {
+    const char* present_mode_name = "mailbox";
+    switch (options.present_mode) {
+    case bb::tools::PresentMode::fifo:
         renderer.present_mode = Vulkan::PresentMode::Fifo;
-    } else if (options.present_mode == "immediate") {
+        present_mode_name = "fifo";
+        break;
+    case bb::tools::PresentMode::mailbox:
+        break;
+    case bb::tools::PresentMode::immediate:
         renderer.present_mode = Vulkan::PresentMode::Immediate;
+        present_mode_name = "immediate";
+        break;
     }
     bb::common::log(LogLevel::info, channel, "renderer: device {}, present mode {}, validation {}",
-                    *gpu_id, options.present_mode, options.validation ? "on" : "off");
+                    *gpu_id, present_mode_name, options.validation ? "on" : "off");
     d->presenter = std::make_unique<bb::hle::video::VideoCorePresenter>(d->window.get(),
                                                                          *guest_memory, renderer);
     display = d.release();

@@ -30,6 +30,7 @@ namespace {
 
 using bb::tools::MainLoopProbe;
 using bb::tools::parse_run_options;
+using bb::tools::PresentMode;
 using bb::tools::RunOptions;
 
 RunOptions parse(std::vector<std::string_view> args) {
@@ -59,7 +60,7 @@ TEST(RunOptions, Defaults) {
     EXPECT_FALSE(o.validation);
     EXPECT_FALSE(o.validation_sync);
     EXPECT_FALSE(o.validation_gpu);
-    EXPECT_EQ(o.present_mode, "mailbox");
+    EXPECT_EQ(o.present_mode, PresentMode::mailbox);
     EXPECT_FALSE(o.help);
 }
 
@@ -87,8 +88,9 @@ TEST(RunOptions, ParsesTheRendererOptions) {
     EXPECT_TRUE(o.validation);
     EXPECT_TRUE(o.validation_sync);
     EXPECT_TRUE(o.validation_gpu);
-    EXPECT_EQ(o.present_mode, "fifo");
-    EXPECT_EQ(parse({"--present-mode", "immediate"}).present_mode, "immediate");
+    EXPECT_EQ(o.present_mode, PresentMode::fifo);
+    EXPECT_EQ(parse({"--present-mode", "immediate"}).present_mode, PresentMode::immediate);
+    EXPECT_EQ(parse({"--present-mode", "mailbox"}).present_mode, PresentMode::mailbox);
     EXPECT_EQ(parse_error({"--present-mode", "vsync"}),
               "--present-mode: expected fifo, mailbox or immediate");
     EXPECT_EQ(parse_error({"--present-mode"}), "--present-mode needs a value");
