@@ -85,7 +85,6 @@ void start_imgui(const Vulkan::Instance& instance) {
     info.pipeline_rendering_create_info.colorAttachmentCount = 1;
     info.pipeline_rendering_create_info.pColorAttachmentFormats = &format;
     ASSERT_TRUE(ImGui::Vulkan::Init(info));
-    ImGui::Core::TextureManager::StartWorker();
 }
 
 vk::ArrayWrapper1D<std::uint8_t, VK_UUID_SIZE> device_uuid(vk::PhysicalDevice device) {

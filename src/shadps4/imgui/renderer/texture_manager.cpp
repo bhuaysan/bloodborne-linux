@@ -4,15 +4,13 @@
 // Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
+#include <atomic>
 #include <deque>
+#include <mutex>
 #include <utility>
 
 #include <imgui.h>
 #include "common/assert.h"
-#include "common/io_file.h"
-#include "common/polyfill_thread.h"
-#include "common/stb.h"
-#include "common/thread.h"
 #include "imgui_impl_vulkan.h"
 #include "texture_manager.h"
 
@@ -35,12 +33,6 @@ using namespace Core::TextureManager;
 
 RefCountedTexture::RefCountedTexture(Inner* inner) : inner(inner) {
     ++inner->count;
-}
-
-RefCountedTexture RefCountedTexture::DecodePngFile(std::filesystem::path path) {
-    const auto core = new Inner;
-    Core::TextureManager::DecodePngFile(std::move(path), core);
-    return RefCountedTexture(core);
 }
 
 RefCountedTexture::RefCountedTexture() : inner(nullptr) {}
@@ -95,24 +87,11 @@ RefCountedTexture::operator bool() const {
     return inner != nullptr && inner->texture_id != nullptr;
 }
 
-struct Job {
-    Inner* core;
-    std::vector<u8> data;
-    std::filesystem::path path;
-};
-
 struct UploadJob {
     Inner* core = nullptr;
     Vulkan::UploadTextureData data;
     int tick = 0; // Used to skip the first frame when destroying to await the current frame to draw
 };
-
-static bool g_is_worker_running = false;
-static std::jthread g_worker_thread;
-static std::condition_variable g_worker_cv;
-
-static std::mutex g_job_list_mtx;
-static std::deque<Job> g_job_list;
 
 static std::mutex g_upload_mtx;
 static std::deque<UploadJob> g_upload_list;
@@ -127,80 +106,6 @@ Inner::~Inner() {
             .tick = 2,
         });
     }
-}
-
-void WorkerLoop() {
-    Common::SetCurrentThreadName("shadPS4:ImGuiTextureManager");
-    std::mutex mtx;
-    while (g_is_worker_running) {
-        std::unique_lock lk{mtx};
-        g_worker_cv.wait(lk);
-        if (!g_is_worker_running) {
-            break;
-        }
-        while (true) {
-            g_job_list_mtx.lock();
-            if (g_job_list.empty()) {
-                g_job_list_mtx.unlock();
-                break;
-            }
-            auto [core, png_raw, path] = std::move(g_job_list.front());
-            g_job_list.pop_front();
-            g_job_list_mtx.unlock();
-
-            if (!path.empty()) { // Decode PNG from file
-                Common::FS::IOFile file(path, Common::FS::FileAccessMode::Read);
-                if (!file.IsOpen()) {
-                    LOG_ERROR(ImGui, "Failed to open PNG file: {}", path.string());
-                    continue;
-                }
-                png_raw.resize(file.GetSize());
-                file.Seek(0);
-                file.ReadRaw<u8>(png_raw.data(), png_raw.size());
-                file.Close();
-            }
-
-            int width, height;
-            const stbi_uc* pixels =
-                stbi_load_from_memory(png_raw.data(), png_raw.size(), &width, &height, nullptr, 4);
-
-            auto texture = Vulkan::UploadTexture(pixels, vk::Format::eR8G8B8A8Unorm, width, height,
-                                                 width * height * 4 * sizeof(stbi_uc));
-            stbi_image_free((void*)pixels);
-
-            core->upload_data = texture;
-            core->width = width;
-            core->height = height;
-
-            std::unique_lock upload_lk{g_upload_mtx};
-            g_upload_list.emplace_back(UploadJob{
-                .core = core,
-            });
-        }
-    }
-}
-
-void StartWorker() {
-    ASSERT(!g_is_worker_running);
-    g_worker_thread = std::jthread(WorkerLoop);
-    g_is_worker_running = true;
-}
-
-void StopWorker() {
-    ASSERT(g_is_worker_running);
-    g_is_worker_running = false;
-    g_worker_cv.notify_one();
-}
-
-void DecodePngFile(std::filesystem::path path, Inner* core) {
-    ++core->count;
-    Job job{
-        .core = core,
-        .path = std::move(path),
-    };
-    std::unique_lock lk{g_job_list_mtx};
-    g_job_list.push_back(std::move(job));
-    g_worker_cv.notify_one();
 }
 
 void Submit() {

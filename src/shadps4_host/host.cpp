@@ -11,7 +11,6 @@
 #include <fmt/format.h>
 
 #include "common/assert.h"
-#include "common/io_file.h"
 #include "common/log.hpp"
 #include "common/logging/log.h"
 #include "common/path_util.h"
@@ -104,18 +103,5 @@ const std::filesystem::path& GetUserPath(PathType user_path) {
     }
     return it->second;
 }
-
-// Files are read only by the pipeline cache and PNG icons.
-// The port builds none of them.
-IOFile::IOFile(const std::filesystem::path&, FileAccessMode, FileType, FileShareFlag) {
-    bb::shadps4::host_missing("Common::FS::IOFile");
-}
-
-IOFile::~IOFile() = default;
-
-// No IOFile can be opened, so these are not reached either.
-u64 IOFile::GetSize() const { bb::shadps4::host_missing("Common::FS::IOFile::GetSize"); }
-bool IOFile::Seek(s64, SeekOrigin) const { bb::shadps4::host_missing("Common::FS::IOFile::Seek"); }
-void IOFile::Close() { bb::shadps4::host_missing("Common::FS::IOFile::Close"); }
 
 }  // namespace Common::FS

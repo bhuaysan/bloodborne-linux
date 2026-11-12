@@ -292,7 +292,6 @@ void start_imgui(const Vulkan::Instance& instance) {
     info.pipeline_rendering_create_info.colorAttachmentCount = 1;
     info.pipeline_rendering_create_info.pColorAttachmentFormats = &format;
     ASSERT_TRUE(ImGui::Vulkan::Init(info));
-    ImGui::Core::TextureManager::StartWorker();
 }
 
 // Unregisters the rasterizer before it goes, also when a test returns early.

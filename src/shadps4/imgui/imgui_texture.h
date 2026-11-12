@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <filesystem>
 #include <vector>
 #include <imgui.h>
 
@@ -29,8 +28,6 @@ public:
         u32 width;
         u32 height;
     };
-
-    static RefCountedTexture DecodePngFile(std::filesystem::path path);
 
     RefCountedTexture();
 

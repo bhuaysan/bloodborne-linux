@@ -132,8 +132,6 @@ void Initialize(const ::Vulkan::Instance& instance, const Frontend::WindowSDL& w
     };
     Vulkan::Init(vk_info);
 
-    TextureManager::StartWorker();
-
     if (const auto dpi = SDL_GetWindowDisplayScale(window.GetSDLWindow()); dpi > 0.0f) {
         GetIO().FontGlobalScale *= dpi;
     }
@@ -151,8 +149,6 @@ void Shutdown(const vk::Device& device) {
         LOG_WARNING(ImGui, "Failed to wait for Vulkan device idle on shutdown: {}",
                     vk::to_string(result));
     }
-
-    TextureManager::StopWorker();
 
     const ImGuiIO& io = GetIO();
     const auto ini_filename = (void*)io.IniFilename;

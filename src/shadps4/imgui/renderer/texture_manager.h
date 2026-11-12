@@ -6,9 +6,6 @@
 
 #pragma once
 
-#include <filesystem>
-#include <vector>
-
 #include "common/types.h"
 #include "imgui/imgui_texture.h"
 
@@ -19,12 +16,6 @@ class CommandBuffer;
 namespace ImGui::Core::TextureManager {
 
 struct Inner;
-
-void StartWorker();
-
-void StopWorker();
-
-void DecodePngFile(std::filesystem::path path, Inner* core);
 
 void Submit();
 

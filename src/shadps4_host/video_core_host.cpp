@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "common/log.hpp"
-#include "common/stb.h"
 #include "common/types.h"
 #include "shadps4_host/failure.hpp"
 #include "video_core/cache_storage.h"
@@ -18,12 +17,6 @@ using bb::shadps4::host_missing;
 void assert_fail_debug_msg(const char* msg) {
     bb::common::log_fatal("shadps4", std::string("ImGui assertion failed: ") + msg);
 }
-
-// PNG decoding: see common/stb.h.
-stbi_uc* stbi_load_from_memory(const stbi_uc*, int, int*, int*, int*, int) {
-    host_missing("stbi_load_from_memory: PNG decoding is not built");
-}
-void stbi_image_free(void*) { host_missing("stbi_image_free: PNG decoding is not built"); }
 
 // The pipeline cache's storage (cache_storage.cpp, left out with miniz).
 // Storage::pipeline_cache_enabled keeps the cache off, so the storage is never opened:
