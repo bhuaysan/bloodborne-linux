@@ -29,10 +29,10 @@ static constexpr u32 MAX_IMAGES = std::numeric_limits<u16>::max();
 static constexpr u32 MAX_IMAGE_VIEWS = std::numeric_limits<u16>::max();
 static constexpr u32 MAX_SAMPLERS = std::numeric_limits<u16>::max();
 
-static u64 HashBackingMemory(VAddr virtual_addr, u64 size) {
+static u64 HashBackingMemory(Core::MemoryManager& memory, VAddr virtual_addr, u64 size) {
     static constexpr std::array<u8, Core::GUEST_PAGE_SIZE> zeros{};
     auto* state = XXH3_createState();
-    const auto& backing_pages = Core::Memory::Instance()->GetAddressSpace().BackingPages();
+    const auto& backing_pages = memory.GetAddressSpace().BackingPages();
     XXH3_64bits_reset(state);
     while (size) {
         const u64 page = virtual_addr >> Core::GUEST_PAGE_BITS;
@@ -53,10 +53,11 @@ static u64 HashBackingMemory(VAddr virtual_addr, u64 size) {
 
 TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& scheduler_,
                            Vulkan::Runtime& runtime_, AmdGpu::Liverpool* liverpool_,
-                           BufferCache& buffer_cache_, PageManager& page_manager_)
+                           BufferCache& buffer_cache_, PageManager& page_manager_,
+                           Core::MemoryManager& memory_)
     : instance{instance_}, scheduler{scheduler_}, runtime{runtime_}, liverpool{liverpool_},
-      buffer_cache{buffer_cache_}, page_manager{page_manager_}, slot_images{MAX_IMAGES},
-      slot_image_views{MAX_IMAGE_VIEWS}, slot_samplers{MAX_SAMPLERS},
+      buffer_cache{buffer_cache_}, page_manager{page_manager_}, memory{memory_},
+      slot_images{MAX_IMAGES}, slot_image_views{MAX_IMAGE_VIEWS}, slot_samplers{MAX_SAMPLERS},
       blit_helper{instance, scheduler},
       tile_manager{instance, scheduler, runtime, buffer_cache.GetStreamBuffer()} {
 
@@ -143,8 +144,7 @@ void TextureCache::DownloadImageMemory(ImageId image_id, DownloadMemoryFlags fla
 
     const auto write_data = [this, image_addr, copy_size, download, discard_buffer_cache, is_sync] {
         download.Invalidate();
-        Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(image_addr), download.mapped,
-                                                  copy_size);
+        memory.TryWriteBacking(std::bit_cast<u8*>(image_addr), download.mapped, copy_size);
         if (discard_buffer_cache) {
             buffer_cache.UnmarkRegionAsGpuModified(image_addr, copy_size, true);
         }
@@ -227,7 +227,8 @@ void TextureCache::MarkAsMaybeGpuDirty(VAddr addr, size_t size) {
     ForEachImageInRegion(addr, size, [&](ImageId image_id, Image& image) {
         if (image.gpu_hash == 0) {
             // Read backing pages directly, without faulting through the guest readback path.
-            image.gpu_hash = HashBackingMemory(image.info.guest_address, image.info.guest_size);
+            image.gpu_hash =
+                HashBackingMemory(memory, image.info.guest_address, image.info.guest_size);
         }
     });
 }
@@ -1003,7 +1004,7 @@ void TextureCache::UntrackImageHead(ImageId image_id) {
     }
     const auto addr = page_manager.GetNextPageAddr(image_begin);
     const auto size = addr - image_begin;
-    image.head_hash = HashBackingMemory(image_begin, size);
+    image.head_hash = HashBackingMemory(memory, image_begin, size);
     page_manager.UpdatePageWatchers(image_begin, size, PageOp::Untrack);
 
     image.track_addr = addr;
@@ -1024,7 +1025,7 @@ void TextureCache::UntrackImageTail(ImageId image_id) {
     ASSERT(image.track_addr_end != 0);
     const auto addr = page_manager.GetPageAddr(image_end);
     const auto size = image_end - addr;
-    image.tail_hash = HashBackingMemory(addr, size);
+    image.tail_hash = HashBackingMemory(memory, addr, size);
     image.track_addr_end = addr;
     if (image.track_addr == image.track_addr_end) {
         // This image spans only 2 pages and both are modified,
@@ -1040,13 +1041,13 @@ void TextureCache::MarkDirtyIfEdgesModified(Image& image) {
     const auto image_end = image.info.guest_address + image.info.guest_size;
     if (image.head_hash != 0) {
         const auto head_end = page_manager.GetNextPageAddr(image_begin);
-        if (HashBackingMemory(image_begin, head_end - image_begin) != image.head_hash) {
+        if (HashBackingMemory(memory, image_begin, head_end - image_begin) != image.head_hash) {
             image.flags |= ImageFlagBits::CpuDirty;
         }
     }
     if (image.tail_hash != 0) {
         const auto tail_begin = page_manager.GetPageAddr(image_end);
-        if (HashBackingMemory(tail_begin, image_end - tail_begin) != image.tail_hash) {
+        if (HashBackingMemory(memory, tail_begin, image_end - tail_begin) != image.tail_hash) {
             image.flags |= ImageFlagBits::CpuDirty;
         }
     }
@@ -1129,7 +1130,8 @@ void TextureCache::GarbageCollectImages() {
 
         for (const auto& image_id : maybe_download) {
             const auto& image = slot_images[image_id];
-            const u64 hash = HashBackingMemory(image.info.guest_address, image.info.guest_size);
+            const u64 hash =
+                HashBackingMemory(memory, image.info.guest_address, image.info.guest_size);
             if (image.gpu_hash == hash) {
                 download_queue.push_back(image_id);
             } else {

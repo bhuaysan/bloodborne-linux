@@ -14,6 +14,7 @@
 #include <gtest/gtest.h>
 #include <imgui.h>
 
+#include "core/memory.h"
 #include "hle/video/video_core_presenter.hpp"
 #include "imgui/renderer/imgui_impl_vulkan.h"
 #include "imgui/renderer/texture_manager.h"
@@ -101,7 +102,8 @@ TEST(VideoCore, CreatesAndDestroysRendererOnLavapipe) {
     }
     // In the order the presenter (vk_presenter.cpp) and the GNM driver create them, and destroyed
     // in reverse. The GPU thread starts with Liverpool and stops with it.
-    auto liverpool = std::make_unique<AmdGpu::Liverpool>();
+    Core::MemoryManager memory;
+    auto liverpool = std::make_unique<AmdGpu::Liverpool>(memory);
     Frontend::WindowSDL window;
     {
         Vulkan::Instance instance{window, -1};

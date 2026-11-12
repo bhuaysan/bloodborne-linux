@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/avplayer/avplayer.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/logging/log.h"
@@ -13,6 +13,9 @@
 #include <string_view>
 
 namespace Libraries::AvPlayer {
+
+// What the video frames invalidate in the GPU caches (RegisterLib).
+static Core::MemoryManager* g_memory = nullptr;
 
 s32 PS4_SYSV_ABI sceAvPlayerAddSource(AvPlayerHandle handle, const char* filename) {
     LOG_TRACE(Lib_AvPlayer, "filename = {}", filename);
@@ -118,7 +121,7 @@ AvPlayerHandle PS4_SYSV_ABI sceAvPlayerInit(AvPlayerInitData* data) {
         return nullptr;
     }
 
-    return new AvPlayer(*data);
+    return new AvPlayer(*data, *g_memory);
 }
 
 s32 PS4_SYSV_ABI sceAvPlayerInitEx(const AvPlayerInitDataEx* p_data, AvPlayerHandle* p_player) {
@@ -143,7 +146,7 @@ s32 PS4_SYSV_ABI sceAvPlayerInitEx(const AvPlayerInitDataEx* p_data, AvPlayerHan
     data.num_output_video_framebuffers = p_data->num_output_video_framebuffers;
     data.auto_start = p_data->auto_start;
 
-    *p_player = new AvPlayer(data);
+    *p_player = new AvPlayer(data, *g_memory);
     return ORBIS_OK;
 }
 
@@ -253,7 +256,8 @@ s32 PS4_SYSV_ABI sceAvPlayerVprintf(const char* format, va_list args) {
     return ORBIS_OK;
 }
 
-void RegisterLib(Core::Loader::SymbolsResolver* sym) {
+void RegisterLib(Core::Loader::SymbolsResolver* sym, Core::MemoryManager& memory) {
+    g_memory = &memory;
     LIB_FUNCTION("KMcEa+rHsIo", "libSceAvPlayer", 1, "libSceAvPlayer", sceAvPlayerAddSource);
     LIB_FUNCTION("x8uvuFOPZhU", "libSceAvPlayer", 1, "libSceAvPlayer", sceAvPlayerAddSourceEx);
     LIB_FUNCTION("buMCiJftcfw", "libSceAvPlayer", 1, "libSceAvPlayer", sceAvPlayerChangeStream);

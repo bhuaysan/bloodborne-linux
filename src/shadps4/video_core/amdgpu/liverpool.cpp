@@ -65,7 +65,7 @@ static std::span<const u32> NextPacket(std::span<const u32> span, size_t offset)
     return span.subspan(offset);
 }
 
-Liverpool::Liverpool() {
+Liverpool::Liverpool(Core::MemoryManager& memory_) : memory{memory_} {
     process_thread = std::jthread{std::bind_front(&Liverpool::Process, this)};
 }
 
@@ -614,9 +614,8 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
             }
             case PM4ItOpcode::EventWriteEos: {
                 const auto* event_eos = reinterpret_cast<const PM4CmdEventWriteEos*>(header);
-                event_eos->SignalFence([](void* address, u64 data, u32 num_bytes) {
-                    auto* memory = Core::Memory::Instance();
-                    ASSERT(memory->TryWriteBacking(address, &data, num_bytes));
+                event_eos->SignalFence([this](void* address, u64 data, u32 num_bytes) {
+                    ASSERT(memory.TryWriteBacking(address, &data, num_bytes));
                 });
                 if (event_eos->command == PM4CmdEventWriteEos::Command::GdsStore) {
                     ASSERT(event_eos->size == 1);
@@ -631,9 +630,8 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
             case PM4ItOpcode::EventWriteEop: {
                 const auto* event_eop = reinterpret_cast<const PM4CmdEventWriteEop*>(header);
                 event_eop->SignalFence(
-                    [](void* address, u64 data, u32 num_bytes) {
-                        auto* memory = Core::Memory::Instance();
-                        ASSERT(memory->TryWriteBacking(address, &data, num_bytes));
+                    [this](void* address, u64 data, u32 num_bytes) {
+                        ASSERT(memory.TryWriteBacking(address, &data, num_bytes));
                     },
                     [] { Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxEop); });
                 break;
@@ -793,8 +791,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                     break;
                 case SourceSelect::SrcAddress: {
                     const VAddr src_addr = strmout->SrcAddress<VAddr>();
-                    auto* memory = Core::Memory::Instance();
-                    if (src_addr && memory && memory->IsValidMapping(src_addr, sizeof(offset))) {
+                    if (src_addr && memory.IsValidMapping(src_addr, sizeof(offset))) {
                         std::memcpy(&offset, reinterpret_cast<const void*>(src_addr),
                                     sizeof(offset));
                     }
@@ -808,8 +805,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                 }
                 if (strmout->update_memory.Value()) {
                     const VAddr dst_addr = strmout->DstAddress<VAddr>();
-                    auto* memory = Core::Memory::Instance();
-                    if (dst_addr && memory && memory->IsValidMapping(dst_addr, sizeof(offset))) {
+                    if (dst_addr && memory.IsValidMapping(dst_addr, sizeof(offset))) {
                         std::memcpy(reinterpret_cast<void*>(dst_addr),
                                     &vgt_strmout_buffer_filled_size[buf_idx], sizeof(offset));
                     }

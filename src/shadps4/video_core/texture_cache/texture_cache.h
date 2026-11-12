@@ -30,6 +30,10 @@ namespace AmdGpu {
 struct Liverpool;
 }
 
+namespace Core {
+class MemoryManager;
+}
+
 namespace Vulkan {
 class Runtime;
 }
@@ -113,7 +117,7 @@ public:
 public:
     TextureCache(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler,
                  Vulkan::Runtime& runtime, AmdGpu::Liverpool* liverpool, BufferCache& buffer_cache,
-                 PageManager& page_manager);
+                 PageManager& page_manager, Core::MemoryManager& memory);
     ~TextureCache();
 
     TileManager& GetTileManager() noexcept {
@@ -404,6 +408,7 @@ private:
     AmdGpu::Liverpool* liverpool;
     BufferCache& buffer_cache;
     PageManager& page_manager;
+    Core::MemoryManager& memory;
     PageTable page_table;
     Common::SlotVector<Image> slot_images;
     Common::SlotVector<ImageView> slot_image_views;

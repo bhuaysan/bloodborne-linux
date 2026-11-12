@@ -60,7 +60,8 @@ class BufferCache {
 public:
     explicit BufferCache(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler,
                          Vulkan::Runtime& runtime, AmdGpu::Liverpool* liverpool,
-                         TextureCache& texture_cache, PageManager& tracker);
+                         TextureCache& texture_cache, PageManager& tracker,
+                         Core::MemoryManager& memory);
     ~BufferCache();
 
     /// Returns a pointer to GDS device local buffer.
@@ -158,7 +159,7 @@ private:
     Vulkan::Runtime& runtime;
     Vulkan::StagingBufferPool& staging_pool;
     AmdGpu::Liverpool* liverpool;
-    Core::MemoryManager* memory;
+    Core::MemoryManager& memory;
     TextureCache& texture_cache;
     std::unique_ptr<MemoryTracker> memory_tracker;
 

@@ -29,8 +29,8 @@ bool contains_ignoring_case(std::string_view text, std::string_view part) {
 
 }  // namespace
 
-VideoCorePresenter::VideoCorePresenter(Frontend::WindowSDL* window)
-    : liverpool_(std::make_unique<AmdGpu::Liverpool>()),
+VideoCorePresenter::VideoCorePresenter(Frontend::WindowSDL* window, Core::MemoryManager& memory)
+    : liverpool_(std::make_unique<AmdGpu::Liverpool>(memory)),
       presenter_(window != nullptr
                      ? std::make_unique<Vulkan::Presenter>(*window, liverpool_.get())
                      : nullptr) {}

@@ -24,6 +24,10 @@
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/amdgpu/regs.h"
 
+namespace Core {
+class MemoryManager;
+}
+
 namespace Vulkan {
 class Rasterizer;
 }
@@ -69,7 +73,7 @@ struct Liverpool {
     CbDbExtent last_db_extent{};
 
 public:
-    explicit Liverpool();
+    explicit Liverpool(Core::MemoryManager& memory);
     ~Liverpool();
 
     void SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb);
@@ -92,6 +96,11 @@ public:
 
     void SetVoPort(Libraries::VideoOut::VideoOutPort* port) {
         vo_port = port;
+    }
+
+    // The guest memory this Liverpool and its rasterizer work on, owned by the caller.
+    [[nodiscard]] Core::MemoryManager& GetMemory() const noexcept {
+        return memory;
     }
 
     void BindRasterizer(Vulkan::Rasterizer* rasterizer_) {
@@ -204,6 +213,7 @@ private:
         static std::array<u8, 48_KB> constants_heap;
     } cblock{};
 
+    Core::MemoryManager& memory;
     Vulkan::Rasterizer* rasterizer{};
     Libraries::VideoOut::VideoOutPort* vo_port{};
     std::jthread process_thread{};

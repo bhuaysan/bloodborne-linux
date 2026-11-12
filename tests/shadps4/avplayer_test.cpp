@@ -28,6 +28,8 @@ extern "C" {
 
 #include "common/logging/log.h"
 #include "core/libraries/avplayer/avplayer.h"
+#include "core/libraries/libs.h"
+#include "core/memory.h"
 #include "hle/kernel/paths.hpp"
 #include "hle/kernel/thread.hpp"
 #include "support/game.hpp"
@@ -162,6 +164,11 @@ TEST(AvPlayerGame, OpeningMovieFramesMatchFfmpeg) {
         Common::Log::Level::Warning;  // Info is very noisy
     // The game opens its files under /app0/dvdroot_ps4, in the dump.
     bb::hle::kernel::path_map().mount_game(game);
+
+    // The library invalidates the GPU caches of the frames it writes, in this guest memory.
+    Core::MemoryManager memory;
+    Core::Loader::SymbolsResolver symbols;
+    RegisterLib(&symbols, memory);
 
     AvPlayerInitData init{};
     init.memory_replacement = {nullptr, allocate, deallocate, allocate, deallocate};

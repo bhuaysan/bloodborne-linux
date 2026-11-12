@@ -12,6 +12,10 @@
 #include "common/types.h"
 #include "video_core/buffer_cache/region_definitions.h"
 
+namespace Core {
+class MemoryManager;
+}
+
 namespace Vulkan {
 class Rasterizer;
 }
@@ -31,7 +35,7 @@ class PageManager {
     static constexpr size_t PM_PAGE_SIZE = 1ULL << PM_PAGE_BITS;
 
 public:
-    explicit PageManager(Vulkan::Rasterizer* rasterizer);
+    explicit PageManager(Vulkan::Rasterizer* rasterizer, Core::MemoryManager& memory);
     ~PageManager();
 
     /// Register a range of mapped gpu memory.

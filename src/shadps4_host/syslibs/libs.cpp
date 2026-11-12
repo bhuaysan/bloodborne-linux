@@ -32,7 +32,7 @@ void LinkSymbolImpl(Core::Loader::SymbolsResolver*, const char* nid, const char*
 
 namespace Libraries {
 
-void InitHLELibs(Core::Loader::SymbolsResolver* sym) {
+void InitHLELibs(Core::Loader::SymbolsResolver* sym, Core::MemoryManager& memory) {
     // Upstream's window starts these before the libraries register: Pad looks for gamepads in
     // its RegisterLib, AudioOut opens devices on sceAudioOutOpen. A failure leaves the game
     // without sound or pads, not without a start. SDL would turn SIGINT and SIGTERM into a quit
@@ -58,8 +58,8 @@ void InitHLELibs(Core::Loader::SymbolsResolver* sym) {
     Pad::RegisterLib(sym);
     AudioOut::RegisterLib(sym);
     Ajm::RegisterLib(sym);
-    AvPlayer::RegisterLib(sym);
-    ImeDialog::RegisterLib(sym);
+    AvPlayer::RegisterLib(sym, memory);
+    ImeDialog::RegisterLib(sym, memory);
     CommonDialog::RegisterLib(sym);
 }
 

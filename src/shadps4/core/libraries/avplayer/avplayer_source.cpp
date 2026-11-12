@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/avplayer/avplayer_source.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/alignment.h"
@@ -50,7 +50,8 @@ static bool IsStreamSupported(AVStream* stream) {
            codec_id == AV_CODEC_ID_AAC;
 }
 
-AvPlayerSource::AvPlayerSource(AvPlayerStateCallback& state) : m_state(state) {}
+AvPlayerSource::AvPlayerSource(AvPlayerStateCallback& state, Core::MemoryManager& memory)
+    : m_memory(memory), m_state(state) {}
 
 AvPlayerSource::~AvPlayerSource() {
     Stop();
@@ -691,8 +692,7 @@ Frame AvPlayerSource::PrepareVideoFrame(GuestBuffer buffer, const AVFrame& frame
     const auto width = Common::AlignUp<u32>(frame.width, 16);
     const auto pitch = Common::AlignUp<u32>(frame.width, 64);
     const auto height = Common::AlignUp<u32>(frame.height, 16);
-    Core::Memory::Instance()->InvalidateMemory(reinterpret_cast<VAddr>(p_buffer),
-                                               (width * height * 3) / 2);
+    m_memory.InvalidateMemory(reinterpret_cast<VAddr>(p_buffer), (width * height * 3) / 2);
 
     return Frame{
         .buffer = std::move(buffer),

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/avplayer/avplayer_state.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/elf_info.h"
@@ -100,8 +100,8 @@ void AvPlayerState::DefaultEventCallback(void* opaque, AvPlayerEvents event_id, 
 }
 
 // Called inside GAME thread
-AvPlayerState::AvPlayerState(const AvPlayerInitData& init_data)
-    : m_init_data(init_data), m_event_replacement(init_data.event_replacement) {
+AvPlayerState::AvPlayerState(const AvPlayerInitData& init_data, Core::MemoryManager& memory)
+    : m_memory(memory), m_init_data(init_data), m_event_replacement(init_data.event_replacement) {
     if (m_event_replacement.event_callback == nullptr || init_data.auto_start) {
         m_auto_start = true;
         m_init_data.event_replacement.event_callback = &AvPlayerState::AutoPlayEventCallback;
@@ -145,7 +145,7 @@ bool AvPlayerState::AddSource(std::string_view path, AvPlayerSourceType source_t
 
         s32 sdk_ver{};
         Libraries::Kernel::sceKernelGetCompiledSdkVersion(&sdk_ver);
-        m_up_source = std::make_unique<AvPlayerSource>(*this);
+        m_up_source = std::make_unique<AvPlayerSource>(*this, m_memory);
         if (!m_up_source->Init(m_init_data, path)) {
             SetState(AvState::Error);
             m_up_source.reset();

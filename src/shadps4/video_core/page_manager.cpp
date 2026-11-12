@@ -237,7 +237,8 @@ struct PageManager::Impl {
 };
 
 struct SignalImpl : public PageManager::Impl {
-    SignalImpl(Vulkan::Rasterizer* rasterizer_) : Impl() {
+    SignalImpl(Vulkan::Rasterizer* rasterizer_, Core::MemoryManager& memory_)
+        : Impl(), memory{memory_} {
         rasterizer = rasterizer_;
 
         // Should be called first.
@@ -248,8 +249,7 @@ struct SignalImpl : public PageManager::Impl {
 
     void Protect(VAddr address, size_t size, Core::MemoryPermission perms) override {
         RENDERER_TRACE;
-        auto* memory = Core::Memory::Instance();
-        auto& impl = memory->GetAddressSpace();
+        auto& impl = memory.GetAddressSpace();
         ASSERT_MSG(perms != Core::MemoryPermission::Write,
                    "Attempted to protect region as write-only which is not a valid permission");
         impl.Protect(address, size, perms);
@@ -264,11 +264,13 @@ struct SignalImpl : public PageManager::Impl {
         const auto size = std::min<u64>(8, PageManager::GetNextPageAddr(addr) - addr);
         return rasterizer->InvalidateMemory(addr, size);
     }
+
+    Core::MemoryManager& memory;
 };
 
-PageManager::PageManager(Vulkan::Rasterizer* rasterizer_) {
+PageManager::PageManager(Vulkan::Rasterizer* rasterizer_, Core::MemoryManager& memory) {
     LOG_INFO(Config, "Memory tracking method: signals");
-    impl = std::make_unique<SignalImpl>(rasterizer_);
+    impl = std::make_unique<SignalImpl>(rasterizer_, memory);
 }
 
 PageManager::~PageManager() = default;

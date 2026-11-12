@@ -46,7 +46,8 @@ std::uintptr_t addr(const void* p) {
 }
 
 Core::MemoryManager& memory() {
-    return *Core::Memory::Instance();
+    static Core::MemoryManager manager;  // created on first use, which is before any mapping
+    return manager;
 }
 
 // The backing entry of the page that holds `address`, or null.
@@ -307,7 +308,7 @@ TEST(GuestMemory, TheRasterizerFollowsTheMappings) {
     if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
         GTEST_SKIP() << reason;
     }
-    auto liverpool = std::make_unique<AmdGpu::Liverpool>();
+    auto liverpool = std::make_unique<AmdGpu::Liverpool>(memory());
     Frontend::WindowSDL window;
     {
         Vulkan::Instance instance{window, -1};
@@ -366,7 +367,7 @@ TEST(GuestMemory, GuestWritesToTrackedPagesAreClaimed) {
         GTEST_SKIP() << reason;
     }
     bb::shadps4::install_fault_handler();
-    auto liverpool = std::make_unique<AmdGpu::Liverpool>();
+    auto liverpool = std::make_unique<AmdGpu::Liverpool>(memory());
     Frontend::WindowSDL window;
     {
         Vulkan::Instance instance{window, -1};

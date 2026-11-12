@@ -84,7 +84,8 @@ constexpr std::size_t main_stack_size =
     (std::size_t{16} << 20) + bb::hle::kernel::thread_stack_reserve;
 
 #ifdef BB_HAVE_VIDEO_CORE
-// video_core's guest memory. Set once before the game starts, never destroyed.
+// video_core's guest memory, owned by start(). Created before the game starts, never destroyed:
+// the run ends in end_run, which skips static destructors, as the GPU thread and the game do.
 Core::MemoryManager* guest_memory = nullptr;
 #endif
 
@@ -209,7 +210,8 @@ void open_display(const std::string& device_selector) {
         end_run(2);
     }
     bb::shader::set_gpu_id(*gpu_id);
-    d->presenter = std::make_unique<bb::hle::video::VideoCorePresenter>(d->window.get());
+    d->presenter = std::make_unique<bb::hle::video::VideoCorePresenter>(d->window.get(),
+                                                                         *guest_memory);
     display = d.release();
 }
 
@@ -219,7 +221,7 @@ bb::hle::video::VideoCorePresenter* video_core() {
     if (display != nullptr) {
         return display->presenter.get();
     }
-    static auto* const headless = new bb::hle::video::VideoCorePresenter(nullptr);
+    static auto* const headless = new bb::hle::video::VideoCorePresenter(nullptr, *guest_memory);
     return headless;
 }
 
@@ -325,12 +327,12 @@ int start(const bb::tools::RunOptions& options) {
 #ifdef BB_HAVE_VIDEO_CORE
     // video_core's guest memory follows the kernel's mappings from the first one on. Its write
     // tracking needs the fault handler (docs/design/renderer.md).
-    guest_memory = Core::Memory::Instance();
+    guest_memory = new Core::MemoryManager;
     bb::shadps4::install_fault_handler();
     // The imported system libraries (docs/design/os-libraries.md), before the imports are linked.
     // A NID that src/hle registers too throws here.
     Core::Loader::SymbolsResolver symbols;
-    Libraries::InitHLELibs(&symbols);
+    Libraries::InitHLELibs(&symbols, *guest_memory);
 #endif
     // Never destroyed: the game runs in it until the process ends.
     auto* game = new Game{bb::loader::map_load_set(*game_dir)};

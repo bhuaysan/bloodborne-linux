@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/ime/ime_dialog_ui.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -14,6 +14,10 @@
 #include "core/libraries/ime/ime_dialog.h"
 #include "core/libraries/ime/ime_kb_layout.h"
 #include "imgui/imgui_layer.h"
+
+namespace Core {
+class MemoryManager;
+}
 
 namespace Libraries::ImeDialog {
 
@@ -61,6 +65,9 @@ class ImeDialogState final {
     // A character can hold up to 4 bytes in UTF-8
     Common::CString<ORBIS_IME_DIALOG_MAX_TEXT_LENGTH * 4 + 1> current_text;
 
+    // Where the game's text buffer is checked, null until a dialog opens.
+    Core::MemoryManager* memory{};
+
 public:
     /*
      * Use default constructor ImeDialogState() to initialize default values instead of
@@ -69,7 +76,8 @@ public:
      */
     ImeDialogState();
     ImeDialogState(const OrbisImeDialogParam* param /*= nullptr*/,
-                   const OrbisImeParamExtended* extended /*= nullptr*/);
+                   const OrbisImeParamExtended* extended /*= nullptr*/,
+                   Core::MemoryManager* memory = nullptr);
     ImeDialogState(const ImeDialogState& other) = delete;
     ImeDialogState(ImeDialogState&& other) noexcept;
     ImeDialogState& operator=(ImeDialogState&& other);

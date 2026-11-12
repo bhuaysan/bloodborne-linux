@@ -19,6 +19,9 @@
 namespace AmdGpu {
 class Liverpool;
 }
+namespace Core {
+class MemoryManager;
+}
 namespace Frontend {
 class WindowSDL;
 enum class WindowSystemType : std::uint8_t;
@@ -33,7 +36,7 @@ class VideoCorePresenter final : public FlipPresenter, public CommandProcessor {
 public:
     // Creates Liverpool and, with a `window`, the Presenter on it, on the Vulkan device of
     // GetGpuId(). Fails as upstream does (an assertion) when Vulkan can't.
-    explicit VideoCorePresenter(Frontend::WindowSDL* window);
+    VideoCorePresenter(Frontend::WindowSDL* window, Core::MemoryManager& memory);
     ~VideoCorePresenter() override;
 
     void set_vo_port(VideoOutPort* port) override;

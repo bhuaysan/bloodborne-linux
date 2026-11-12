@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/avplayer/avplayer_impl.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include "core/libraries/avplayer/avplayer_common.h"
@@ -94,9 +94,9 @@ AvPlayerInitData AvPlayer::StubInitData(const AvPlayerInitData& data) {
     return result;
 }
 
-AvPlayer::AvPlayer(const AvPlayerInitData& data)
+AvPlayer::AvPlayer(const AvPlayerInitData& data, Core::MemoryManager& memory)
     : m_init_data(StubInitData(data)), m_init_data_original(data),
-      m_state(std::make_unique<AvPlayerState>(m_init_data)) {}
+      m_state(std::make_unique<AvPlayerState>(m_init_data, memory)) {}
 
 s32 AvPlayer::PostInit(const AvPlayerPostInitData& data) {
     m_state->PostInit(data);

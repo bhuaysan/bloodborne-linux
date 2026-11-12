@@ -69,10 +69,11 @@ std::optional<u32> FindMemoryType(const vk::PhysicalDeviceMemoryProperties& prop
 
 BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& scheduler_,
                          Vulkan::Runtime& runtime_, AmdGpu::Liverpool* liverpool_,
-                         TextureCache& texture_cache_, PageManager& tracker)
+                         TextureCache& texture_cache_, PageManager& tracker,
+                         Core::MemoryManager& memory_)
     : instance{instance_}, scheduler{scheduler_}, runtime{runtime_},
       staging_pool{runtime_.GetStagingPool()}, liverpool{liverpool_},
-      memory{Core::Memory::Instance()}, texture_cache{texture_cache_},
+      memory{memory_}, texture_cache{texture_cache_},
       memory_tracker{std::make_unique<MemoryTracker>(tracker)},
       stream_buffer{instance, scheduler, MemoryType::Stream, STREAM_BUFFER_SIZE},
       gds_buffer{instance, 0, GDS_BUFFER_SIZE, MemoryType::Stream, "GDS Buffer"},
@@ -190,7 +191,7 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
         download.Invalidate();
         for (const auto& copy : copies) {
             auto* dst_addr = std::bit_cast<u8*>(arena_base + copy.srcOffset);
-            memory->TryWriteBacking(dst_addr, download.mapped + (copy.dstOffset - download.offset),
+            memory.TryWriteBacking(dst_addr, download.mapped + (copy.dstOffset - download.offset),
                                     copy.size);
         }
         memory_tracker->UnmarkRegionAsGpuModified(device_addr, size, false);
@@ -217,7 +218,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     if (!is_written && !skip_stream_buffer && size <= STREAM_THRESHOLD &&
         !IsRegionGpuModified(device_addr, size)) {
         const auto [data, offset] = stream_buffer.Map(size, instance.UniformMinAlignment());
-        memory->CopySparseMemory(device_addr, data, size);
+        memory.CopySparseMemory(device_addr, data, size);
         stream_buffer.Commit();
         return {&stream_buffer, offset};
     }
@@ -241,7 +242,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBufferForImage(VAddr device_add
     }
     const auto staging = staging_pool.Request(size, VideoCore::MemoryType::HostUncached,
                                               instance.StorageMinAlignment());
-    memory->CopySparseMemory(device_addr, staging.mapped, staging.size);
+    memory.CopySparseMemory(device_addr, staging.mapped, staging.size);
     staging.Flush();
     return {staging.buffer, staging.offset};
 }
@@ -302,11 +303,10 @@ void BufferCache::ReadEdgeImagePages(const Image& image) {
     scheduler.DeferOperation(
         [this, base = buffer->CpuAddr(), download, copies = std::move(copies)]() {
             download.Invalidate();
-            auto* memory = Core::Memory::Instance();
             for (const auto& copy : copies) {
                 const VAddr copy_device_addr = base + copy.srcOffset;
                 const u64 dst_offset = copy.dstOffset - download.offset;
-                memory->TryWriteBacking(std::bit_cast<u8*>(copy_device_addr),
+                memory.TryWriteBacking(std::bit_cast<u8*>(copy_device_addr),
                                         download.mapped + dst_offset, copy.size);
             }
             staging_pool.FreeDeferred(download);
@@ -454,7 +454,7 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
     if (!copies.empty()) {
         const auto staging = staging_pool.Request(total_size_bytes, MemoryType::HostUncached);
         for (auto& copy : copies) {
-            memory->CopySparseMemory(copy.dstOffset, staging.mapped + copy.srcOffset, copy.size);
+            memory.CopySparseMemory(copy.dstOffset, staging.mapped + copy.srcOffset, copy.size);
             copy.srcOffset += staging.offset;
             copy.dstOffset -= arena->cpu_addr;
         }

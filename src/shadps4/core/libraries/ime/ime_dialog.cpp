@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/ime/ime_dialog.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include <array>
@@ -22,6 +22,8 @@ static constexpr std::array<float, 2> MAX_Y_POSITIONS = {2160.0f, 1080.0f};
 
 namespace Libraries::ImeDialog {
 
+// Where the guest's text buffer is checked (RegisterLib).
+static Core::MemoryManager* g_memory = nullptr;
 static OrbisImeDialogStatus g_ime_dlg_status = OrbisImeDialogStatus::None;
 static OrbisImeDialogResult g_ime_dlg_result{};
 static ImeDialogState g_ime_dlg_state{};
@@ -1035,7 +1037,7 @@ static Error SetupDialogState(OrbisImeDialogParam* param, OrbisImeParamExtended*
         g_ime_dlg_has_extended = false;
     }
 
-    g_ime_dlg_state = ImeDialogState(&g_ime_dlg_param, ext_ptr);
+    g_ime_dlg_state = ImeDialogState(&g_ime_dlg_param, ext_ptr, g_memory);
     g_ime_dlg_status = OrbisImeDialogStatus::Running;
     if (g_ime_dlg_client) {
         g_ime_dlg_client->dialog_state = 4;
@@ -1361,7 +1363,8 @@ Error PS4_SYSV_ABI sceImeDialogTerm() {
     return Error::OK;
 }
 
-void RegisterLib(Core::Loader::SymbolsResolver* sym) {
+void RegisterLib(Core::Loader::SymbolsResolver* sym, Core::MemoryManager& memory) {
+    g_memory = &memory;
     LIB_FUNCTION("oBmw4xrmfKs", "libSceImeDialog", 1, "libSceImeDialog", sceImeDialogAbort);
     LIB_FUNCTION("bX4H+sxPI-o", "libSceImeDialog", 1, "libSceImeDialog", sceImeDialogForceClose);
     LIB_FUNCTION("UFcyYDf+e88", "libSceImeDialog", 1, "libSceImeDialog",

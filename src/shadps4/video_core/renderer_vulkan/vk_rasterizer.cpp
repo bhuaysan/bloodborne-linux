@@ -37,13 +37,16 @@ static Shader::PushData MakeUserData(const AmdGpu::Regs& regs) {
 
 Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime& runtime_,
                        AmdGpu::Liverpool* liverpool_)
-    : instance{instance_}, scheduler{scheduler_}, runtime{runtime_}, page_manager{this},
-      buffer_cache{instance, scheduler, runtime, liverpool_, texture_cache, page_manager},
-      texture_cache{instance, scheduler, runtime, liverpool_, buffer_cache, page_manager},
-      liverpool{liverpool_}, memory{Core::Memory::Instance()},
+    : instance{instance_}, scheduler{scheduler_}, runtime{runtime_},
+      page_manager{this, liverpool_->GetMemory()},
+      buffer_cache{instance, scheduler, runtime, liverpool_, texture_cache, page_manager,
+                    liverpool_->GetMemory()},
+      texture_cache{instance, scheduler, runtime, liverpool_, buffer_cache, page_manager,
+                    liverpool_->GetMemory()},
+      liverpool{liverpool_}, memory{liverpool_->GetMemory()},
       pipeline_cache{instance, scheduler, liverpool, buffer_cache.GetSparsePageShift()} {
     liverpool->BindRasterizer(this);
-    memory->SetRasterizer(this);
+    memory.SetRasterizer(this);
 
     scheduler.SetSubmitCallback([this](Vulkan::SubmitInfo& info) {
         runtime.FlushBarriers();
@@ -487,7 +490,7 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
 
     // Map buffers for merged ranges
     for (auto& range : ranges_merged) {
-        const u64 size = memory->ClampRangeSize(range.base_address, range.GetSize());
+        const u64 size = memory.ClampRangeSize(range.base_address, range.GetSize());
         std::tie(range.buffer, range.offset) = buffer_cache.ObtainBuffer(range.base_address, size);
         needs_barrier |= runtime.IsBufferAccessed(range.buffer, range.offset, size);
         bound_buffers.emplace_back(range.buffer, range.offset, size,
@@ -543,7 +546,7 @@ void Rasterizer::BindIndexBuffer(u32 index_offset, bool is_indirect) {
         is_indirect ? regs.max_index_size : std::min(regs.num_indices, regs.max_index_size);
     const u64 requested_size = u64(num_indices) * index_size;
     const u64 mapped_size =
-        base_address != 0 ? memory->ClampRangeSize(index_address, requested_size) : 0;
+        base_address != 0 ? memory.ClampRangeSize(index_address, requested_size) : 0;
     u32 index_buffer_size = static_cast<u32>(Common::AlignDown(mapped_size, index_size));
     vk::Buffer index_buffer{};
     u64 buffer_offset{};
@@ -802,7 +805,7 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             if (vsharp.base_address == 0 || vsharp.GetSize() == 0) {
                 buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
             } else {
-                const u64 size = memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize());
+                const u64 size = memory.ClampRangeSize(vsharp.base_address, vsharp.GetSize());
                 if (size != vsharp.GetSize()) {
                     LOG_ERROR(Render, "Clamped size from {} to {} for stage {:#x}",
                               vsharp.GetSize(), size, stage.pgm_hash);
@@ -860,7 +863,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             continue;
         }
 
-        if (!memory->IsValidGpuMapping(tsharp.Address(), 0) ||
+        if (!memory.IsValidGpuMapping(tsharp.Address(), 0) ||
             !magic_enum::enum_contains(data_fmt) || !magic_enum::enum_contains(num_fmt)) {
             LOG_WARNING(Render_Vulkan,
                         "Rejecting invalid T# address={:#x}, pitch={}, width={}, "

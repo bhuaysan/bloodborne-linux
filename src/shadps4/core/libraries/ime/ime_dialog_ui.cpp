@@ -59,11 +59,10 @@ using Libraries::Ime::Utf16CountFromUtf8Range;
 using Libraries::Ime::Utf8ByteIndexFromUtf16Index;
 using Libraries::Ime::VirtualPadSnapshot;
 
-bool IsMappedGuestBuffer(const void* ptr, size_t bytes) {
+bool IsMappedGuestBuffer(::Core::MemoryManager* memory, const void* ptr, size_t bytes) {
     if (!ptr || bytes == 0) {
         return false;
     }
-    auto* memory = ::Core::Memory::Instance();
     if (!memory) {
         return false;
     }
@@ -93,7 +92,9 @@ ImeDialogState::ImeDialogState()
       title(), placeholder(), current_text() {}
 
 ImeDialogState::ImeDialogState(const OrbisImeDialogParam* param,
-                               const OrbisImeParamExtended* extended) {
+                               const OrbisImeParamExtended* extended,
+                               ::Core::MemoryManager* memory_)
+    : memory(memory_) {
     LOG_INFO(Lib_ImeDialog, "param={}, text_buffer={}", static_cast<const void*>(param),
              static_cast<void*>(param ? param->input_text_buffer : nullptr));
     if (!param) {
@@ -157,7 +158,7 @@ ImeDialogState::ImeDialogState(const OrbisImeDialogParam* param,
     std::size_t text_len = 0;
     if (text_buffer) {
         const size_t bytes = (static_cast<size_t>(max_text_length) + 1) * sizeof(char16_t);
-        if (IsMappedGuestBuffer(text_buffer, bytes)) {
+        if (IsMappedGuestBuffer(memory, text_buffer, bytes)) {
             text_len = BoundedUtf16Length(text_buffer, max_text_length);
         } else {
             LOG_ERROR(Lib_ImeDialog, "ImeDialogState: input_text_buffer not mapped");
@@ -205,7 +206,8 @@ ImeDialogState::ImeDialogState(ImeDialogState&& other) noexcept
       text_filter(other.text_filter), keyboard_filter(other.keyboard_filter),
       max_text_length(other.max_text_length), text_buffer(other.text_buffer),
       original_text(std::move(other.original_text)), title(std::move(other.title)),
-      placeholder(std::move(other.placeholder)), current_text(other.current_text) {
+      placeholder(std::move(other.placeholder)), current_text(other.current_text),
+      memory(other.memory) {
 
     other.text_buffer = nullptr;
 }
@@ -240,6 +242,7 @@ ImeDialogState& ImeDialogState::operator=(ImeDialogState&& other) {
         title = std::move(other.title);
         placeholder = std::move(other.placeholder);
         current_text = other.current_text;
+        memory = other.memory;
 
         other.text_buffer = nullptr;
     }

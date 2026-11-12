@@ -33,12 +33,16 @@ void LinkSymbolImpl(Core::Loader::SymbolsResolver* sym, const char* nid, const c
     LinkSymbolImpl(sym, nid, lib, libversion, mod, reinterpret_cast<u64>(obj),                \
                    Core::Loader::SymbolType::Object)
 
+namespace Core {
+class MemoryManager;
+}
+
 namespace Libraries {
 
 // Registers Pad, AudioOut, Ajm, AvPlayer, ImeDialog and CommonDialog, after starting the SDL
 // subsystems they use (audio, gamepads). Call once, before the game's imports are linked
 // (bb::hle::link); throws std::logic_error for a NID that is registered already.
-void InitHLELibs(Core::Loader::SymbolsResolver* sym);
+void InitHLELibs(Core::Loader::SymbolsResolver* sym, Core::MemoryManager& memory);
 
 // The number of (library, NID) pairs LinkSymbolImpl has registered so far. The test checks it
 // against the libraries' LIB_FUNCTION lines, so a RegisterLib that drops functions shows.

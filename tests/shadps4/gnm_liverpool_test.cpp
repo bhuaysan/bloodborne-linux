@@ -40,9 +40,16 @@ bool eventually(auto&& done) {
     return true;
 }
 
+// The tests' guest memory: it follows the kernel's mappings from its first use on, and outlives
+// the Liverpool below, which is created after it.
+Core::MemoryManager& guest_memory() {
+    static Core::MemoryManager memory;
+    return memory;
+}
+
 // A page of flexible memory, which video_core's guest memory backs.
 std::uint32_t* guest_page() {
-    Core::Memory::Instance();  // guest memory follows the kernel's mappings from here on
+    guest_memory();
     void* page = nullptr;
     EXPECT_EQ(bb::hle::kernel::map_anonymous(&page, bb::hle::kernel::vmem::page_size, 3, 0), 0);
     return static_cast<std::uint32_t*>(page);
@@ -50,7 +57,7 @@ std::uint32_t* guest_page() {
 
 // One Liverpool for the tests: its GPU thread may still run after a test.
 VideoCorePresenter& liverpool() {
-    static VideoCorePresenter gpu(nullptr);
+    static VideoCorePresenter gpu(nullptr, guest_memory());
     return gpu;
 }
 

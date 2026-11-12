@@ -33,6 +33,7 @@
 #include "core/libraries/libs.h"
 #include "core/libraries/pad/pad.h"
 #include "core/libraries/pad_input.h"
+#include "core/memory.h"
 #include "core/libraries/system/commondialog.h"
 #include "common/singleton.h"
 #include "core/user_settings.h"
@@ -50,6 +51,12 @@ AvPlayerHandle PS4_SYSV_ABI sceAvPlayerInit(AvPlayerInitData* data);
 
 namespace {
 
+// The libraries' guest memory, for the whole process.
+Core::MemoryManager& guest_memory() {
+    static Core::MemoryManager memory;
+    return memory;
+}
+
 // Registers the libraries once per process: the registry is global and a second call throws.
 void init_once() {
     static std::once_flag once;
@@ -58,7 +65,7 @@ void init_once() {
         // Real gamepads on the machine would take the one pad slot the port has a user for.
         ::setenv("SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT", "0x1234/0x5678", 1);
         Core::Loader::SymbolsResolver symbols;
-        Libraries::InitHLELibs(&symbols);
+        Libraries::InitHLELibs(&symbols, guest_memory());
     });
 }
 
@@ -109,7 +116,7 @@ TEST(SysLibsRegistration, ANidRegisteredTwiceFails) {
                                 Core::Loader::SymbolType::Function),
                  std::logic_error);
     // Every NID of the libraries is taken now, so a second registration fails at the first.
-    EXPECT_THROW(Libraries::InitHLELibs(&symbols), std::logic_error);
+    EXPECT_THROW(Libraries::InitHLELibs(&symbols, guest_memory()), std::logic_error);
 }
 
 TEST(SysLibsHost, ThreadRunsOnAGuestThreadAndStops) {

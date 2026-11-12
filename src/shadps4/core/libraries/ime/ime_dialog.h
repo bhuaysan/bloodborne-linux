@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/ime/ime_dialog.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -9,6 +9,10 @@
 #include "common/enum.h"
 #include "common/types.h"
 #include "ime_common.h"
+
+namespace Core {
+class MemoryManager;
+}
 
 namespace Core::Loader {
 class SymbolsResolver;
@@ -54,5 +58,5 @@ int PS4_SYSV_ABI sceImeDialogInitInternal3(int* param_1, u32* param_2, u32 param
 int PS4_SYSV_ABI sceImeDialogSetPanelPosition(s32 posx, s32 posy);
 Error PS4_SYSV_ABI sceImeDialogTerm();
 
-void RegisterLib(Core::Loader::SymbolsResolver* sym);
+void RegisterLib(Core::Loader::SymbolsResolver* sym, Core::MemoryManager& memory);
 } // namespace Libraries::ImeDialog

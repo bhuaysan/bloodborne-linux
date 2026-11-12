@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/memory.h, src/core/address_space.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-11: only the parts video_core and AvPlayer use, on top of
+// Changed for bloodborne-linux, 2026-11-12: only the parts video_core and AvPlayer use, on top of
 // our kernel's vmem and dmem (memory.cpp) instead of upstream's address space and memory map
 // (docs/design/renderer.md, "One backing for every page the GPU can see").
 // License texts: third_party/shadps4/LICENSES/
@@ -13,7 +13,6 @@
 
 #include "common/enum.h"
 #include "common/multi_level_page_table.h"
-#include "common/singleton.h"
 #include "common/types.h"
 
 namespace Vulkan {
@@ -124,7 +123,5 @@ private:
     std::atomic<Vulkan::Rasterizer*> rasterizer{};
     std::unique_ptr<Observer> observer;
 };
-
-using Memory = Common::Singleton<MemoryManager>;
 
 }  // namespace Core
