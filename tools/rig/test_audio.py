@@ -72,11 +72,6 @@ class AudioTests(unittest.TestCase):
             path.write_bytes(b"")
             self.assertEqual(audio.summary(path)["windows"], 0)
 
-    def test_ratio(self) -> None:
-        self.assertAlmostEqual(audio.ratio({"rms": 0.02}, {"rms": 0.04}), 0.5)
-        self.assertIsNone(audio.ratio({"rms": 0.02}, {"rms": 0.0}))
-        self.assertEqual(audio.ratio({"rms": 0.0}, {"rms": 1.0}), 0.0)
-
 
 if __name__ == "__main__":
     unittest.main()

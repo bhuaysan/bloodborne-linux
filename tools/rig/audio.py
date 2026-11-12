@@ -65,11 +65,6 @@ def summary(path: Path, seconds: float | None = None) -> dict:
             "peak": round(peak, 4), "levels": levels}
 
 
-def ratio(ours: dict, reference: dict) -> float | None:
-    """Our RMS over the reference's, or None when the reference is silent."""
-    return ours["rms"] / reference["rms"] if reference["rms"] > 0 else None
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
