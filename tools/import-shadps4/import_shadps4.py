@@ -20,6 +20,9 @@ Usage: import_shadps4.py --cache DIR --write    regenerate the tree in this chec
        import_shadps4.py --cache DIR --check    compare the tree with a fresh generation
 
 DIR holds the fetched repositories and may be reused. It must be outside the tracked tree.
+
+Since R6 the files under src/shadps4/ are edited in place (docs/design/rewrite.md), so --check
+reproduces the tree of the import commits, not the current one.
 """
 
 from __future__ import annotations
