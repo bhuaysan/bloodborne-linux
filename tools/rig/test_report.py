@@ -59,6 +59,12 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(segments["a"]["frames"], 3)
         self.assertEqual(segments["b"]["frames"], 3)
 
+    def test_a_segment_without_presents_is_recorded_as_none(self) -> None:
+        frames = self.frames([10, 10, 10])
+        segments = report.segment_stats(frames, [(0, "a"), (10**9, "empty")])
+        self.assertEqual(sorted(segments), ["a", "empty"])
+        self.assertIsNone(segments["empty"])
+
     def test_read_frames_skips_a_cut_off_last_line(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "frames.csv"

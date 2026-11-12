@@ -141,11 +141,10 @@ def frame_stats(frames: list[Frame]) -> dict | None:
     }
 
 
-def segment_stats(frames: list[Frame], marks: list[tuple[int, str]]) -> dict[str, dict]:
-    """Frame statistics per named segment. A mark (ns, name) starts a segment."""
+def segment_stats(frames: list[Frame], marks: list[tuple[int, str]]) -> dict[str, dict | None]:
+    """Frame statistics per named segment, None for one with no presents. A mark (ns, name) starts
+    a segment."""
     result = {}
     for (start, name), (end, _) in zip(marks, [*marks[1:], (1 << 63, "")]):
-        stats = frame_stats([f for f in frames if start <= f.present_ns < end])
-        if stats:
-            result[name] = stats
+        result[name] = frame_stats([f for f in frames if start <= f.present_ns < end])
     return result
