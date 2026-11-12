@@ -5,30 +5,17 @@
 // License texts: third_party/shadps4/LICENSES/
 
 // Include the vulkan platform specific header
-#if defined(ANDROID)
-#define VK_USE_PLATFORM_ANDROID_KHR
-#elif defined(_WIN64)
-#define VK_USE_PLATFORM_WIN32_KHR
-#elif defined(__APPLE__)
-#define VK_USE_PLATFORM_METAL_EXT
-#else
 #define VK_USE_PLATFORM_WAYLAND_KHR
 #define VK_USE_PLATFORM_XLIB_KHR
-#endif
 
 #include <vector>
 #include <fmt/ranges.h>
 
 #include "common/assert.h"
 #include "common/logging/log.h"
-#include "common/path_util.h"
 #include "core/emulator_settings.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
-
-#ifdef __APPLE__
-#include <mach-o/dyld.h>
-#endif
 
 namespace Vulkan {
 
@@ -65,19 +52,6 @@ vk::SurfaceKHR CreateSurface(vk::Instance instance, const Frontend::WindowSDL& e
     const auto& window_info = emu_window.GetWindowInfo();
     vk::SurfaceKHR surface{};
 
-#if defined(VK_USE_PLATFORM_WIN32_KHR)
-    if (window_info.type == Frontend::WindowSystemType::Windows) {
-        const vk::Win32SurfaceCreateInfoKHR win32_ci = {
-            .hinstance = nullptr,
-            .hwnd = static_cast<HWND>(window_info.render_surface),
-        };
-
-        if (instance.createWin32SurfaceKHR(&win32_ci, nullptr, &surface) != vk::Result::eSuccess) {
-            LOG_CRITICAL(Render_Vulkan, "Failed to initialize Win32 surface");
-            UNREACHABLE();
-        }
-    }
-#elif defined(VK_USE_PLATFORM_XLIB_KHR) || defined(VK_USE_PLATFORM_WAYLAND_KHR)
     if (window_info.type == Frontend::WindowSystemType::X11) {
         const vk::XlibSurfaceCreateInfoKHR xlib_ci = {
             .dpy = static_cast<Display*>(window_info.display_connection),
@@ -100,18 +74,6 @@ vk::SurfaceKHR CreateSurface(vk::Instance instance, const Frontend::WindowSDL& e
             UNREACHABLE();
         }
     }
-#elif defined(VK_USE_PLATFORM_METAL_EXT)
-    if (window_info.type == Frontend::WindowSystemType::Metal) {
-        const vk::MetalSurfaceCreateInfoEXT macos_ci = {
-            .pLayer = static_cast<const CAMetalLayer*>(window_info.render_surface),
-        };
-
-        if (instance.createMetalSurfaceEXT(&macos_ci, nullptr, &surface) != vk::Result::eSuccess) {
-            LOG_CRITICAL(Render_Vulkan, "Failed to initialize MacOS surface");
-            UNREACHABLE();
-        }
-    }
-#endif
 
     if (!surface) {
         LOG_CRITICAL(Render_Vulkan, "Presentation not supported on this platform");
@@ -168,22 +130,12 @@ std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window
     switch (window_type) {
     case Frontend::WindowSystemType::Headless:
         break;
-#if defined(VK_USE_PLATFORM_WIN32_KHR)
-    case Frontend::WindowSystemType::Windows:
-        extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
-        break;
-#elif defined(VK_USE_PLATFORM_XLIB_KHR) || defined(VK_USE_PLATFORM_WAYLAND_KHR)
     case Frontend::WindowSystemType::X11:
         extensions.push_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
         break;
     case Frontend::WindowSystemType::Wayland:
         extensions.push_back(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
         break;
-#elif defined(VK_USE_PLATFORM_METAL_EXT)
-    case Frontend::WindowSystemType::Metal:
-        extensions.push_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
-        break;
-#endif
     default:
         LOG_ERROR(Render_Vulkan, "Presentation not supported on this platform");
         break;
@@ -250,18 +202,6 @@ std::vector<const char*> GetInstanceLayers(bool enable_validation) {
 
 vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool enable_validation) {
     LOG_INFO(Render_Vulkan, "Creating vulkan instance");
-
-#if defined(__APPLE__)
-    // Initialize the environment with the path to the included ICD, so that the loader will
-    // find it.
-    static const auto icd_path = [] {
-        char path[PATH_MAX];
-        u32 length = PATH_MAX;
-        _NSGetExecutablePath(path, &length);
-        return std::filesystem::path(path).parent_path();
-    }();
-    setenv("VK_DRIVER_FILES", icd_path.c_str(), true);
-#endif
 
     static vk::detail::DynamicLoader dl;
     VULKAN_HPP_DEFAULT_DISPATCHER.init(

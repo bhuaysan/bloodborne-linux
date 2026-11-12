@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/audio/sdl_audio_out.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -145,13 +145,9 @@ private:
         // Allocate aligned internal buffer for SIMD operations
         internal_buffer_size = buffer_frames * sizeof(float) * num_channels;
 
-#ifdef _WIN32
-        internal_buffer = _aligned_malloc(internal_buffer_size, AUDIO_BUFFER_ALIGNMENT);
-#else
         if (posix_memalign(&internal_buffer, AUDIO_BUFFER_ALIGNMENT, internal_buffer_size) != 0) {
             internal_buffer = nullptr;
         }
-#endif
 
         if (!internal_buffer) {
             LOG_ERROR(Lib_AudioOut, "Failed to allocate aligned audio buffer of size {}",
@@ -186,11 +182,7 @@ private:
 
     void FreeAlignedBuffer() {
         if (internal_buffer) {
-#ifdef _WIN32
-            _aligned_free(internal_buffer);
-#else
             free(internal_buffer);
-#endif
             internal_buffer = nullptr;
         }
     }
