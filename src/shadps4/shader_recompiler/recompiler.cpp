@@ -140,7 +140,7 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
     Shader::Optimization::LowerHardwareIntrinsics(program);
     Shader::Optimization::ConstantPropagationPass(program.post_order_blocks);
     Shader::Optimization::DeadCodeEliminationPass(program);
-    Shader::Optimization::CollectShaderInfoPass(program, profile);
+    Shader::Optimization::CollectShaderInfoPass(program);
 
     return program;
 }

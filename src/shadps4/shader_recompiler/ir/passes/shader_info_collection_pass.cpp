@@ -1,12 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/shader_recompiler/ir/passes/shader_info_collection_pass.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
-#include "core/emulator_settings.h"
 #include "shader_recompiler/ir/program.h"
-#include "shader_recompiler/profile.h"
 
 namespace Shader::Optimization {
 
@@ -194,12 +192,8 @@ void Visit(Info& info, const IR::Inst& inst) {
         info.uses_shader_clock = true;
         break;
     case IR::Opcode::ReadConst:
+        // Direct memory access is off, so every constant read loads from the flatbuf.
         AddFlatbuf(info);
-        if (inst.Flags<u32>() == 0) {
-            info.readconst_types |= Info::ReadConstType::Immediate;
-            info.readconst_types |= Info::ReadConstType::Dynamic;
-            info.uses_dma = true;
-        }
         break;
     case IR::Opcode::PackUfloat10_11_11:
         info.uses_pack_10_11_11 = true;
@@ -212,31 +206,12 @@ void Visit(Info& info, const IR::Inst& inst) {
     }
 }
 
-void CollectShaderInfoPass(IR::Program& program, const Profile& profile) {
+void CollectShaderInfoPass(IR::Program& program) {
     Info& info = program.info;
     for (IR::Block* const block : program.post_order_blocks) {
         for (IR::Inst& inst : block->Instructions()) {
             Visit(info, inst);
         }
-    }
-
-    if (!EmulatorSettings.IsDirectMemoryAccessEnabled() || !profile.support_bda) {
-        info.uses_dma = false;
-        info.readconst_types = Info::ReadConstType::None;
-    }
-
-    if (info.uses_dma) {
-        info.buffers.push_back({
-            .used_types = IR::Type::U64,
-            .buffer_type = BufferType::BdaPagetable,
-            .is_written = true,
-        });
-        info.buffers.push_back({
-            .used_types = IR::Type::U32,
-            .buffer_type = BufferType::FaultBuffer,
-            .is_written = true,
-        });
-        LOG_ERROR(Render, "Enabling DMA for shader {:#x}", info.pgm_hash);
     }
 }
 
