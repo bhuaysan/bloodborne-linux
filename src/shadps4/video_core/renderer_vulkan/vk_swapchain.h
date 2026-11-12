@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_swapchain.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -136,7 +136,7 @@ private:
     u32 frame_index = 0;
     bool needs_recreation = true;
     bool needs_hdr = false;    // The game requested HDR swapchain
-    bool supports_hdr = false; // SC supports HDR output
+    bool supports_hdr = false; // HDR output is off, so this stays false
 };
 
 } // namespace Vulkan

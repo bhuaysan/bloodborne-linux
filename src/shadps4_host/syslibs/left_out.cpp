@@ -1,14 +1,12 @@
 // What the import leaves out of the system libraries (docs/design/os-libraries.md, "Codecs"):
-// AJM's AAC decoder, which needs FDK-AAC, and AudioOut's OpenAL backend. Neither runs in the
-// reference run; reaching one is logged.
+// AJM's AAC decoder, which needs FDK-AAC. It does not run in the reference run; reaching it is
+// logged.
 
 #include <cstring>
 
 #include "common/logging/log.h"
 #include "core/libraries/ajm/ajm_aac.h"
 #include "core/libraries/ajm/ajm_result.h"
-#include "core/libraries/audio/audioout_backend.h"
-#include "shadps4_host/failure.hpp"
 
 namespace Libraries::Ajm {
 
@@ -53,12 +51,3 @@ DecoderResult AjmAacDecoder::ProcessData(std::span<u8>&, SparseOutputBuffer&,
 }
 
 }  // namespace Libraries::Ajm
-
-namespace Libraries::AudioOut {
-
-// EmulatorSettings fixes the SDL backend, so this is not reached.
-std::unique_ptr<PortBackend> OpenALAudioOut::Open(PortOut&) {
-    bb::shadps4::host_missing("AudioOut's OpenAL backend");
-}
-
-}  // namespace Libraries::AudioOut

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_swapchain.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -157,16 +157,6 @@ void Swapchain::FindPresentFormat() {
         instance.GetPhysicalDevice().getSurfaceFormatsKHR(surface);
     ASSERT_MSG(formats_result == vk::Result::eSuccess, "Failed to query surface formats: {}",
                vk::to_string(formats_result));
-
-    // Check if the device supports HDR formats. Here we care of Rec.2020 PQ only as it is expected
-    // game output. Other variants as e.g. linear Rec.2020 will require additional color space
-    // rotation
-    supports_hdr =
-        std::find_if(formats.begin(), formats.end(), [](const vk::SurfaceFormatKHR& format) {
-            return format == SURFACE_FORMAT_HDR;
-        }) != formats.end();
-    // Also make sure that user allowed us to use HDR
-    supports_hdr &= EmulatorSettings.IsHdrAllowed();
 
     // If there is a single undefined surface format, the device doesn't care, so we'll just use
     // RGBA sRGB.

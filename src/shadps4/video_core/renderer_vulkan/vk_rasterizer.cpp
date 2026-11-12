@@ -6,7 +6,6 @@
 
 #include "common/debug.h"
 #include "core/gpu_stats.h"
-#include "core/emulator_settings.h"
 #include "core/memory.h"
 #include "shader_recompiler/resource.h"
 #include "shader_recompiler/runtime_info.h"
@@ -43,9 +42,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
       texture_cache{instance, scheduler, runtime, liverpool_, buffer_cache, page_manager},
       liverpool{liverpool_}, memory{Core::Memory::Instance()},
       pipeline_cache{instance, scheduler, liverpool, buffer_cache.GetSparsePageShift()} {
-    if (!EmulatorSettings.IsNullGPU()) {
-        liverpool->BindRasterizer(this);
-    }
+    liverpool->BindRasterizer(this);
     memory->SetRasterizer(this);
 
     scheduler.SetSubmitCallback([this](Vulkan::SubmitInfo& info) {

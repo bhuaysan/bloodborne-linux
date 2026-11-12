@@ -1,10 +1,10 @@
 // What src/shadps4 reads of shadPS4's settings object, fixed at the values this port runs with.
 // A port for one game has nothing to configure here. The values are upstream's defaults
-// (core/emulator_settings.h of v.0.21.0): DMA, readbacks, userfaultfd, the null GPU, HDR, FSR and
-// every debug aid off, RCAS on, present mode Mailbox; for the system libraries the SDL audio
-// backend on the default device at full volume, the standard pad with motion controls, and
-// ImeDialog's accessibility and short URL panel off. The pipeline cache stays off until R8 makes
-// it work on disk (docs/design/renderer.md).
+// (core/emulator_settings.h of v.0.21.0): DMA, readbacks, userfaultfd, FSR and every debug aid
+// off, RCAS on, present mode Mailbox; for the system libraries the default audio device at full
+// volume, the standard pad with motion controls, and ImeDialog's accessibility and short URL panel
+// off. The pipeline cache stays off until R8 makes it work on disk (docs/design/renderer.md). The
+// null GPU, HDR and the OpenAL backend were off too; they are gone together with their paths.
 #pragma once
 
 #include <string>
@@ -19,12 +19,6 @@ enum GpuReadbacksMode : int {
     Precise,
 };
 
-// The values of upstream's audio_backend setting. OpenAL is not built (syslibs/left_out.cpp).
-enum AudioBackend : int {
-    SDL,
-    OpenAL,
-};
-
 namespace bb::shader {
 
 // The index of the Vulkan device the renderer's instance uses, -1 (the default) for its own
@@ -37,13 +31,11 @@ struct FixedSettings {
     static constexpr bool IsDirectMemoryAccessEnabled() { return false; }
 
     // GPU.
-    static constexpr bool IsNullGPU() { return false; }
     static constexpr bool IsCopyGpuBuffers() { return false; }
     static constexpr u32 GetReadbacksMode() { return GpuReadbacksMode::Disabled; }
     static constexpr bool IsReadbackLinearImagesEnabled() { return false; }
     static constexpr bool IsUserfaultfdTracking() { return false; }
     static constexpr std::string_view GetPresentMode() { return "Mailbox"; }
-    static constexpr bool IsHdrAllowed() { return false; }
     static constexpr bool IsFsrEnabled() { return false; }
     static constexpr bool IsRcasEnabled() { return true; }
     static constexpr int GetRcasAttenuation() { return 250; }
@@ -59,7 +51,6 @@ struct FixedSettings {
     static constexpr bool IsPipelineCacheArchived() { return false; }
 
     // Sound (AudioOut).
-    static constexpr u32 GetAudioBackend() { return AudioBackend::SDL; }
     static constexpr int GetVolumeSlider() { return 100; }
     static std::string GetSDLMainOutputDevice() { return "Default Device"; }
     static std::string GetSDLPadSpkOutputDevice() { return "Default Device"; }

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/audio/audioout.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include <memory>
@@ -15,7 +15,6 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/thread.h"
-#include "core/emulator_settings.h"
 #include "core/libraries/audio/audioout.h"
 #include "core/libraries/audio/audioout_backend.h"
 #include "core/libraries/audio/audioout_error.h"
@@ -219,11 +218,7 @@ s32 PS4_SYSV_ABI sceAudioOutInit() {
         return ORBIS_AUDIO_OUT_ERROR_ALREADY_INIT;
     }
 
-    if (EmulatorSettings.GetAudioBackend() == AudioBackend::OpenAL) {
-        audio = std::make_unique<OpenALAudioOut>();
-    } else {
-        audio = std::make_unique<SDLAudioOut>();
-    }
+    audio = std::make_unique<SDLAudioOut>();
 
     LOG_INFO(Lib_AudioOut, "Audio system initialized");
     return ORBIS_OK;
