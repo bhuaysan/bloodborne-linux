@@ -101,7 +101,6 @@ const std::filesystem::path& GetUserPath(PathType user_path) {
             {PathType::UserDir, dirs.data()},
             {PathType::LogDir, dirs.logs()},
             {PathType::ScreenshotsDir, dirs.data() / "screenshots"},
-            {PathType::ShaderDir, dirs.cache() / "shader"},
             {PathType::CacheDir, dirs.cache() / "pipeline"},
             {PathType::CapturesDir, dirs.data() / "captures"},
         };

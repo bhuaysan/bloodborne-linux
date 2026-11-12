@@ -1,16 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_pipeline_cache.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include <ranges>
 
 #include "common/hash.h"
-#include "common/io_file.h"
-#include "common/path_util.h"
-#include "core/debug_state.h"
-#include "core/emulator_settings.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/recompiler.h"
@@ -153,8 +149,6 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(HwStage stage, SwStag
         const auto params_vc = AmdGpu::GetParams(regs.vs_program);
         info.hw.gs.vs_copy = params_vc.code;
         info.hw.gs.vs_copy_hash = params_vc.hash;
-        DumpShader(info.hw.gs.vs_copy, info.hw.gs.vs_copy_hash, Shader::HwStage::Vertex, 0,
-                   "copy.bin");
         break;
     }
     case HwStage::Vertex: {
@@ -330,7 +324,6 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .needs_unorm_fixup = instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
-        .fast_shader_math = EmulatorSettings.IsFastShaderMath(),
         .support_bda = instance_.IsBufferDeviceAddressSupported(),
     };
     WarmUp();
@@ -360,15 +353,6 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
 
         RegisterPipelineData(graphics_key, pipeline_hash, sdata);
         ++num_new_pipelines;
-
-        if (EmulatorSettings.IsShaderCollect()) {
-            for (auto stage = 0; stage < MaxShaderStages; ++stage) {
-                if (infos[stage]) {
-                    auto& m = modules[stage];
-                    module_related_pipelines[m].emplace_back(graphics_key);
-                }
-            }
-        }
     }
     return it->second.get();
 }
@@ -388,11 +372,6 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
                                                        modules[0], sdata, false);
         RegisterPipelineData(compute_key, sdata);
         ++num_new_pipelines;
-
-        if (EmulatorSettings.IsShaderCollect()) {
-            auto& m = modules[0];
-            module_related_pipelines[m].emplace_back(compute_key);
-        }
     }
     return it->second.get();
 }
@@ -631,31 +610,16 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
                                               Shader::Backend::Bindings& binding) {
     LOG_INFO(Render_Vulkan, "Compiling {} shader {:#x} {}", info.hw_stage, info.pgm_hash,
              perm_idx != 0 ? "(permutation)" : "");
-    DumpShader(code, info.pgm_hash, info.hw_stage, perm_idx, "bin");
 
     const auto ir_program = Shader::TranslateProgram(code, pools, info, runtime_info, profile);
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);
-    DumpShader(spv, info.pgm_hash, info.hw_stage, perm_idx, "spv");
 
-    vk::ShaderModule module;
-
-    auto patch = GetShaderPatch(info.pgm_hash, info.hw_stage, perm_idx, "spv");
-    const bool is_patched = patch && EmulatorSettings.IsPatchShaders();
-    if (is_patched) {
-        LOG_INFO(Loader, "Loaded patch for {} shader {:#x}", info.hw_stage, info.pgm_hash);
-        module = CompileSPV(*patch, instance.GetDevice());
-    } else {
-        module = CompileSPV(spv, instance.GetDevice());
-    }
+    const vk::ShaderModule module = CompileSPV(spv, instance.GetDevice());
 
     RegisterShaderBinary(std::move(spv), info.pgm_hash, perm_idx);
 
     const auto name = GetShaderName(info.hw_stage, info.pgm_hash, perm_idx);
     Vulkan::SetObjectName(instance.GetDevice(), module, name);
-    if (EmulatorSettings.IsShaderCollect()) {
-        DebugState.CollectShader(name, info.sw_stage, module, spv, code,
-                                 patch ? *patch : std::span<const u32>{}, is_patched);
-    }
     return module;
 }
 
@@ -711,34 +675,6 @@ PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_sta
     return std::make_tuple(&program->info, module, perm_hash);
 }
 
-std::optional<vk::ShaderModule> PipelineCache::ReplaceShader(vk::ShaderModule module,
-                                                             std::span<const u32> spv_code) {
-    std::optional<vk::ShaderModule> new_module{};
-    for (const auto& [_, program] : program_cache) {
-        for (auto& m : program->modules) {
-            if (m.module == module) {
-                const auto& d = instance.GetDevice();
-                d.destroyShaderModule(m.module);
-                m.module = CompileSPV(spv_code, d);
-                new_module = m.module;
-            }
-        }
-    }
-    if (module_related_pipelines.contains(module)) {
-        auto& pipeline_keys = module_related_pipelines[module];
-        for (auto& key : pipeline_keys) {
-            if (std::holds_alternative<GraphicsPipelineKey>(key)) {
-                auto& graphics_key = std::get<GraphicsPipelineKey>(key);
-                graphics_pipelines.erase(graphics_key);
-            } else if (std::holds_alternative<ComputePipelineKey>(key)) {
-                auto& compute_key = std::get<ComputePipelineKey>(key);
-                compute_pipelines.erase(compute_key);
-            }
-        }
-    }
-    return new_module;
-}
-
 std::string PipelineCache::GetShaderName(Shader::HwStage stage, u64 hash,
                                          std::optional<size_t> perm) {
     if (perm) {
@@ -747,39 +683,4 @@ std::string PipelineCache::GetShaderName(Shader::HwStage stage, u64 hash,
     return fmt::format("{}_{:#018x}", stage, hash);
 }
 
-void PipelineCache::DumpShader(std::span<const u32> code, u64 hash, Shader::HwStage stage,
-                               size_t perm_idx, std::string_view ext) {
-    if (!EmulatorSettings.IsDumpShaders()) {
-        return;
-    }
-
-    using namespace Common::FS;
-    const auto dump_dir = GetUserPath(PathType::ShaderDir) / "dumps";
-    if (!std::filesystem::exists(dump_dir)) {
-        std::filesystem::create_directories(dump_dir);
-    }
-    const auto filename = fmt::format("{}.{}", GetShaderName(stage, hash, perm_idx), ext);
-    const auto file = IOFile{dump_dir / filename, FileAccessMode::Create};
-    file.WriteSpan(code);
-}
-
-std::optional<std::vector<u32>> PipelineCache::GetShaderPatch(u64 hash, Shader::HwStage stage,
-                                                              size_t perm_idx,
-                                                              std::string_view ext) {
-
-    using namespace Common::FS;
-    const auto patch_dir = GetUserPath(PathType::ShaderDir) / "patch";
-    if (!std::filesystem::exists(patch_dir)) {
-        std::filesystem::create_directories(patch_dir);
-    }
-    const auto filename = fmt::format("{}.{}", GetShaderName(stage, hash, perm_idx), ext);
-    const auto filepath = patch_dir / filename;
-    if (!std::filesystem::exists(filepath)) {
-        return {};
-    }
-    const auto file = IOFile{patch_dir / filename, FileAccessMode::Read};
-    std::vector<u32> code(file.GetSize() / sizeof(u32));
-    file.Read(code);
-    return code;
-}
 } // namespace Vulkan

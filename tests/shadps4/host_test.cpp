@@ -50,7 +50,6 @@ TEST(ShadPs4Host, UserPathsAreXdgDirectories) {
     EXPECT_EQ(GetUserPath(PathType::LogDir), base / "state/bloodborne-linux/logs");
     EXPECT_EQ(GetUserPath(PathType::ScreenshotsDir), base / "data/bloodborne-linux/screenshots");
     EXPECT_EQ(GetUserPath(PathType::CapturesDir), base / "data/bloodborne-linux/captures");
-    EXPECT_EQ(GetUserPath(PathType::ShaderDir), base / "cache/bloodborne-linux/shader");
     EXPECT_EQ(GetUserPath(PathType::CacheDir), base / "cache/bloodborne-linux/pipeline");
     EXPECT_EQ(Common::FS::GetUserPathString(PathType::UserDir),
               "/nonexistent-bb-test/data/bloodborne-linux");

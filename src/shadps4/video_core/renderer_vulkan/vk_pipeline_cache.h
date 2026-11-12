@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_pipeline_cache.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
 
-#include <variant>
 #include <tsl/robin_map.h>
 #include "shader_recompiler/profile.h"
 #include "shader_recompiler/recompiler.h"
@@ -15,13 +14,6 @@
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "vulkan/vulkan.hpp"
-
-template <>
-struct std::hash<vk::ShaderModule> {
-    std::size_t operator()(const vk::ShaderModule& module) const noexcept {
-        return std::hash<size_t>{}(reinterpret_cast<size_t>((VkShaderModule)module));
-    }
-};
 
 namespace AmdGpu {
 class Liverpool;
@@ -94,9 +86,6 @@ public:
     Result GetProgram(Shader::HwStage hw_stage, Shader::SwStage sw_stage,
                       const Shader::ShaderParams& params, Shader::Backend::Bindings& binding);
 
-    std::optional<vk::ShaderModule> ReplaceShader(vk::ShaderModule module,
-                                                  std::span<const u32> spv_code);
-
     static std::string GetShaderName(Shader::HwStage stage, u64 hash,
                                      std::optional<size_t> perm = {});
 
@@ -109,10 +98,6 @@ private:
     bool RefreshGraphicsStages();
     bool RefreshComputeKey();
 
-    void DumpShader(std::span<const u32> code, u64 hash, Shader::HwStage stage, size_t perm_idx,
-                    std::string_view ext);
-    std::optional<std::vector<u32>> GetShaderPatch(u64 hash, Shader::HwStage stage, size_t perm_idx,
-                                                   std::string_view ext);
     vk::ShaderModule CompileModule(Shader::Info& info, Shader::RuntimeInfo& runtime_info,
                                    const std::span<const u32>& code, size_t perm_idx,
                                    Shader::Backend::Bindings& binding);
@@ -142,11 +127,6 @@ private:
     GraphicsPipelineKey graphics_key{};
     ComputePipelineKey compute_key{};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start
-
-    // Only if Config::collectShadersForDebug()
-    tsl::robin_map<vk::ShaderModule,
-                   std::vector<std::variant<GraphicsPipelineKey, ComputePipelineKey>>>
-        module_related_pipelines;
 };
 
 } // namespace Vulkan

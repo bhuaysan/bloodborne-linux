@@ -1,10 +1,10 @@
 // What src/shadps4 reads of shadPS4's settings object, fixed at the values this port runs with.
 // A port for one game has nothing to configure here. The values are upstream's defaults
-// (core/emulator_settings.h of v.0.21.0): DMA, inlined fetch shaders, readbacks, userfaultfd, the
-// null GPU, HDR, FSR and every debug aid off, RCAS on, present mode Mailbox; for the system
-// libraries the SDL audio backend on the default device at full volume, the standard pad with
-// motion controls, and ImeDialog's accessibility and short URL panel off. The pipeline cache
-// stays off until R8 makes it work on disk (docs/design/renderer.md).
+// (core/emulator_settings.h of v.0.21.0): DMA, readbacks, userfaultfd, the null GPU, HDR, FSR and
+// every debug aid off, RCAS on, present mode Mailbox; for the system libraries the SDL audio
+// backend on the default device at full volume, the standard pad with motion controls, and
+// ImeDialog's accessibility and short URL panel off. The pipeline cache stays off until R8 makes
+// it work on disk (docs/design/renderer.md).
 #pragma once
 
 #include <string>
@@ -34,12 +34,7 @@ void set_gpu_id(s32 id);
 
 struct FixedSettings {
     // Shader translation.
-    static constexpr bool IsDumpShaders() { return false; }
     static constexpr bool IsDirectMemoryAccessEnabled() { return false; }
-    static constexpr bool IsInlineFetchShader() { return false; }
-    static constexpr bool IsPatchShaders() { return false; }
-    static constexpr bool IsFastShaderMath() { return false; }
-    static constexpr bool IsShaderCollect() { return false; }
 
     // GPU.
     static constexpr bool IsNullGPU() { return false; }
