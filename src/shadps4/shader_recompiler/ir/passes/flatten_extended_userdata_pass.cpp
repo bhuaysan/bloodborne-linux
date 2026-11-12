@@ -104,6 +104,8 @@ struct PassInfo {
             // 1. If immediate, sort by immediate value
             // 2. If not immediate, sort by instruction order
             // 3. Immediates come first, then instructions
+            // The order assigns the offsets in the flattened buffer, so it must not depend on
+            // where the pools put blocks: blocks sort by reverse post-order, not by address.
             if (a.IsImmediate() && b.IsImmediate()) {
                 return a.U32() < b.U32();
             } else if (!a.IsImmediate() && !b.IsImmediate()) {
@@ -112,10 +114,11 @@ struct PassInfo {
                 auto a_block = a_inst->GetParent();
                 auto b_block = b_inst->GetParent();
                 if (a_block != b_block) {
-                    return a_block < b_block; // Sort by block address
+                    return a_block->po_index > b_block->po_index;
                 }
 
-                auto it = a_block->Instructions().iterator_to(*a_inst);
+                // Strictly after a_inst, so that a value never sorts before itself
+                auto it = std::next(a_block->Instructions().iterator_to(*a_inst));
                 auto end = a_block->Instructions().end();
                 for (; it != end; ++it) {
                     if (&*it == b_inst) {
