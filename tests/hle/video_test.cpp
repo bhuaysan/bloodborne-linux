@@ -1016,8 +1016,8 @@ TEST(GnmDriver, TessellationFactorRingIsReserved) {
     const auto region = bb::hle::kernel::vmem::find(address);
     ASSERT_TRUE(region.has_value());
     EXPECT_TRUE(region->reserved);
-    EXPECT_LE(region->start, address);
-    EXPECT_GE(region->end, address + tessellation_factor_ring_size);
+    EXPECT_EQ(region->start, address);
+    EXPECT_EQ(region->end, address + tessellation_factor_ring_size);
 }
 
 }  // namespace

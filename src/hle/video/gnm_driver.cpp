@@ -592,10 +592,10 @@ BB_HLE_FUNCTION("libSceGnmDriver", "b0xyllnVY-I", sceGnmAddEqEvent);
 BB_HLE_FUNCTION("libSceGnmDriver", "PVT+fuoS9gU", sceGnmDeleteEqEvent);
 BB_HLE_FUNCTION("libSceGnmDriver", "UoYY0DWMC0U", sceGnmGetEqEventType);
 
-
 // sceGnmGetTheTessellationFactorRingBufferBaseAddress. Upstream hands out a fixed address in the
 // system-reserved top of its address space. Here the top 256 MiB of the guest window are
-// reserved on the first call, so no guest mapping can take the ring.
+// reserved on the first call, so no guest mapping can take the ring. If the reservation fails
+// only a warning is logged and the fixed address is returned anyway, as upstream never backs it.
 std::uint64_t sceGnmGetTheTessellationFactorRingBufferBaseAddress() {
     static std::once_flag once;
     std::call_once(once, [] {
@@ -614,7 +614,6 @@ std::uint64_t sceGnmGetTheTessellationFactorRingBufferBaseAddress() {
     return tessellation_factor_ring_address;
 }
 
-// sceGnmGetTheTessellationFactorRingBufferBaseAddress
 BB_HLE_FUNCTION("libSceGnmDriver", "ln33zjBrfjk",
                sceGnmGetTheTessellationFactorRingBufferBaseAddress);
 }  // namespace bb::hle::video
