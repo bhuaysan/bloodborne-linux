@@ -62,6 +62,30 @@ class ParseTests(unittest.TestCase):
         with self.assertRaisesRegex(scn.ScenarioError, "used twice"):
             scn.parse("mark a\nmark a\n")
 
+    def test_repeat_writes_the_block_out_and_numbers_it(self) -> None:
+        parsed = scn.parse("sleep 1\nrepeat 3\nsleep 2\nshot p{i}\nend\nshot last\n")
+        self.assertEqual([s.op for s in parsed.steps], ["sleep"] + ["sleep", "shot"] * 3 + ["shot"])
+        self.assertEqual([s.args[0] for s in parsed.steps if s.op == "shot"],
+                         ["p01", "p02", "p03", "last"])
+        self.assertEqual([s.line for s in parsed.steps[1:3]], [3, 4])
+
+    def test_repeat_errors_name_the_line(self) -> None:
+        for text, message in (("repeat 2\nrepeat 2\nend\nend\n", "line 2: repeat cannot be nested"),
+                              ("end\n", "line 1: end without repeat"),
+                              ("repeat 0\nend\n", "line 1: repeat takes a positive count"),
+                              ("repeat\nend\n", "line 1: repeat takes a positive count"),
+                              ("repeat 2\nsleep 1\n", "repeat without end")):
+            with self.assertRaisesRegex(scn.ScenarioError, message):
+                scn.parse(text)
+
+    def test_a_mark_in_a_repeat_is_used_twice(self) -> None:
+        with self.assertRaisesRegex(scn.ScenarioError, "used twice"):
+            scn.parse("repeat 2\nmark a\nend\n")
+
+    def test_a_step_error_in_a_repeat_names_its_own_line(self) -> None:
+        with self.assertRaisesRegex(scn.ScenarioError, "line 2: unknown button Z"):
+            scn.parse("repeat 2\ntap Z\nend\n")
+
 
 class FakeTarget:
     """A target whose log, frames and pictures follow a script of ticks of the fake clock."""
@@ -142,6 +166,15 @@ class InterpreterTests(unittest.TestCase):
         target2 = FakeTarget(clock2, logs=["one\n"])
         with self.assertRaises(scn.StepFailed):
             run("log one timeout=1\nlog one timeout=1\n", target2, clock2)
+
+    def test_lognow_skips_what_was_logged_and_keeps_a_started_line(self) -> None:
+        clock = FakeClock()
+        target = FakeTarget(clock, logs=["old\nhalf", "way\nnew\n"])
+        run("lognow\nlog halfway timeout=2\nlog new timeout=2\n", target, clock)
+        clock2 = FakeClock()
+        target2 = FakeTarget(clock2, logs=["old\nhalf", "way\nnew\n"])
+        with self.assertRaises(scn.StepFailed):
+            run("lognow\nlog old timeout=2\n", target2, clock2)
 
     def test_log_wait_handles_a_line_split_between_reads(self) -> None:
         clock = FakeClock()

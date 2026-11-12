@@ -1,0 +1,49 @@
+# The 25-minute run of the R5 acceptance: continue from the save of r5-acceptance into the clinic
+# and play there for 25 minutes with simple scripted input: the stick back and forth, the lock-on
+# and the camera. Start it with --user-from the user/ directory of an r5-acceptance run. A picture
+# a minute shows that the game still draws.
+limit time=2100
+
+log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
+sleep 1
+tap A                   # the notice about an unclean end of the last session, when there is one
+mark logos
+stable seconds=6 delta=1 timeout=120
+dpad D                  # Play Offline
+tap A
+sleep 2
+stable seconds=1.5 delta=1 timeout=40
+tap A                   # the network notice
+sleep 2
+stable seconds=1.5 delta=1 timeout=40
+lognow
+tap A                   # the offline notice; the menu appears once the game has read the save
+log 'mount SPRJ0005 at /savedata0 \(mode 0xa,' timeout=30
+sleep 1
+stable seconds=1.5 delta=1 timeout=40
+lognow
+tap A                   # Continue
+mark continue
+log 'mount SPRJ0005 at /savedata0 \(mode 0x1,' timeout=30
+log 'mount SPRJ0005 at /savedata0 \(mode 0xa,' timeout=60
+stable seconds=3 delta=1 timeout=60
+sleep 10                # the loading page, if it is still up, goes
+stable seconds=3 delta=1 timeout=60
+shot 00-clinic
+mark soak
+
+repeat 25
+stick LY -32767
+sleep 4
+stick LY 32767
+sleep 4
+neutral
+stick RX 20000
+sleep 3
+neutral
+tap R3
+sleep 2
+tap R3
+sleep 41
+shot minute-{i}
+end

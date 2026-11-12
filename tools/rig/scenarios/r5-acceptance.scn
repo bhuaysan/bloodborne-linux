@@ -1,0 +1,134 @@
+# The R5 acceptance run on bb-run: from the title through a new game, the name dialog and the
+# intro to first control in the clinic, then the game's own save when it exits to the title, and
+# Continue back into the clinic. Needs a fresh user directory. Run it with --audio for the sound.
+#
+# Waits follow bb-run's log (the splash screen by NID, the opening movie's module, the save
+# mounts) and the picture. The loading pages stand still like the title does, so a loaded game
+# is a still picture after the loading page has had time to go (the shots show which it was).
+limit time=900
+
+log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
+mark logos
+stable seconds=6 delta=1 timeout=120
+shot 01-title
+mark menu
+
+dpad D                  # Play Offline
+tap A
+sleep 2
+stable seconds=1.5 delta=1 timeout=40
+tap A                   # the network and offline notices, then the menu
+sleep 2
+stable seconds=1.5 delta=1 timeout=40
+shot 02-new-game
+dpad D count=2          # New Game (Continue and Load Game come first once a save exists)
+tap A
+sleep 2
+stable seconds=1.5 delta=1 timeout=40
+shot 03-brightness
+dpad D
+tap A
+stable seconds=1.5 delta=1 timeout=40
+shot 04-controls
+dpad D count=6          # to Next
+sleep 0.5
+tap A
+mark movie
+
+# The opening is a video with sound. The game unloads its player when it ends.
+log "sceSysmoduleLoadModule.*0xa5|load module 0xa5" timeout=60
+sleep 15
+shot 05-movie
+log "sceSysmoduleUnloadModule.*0xa5|unload module 0xa5" timeout=240
+nonblack level=20 timeout=60
+stable seconds=2 delta=1 timeout=60
+shot 06-editor
+mark editor
+
+tap A                   # Enter Name
+log sceImeDialogInit timeout=20
+sleep 1.5
+shot 07-name-dialog
+tap A                   # types "g"
+sleep 0.7
+trigger R               # Done
+log "ImeDialog OK|sceImeDialogGetResult" timeout=20
+sleep 2
+shot 08-name-done
+dpad D count=5          # to Finish
+sleep 0.5
+tap A
+sleep 2
+dpad L                  # the default answer is No
+sleep 0.4
+tap A
+mark intro
+log "mount SPRJ0005 at /savedata0" timeout=60
+sleep 10
+shot 09-intro
+
+# The intro cutscene runs for about 100 s, and the clinic stands still once it ends.
+stable seconds=8 delta=1 timeout=300
+shot 10-clinic
+mark clinic
+
+# The character answers the stick: the player has control.
+stick LY -32767
+changed delta=1 timeout=15
+sleep 1
+neutral
+shot 11-moved
+sleep 3
+
+# Options, System, Exit Game. The game saves as it exits (two mounts), and plays its logos again.
+tap START
+sleep 2
+dpad R count=2
+sleep 1
+tap A
+sleep 2
+dpad D count=4
+sleep 1
+tap A
+sleep 2
+shot 12-exit-question
+dpad L                  # the default answer is No
+sleep 0.5
+lognow
+tap A
+mark exit
+log 'mount SPRJ0005 at /savedata0 \(mode 0xa' timeout=20
+stable seconds=6 delta=1 timeout=120
+shot 13-title-again
+mark title-again
+
+dpad D                  # Play Offline
+tap A
+sleep 2
+stable seconds=1.5 delta=1 timeout=40
+tap A                   # the network notice
+sleep 2
+stable seconds=1.5 delta=1 timeout=40
+lognow
+tap A                   # the offline notice; the menu appears once the game has read the save
+log 'mount SPRJ0005 at /savedata0 \(mode 0xa,' timeout=30
+sleep 1
+stable seconds=1.5 delta=1 timeout=40
+shot 14-continue-menu
+lognow
+tap A                   # Continue, the first entry
+mark continue
+log 'mount SPRJ0005 at /savedata0 \(mode 0x1,' timeout=30
+log 'mount SPRJ0005 at /savedata0 \(mode 0xa,' timeout=60
+stable seconds=3 delta=1 timeout=60
+shot 15-loading
+sleep 10                # the loading page, if it is still up, goes
+stable seconds=3 delta=1 timeout=60
+shot 16-clinic-loaded
+mark clinic-loaded
+stick LY -32767
+changed delta=1 timeout=15
+sleep 1
+neutral
+shot 17-moved-again
+sleep 5

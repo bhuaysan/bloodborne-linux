@@ -11,6 +11,7 @@ A scenario is a list of steps, one per line, `#` starts a comment. Options are k
   sleep SECONDS
   log REGEX [timeout=60]               a new complete line of the target's log matches (quote the
                                        regex in single quotes when it has backslashes or a #)
+  lognow                               the next log wait starts with what the target logs from here
   frames N [timeout=60]                N more presents happened
   nonblack [level=16] [timeout=60]     the picture's mean luma reaches level
   changed [delta=4] [timeout=60]       the picture differs from the one at the start of the step
@@ -18,6 +19,9 @@ A scenario is a list of steps, one per line, `#` starts a comment. Options are k
                                        a "stable" event with how long it has been unchanged
   shot NAME                            save the current picture
   mark NAME                            start a named segment of the frame-time report
+  repeat COUNT ... end                 the steps in between COUNT times (no nesting); {i} in them
+                                       is the repetition's number, 01 to COUNT, so a shot name
+                                       can differ in each
 
 A wait that runs out of time fails the scenario. The picture conditions need a target that
 presents frames. `log` needs only its log, so a target without a picture can run those.
@@ -86,6 +90,7 @@ _SPEC: dict[str, tuple[int, set[str]]] = {
     "neutral": (0, set()),
     "sleep": (1, set()),
     "log": (1, {"timeout"}),
+    "lognow": (0, set()),
     "frames": (1, {"timeout"}),
     "nonblack": (0, {"level", "timeout"}),
     "changed": (0, {"delta", "timeout"}),
@@ -132,10 +137,40 @@ def _check_step(step: Step) -> None:
         raise ValueError("count must be positive")
 
 
+def _expand(text: str) -> list[tuple[int, str]]:
+    """The lines with their numbers, each repeat block written out COUNT times."""
+    lines: list[tuple[int, str]] = []
+    block: list[tuple[int, str]] | None = None
+    count = 0
+    for number, raw in enumerate(text.splitlines(), 1):
+        try:
+            tokens = shlex.split(raw, comments=True)
+            head = tokens[0] if tokens else ""
+            if head == "repeat":
+                if block is not None:
+                    raise ValueError("repeat cannot be nested")
+                if len(tokens) != 2 or not tokens[1].isdecimal() or int(tokens[1]) < 1:
+                    raise ValueError("repeat takes a positive count")
+                block, count = [], int(tokens[1])
+            elif head == "end":
+                if block is None or len(tokens) != 1:
+                    raise ValueError("end without repeat")
+                for i in range(1, count + 1):
+                    lines += [(n, line.replace("{i}", f"{i:02d}")) for n, line in block]
+                block = None
+            else:
+                (lines if block is None else block).append((number, raw))
+        except ValueError as e:
+            raise ScenarioError(f"line {number}: {e}") from e
+    if block is not None:
+        raise ScenarioError("repeat without end")
+    return lines
+
+
 def parse(text: str) -> Scenario:
     scenario = Scenario()
     marks: set[str] = set()
-    for number, raw in enumerate(text.splitlines(), 1):
+    for number, raw in _expand(text):
         try:
             tokens = shlex.split(raw, comments=True)
             if not tokens:
@@ -269,6 +304,10 @@ class Interpreter:
                 self._sleep_alive(float(head))
             case "log":
                 self._wait_log(re.compile(head, re.MULTILINE), step)
+            case "lognow":
+                # Drop what was logged so far, but keep the unfinished last line for the next wait.
+                self._log_buffer += self.target.log_tail()
+                self._log_buffer = self._log_buffer[self._log_buffer.rfind("\n") + 1:]
             case "frames":
                 self._wait_frames(int(head), step)
             case "nonblack":

@@ -4,7 +4,7 @@
   rig.py setup                          download and check the reference (shadPS4 v.0.21.0)
   rig.py run reference new-game-to-clinic    a scenario from tools/rig/scenarios/ on the reference
   rig.py run bb-run --time 120          our program under the same limits, with the same virtual gamepad
-  rig.py run reference --user-from DIR ...   start with a copy of an earlier user/ directory
+  rig.py run TARGET --user-from DIR ...   start with a copy of the user/ directory of an earlier run
   rig.py compare REF_RUN REF_RUN OUR_RUN     our menu captures and time against two reference runs
 
 Output of each run goes to analysis/rig/runs/<stamp>-<target>-<scenario>/: target.log, events.csv,
@@ -180,6 +180,11 @@ def find_bb_run(preset: str) -> Path:
         if candidate.is_file():
             return candidate
     raise SystemExit(f"no bb-run in build/{preset}, build the preset first")
+
+
+def bb_run_profile_data(work_root: Path) -> Path:
+    """Where bb-run keeps the save data of the profile the rig uses (XDG data, profile `rig`)."""
+    return work_root / "data" / "bloodborne-linux" / "profiles" / "rig"
 
 
 def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_root: Path) -> Program:
@@ -393,6 +398,8 @@ def run_target(args: argparse.Namespace) -> int:
         work_root = Path(tempfile.mkdtemp(prefix="bb-rig-",
                                           dir=os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"))
         program = bb_run_program(run, game_dir, args.preset, args.window, work_root)
+        if args.user_from:
+            shutil.copytree(args.user_from, bb_run_profile_data(work_root))
 
     env = {**os.environ, **program.env, "BB_RIG_DIR": str(run)}
     audio_file = run / "audio.raw"
@@ -458,6 +465,9 @@ def run_target(args: argparse.Namespace) -> int:
     if work_root:
         if (work_root / "state").exists():
             shutil.copytree(work_root / "state", run / "target-state", dirs_exist_ok=True)
+        if bb_run_profile_data(work_root).exists():
+            # The save data of the run, for `--user-from` in a later one.
+            shutil.copytree(bb_run_profile_data(work_root), run / "user")
         shutil.rmtree(work_root, ignore_errors=True)
     zenity = run / "zenity-calls.txt"
     if not scenario.steps and status not in (0, 124):
@@ -501,7 +511,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--time", type=int, help="time limit in seconds")
     run.add_argument("--memory", help="memory limit, as systemd takes it (12G)")
     run.add_argument("--hold", type=float, default=0, help="seconds to keep running after the end")
-    run.add_argument("--user-from", type=Path, help="copy this user/ directory (reference)")
+    run.add_argument("--user-from", type=Path,
+                     help="copy this user/ directory (the reference's, or an earlier bb-run's)")
     run.add_argument("--preset", default="relwithdebinfo", help="bb-run build preset")
     run.add_argument("--window", action="store_true", help="let bb-run open its window")
     run.add_argument("--audio", action="store_true",
