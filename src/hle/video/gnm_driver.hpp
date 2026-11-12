@@ -32,6 +32,15 @@ public:
     virtual std::span<const std::uint32_t> queue_ring(std::uint32_t index) = 0;
 };
 
+// The tessellation factor ring: the top 256 MiB of the guest window (vmem.hpp), as upstream's
+// SystemReservedVirtualBase + SystemReservedVirtualSize - 0x10000000.
+inline constexpr std::uint64_t tessellation_factor_ring_size = 0x10000000;
+inline constexpr std::uint64_t tessellation_factor_ring_address =
+    0x100'0000'0000 - tessellation_factor_ring_size;  // vmem::window_end - size
+
+// NID ln33zjBrfjk. Reserves the ring in the guest window once and returns its address.
+std::uint64_t sceGnmGetTheTessellationFactorRingBufferBaseAddress();
+
 // Starts the GNM driver on `gpu` (nullptr: the submits drop their buffers), as upstream's
 // RegisterLib: the submission lock ends at Liverpool's GpuIdle interrupt. bb-run calls it once
 // Liverpool exists, before the game starts. A later call replaces `gpu`: the tests switch it while

@@ -23,6 +23,7 @@
 #include "hle/hle.hpp"
 #include "hle/kernel/equeue.hpp"
 #include "hle/kernel/vmem.hpp"
+#include "hle/video/gnm_driver.hpp"
 #include "hle/video/gnm_shader.hpp"
 #include "hle/video/video_out.hpp"
 #include "loader/image.hpp"
@@ -1003,6 +1004,20 @@ TEST(HleVideoGame, EbootImportsBindToTheImplementations) {
         EXPECT_EQ(bb::hle::import_address(e.library, e.nid),
                   reinterpret_cast<std::uintptr_t>(e.impl));
     }
+}
+
+// #471: the ring address is fixed, inside the guest window, and held by a reservation that no
+// guest mapping can take.
+TEST(GnmDriver, TessellationFactorRingIsReserved) {
+    const std::uint64_t address = sceGnmGetTheTessellationFactorRingBufferBaseAddress();
+    EXPECT_EQ(address, tessellation_factor_ring_address);
+    EXPECT_EQ(sceGnmGetTheTessellationFactorRingBufferBaseAddress(), address);
+    EXPECT_EQ(address + tessellation_factor_ring_size, bb::hle::kernel::vmem::window_end);
+    const auto region = bb::hle::kernel::vmem::find(address);
+    ASSERT_TRUE(region.has_value());
+    EXPECT_TRUE(region->reserved);
+    EXPECT_LE(region->start, address);
+    EXPECT_GE(region->end, address + tessellation_factor_ring_size);
 }
 
 }  // namespace
