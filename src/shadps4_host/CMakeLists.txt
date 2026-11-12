@@ -56,7 +56,7 @@ set_source_files_properties(${BB_SHADPS4_DIR}/shader_recompiler/frontend/decode.
     COMPILE_OPTIONS "-w;$<$<BOOL:${BB_SANITIZE}>:-fno-sanitize=alignment>")
 
 # Libraries video_core needs (issue #427), unchanged copies in third_party/ at shadPS4's submodule
-# commits. Nothing uses them yet. All are SYSTEM so that their warnings stay out of our builds.
+# commits. bbvideocore links them. All are SYSTEM so that their warnings stay out of our builds.
 set(BB_3P ${PROJECT_SOURCE_DIR}/third_party)
 
 add_library(bb_vma INTERFACE)
@@ -98,9 +98,6 @@ if(Vulkan_FOUND)
     target_link_libraries(bb_imgui_vulkan PUBLIC bb_imgui Vulkan::Headers)
     target_compile_options(bb_imgui_vulkan PRIVATE -w)
 endif()
-
-add_library(bb_third_party_check STATIC third_party_check.cpp)
-target_link_libraries(bb_third_party_check PUBLIC bb_vma bb_robin_map bb_stb bb_xxhash bb_imgui)
 
 # The renderer: video_core and the ImGui renderer core on the host headers in this directory. It
 # needs the Vulkan headers (the loader is opened at run time), SDL3 for the window and glslang to
