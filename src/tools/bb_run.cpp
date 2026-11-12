@@ -217,6 +217,8 @@ void open_display(const bb::tools::RunOptions& options) {
     } else if (options.present_mode == "immediate") {
         renderer.present_mode = Vulkan::PresentMode::Immediate;
     }
+    bb::common::log(LogLevel::info, channel, "renderer: device {}, present mode {}, validation {}",
+                    *gpu_id, options.present_mode, options.validation ? "on" : "off");
     d->presenter = std::make_unique<bb::hle::video::VideoCorePresenter>(d->window.get(),
                                                                          *guest_memory, renderer);
     display = d.release();
