@@ -61,7 +61,8 @@ struct RunOptions {
 // Parses the arguments after argv[0]. Throws std::invalid_argument, naming the argument, for an
 // unknown option, a missing value, a profile name that valid_profile_name refuses, a timeout that
 // isn't a whole number from 1 to 86400, a log spec that LogFilter::parse refuses, a --present-mode
-// that is none of fifo, mailbox and immediate, and --validation-sync or --validation-gpu without --validation.
+// that is none of fifo, mailbox and immediate, and --validation-sync or --validation-gpu without
+// --validation.
 RunOptions parse_run_options(std::span<const std::string_view> args);
 
 // The eboot's entry reads argc from +0 of its first argument and takes argv at +8 (link address
