@@ -73,6 +73,43 @@ class CommandTests(unittest.TestCase):
             self.assertIn("Save Migration", (Path(temp) / "zenity-calls.txt").read_text())
 
 
+class OutputFailureTests(unittest.TestCase):
+    STATS = {"frames": 5}
+
+    def test_a_missing_shot_fails_the_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            (run / "shots").mkdir()
+            (run / "shots" / "a.png").write_bytes(b"x")
+            self.assertEqual(rig.missing_shots(run, ["a", "b", "b2"]), ["b", "b2"])
+        failure = rig.output_failure(None, True, self.STATS, ["b"])
+        self.assertIn("missing shots: b", failure)
+        self.assertIsNone(rig.output_failure(None, True, self.STATS, []))
+
+    def test_no_frames_fails_a_run_with_the_layer_only(self) -> None:
+        self.assertIn("no frames", rig.output_failure(None, True, None, []))
+        self.assertIsNone(rig.output_failure(None, False, None, []))
+
+    def test_an_earlier_failure_stays(self) -> None:
+        self.assertEqual(rig.output_failure("timed out", True, None, ["b"]), "timed out")
+
+    def test_the_interpreter_lists_the_steps_it_finished(self) -> None:
+        class Target:
+            pad = None
+
+            def alive(self) -> bool:
+                return True
+
+            def shot(self, name: str) -> None:
+                if name == "bad":
+                    raise rig.scn.StepFailed("no")
+
+        interpreter = rig.scn.Interpreter(Target(), lambda kind, text: None)
+        with self.assertRaises(rig.scn.StepFailed):
+            interpreter.run(rig.scn.parse("shot a\nshot bad\nshot c\n"))
+        self.assertEqual([s.args[0] for s in interpreter.executed], ["a"])
+
+
 class ScenarioFileTests(unittest.TestCase):
     def test_shipped_scenarios_parse(self) -> None:
         paths = sorted((HERE / "scenarios").glob("*.scn"))

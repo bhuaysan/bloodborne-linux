@@ -260,11 +260,13 @@ class Interpreter:
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
     _log_buffer: str = ""
+    executed: list[Step] = field(default_factory=list)  # the steps that finished
 
     def run(self, scenario: Scenario) -> None:
         for step in scenario.steps:
             self.event("step", f"{step.line}: {step.text()}")
             self._step(step)
+            self.executed.append(step)
         self.event("end", "scenario finished")
 
     def _check_alive(self) -> None:

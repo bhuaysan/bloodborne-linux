@@ -10,7 +10,9 @@
 Output of each run goes to analysis/rig/runs/<stamp>-<target>-<scenario>/: target.log, events.csv,
 frames.csv, memory.csv, shots/*.png, kernel.log, summary.json. Exit status 0 means the scenario
 finished (or a run without one reached its time limit) with no kernel GPU fault and an unchanged
-game directory.
+game directory. The run fails on an out-of-memory kill, an unreadable kernel log, a target that
+exits before the scenario ends, a shot step without its picture, and (with the layer) no frame
+presented at all.
 
 The game directory is mounted read-only for the target. Nothing this tool writes is ever committed:
 analysis/ is excluded from git.
@@ -222,7 +224,6 @@ class RunningTarget:
         self._log = open(run / "target.log", "rb")
         self._ctl = os.open(run / "ctl", os.O_RDWR | os.O_NONBLOCK)
         self._seq = b""
-        self._pending = b""
         self._pending_since = 0.0
         self._last_picture: bytes | None = None
         self._last_picture_at = 0.0
@@ -373,6 +374,22 @@ def convert_shots(run: Path) -> list[str]:
     return errors
 
 
+def missing_shots(run: Path, names: list[str]) -> list[str]:
+    """The names of the shot steps that left no shots/<name>.png."""
+    return [n for n in names if not (run / "shots" / f"{n}.png").is_file()]
+
+
+def output_failure(failure: str | None, layer: bool, frames: dict | None,
+                   missing: list[str]) -> str | None:
+    """The run's failure with the two checks that need the output: the layer saw a present, and
+    every shot step left its picture. An earlier failure stays."""
+    if layer and frames is None:
+        failure = failure or "no frames: the layer saw no present"
+    if missing:
+        failure = failure or "missing shots: " + ", ".join(missing)
+    return failure
+
+
 def run_target(args: argparse.Namespace) -> int:
     game_dir = toolenv.load_game_dir()
     if game_dir is None:
@@ -424,8 +441,9 @@ def run_target(args: argparse.Namespace) -> int:
     memory_sampler.start()
     target = RunningTarget(run, process, pad)
     failure = None
+    interpreter = scn.Interpreter(target, events)
     try:
-        scn.Interpreter(target, events).run(scenario)
+        interpreter.run(scenario)
         if args.hold:
             events("hold", f"{args.hold}s")
             end = time.monotonic() + args.hold
@@ -453,9 +471,13 @@ def run_target(args: argparse.Namespace) -> int:
         memory_sampler.stopping.set()
         memory_sampler.join(timeout=3)
 
+    shot_names = [step.args[0] for step in interpreter.executed if step.op == "shot"]
     status = process.returncode
     frames = report.read_frames(run / "frames.csv")
     conversion_errors = convert_shots(run)
+    frame_summary = report.frame_stats(frames)
+    missing = missing_shots(run, shot_names)
+    failure = output_failure(failure, not args.no_layer, frame_summary, missing)
     journal = kernel_journal(started)
     (run / "kernel.log").write_text(journal or "")
     faults = report.kernel_faults(journal or "")
@@ -483,10 +505,11 @@ def run_target(args: argparse.Namespace) -> int:
         "scenario_ok": failure is None, "failure": failure,
         "peak_memory_bytes": memory_sampler.peak, "peak_program_bytes": memory_sampler.peak_program,
         "oom_kills": memory_sampler.oom_kills,
-        "frames": report.frame_stats(frames),
+        "frames": frame_summary,
         "segments": report.segment_stats(frames, events.marks),
         "kernel_gpu_faults": faults, "game_dir_changes": changes,
         "zenity_called": zenity.exists(), "shot_errors": conversion_errors,
+        "missing_shots": missing,
     }
     if args.audio and audio_file.exists():
         try:
