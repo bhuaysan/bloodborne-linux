@@ -1,7 +1,7 @@
 # The 25-minute run of the R5 acceptance: continue from the save of r5-acceptance into the clinic
 # and play there for 25 minutes with simple scripted input: the stick back and forth, the lock-on
-# and the camera. Start it with --user-from the user/ directory of an r5-acceptance run. A picture
-# a minute shows that the game still draws.
+# and the camera. Start it with --user-from the user/ directory of an r5-acceptance run.
+# The picture must change when the stick moves, and one is saved a minute.
 limit time=2200
 
 log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
@@ -24,6 +24,7 @@ mark soak
 
 repeat 25
 stick LY -32767
+changed delta=1 timeout=15     # a hung game with a frozen picture fails here
 sleep 4
 stick LY 32767
 sleep 4
