@@ -103,10 +103,7 @@ void TextureCache::DownloadImageMemory(ImageId image_id, DownloadMemoryFlags fla
     const auto image_addr = image.info.guest_address;
     const auto image_size = image.info.guest_size;
     const auto image_mips = image.info.resources.levels;
-    const auto is_sync = True(flags & DownloadMemoryFlags::Sync);
-    const auto is_priority = True(flags & DownloadMemoryFlags::Priority);
     const auto discard_buffer_cache = True(flags & DownloadMemoryFlags::DiscardBufferCache);
-    ASSERT(!(is_sync && is_priority));
 
     u32 copy_size = 0;
     boost::container::small_vector<vk::BufferImageCopy, 8> buffer_copies;
@@ -138,29 +135,18 @@ void TextureCache::DownloadImageMemory(ImageId image_id, DownloadMemoryFlags fla
     }
     ASSERT(copy_size <= image.info.guest_size);
     const auto download =
-        runtime.GetStagingPool().Request(copy_size, MemoryType::HostCached, 16, !is_sync);
+        runtime.GetStagingPool().Request(copy_size, MemoryType::HostCached, 16, true);
 
     tile_manager.TileImage(image, buffer_copies, download.buffer, download.offset);
 
-    const auto write_data = [this, image_addr, copy_size, download, discard_buffer_cache, is_sync] {
+    scheduler.DeferOperation([this, image_addr, copy_size, download, discard_buffer_cache] {
         download.Invalidate();
         memory.TryWriteBacking(std::bit_cast<u8*>(image_addr), download.mapped, copy_size);
         if (discard_buffer_cache) {
             buffer_cache.UnmarkRegionAsGpuModified(image_addr, copy_size, true);
         }
-        if (!is_sync) {
-            runtime.GetStagingPool().FreeDeferred(download);
-        }
-    };
-
-    if (is_priority) {
-        scheduler.DeferPriorityOperation(std::move(write_data));
-    } else if (is_sync) {
-        scheduler.Finish();
-        write_data();
-    } else {
-        scheduler.DeferOperation(std::move(write_data));
-    }
+        runtime.GetStagingPool().FreeDeferred(download);
+    });
 }
 
 void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {

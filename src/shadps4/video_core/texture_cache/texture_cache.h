@@ -88,9 +88,7 @@ public:
 
     enum class DownloadMemoryFlags : u32 {
         None = 0,
-        Sync = 1 << 0,
-        Priority = 1 << 1,
-        DiscardBufferCache = 1 << 2,
+        DiscardBufferCache = 1 << 0,
     };
 
     struct ImageDesc {
