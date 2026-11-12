@@ -94,9 +94,7 @@ const std::filesystem::path& GetUserPath(PathType user_path) {
         return std::map<PathType, std::filesystem::path>{
             {PathType::UserDir, dirs.data()},
             {PathType::LogDir, dirs.logs()},
-            {PathType::ScreenshotsDir, dirs.data() / "screenshots"},
             {PathType::CacheDir, dirs.cache() / "pipeline"},
-            {PathType::CapturesDir, dirs.data() / "captures"},
         };
     }();
     const auto it = paths.find(user_path);
