@@ -41,18 +41,25 @@ constexpr std::uint32_t s_swappc_b64_prefix = 0xbe802100;  // the low byte is th
 // The called fetch subroutine: returns at once, so no attribute is loaded.
 const std::array<std::uint32_t, 1> empty_fetch_shader = {s_setpc_b64_s0};
 
-constexpr std::size_t low_block_align = 0x10000;
-
-// Memory below 4 GiB, 64 KiB aligned. A dword holding such an address, repeated, reads as that
-// address both as a pointer (64 bits masked to 48) and as a V# base (40 bits).
-void* low_block(std::size_t size) {
-    void* memory = mmap(nullptr, size + low_block_align, PROT_READ | PROT_WRITE,
-                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+// Memory below 4 GiB at a fixed, 64 KiB aligned address. A dword holding such an address,
+// repeated, reads as that address both as a pointer (64 bits masked to 48) and as a V# base
+// (40 bits). The translator also reads the other fields of these sharps from it: a V#'s stride
+// and formats, a T#'s format and type, a sampler's flags. So the address must not depend on where
+// the kernel puts memory: with address randomization on, bit 20 (a sampler's force_degamma) came
+// and went, and domain shaders with it an sRGB-to-linear conversion of a sampled texel (#501).
+// MAP_FIXED_NOREPLACE fails instead of replacing a mapping already there.
+void* low_block(std::uintptr_t address, std::size_t size) {
+    void* const wanted = reinterpret_cast<void*>(address);
+    void* memory = mmap(wanted, size, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (memory == MAP_FAILED) {
-        throw std::runtime_error("mmap failed");
+        throw std::runtime_error("mmap at a fixed address failed");
     }
-    return reinterpret_cast<void*>((reinterpret_cast<std::uintptr_t>(memory) + low_block_align - 1) &
-                                   ~(low_block_align - 1));
+    if (memory != wanted) {  // a kernel without MAP_FIXED_NOREPLACE takes it as a hint
+        munmap(memory, size);
+        throw std::runtime_error("mmap ignored the fixed address");
+    }
+    return memory;
 }
 
 std::uint32_t low_address(const void* block) {
@@ -67,9 +74,15 @@ struct TessConstants {
     std::array<std::uint32_t, 0x10000> self_pointers;  // past every offset a shader reads
 };
 
+// Where the two blocks lie. The constants' address is the one the kernel picked with address
+// randomization off, so programs reaching their V# inline translate as they did in those runs.
+constexpr std::uintptr_t tess_constants_address = 0x40000000;
+constexpr std::uintptr_t tess_v_sharp_table_address = 0x40050000;
+static_assert(tess_constants_address + sizeof(TessConstants) <= tess_v_sharp_table_address);
+
 TessConstants* tess_constants() {
     static TessConstants* const data = [] {
-        auto* block = new (low_block(sizeof(TessConstants))) TessConstants;
+        auto* block = new (low_block(tess_constants_address, sizeof(TessConstants))) TessConstants;
         block->constants = {
             .ls_stride = stride_bytes,
             .hs_cp_stride = stride_bytes,
@@ -91,7 +104,8 @@ TessConstants* tess_constants() {
 std::uint32_t* tess_v_sharp_table() {
     constexpr std::size_t size_dwords = 0x10000;
     static std::uint32_t* const table = [] {
-        auto* dwords = static_cast<std::uint32_t*>(low_block(size_dwords * sizeof(std::uint32_t)));
+        auto* dwords = static_cast<std::uint32_t*>(
+            low_block(tess_v_sharp_table_address, size_dwords * sizeof(std::uint32_t)));
         std::fill_n(dwords, size_dwords, low_address(tess_constants()));
         return dwords;
     }();

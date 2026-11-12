@@ -42,8 +42,8 @@ using namespace bb::test::shadps4;
 
 constexpr std::string_view ok_marker = "RESULT ok";
 // What follows ok_marker on its line: the SHA-256 of the SPIR-V module, so two reports show
-// whether a translator change altered any module. Some domain shaders translate differently with
-// the heap at other addresses, so compare runs made under `setarch -R` (address randomization off).
+// whether a translator change altered any module. Runs with and without address randomization
+// give the same hashes (#501).
 constexpr std::string_view spirv_marker = " spirv=";
 // A copy shader never becomes a module of its own: it is read while translating its geometry shader.
 constexpr std::string_view copy_marker = "RESULT copy-parsed";
@@ -256,6 +256,29 @@ std::vector<Job> distinct_programs(const fs::path& root) {
         }
     }
     return jobs;
+}
+
+// The user data of a hull or domain program, and the V#s it reaches through them, hold the same
+// values wherever the process's memory lies. The translator reads them as sharps, so they decide
+// resource types and formats: a sampler's degamma bit, for one. With the blocks wherever mmap put
+// them, domain shaders changed with address randomization (#501). Each table holds the address
+// of the block of tessellation constants, so this also checks the V# in the table.
+TEST(ShaderCorpus, TessellationUserDataIsTheSameInEveryProcess) {
+    constexpr std::uint32_t constants_address = 0x40000000;
+    constexpr std::uint32_t table_address = 0x40050000;
+    for (const ProgramType type : {ProgramType::hs, ProgramType::ds}) {
+        Program program;
+        program.type = static_cast<unsigned>(type);
+        const UserData inline_form = user_data_of(program, TessConstantsForm::inline_v_sharp);
+        const UserData pointer_form = user_data_of(program, TessConstantsForm::through_pointer);
+        for (std::size_t reg = 0; reg < inline_form.size(); ++reg) {
+            EXPECT_EQ(inline_form[reg], constants_address) << "register " << reg;
+            EXPECT_EQ(pointer_form[reg], table_address) << "register " << reg;
+        }
+        const auto* table = reinterpret_cast<const std::uint32_t*>(std::uintptr_t{table_address});
+        EXPECT_EQ(table[0], constants_address);
+        EXPECT_EQ(table[0xffff], constants_address);
+    }
 }
 
 TEST(ShaderCorpus, EveryProgramTranslatesOrHasAReason) {
