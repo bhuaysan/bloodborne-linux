@@ -117,8 +117,8 @@ std::string GetUserPathString(PathType user_path) {
     return GetUserPath(user_path).string();
 }
 
-// Files are written only by the shader dumps and screenshots, and read only by the shader patches,
-// the pipeline cache and PNG icons. The port builds none of them.
+// Files are written only by screenshots and read only by the pipeline cache and PNG icons.
+// The port builds none of them.
 IOFile::IOFile(const std::filesystem::path&, FileAccessMode, FileType, FileShareFlag) {
     bb::shadps4::host_missing("Common::FS::IOFile");
 }
