@@ -89,12 +89,6 @@ void VideoCorePresenter::present(Vulkan::Frame* frame, bool is_reusing_frame,
     }
 }
 
-void VideoCorePresenter::set_hdr(bool enable) {
-    if (presenter_) {
-        presenter_->SetHDR(enable);
-    }
-}
-
 bool VideoCorePresenter::must_keep_drawing() {
     return presenter_ && ImGui::Core::MustKeepDrawing();
 }

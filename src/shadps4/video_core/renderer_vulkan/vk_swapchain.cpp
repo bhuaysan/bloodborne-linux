@@ -16,11 +16,6 @@
 
 namespace Vulkan {
 
-static constexpr vk::SurfaceFormatKHR SURFACE_FORMAT_HDR = {
-    .format = vk::Format::eA2B10G10R10UnormPack32,
-    .colorSpace = vk::ColorSpaceKHR::eHdr10St2084EXT,
-};
-
 Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& window_)
     : instance{instance_}, window{window_}, surface{CreateSurface(instance.GetInstance(), window)} {
     FindPresentFormat();
@@ -53,7 +48,7 @@ void Swapchain::Create(u32 width_, u32 height_) {
     const u32 queue_family_indices_count = exclusive ? 1u : 2u;
     const vk::SharingMode sharing_mode =
         exclusive ? vk::SharingMode::eExclusive : vk::SharingMode::eConcurrent;
-    const auto format = needs_hdr ? SURFACE_FORMAT_HDR : surface_format;
+    const auto format = surface_format;
     const vk::SwapchainCreateInfoKHR swapchain_info = {
         .surface = surface,
         .minImageCount = image_count,
@@ -83,26 +78,8 @@ void Swapchain::Create(u32 width_, u32 height_) {
 }
 
 void Swapchain::Recreate(u32 width_, u32 height_) {
-    LOG_DEBUG(Render_Vulkan, "Recreate the swapchain: width={} height={} HDR={}", width_, height_,
-              needs_hdr);
+    LOG_DEBUG(Render_Vulkan, "Recreate the swapchain: width={} height={}", width_, height_);
     Create(width_, height_);
-}
-
-void Swapchain::SetHDR(bool hdr) {
-    if (needs_hdr == hdr) {
-        return;
-    }
-
-    auto result = instance.GetDevice().waitIdle();
-    if (result != vk::Result::eSuccess) {
-        LOG_WARNING(ImGui, "Failed to wait for Vulkan device idle on mode change: {}",
-                    vk::to_string(result));
-    }
-
-    needs_hdr = hdr;
-    Recreate(width, height);
-    ImGui::Core::OnSurfaceFormatChange(needs_hdr ? SURFACE_FORMAT_HDR.format
-                                                 : surface_format.format);
 }
 
 bool Swapchain::AcquireNextImage() {
@@ -314,7 +291,7 @@ void Swapchain::SetupImages() {
         auto [im_view_result, im_view] = device.createImageView(vk::ImageViewCreateInfo{
             .image = images[i],
             .viewType = vk::ImageViewType::e2D,
-            .format = needs_hdr ? SURFACE_FORMAT_HDR.format : surface_format.format,
+            .format = surface_format.format,
             .subresourceRange =
                 {
                     .aspectMask = vk::ImageAspectFlagBits::eColor,

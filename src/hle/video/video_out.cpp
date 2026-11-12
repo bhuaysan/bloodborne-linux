@@ -63,7 +63,6 @@ struct Port : VideoOutPort {
 
     std::atomic<int> flip_rate{0};
     std::atomic<bool> is_open{false};
-    bool is_hdr = false;
 };
 
 class Driver {
@@ -283,7 +282,6 @@ private:
 
     void flip(const Request& req) {
         if (req.presenter != nullptr) {
-            req.presenter->set_hdr(port_.is_hdr);
             req.presenter->present(req.frame, false, true);
         }
 

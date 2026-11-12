@@ -97,7 +97,6 @@ public:
     virtual Vulkan::Frame* prepare_blank_frame(bool present_thread) = 0;
     virtual Vulkan::Frame* prepare_last_frame() = 0;
     virtual void present(Vulkan::Frame* frame, bool is_reusing_frame, bool is_game_frame) = 0;
-    virtual void set_hdr(bool enable) = 0;
     // ImGui::Core::MustKeepDrawing.
     virtual bool must_keep_drawing() = 0;
 };
