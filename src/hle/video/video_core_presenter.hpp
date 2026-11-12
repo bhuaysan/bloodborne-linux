@@ -59,7 +59,7 @@ public:
 
     // The number of presents of the game's frames so far.
     std::uint64_t game_frames() const { return game_frames_; }
-    // The rasterizer's draws and dispatches so far (DebugState's counters).
+    // The rasterizer's draws and dispatches so far (GpuStats' counters).
     static std::uint64_t draws();
     static std::uint64_t dispatches();
 

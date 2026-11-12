@@ -5,7 +5,7 @@
 #include <utility>
 
 #include "common/log.hpp"
-#include "core/debug_state.h"
+#include "core/gpu_stats.h"
 #include "core/emulator_settings.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
@@ -140,11 +140,11 @@ std::span<const std::uint32_t> VideoCorePresenter::queue_ring(std::uint32_t inde
 }
 
 std::uint64_t VideoCorePresenter::draws() {
-    return DebugState.draws.load(std::memory_order_relaxed);
+    return GpuStats.draws.load(std::memory_order_relaxed);
 }
 
 std::uint64_t VideoCorePresenter::dispatches() {
-    return DebugState.dispatches.load(std::memory_order_relaxed);
+    return GpuStats.dispatches.load(std::memory_order_relaxed);
 }
 
 std::optional<std::int32_t> resolve_gpu_id(std::string_view selector,
@@ -159,8 +159,7 @@ std::optional<std::int32_t> resolve_gpu_id(std::string_view selector,
     // could list them in another order. Not a Vulkan::Instance: its destructor needs a logical
     // device.
     const vk::UniqueInstance instance =
-        Vulkan::CreateInstance(window_type, EmulatorSettings.IsVkValidationEnabled(),
-                               EmulatorSettings.IsVkCrashDiagnosticEnabled());
+        Vulkan::CreateInstance(window_type, EmulatorSettings.IsVkValidationEnabled());
     const auto [result, devices] = instance->enumeratePhysicalDevices();
     if (result != vk::Result::eSuccess) {
         why = "vkEnumeratePhysicalDevices: " + vk::to_string(result);

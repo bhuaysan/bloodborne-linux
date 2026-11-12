@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_instance.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include <boost/container/static_vector.hpp>
@@ -9,7 +9,6 @@
 #include <fmt/ranges.h>
 
 #include "common/assert.h"
-#include "common/debug.h"
 #include "common/types.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
@@ -92,15 +91,13 @@ std::string GetReadableVersion(u32 version) {
 
 } // Anonymous namespace
 
-Instance::Instance(bool enable_validation, bool enable_crash_diagnostic)
-    : instance{CreateInstance(Frontend::WindowSystemType::Headless, enable_validation,
-                              enable_crash_diagnostic)},
+Instance::Instance(bool enable_validation)
+    : instance{CreateInstance(Frontend::WindowSystemType::Headless, enable_validation)},
       physical_devices{EnumeratePhysicalDevices(instance)} {}
 
 Instance::Instance(Frontend::WindowSDL& window, s32 physical_device_index,
-                   bool enable_validation /*= false*/, bool enable_crash_diagnostic /*= false*/)
-    : instance{
-          CreateInstance(window.GetWindowInfo().type, enable_validation, enable_crash_diagnostic)},
+                   bool enable_validation /*= false*/)
+    : instance{CreateInstance(window.GetWindowInfo().type, enable_validation)},
       physical_devices{EnumeratePhysicalDevices(instance)} {
     if (enable_validation) {
         debug_callback = CreateDebugCallback(*instance);
@@ -367,8 +364,6 @@ bool Instance::CreateDevice() {
         LOG_INFO(Render_Vulkan, "- shaderSubgroupClock: {}",
                  shader_clock_features.shaderSubgroupClock);
     }
-    const bool calibrated_timestamps =
-        TRACY_GPU_ENABLED ? add_extension(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) : false;
 
     const auto family_properties = physical_device.getQueueFamilyProperties();
     if (family_properties.empty()) {
@@ -613,37 +608,6 @@ bool Instance::CreateDevice() {
 
     graphics_queue = device->getQueue(queue_family_index, 0);
     present_queue = device->getQueue(queue_family_index, 0);
-
-    if (calibrated_timestamps) {
-        const auto [time_domains_result, time_domains] =
-            physical_device.getCalibrateableTimeDomainsEXT();
-        if (time_domains_result == vk::Result::eSuccess) {
-#if _WIN64
-            const bool has_host_time_domain =
-                std::find(time_domains.cbegin(), time_domains.cend(),
-                          vk::TimeDomainEXT::eQueryPerformanceCounter) != time_domains.cend();
-#elif __linux__
-            const bool has_host_time_domain =
-                std::find(time_domains.cbegin(), time_domains.cend(),
-                          vk::TimeDomainEXT::eClockMonotonicRaw) != time_domains.cend();
-#else
-            // Tracy limitation means only Windows and Linux can use host time domain.
-            // https://github.com/shadps4-emu/tracy/blob/c6d779d78508514102fbe1b8eb28bda10d95bb2a/public/tracy/TracyVulkan.hpp#L384-L389
-            const bool has_host_time_domain = false;
-#endif
-            if (has_host_time_domain) {
-                static constexpr std::string_view context_name{"vk_rasterizer"};
-                profiler_context = TracyVkContextHostCalibrated(
-                    *instance, physical_device, *device,
-                    VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr,
-                    VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr);
-                TracyVkContextName(profiler_context, context_name.data(), context_name.size());
-            }
-        } else {
-            LOG_WARNING(Render_Vulkan, "Could not query calibrated time domains for profiling: {}",
-                        vk::to_string(time_domains_result));
-        }
-    }
 
     CreateAllocator();
     return true;

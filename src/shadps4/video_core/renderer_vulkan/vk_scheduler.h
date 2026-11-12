@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_scheduler.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -18,10 +18,6 @@
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 #include "vulkan/vulkan.hpp"
-
-namespace tracy {
-class VkCtxScope;
-}
 
 namespace Vulkan {
 
@@ -482,7 +478,6 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
-    tracy::VkCtxScope* profiler_scope{};
 };
 
 } // namespace Vulkan

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_instance.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -10,9 +10,6 @@
 #include <unordered_map>
 
 #include "video_core/renderer_vulkan/vk_platform.h"
-
-#define TRACY_VK_USE_SYMBOL_TABLE
-#include <tracy/TracyVulkan.hpp>
 
 namespace Frontend {
 class WindowSDL;
@@ -24,9 +21,9 @@ namespace Vulkan {
 
 class Instance {
 public:
-    explicit Instance(bool validation = false, bool crash_diagnostic = false);
+    explicit Instance(bool validation = false);
     explicit Instance(Frontend::WindowSDL& window, s32 physical_device_index,
-                      bool enable_validation = false, bool enable_crash_diagnostic = false);
+                      bool enable_validation = false);
     ~Instance();
 
     /// Returns a formatted string for the driver version
@@ -76,10 +73,6 @@ public:
 
     vk::Queue GetPresentQueue() const {
         return present_queue;
-    }
-
-    TracyVkCtx GetProfilerContext() const {
-        return profiler_context;
     }
 
     /// Returns true if anisotropic filtering is supported
@@ -239,8 +232,7 @@ public:
         return vk12_features.shaderSharedInt64Atomics;
     }
 
-    /// Returns true when buffer device address can be used. RenderDoc hides it on drivers that
-    /// lack bufferDeviceAddressCaptureReplay.
+    /// Returns true when buffer device address can be used.
     bool IsBufferDeviceAddressSupported() const {
         return vk12_features.bufferDeviceAddress;
     }
@@ -523,7 +515,6 @@ private:
     std::vector<vk::PhysicalDevice> physical_devices;
     std::vector<std::string> available_extensions;
     std::unordered_map<vk::Format, vk::FormatProperties3> format_properties;
-    TracyVkCtx profiler_context{};
     u32 queue_family_index{0};
     bool custom_border_color{};
     bool fragment_shader_barycentric{};

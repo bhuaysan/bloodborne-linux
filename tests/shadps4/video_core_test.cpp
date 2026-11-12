@@ -142,7 +142,7 @@ TEST(VideoCore, ResolvesTheDeviceSelectorToTheIndexInThePresentersInstance) {
     vk::PhysicalDeviceProperties last;
     vk::ArrayWrapper1D<std::uint8_t, VK_UUID_SIZE> last_uuid;
     {
-        const vk::UniqueInstance instance = Vulkan::CreateInstance(type, false, false);
+        const vk::UniqueInstance instance = Vulkan::CreateInstance(type, false);
         const auto [result, devices] = instance->enumeratePhysicalDevices();
         ASSERT_EQ(result, vk::Result::eSuccess);
         ASSERT_FALSE(devices.empty());

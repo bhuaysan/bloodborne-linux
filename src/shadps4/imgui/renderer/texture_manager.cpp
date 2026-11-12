@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/imgui/renderer/texture_manager.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include <deque>
@@ -154,11 +154,6 @@ void WorkerLoop() {
             auto [core, png_raw, path] = std::move(g_job_list.front());
             g_job_list.pop_front();
             g_job_list_mtx.unlock();
-
-            if (EmulatorSettings.IsVkCrashDiagnosticEnabled()) {
-                // FIXME: Crash diagnostic hangs when building the command buffer here
-                continue;
-            }
 
             if (!path.empty()) { // Decode PNG from file
                 Common::FS::IOFile file(path, Common::FS::FileAccessMode::Read);

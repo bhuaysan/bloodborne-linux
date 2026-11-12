@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/ime/ime_dialog_ui.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -19,7 +19,7 @@
 
 #include "common/assert.h"
 #include "common/logging/log.h"
-#include "core/debug_state.h"
+#include "core/display_state.h"
 #include "core/libraries/error_codes.h"
 #include "core/libraries/ime/ime_dialog.h"
 #include "core/libraries/ime/ime_dialog_ui.h"
@@ -1095,8 +1095,8 @@ void ImeDialogUi::Draw() {
         SetWindowFontScale(std::max(ui_scale, metrics.input_font_scale));
 
         if (first_render) {
-            const auto game_res = DebugState.game_resolution;
-            const auto out_res = DebugState.output_resolution;
+            const auto game_res = DisplayState.game_resolution;
+            const auto out_res = DisplayState.output_resolution;
             const float req_w = has_layout ? static_cast<float>(layout.width)
                                            : static_cast<float>(state->panel_req_width);
             const float req_h = has_layout ? static_cast<float>(layout.height)

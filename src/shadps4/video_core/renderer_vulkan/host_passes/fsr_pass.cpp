@@ -1,7 +1,7 @@
 //  SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 //  SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/host_passes/fsr_pass.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/assert.h"
@@ -13,7 +13,6 @@
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 
 #define A_CPU
-#include "core/debug_state.h"
 #include "video_core/host_shaders/fsr/ffx_a.h"
 #include "video_core/host_shaders/fsr/ffx_fsr1.h"
 
@@ -136,15 +135,11 @@ vk::ImageView FsrPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView input,
                               vk::Extent2D input_size, vk::Extent2D output_size, Settings settings,
                               bool hdr) {
     if (!settings.enable) {
-        DebugState.is_using_fsr = false;
         return input;
     }
     if (input_size.width >= output_size.width && input_size.height >= output_size.height) {
-        DebugState.is_using_fsr = false;
         return input;
     }
-
-    DebugState.is_using_fsr = true;
 
     if (output_size != cur_size) {
         ResizeAndInvalidate(output_size.width, output_size.height);
@@ -158,12 +153,6 @@ vk::ImageView FsrPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView input,
 
     if (img.dirty) {
         CreateImages(img);
-    }
-
-    if (EmulatorSettings.IsVkHostMarkersEnabled()) {
-        cmdbuf.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT{
-            .pLabelName = "Host/FSR",
-        });
     }
 
     static const int thread_group_work_region_dim = 16;
@@ -382,10 +371,6 @@ vk::ImageView FsrPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView input,
         .imageMemoryBarrierCount = return_barrier.size(),
         .pImageMemoryBarriers = return_barrier.data(),
     });
-
-    if (EmulatorSettings.IsVkHostMarkersEnabled()) {
-        cmdbuf.endDebugUtilsLabelEXT();
-    }
 
     return img.output_image_view.get();
 }

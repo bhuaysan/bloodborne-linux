@@ -56,9 +56,6 @@ struct FixedSettings {
     static constexpr bool IsVkValidationCoreEnabled() { return true; }
     static constexpr bool IsVkValidationSyncEnabled() { return false; }
     static constexpr bool IsVkValidationGpuEnabled() { return false; }
-    static constexpr bool IsVkCrashDiagnosticEnabled() { return false; }
-    static constexpr bool IsVkHostMarkersEnabled() { return false; }
-    static constexpr bool IsVkGuestMarkersEnabled() { return false; }
     static constexpr bool IsPipelineCacheEnabled() { return false; }
     static constexpr bool IsPipelineCacheArchived() { return false; }
 

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_platform.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 // Include the vulkan platform specific header
@@ -33,7 +33,6 @@
 namespace Vulkan {
 
 static const char* const VALIDATION_LAYER_NAME = "VK_LAYER_KHRONOS_validation";
-static const char* const CRASH_DIAGNOSTIC_LAYER_NAME = "VK_LAYER_LUNARG_crash_diagnostic";
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
     vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type,
@@ -224,7 +223,7 @@ std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window
     return extensions;
 }
 
-std::vector<const char*> GetInstanceLayers(bool enable_validation, bool enable_crash_diagnostic) {
+std::vector<const char*> GetInstanceLayers(bool enable_validation) {
     const auto [properties_result, properties] = vk::enumerateInstanceLayerProperties();
     if (properties_result != vk::Result::eSuccess || properties.empty()) {
         LOG_ERROR(Render_Vulkan, "Failed to query layer properties: {}",
@@ -237,9 +236,6 @@ std::vector<const char*> GetInstanceLayers(bool enable_validation, bool enable_c
 
     if (enable_validation) {
         layers.push_back(VALIDATION_LAYER_NAME);
-    }
-    if (enable_crash_diagnostic) {
-        layers.push_back(CRASH_DIAGNOSTIC_LAYER_NAME);
     }
 
     // Sanitize layer list
@@ -257,8 +253,7 @@ std::vector<const char*> GetInstanceLayers(bool enable_validation, bool enable_c
     return layers;
 }
 
-vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool enable_validation,
-                                  bool enable_crash_diagnostic) {
+vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool enable_validation) {
     LOG_INFO(Render_Vulkan, "Creating vulkan instance");
 
 #if defined(__APPLE__)
@@ -288,7 +283,7 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
                VK_VERSION_MAJOR(TargetVulkanApiVersion), VK_VERSION_MINOR(TargetVulkanApiVersion),
                VK_VERSION_MAJOR(available_version), VK_VERSION_MINOR(available_version));
 
-    const auto layers = GetInstanceLayers(enable_validation, enable_crash_diagnostic);
+    const auto layers = GetInstanceLayers(enable_validation);
     const auto extensions = GetLayerExtensions(GetInstanceExtensions(window_type, true), layers);
 
     const vk::ApplicationInfo application_info = {
@@ -308,12 +303,6 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
     vk::Bool32 enable_core = EmulatorSettings.IsVkValidationCoreEnabled() ? vk::True : vk::False;
     vk::Bool32 enable_sync = EmulatorSettings.IsVkValidationSyncEnabled() ? vk::True : vk::False;
     vk::Bool32 enable_gpuav = EmulatorSettings.IsVkValidationGpuEnabled() ? vk::True : vk::False;
-
-    // Crash diagnostics settings
-    static const auto crash_diagnostic_path =
-        Common::FS::GetUserPathString(Common::FS::PathType::LogDir);
-    const char* log_path = crash_diagnostic_path.c_str();
-    vk::Bool32 enable_force_barriers = vk::True;
 
     const std::array layer_setings = {
         vk::LayerSettingEXT{
@@ -385,20 +374,6 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
             .type = vk::LayerSettingTypeEXT::eBool32,
             .valueCount = 1,
             .pValues = &enable_gpuav,
-        },
-        vk::LayerSettingEXT{
-            .pLayerName = "lunarg_crash_diagnostic",
-            .pSettingName = "output_path",
-            .type = vk::LayerSettingTypeEXT::eString,
-            .valueCount = 1,
-            .pValues = &log_path,
-        },
-        vk::LayerSettingEXT{
-            .pLayerName = "lunarg_crash_diagnostic",
-            .pSettingName = "sync_after_commands",
-            .type = vk::LayerSettingTypeEXT::eBool32,
-            .valueCount = 1,
-            .pValues = &enable_force_barriers,
         },
     };
 

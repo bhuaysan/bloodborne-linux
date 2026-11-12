@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_rasterizer.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -55,22 +55,6 @@ public:
 
     void DispatchDirect();
     void DispatchIndirect(VAddr address, u32 offset, u32 size);
-
-    void ScopeMarker(fmt::string_view fmt, fmt::format_args args, auto&& func) {
-        if (host_markers_enabled) {
-            ScopeMarkerBegin(fmt::vformat(fmt, args));
-            func();
-            ScopeMarkerEnd();
-        } else {
-            func();
-        }
-    }
-
-    void ScopeMarkerBegin(const std::string_view& str, bool from_guest = false);
-    void ScopeMarkerEnd(bool from_guest = false);
-    void ScopedMarkerInsert(const std::string_view& str, bool from_guest = false);
-    void ScopedMarkerInsertColor(const std::string_view& str, const u32 color,
-                                 bool from_guest = false);
 
     void FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds);
     void CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds);
@@ -149,8 +133,6 @@ private:
     boost::icl::interval_set<VAddr> mapped_ranges;
     Common::SharedFirstMutex mapped_ranges_mutex;
     PipelineCache pipeline_cache;
-    const bool host_markers_enabled;
-    const bool guest_markers_enabled;
 
     struct ImageBinding {
         VideoCore::ImageId image_id;

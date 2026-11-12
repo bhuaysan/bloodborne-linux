@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_rasterizer.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/debug.h"
-#include "core/debug_state.h"
+#include "core/gpu_stats.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
 #include "shader_recompiler/resource.h"
@@ -42,9 +42,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
       buffer_cache{instance, scheduler, runtime, liverpool_, texture_cache, page_manager},
       texture_cache{instance, scheduler, runtime, liverpool_, buffer_cache, page_manager},
       liverpool{liverpool_}, memory{Core::Memory::Instance()},
-      pipeline_cache{instance, scheduler, liverpool, buffer_cache.GetSparsePageShift()},
-      host_markers_enabled{EmulatorSettings.IsVkHostMarkersEnabled()},
-      guest_markers_enabled{EmulatorSettings.IsVkGuestMarkersEnabled()} {
+      pipeline_cache{instance, scheduler, liverpool, buffer_cache.GetSparsePageShift()} {
     if (!EmulatorSettings.IsNullGPU()) {
         liverpool->BindRasterizer(this);
     }
@@ -68,7 +66,6 @@ bool Rasterizer::FilterDraw() {
     if (regs.color_control.mode == AmdGpu::ColorControl::OperationMode::FmaskDecompress) {
         // TODO: check for a valid MRT1 to promote the draw to the resolve pass.
         LOG_TRACE(Render_Vulkan, "FMask decompression pass skipped");
-        ScopedMarkerInsert("FmaskDecompress");
         EliminateFastClear();
         return false;
     }
@@ -79,7 +76,6 @@ bool Rasterizer::FilterDraw() {
     }
     if (regs.primitive_type == AmdGpu::PrimitiveType::None) {
         LOG_TRACE(Render_Vulkan, "Primitive type 'None' skipped");
-        ScopedMarkerInsert("PrimitiveTypeNone");
         return false;
     }
 
@@ -178,10 +174,7 @@ void Rasterizer::EliminateFastClear() {
     auto& image = texture_cache.GetImage(image_id);
     const auto clear_value = LiverpoolToVK::ColorBufferClearValue(col_buf);
 
-    ScopeMarkerBegin(fmt::format("EliminateFastClear:MRT={:#x}:M={:#x}", col_buf.Address(),
-                                 col_buf.CmaskAddress()));
     runtime.ClearImage(&image, desc.view_info.range, clear_value);
-    ScopeMarkerEnd();
 }
 
 void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
@@ -232,7 +225,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         cmdbuf.draw(regs.num_indices, regs.num_instances.NumInstances(), vertex_offset,
                     instance_offset);
     }
-    DebugState.IncDrawCall();
+    GpuStats.IncDrawCall();
 
     ResetBindings(false);
 }
@@ -303,7 +296,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         } else {
             cmdbuf.drawIndexedIndirect(buffer->Handle(), base, max_count, stride);
         }
-        DebugState.IncDrawCall();
+        GpuStats.IncDrawCall();
     } else {
         ASSERT(sizeof(VkDrawIndirectCommand) == stride);
 
@@ -313,7 +306,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         } else {
             cmdbuf.drawIndirect(buffer->Handle(), base, max_count, stride);
         }
-        DebugState.IncDrawCall();
+        GpuStats.IncDrawCall();
     }
 
     ResetBindings(false);
@@ -349,7 +342,7 @@ void Rasterizer::DispatchDirect() {
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
     cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
-    DebugState.IncDispatch();
+    GpuStats.IncDispatch();
 
     ResetBindings(true);
 }
@@ -383,7 +376,7 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
     cmdbuf.dispatchIndirect(buffer->Handle(), base);
-    DebugState.IncDispatch();
+    GpuStats.IncDispatch();
 
     ResetBindings(true);
 }
@@ -1177,12 +1170,8 @@ void Rasterizer::Resolve() {
     auto& mrt0_image = texture_cache.GetImage(texture_cache.FindImage(mrt0_desc, true));
     auto& mrt1_image = texture_cache.GetImage(texture_cache.FindImage(mrt1_desc, true));
 
-    ScopeMarkerBegin(fmt::format("Resolve:MRT0={:#x}:MRT1={:#x}",
-                                 liverpool->regs.color_buffers[0].Address(),
-                                 liverpool->regs.color_buffers[1].Address()));
     runtime.ResolveImage(&mrt0_image, &mrt1_image, mrt0_desc.view_info.range,
                          mrt1_desc.view_info.range);
-    ScopeMarkerEnd();
 }
 
 void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
@@ -1205,14 +1194,7 @@ void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
     sub_range.base.layer = liverpool->regs.depth_view.slice_start;
     sub_range.extent.layers = liverpool->regs.depth_view.NumSlices() - sub_range.base.layer;
 
-    ScopeMarkerBegin(fmt::format(
-        "DepthStencilCopy:DR={:#x}:SR={:#x}:DW={:#x}:SW={:#x}", regs.depth_buffer.DepthAddress(),
-        regs.depth_buffer.StencilAddress(), regs.depth_buffer.DepthWriteAddress(),
-        regs.depth_buffer.StencilWriteAddress()));
-
     runtime.CopyDepthStencil(&read_image, &write_image, sub_range);
-
-    ScopeMarkerEnd();
 }
 
 void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds) {
@@ -1582,51 +1564,6 @@ void Rasterizer::UpdateColorBlendingState(const GraphicsPipeline* pipeline) cons
     dynamic_state.SetBlendConstants(regs.blend_constants);
     dynamic_state.SetColorWriteMasks(pipeline->GetGraphicsKey().write_masks);
     dynamic_state.SetAttachmentFeedbackLoopEnabled(attachment_feedback_loop);
-}
-
-void Rasterizer::ScopeMarkerBegin(const std::string_view& str, bool from_guest) {
-    if ((from_guest && !EmulatorSettings.IsVkGuestMarkersEnabled()) ||
-        (!from_guest && !EmulatorSettings.IsVkHostMarkersEnabled())) {
-        return;
-    }
-    const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT{
-        .pLabelName = str.data(),
-    });
-}
-
-void Rasterizer::ScopeMarkerEnd(bool from_guest) {
-    if ((from_guest && !EmulatorSettings.IsVkGuestMarkersEnabled()) ||
-        (!from_guest && !EmulatorSettings.IsVkHostMarkersEnabled())) {
-        return;
-    }
-    const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.endDebugUtilsLabelEXT();
-}
-
-void Rasterizer::ScopedMarkerInsert(const std::string_view& str, bool from_guest) {
-    if ((from_guest && !EmulatorSettings.IsVkGuestMarkersEnabled()) ||
-        (!from_guest && !EmulatorSettings.IsVkHostMarkersEnabled())) {
-        return;
-    }
-    const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.insertDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT{
-        .pLabelName = str.data(),
-    });
-}
-
-void Rasterizer::ScopedMarkerInsertColor(const std::string_view& str, const u32 color,
-                                         bool from_guest) {
-    if ((from_guest && !EmulatorSettings.IsVkGuestMarkersEnabled()) ||
-        (!from_guest && !EmulatorSettings.IsVkHostMarkersEnabled())) {
-        return;
-    }
-    const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.insertDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT{
-        .pLabelName = str.data(),
-        .color = std::array<f32, 4>(
-            {(f32)((color >> 16) & 0xff) / 255.0f, (f32)((color >> 8) & 0xff) / 255.0f,
-             (f32)(color & 0xff) / 255.0f, (f32)((color >> 24) & 0xff) / 255.0f})});
 }
 
 std::thread::id Rasterizer::GetGpuCommandProcessorThread() {

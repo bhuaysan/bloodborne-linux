@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_scheduler.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/assert.h"
-#include "common/debug.h"
 #include "common/thread.h"
 #include "imgui/renderer/texture_manager.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -17,19 +16,12 @@ std::mutex Scheduler::submit_mutex;
 
 Scheduler::Scheduler(const Instance& instance)
     : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
-#if TRACY_GPU_ENABLED
-    profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
-#endif
     BeginSession();
     priority_pending_ops_thread =
         std::jthread(std::bind_front(&Scheduler::PriorityPendingOpsThread, this));
 }
 
-Scheduler::~Scheduler() {
-#if TRACY_GPU_ENABLED
-    std::free(profiler_scope);
-#endif
-}
+Scheduler::~Scheduler() = default;
 
 void Scheduler::BeginRendering(const RenderState& new_state) {
     if (is_rendering && render_state == new_state) {
@@ -156,15 +148,6 @@ void Scheduler::BeginSession() {
 
     // Invalidate dynamic state so it gets applied to the new command buffer.
     dynamic_state.Invalidate();
-
-#if TRACY_GPU_ENABLED
-    auto* profiler_ctx = instance.GetProfilerContext();
-    if (profiler_ctx) {
-        static const auto scope_loc =
-            GPU_SCOPE_LOCATION("Guest Frame", MarkersPalette::GpuMarkerColor);
-        new (profiler_scope) tracy::VkCtxScope{profiler_ctx, &scope_loc, current_cmdbuf, true};
-    }
-#endif
 }
 
 void Scheduler::EndSession() {
@@ -188,14 +171,6 @@ void Scheduler::EndSession() {
 void Scheduler::SubmitExecution(SubmitInfo& info) {
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
-
-#if TRACY_GPU_ENABLED
-    auto* profiler_ctx = instance.GetProfilerContext();
-    if (profiler_ctx) {
-        profiler_scope->~VkCtxScope();
-        TracyVkCollect(profiler_ctx, current_cmdbuf);
-    }
-#endif
 
     if (on_submit) {
         on_submit(info);

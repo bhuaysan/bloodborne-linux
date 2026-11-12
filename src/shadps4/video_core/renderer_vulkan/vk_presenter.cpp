@@ -1,24 +1,18 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_presenter.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
-#include "common/debug.h"
 #include "common/elf_info.h"
 #include "common/io_file.h"
 #include "common/path_util.h"
-#include "common/singleton.h"
-#include "core/debug_state.h"
-#include "core/devtools/layer.h"
+#include "core/display_state.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/system/systemservice.h"
-#include "imgui/friends_layer.h"
-#include "imgui/invitation_prompt_layer.h"
 #include "imgui/notifications_layer.h"
 #include "imgui/renderer/imgui_core.h"
 #include "imgui/renderer/imgui_impl_vulkan.h"
-#include "imgui/shadnet_notifications_layer.h"
 #include "sdl_window.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderdoc.h"
@@ -467,8 +461,7 @@ static void SavePendingScreenshot(const ScreenshotReadback& readback) {
 
 Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_)
     : window{window_}, liverpool{liverpool_},
-      instance{window, EmulatorSettings.GetGpuId(), EmulatorSettings.IsVkValidationEnabled(),
-               EmulatorSettings.IsVkCrashDiagnosticEnabled()},
+      instance{window, EmulatorSettings.GetGpuId(), EmulatorSettings.IsVkValidationEnabled()},
       draw_scheduler{instance}, present_scheduler{instance}, flip_scheduler{instance},
       swapchain{instance, window}, runtime{instance, draw_scheduler},
       rasterizer{std::make_unique<Rasterizer>(instance, draw_scheduler, runtime, liverpool)},
@@ -495,18 +488,9 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     fsr_pass.Create(device, instance.GetAllocator(), num_images);
     pp_pass.Create(device, swapchain.GetSurfaceFormat().format);
 
-    ImGui::Layer::AddLayer(Common::Singleton<Core::Devtools::Layer>::Instance());
-    ImGui::Friends::Register();
-    ImGui::ShadNetNotify::Register();
-    ImGui::InvitationPrompt::Register();
 }
 
 Presenter::~Presenter() {
-    ImGui::InvitationPrompt::Unregister();
-    ImGui::ShadNetNotify::Unregister();
-    ImGui::Friends::Unregister();
-    ImGui::Layer::RemoveLayer(Common::Singleton<Core::Devtools::Layer>::Instance());
-
     draw_scheduler.Finish();
     present_scheduler.Finish();
     flip_scheduler.Finish();
@@ -752,8 +736,8 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         attribute.attrib.pixel_format == Libraries::VideoOut::PixelFormat::A2R10G10B10Srgb;
     pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
 
-    DebugState.game_resolution = {image_size.width, image_size.height};
-    DebugState.output_resolution = {frame->width, frame->height};
+    DisplayState.game_resolution = {image_size.width, image_size.height};
+    DisplayState.output_resolution = {frame->width, frame->height};
 
     if (pending_screenshot) {
         draw_scheduler.DeferPriorityOperation(
@@ -886,17 +870,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     const u32 capture_with_overlays_count = VideoCore::ConsumeWithOverlaysScreenshotRequests();
     std::optional<ScreenshotReadback> pending_screenshot;
 
-    if (EmulatorSettings.IsVkHostMarkersEnabled()) {
-        cmdbuf.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT{
-            .pLabelName = "Present",
-        });
-    }
 
     {
-        auto* profiler_ctx = instance.GetProfilerContext();
-        TracyVkNamedZoneC(profiler_ctx, renderer_gpu_zone, cmdbuf, "Host frame",
-                          MarkersPalette::GpuMarkerColor, profiler_ctx != nullptr);
-
         const vk::Extent2D extent = swapchain.GetExtent();
         const std::array pre_barriers{
             vk::ImageMemoryBarrier{
@@ -983,10 +958,6 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 
                 ImGui::SetCursorPos(ImGui::GetCursorStartPos() + offset);
                 ImGui::Image(game_texture, size);
-
-                if (EmulatorSettings.IsNullGPU()) {
-                    Core::Devtools::Layer::DrawNullGpuNotice();
-                }
             }
             ImGui::End();
             ImGui::PopStyleVar(3);
@@ -1053,13 +1024,6 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
                                vk::PipelineStageFlagBits::eAllCommands,
                                vk::DependencyFlagBits::eByRegion, {}, {}, post_barrier);
-
-        if (profiler_ctx) {
-            TracyVkCollect(profiler_ctx, cmdbuf);
-        }
-    }
-    if (EmulatorSettings.IsVkHostMarkersEnabled()) {
-        cmdbuf.endDebugUtilsLabelEXT();
     }
 
     // Flush vulkan commands.
@@ -1085,9 +1049,6 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     }
 
     free_frame();
-    if (!is_reusing_frame && is_game_frame) {
-        DebugState.IncFlipFrameNum();
-    }
 }
 
 Frame* Presenter::GetRenderFrame() {

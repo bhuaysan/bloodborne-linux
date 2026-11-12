@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/imgui/renderer/imgui_core.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -12,8 +12,6 @@
 #include <imgui.h>
 
 #include "common/path_util.h"
-#include "core/debug_state.h"
-#include "core/devtools/layer.h"
 #include "core/emulator_settings.h"
 #include "font_data.h"
 #include "font_stack.h"
@@ -118,7 +116,6 @@ void Initialize(const ::Vulkan::Instance& instance, const Frontend::WindowSDL& w
 
     StyleColorsDark();
 
-    ::Core::Devtools::Layer::SetupSettings();
     Sdl::Init(window.GetSDLWindow());
 
     const Vulkan::InitInfo vk_info{
@@ -242,11 +239,9 @@ ImGuiID NewFrame(bool is_reusing_frame) {
     ImGui::NewFrame();
     SetKeyOwner(ImGuiKey_GamepadFaceUp, ImHashStr("shadps4/pad"));
 
-    ImGuiWindowFlags flags =
-        ImGuiDockNodeFlags_PassthruCentralNode | ImGuiDockNodeFlags_AutoHideTabBar;
-    if (!DebugState.IsShowingDebugMenuBar()) {
-        flags |= ImGuiDockNodeFlags_NoTabBar;
-    }
+    const ImGuiWindowFlags flags = ImGuiDockNodeFlags_PassthruCentralNode |
+                                   ImGuiDockNodeFlags_AutoHideTabBar |
+                                   ImGuiDockNodeFlags_NoTabBar;
     ImGuiID dockId = DockSpaceOverViewport(0, GetMainViewport(), flags);
 
     for (auto* layer : layers) {
@@ -264,12 +259,6 @@ void Render(const vk::CommandBuffer& cmdbuf, const vk::ImageView& image_view,
     Vulkan::UpdateTextures(*draw_data, cmdbuf);
     if (draw_data->CmdListsCount == 0) {
         return;
-    }
-
-    if (EmulatorSettings.IsVkHostMarkersEnabled()) {
-        cmdbuf.beginDebugUtilsLabelEXT(vk::DebugUtilsLabelEXT{
-            .pLabelName = "ImGui Render",
-        });
     }
 
     vk::RenderingAttachmentInfo color_attachments[1]{
@@ -291,9 +280,6 @@ void Render(const vk::CommandBuffer& cmdbuf, const vk::ImageView& image_view,
     cmdbuf.beginRendering(render_info);
     Vulkan::RenderDrawData(*draw_data, cmdbuf);
     cmdbuf.endRendering();
-    if (EmulatorSettings.IsVkHostMarkersEnabled()) {
-        cmdbuf.endDebugUtilsLabelEXT();
-    }
 }
 
 bool MustKeepDrawing() {

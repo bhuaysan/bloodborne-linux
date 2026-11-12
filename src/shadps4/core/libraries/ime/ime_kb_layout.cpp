@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/ime/ime_kb_layout.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-12
 // License texts: third_party/shadps4/LICENSES/
 
 #include "core/libraries/ime/ime_kb_layout.h"
@@ -14,7 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "core/debug_state.h"
+#include "core/display_state.h"
 #include "core/libraries/ime/ime_ui_shared.h"
 
 namespace Libraries::Ime {
@@ -1091,7 +1091,7 @@ ImeViewportMetrics ComputeImeViewportMetrics(bool use_over2k) {
     metrics.size = base_size;
     metrics.offset = base_pos;
 
-    const auto out_res = DebugState.output_resolution;
+    const auto out_res = DisplayState.output_resolution;
     if (out_res.first != 0 && out_res.second != 0) {
         const float fb_scale_x =
             io.DisplayFramebufferScale.x > 0.0f ? io.DisplayFramebufferScale.x : 1.0f;
