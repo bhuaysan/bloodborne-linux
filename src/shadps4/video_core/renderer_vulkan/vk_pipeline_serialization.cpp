@@ -420,8 +420,11 @@ void PipelineCache::SaveDriverCache() {
     std::scoped_lock lock{save_mutex};
     saved_pipelines = num_new_pipelines.load();
     LOG_INFO(Render, "Pipeline cache: {} pipelines preloaded, {} built and {} shaders translated "
-                     "since start",
-             num_preloaded, saved_pipelines, num_new_shaders.load());
+                     "since start, {} ms spent building them",
+             num_preloaded, saved_pipelines, num_new_shaders.load(),
+             std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::steady_clock::duration{build_ns.load()})
+                 .count());
     last_save = std::chrono::steady_clock::now();
     auto [result, data] = instance.GetDevice().getPipelineCacheData(*pipeline_cache);
     if (result != vk::Result::eSuccess || data.empty()) {

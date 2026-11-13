@@ -365,12 +365,14 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(graphics_key);
         LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x}", pipeline_hash);
 
+        const auto build_start = std::chrono::steady_clock::now();
         GraphicsPipeline::SerializationSupport sdata{};
         it.value() = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
             runtime_infos, fetch_shader, modules, sdata, false);
 
         RegisterPipelineData(graphics_key, pipeline_hash, sdata);
+        build_ns += (std::chrono::steady_clock::now() - build_start).count();
         ++num_new_pipelines;
         SaveDriverCacheIfDue();
     }
@@ -386,11 +388,13 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         const auto pipeline_hash = std::hash<ComputePipelineKey>{}(compute_key);
         LOG_INFO(Render_Vulkan, "Compiling compute pipeline {:#x}", pipeline_hash);
 
+        const auto build_start = std::chrono::steady_clock::now();
         ComputePipeline::SerializationSupport sdata{};
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                                        *pipeline_cache, compute_key, *infos[0],
                                                        modules[0], sdata, false);
         RegisterPipelineData(compute_key, sdata);
+        build_ns += (std::chrono::steady_clock::now() - build_start).count();
         ++num_new_pipelines;
         SaveDriverCacheIfDue();
     }
@@ -633,12 +637,14 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
              perm_idx != 0 ? "(permutation)" : "");
 
     ++num_new_shaders;
+    const auto build_start = std::chrono::steady_clock::now();
     const auto ir_program = Shader::TranslateProgram(code, pools, info, runtime_info, profile);
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);
 
     const vk::ShaderModule module = CompileSPV(spv, instance.GetDevice());
 
     RegisterShaderBinary(std::move(spv), info.pgm_hash, perm_idx);
+    build_ns += (std::chrono::steady_clock::now() - build_start).count();
 
     const auto name = GetShaderName(info.hw_stage, info.pgm_hash, perm_idx);
     Vulkan::SetObjectName(instance.GetDevice(), module, name);

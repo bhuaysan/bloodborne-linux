@@ -146,6 +146,7 @@ private:
     ComputePipelineKey compute_key{};
     std::atomic<u32> num_new_pipelines{}; // new pipelines added to the cache since the game start
     std::atomic<u32> num_new_shaders{}; // shader modules translated since the game start
+    std::atomic<u64> build_ns{}; // time spent translating shaders and building pipelines
     u32 num_preloaded{};                // pipelines loaded from the disk cache at start
     std::mutex save_mutex;
     u32 saved_pipelines{}; // num_new_pipelines at the last save of the driver's cache
