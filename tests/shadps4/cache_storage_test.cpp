@@ -1,6 +1,7 @@
 // The pipeline cache's store (src/shadps4/video_core/cache_storage.cpp): what is saved reads back,
 // and a file that is of another schema, truncated, damaged or half written reads as missing.
 
+#include <chrono>
 #include <algorithm>
 #include <atomic>
 #include <filesystem>
@@ -125,7 +126,7 @@ TEST_F(CacheStorage, ForEachBlobSkipsDroppedFilesAndOtherTypes) {
 }
 
 // A run that died between creating the temporary file and renaming it leaves the old file in
-// place and a stray temporary file, which the next Open removes.
+// place and an old stray temporary file, which the next Open removes.
 TEST_F(CacheStorage, AKilledWriteLeavesTheOldFileAndNoTrustedTornOne) {
     auto& db = open(1);
     db.Save(BlobType::ShaderMeta, "a", std::vector<u8>{1, 2, 3});
@@ -134,8 +135,15 @@ TEST_F(CacheStorage, AKilledWriteLeavesTheOldFileAndNoTrustedTornOne) {
         std::ofstream f{dir_ / "a.meta.tmp123-0", std::ios::binary};
         f << "half a file";
     }
+    {
+        std::ofstream f{dir_ / "b.meta.tmp456-0", std::ios::binary};
+        f << "being written by another process";
+    }
+    fs::last_write_time(dir_ / "a.meta.tmp123-0",
+                        fs::file_time_type::clock::now() - std::chrono::hours{1});
     open(1);
     EXPECT_FALSE(fs::exists(dir_ / "a.meta.tmp123-0"));
+    EXPECT_TRUE(fs::exists(dir_ / "b.meta.tmp456-0")); // young: may be another process's
     EXPECT_EQ(load("a"), (std::vector<u8>{1, 2, 3}));
 }
 

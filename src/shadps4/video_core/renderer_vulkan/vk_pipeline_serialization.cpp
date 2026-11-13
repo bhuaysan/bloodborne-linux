@@ -5,6 +5,8 @@
 // License texts: third_party/shadps4/LICENSES/
 
 #include <chrono>
+#include <elf.h>
+#include <link.h>
 #include <mutex>
 
 #include "common/serdes.h"
@@ -306,15 +308,60 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
     return true;
 }
 
+namespace {
+// GNU build id of the running executable, or empty without one. Any change of the translator or
+// the renderer gives a new id, so a cache written by another build is never trusted: spv, meta
+// and key files of one build always belong together.
+std::vector<u8> ExecutableBuildId() {
+    std::vector<u8> id;
+    dl_iterate_phdr(
+        [](dl_phdr_info* info, size_t, void* data) {
+            auto& out = *static_cast<std::vector<u8>*>(data);
+            for (int i = 0; i < info->dlpi_phnum; ++i) {
+                const auto& ph = info->dlpi_phdr[i];
+                if (ph.p_type != PT_NOTE) {
+                    continue;
+                }
+                const auto* p = reinterpret_cast<const u8*>(info->dlpi_addr + ph.p_vaddr);
+                const auto* end = p + ph.p_memsz;
+                while (p + sizeof(ElfW(Nhdr)) <= end) {
+                    ElfW(Nhdr) nhdr;
+                    std::memcpy(&nhdr, p, sizeof(nhdr));
+                    const u8* name = p + sizeof(nhdr);
+                    const u8* desc = name + ((nhdr.n_namesz + 3u) & ~3u);
+                    const u8* next = desc + ((nhdr.n_descsz + 3u) & ~3u);
+                    if (next > end) {
+                        break;
+                    }
+                    if (nhdr.n_type == NT_GNU_BUILD_ID && nhdr.n_namesz == 4 &&
+                        std::memcmp(name, "GNU", 4) == 0) {
+                        out.assign(desc, desc + nhdr.n_descsz);
+                        return 1;
+                    }
+                    p = next;
+                }
+            }
+            return 1; // only the first object, the executable
+        },
+        &id);
+    return id;
+}
+} // namespace
+
 u32 CacheSchema() {
-    // The versions above, and the sizes of the structs that are written as raw bytes: a layout
-    // change that nobody remembered to put in a version still gives the cache a new schema.
+    // The versions above, the sizes of the structs that are written as raw bytes, and the build
+    // id of the executable.
     u64 hash = 0xcbf29ce484222325ull;
+    const auto mix = [&hash](u64 v) { hash = (hash ^ v) * 0x100000001b3ull; };
     for (const u64 v : {u64{Serialization::ShaderBinaryVersion}, u64{Serialization::ShaderMetaVersion},
                         u64{Serialization::PipelineKeyVersion}, u64{sizeof(Shader::InfoPersistent)},
                         u64{sizeof(GraphicsPipelineKey)}, u64{sizeof(Shader::StageSpecialization)},
                         u64{sizeof(Shader::Profile)}}) {
-        hash = (hash ^ v) * 0x100000001b3ull;
+        mix(v);
+    }
+    static const std::vector<u8> build_id = ExecutableBuildId();
+    for (const u8 b : build_id) {
+        mix(b);
     }
     return static_cast<u32>(hash ^ (hash >> 32));
 }
@@ -388,10 +435,12 @@ void PipelineCache::SaveDriverCache() {
 }
 
 void PipelineCache::SaveDriverCacheIfDue() {
-    if (num_new_pipelines.load() == saved_pipelines ||
+    std::unique_lock lock{save_mutex, std::try_to_lock};
+    if (!lock.owns_lock() || num_new_pipelines.load() == saved_pipelines ||
         std::chrono::steady_clock::now() - last_save < SaveInterval) {
         return;
     }
+    lock.unlock();
     SaveDriverCache();
 }
 

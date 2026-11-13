@@ -11,6 +11,7 @@
 
 #include "video_core/cache_storage.h"
 
+#include <chrono>
 #include <unistd.h>
 
 #include <cstring>
@@ -123,10 +124,14 @@ bool DataBase::Open(const std::filesystem::path& dir, u32 schema_) {
                     dir.string());
         return false;
     }
-    // Temporary files of runs that were killed in the middle of a write.
+    // Temporary files of runs that were killed in the middle of a write. Young ones may belong to
+    // another process that shares the directory and is writing right now.
+    const auto now = std::filesystem::file_time_type::clock::now();
     for (const auto& entry : std::filesystem::directory_iterator{dir, ec}) {
-        if (entry.path().extension().string().starts_with(".tmp")) {
-            std::filesystem::remove(entry.path(), ec);
+        std::error_code entry_ec;
+        if (entry.path().extension().string().starts_with(".tmp") &&
+            now - entry.last_write_time(entry_ec) > std::chrono::minutes{10}) {
+            std::filesystem::remove(entry.path(), entry_ec);
         }
     }
     cache_path = dir;
@@ -236,7 +241,7 @@ bool DataBase::ReadBlob(const std::filesystem::path& file, std::vector<u8>& payl
               header.schema == schema;
     if (ok) {
         const auto file_size = std::filesystem::file_size(file, ec);
-        ok = !ec && file_size == sizeof(header) + header.payload_size;
+        ok = !ec && file_size >= sizeof(header) && header.payload_size == file_size - sizeof(header);
     }
     if (ok) {
         payload.resize(header.payload_size);

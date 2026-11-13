@@ -219,7 +219,7 @@ TEST(VideoCore, PipelineCacheSurvivesDamageAndOldVersions) {
     EXPECT_EQ(run(schema), 0u); // warm: everything loads
 
     // A cache written under another schema (an older ShaderMetaVersion): dropped, then rebuilt.
-    EXPECT_GE(run(schema + 1), 1u);
+    EXPECT_EQ(run(schema + 1), 2u); // the driver cache and the profile
     EXPECT_EQ(run(schema + 1), 0u);
 
     // Truncated and damaged files.
@@ -229,7 +229,7 @@ TEST(VideoCore, PipelineCacheSurvivesDamageAndOldVersions) {
         f.seekp(-1, std::ios::end);
         f.put('\x7f');
     }
-    EXPECT_GE(run(schema + 1), 2u);
+    EXPECT_EQ(run(schema + 1), 2u);
     EXPECT_EQ(run(schema + 1), 0u);
 
     // A driver cache of another device is not handed to this one: the file is valid, the key
@@ -241,7 +241,15 @@ TEST(VideoCore, PipelineCacheSurvivesDamageAndOldVersions) {
                 std::vector<u8>(256, 0xab));
         db.Close();
     }
-    EXPECT_EQ(run(schema + 1), 0u);
+    {
+        auto& db = Storage::DataBase::Instance();
+        ASSERT_TRUE(db.Open(dir, schema + 1));
+        {
+            Vulkan::Scheduler scheduler{instance};
+            Vulkan::PipelineCache cache{instance, scheduler, liverpool.get()};
+            EXPECT_TRUE(cache.LoadDriverCache().empty());
+        }
+    }
     EXPECT_EQ(run(schema + 1), 0u);
     fs::remove_all(dir);
 }

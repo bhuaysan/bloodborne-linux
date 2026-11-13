@@ -102,6 +102,9 @@ public:
         return profile;
     }
 
+    // The driver's cache data on disk; empty when none is stored for this device and driver.
+    std::vector<u8> LoadDriverCache();
+
 private:
     bool RefreshGraphicsKey();
     bool RefreshGraphicsStages();
@@ -116,8 +119,7 @@ private:
         return num_new_pipelines > 0;
     }
 
-    // The driver's cache (VkPipelineCache data) on disk. Saving may run on any thread.
-    std::vector<u8> LoadDriverCache();
+    // Saving the driver's cache may run on any thread.
     void SaveDriverCache();
     void SaveDriverCacheIfDue();
     void RegisterActive();

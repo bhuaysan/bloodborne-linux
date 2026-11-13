@@ -30,6 +30,9 @@ if(BB_SANITIZE)
     add_link_options(-fsanitize=address,undefined)
 endif()
 
+# The pipeline cache keys on the executable's build id (vk_pipeline_serialization.cpp).
+add_link_options(-Wl,--build-id=sha1)
+
 add_subdirectory(src)
 
 if(BB_BUILD_TESTS)
