@@ -189,8 +189,8 @@ class ReportTests(unittest.TestCase):
 
 
 class PerfReportTests(unittest.TestCase):
-    def run_of(self, p99: float, segment: str = "play-walk") -> dict:
-        stats = {"p50_ms": 33.33, "p95_ms": 33.4, "p99_ms": p99, "max_ms": p99 + 5,
+    def run_of(self, p99: float, segment: str = "play-walk", p95: float = 33.4) -> dict:
+        stats = {"p50_ms": 33.33, "p95_ms": p95, "p99_ms": p99, "max_ms": p99 + 5,
                  "stutters_over_2x_median": 0}
         return {"segments": {segment: stats, "logos": None}}
 
@@ -210,6 +210,37 @@ class PerfReportTests(unittest.TestCase):
         self.assertFalse(report.perf_flag(ours, within))
         self.assertTrue(report.perf_flag(ours, steady))
         self.assertFalse(report.perf_flag(None, steady))
+
+    def test_cell_takes_the_spread_of_p95(self) -> None:
+        cell = report.perf_cell([self.run_of(50, p95=33.4), self.run_of(50, p95=50.0),
+                                 self.run_of(50, p95=33.5)], "play-walk")
+        self.assertEqual((cell["p95_ms"], cell["p95_spread_ms"]), (33.5, 16.6))
+
+    def test_flag_of_p95_needs_more_than_the_larger_spread(self) -> None:
+        def cell(*p95s: float) -> dict:
+            return report.perf_cell([self.run_of(50, p95=v) for v in p95s], "play-walk")
+
+        steady = cell(33.4, 33.5, 33.4)
+        late = cell(50.0, 50.0, 50.0)
+        mixed = cell(33.4, 50.0, 33.5)  # p95 33.5, spread 16.6
+        self.assertTrue(report.perf_flag(late, steady, "p95"))
+        self.assertFalse(report.perf_flag(steady, steady, "p95"))
+        # 50.0 - 33.5 is within the spread of 16.6 of the reference; a p99 of 50 is no flag either
+        self.assertFalse(report.perf_flag(late, mixed, "p95"))
+        self.assertFalse(report.perf_flag(late, steady, "p99"))
+        # the larger of the two spreads counts, so a spread of ours excuses it as well
+        unsteady = cell(50.0, 50.0, 33.4)  # p95 50.0, spread 16.6 against 33.4 and 0.1
+        self.assertFalse(report.perf_flag(unsteady, steady, "p95"))
+        self.assertFalse(report.perf_flag(None, steady, "p95"))
+
+    def test_report_flags_the_p95_of_a_segment(self) -> None:
+        columns = {"branch": [self.run_of(50, p95=50.0), self.run_of(50, p95=50.0)],
+                   "reference": [self.run_of(50, p95=33.4), self.run_of(50, p95=33.4)]}
+        text, flagged = report.perf_report(columns)
+        self.assertEqual(len(flagged), 1)
+        self.assertIn("play-walk (branch): p95 50.0 ms against 33.4 ms, spread 0.0 and 0.0 ms",
+                      flagged[0])
+        self.assertIn("> reference", text)
 
     def test_report_lists_flagged_segments_and_filters(self) -> None:
         columns = {"branch": [self.run_of(60), self.run_of(60)],

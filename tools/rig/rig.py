@@ -608,7 +608,7 @@ def perf_command(args: argparse.Namespace) -> int:
     text, flagged = report.perf_report(columns, args.only)
     print(text)
     for line in flagged:
-        print(f"p99 above the reference by more than the spread: {line}")
+        print(f"above the reference by more than the spread: {line}")
     return 0
 
 

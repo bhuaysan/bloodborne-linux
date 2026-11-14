@@ -215,6 +215,8 @@ def segment_build_stalls(frames: list[Frame], builds: list[Build],
 # The columns of `rig.py perf`, in the order they print.
 PERF_COLUMNS = ("branch", "main", "reference")
 PERF_FIELDS = ("p50_ms", "p95_ms", "p99_ms", "max_ms", "stutters_over_2x_median")
+# The percentiles that perf_flag compares with the reference's.
+PERF_FLAGGED = ("p95", "p99")
 
 
 def load_perf_run(run: Path) -> dict | None:
@@ -238,25 +240,27 @@ def _median(values: list[float]) -> float:
 
 def perf_cell(runs: list[dict | None], segment: str) -> dict | None:
     """Per field the median over the runs of the segment's value, and the spread (largest minus
-    smallest) of the p99 between runs. None when no run has frames in the segment."""
+    smallest) of the p95 and of the p99 between runs. None when no run has frames in the segment."""
     stats = [r["segments"].get(segment) for r in runs if r and r.get("segments")]
     stats = [s for s in stats if s]
     if not stats:
         return None
     cell = {f: round(_median([s[f] for s in stats]), 2) for f in PERF_FIELDS}
-    p99s = [s["p99_ms"] for s in stats]
-    cell["p99_spread_ms"] = round(max(p99s) - min(p99s), 2)
+    for field in PERF_FLAGGED:
+        values = [s[f"{field}_ms"] for s in stats]
+        cell[f"{field}_spread_ms"] = round(max(values) - min(values), 2)
     cell["runs"] = len(stats)
     return cell
 
 
-def perf_flag(cell: dict | None, reference: dict | None) -> bool:
-    """The p99 of cell is above the reference's by more than the run-to-run spread, the larger of
-    the two spreads (the spread of one run is 0, so a single run never excuses anything)."""
+def perf_flag(cell: dict | None, reference: dict | None, field: str = "p99") -> bool:
+    """The p99 (or the p95, with field="p95") of cell is above the reference's by more than the
+    run-to-run spread, the larger of the two spreads (the spread of one run is 0, so a single run
+    never excuses anything)."""
     if not cell or not reference:
         return False
-    spread = max(cell["p99_spread_ms"], reference["p99_spread_ms"])
-    return cell["p99_ms"] - reference["p99_ms"] > spread
+    spread = max(cell[f"{field}_spread_ms"], reference[f"{field}_spread_ms"])
+    return cell[f"{field}_ms"] - reference[f"{field}_ms"] > spread
 
 
 def perf_report(columns: dict[str, list[dict | None]], only: str = "*") -> tuple[str, list[str]]:
@@ -269,7 +273,7 @@ def perf_report(columns: dict[str, list[dict | None]], only: str = "*") -> tuple
                 if name not in names and fnmatch.fnmatch(name, only):
                     names.append(name)
     shown = [c for c in PERF_COLUMNS if c in columns]
-    lines = ["segment / column      runs   p50    p95    p99 (spread)     max  stutters"]
+    lines = ["segment / column      runs   p50    p95 (spread)    p99 (spread)     max  stutters"]
     flagged = []
     for name in names:
         lines.append(name)
@@ -280,12 +284,16 @@ def perf_report(columns: dict[str, list[dict | None]], only: str = "*") -> tuple
                 lines.append(f"  {column:<18} {len(columns[column]):>4}   no frames")
                 continue
             mark = ""
-            if column != "reference" and perf_flag(cell, cells.get("reference")):
-                mark = "  > reference"
-                flagged.append(f"{name} ({column}): p99 {cell['p99_ms']} ms against "
-                               f"{cells['reference']['p99_ms']} ms, spread {cell['p99_spread_ms']}"
-                               f" and {cells['reference']['p99_spread_ms']} ms")
+            reference = cells.get("reference")
+            for field in PERF_FLAGGED:
+                if column != "reference" and perf_flag(cell, reference, field):
+                    mark = "  > reference"
+                    flagged.append(f"{name} ({column}): {field} {cell[f'{field}_ms']} ms against "
+                                   f"{reference[f'{field}_ms']} ms, spread "
+                                   f"{cell[f'{field}_spread_ms']} and "
+                                   f"{reference[f'{field}_spread_ms']} ms")
             lines.append(f"  {column:<18} {cell['runs']:>4} {cell['p50_ms']:>6} {cell['p95_ms']:>6} "
-                         f"{cell['p99_ms']:>6} ({cell['p99_spread_ms']:>5}) {cell['max_ms']:>7} "
+                         f"({cell['p95_spread_ms']:>5}) {cell['p99_ms']:>6} "
+                         f"({cell['p99_spread_ms']:>5}) {cell['max_ms']:>7} "
                          f"{cell['stutters_over_2x_median']:>6.0f}{mark}")
     return "\n".join(lines), flagged
