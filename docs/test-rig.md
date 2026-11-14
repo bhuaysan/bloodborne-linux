@@ -187,3 +187,75 @@ Measured on 2026-11-14 (RADV, `relwithdebinfo`, `--window`, cold shader cache ev
 | | reference | 33.33 | 33.37 | 50.0 (16.72) | 50.04 | 0 |
 
 No segment is flagged: the p99 of `bb-run` is never above the reference's by more than the spread of the runs. Neither target has a stutter in the fight, and the maximum is 50 ms (one late present) on both. The one p95 difference is `play-fight-strong` (`bb-run` 50.0 ms, reference 33.38 ms). In the open street of the route above `bb-run` showed a p95 of 50 ms in every segment and stutters; here only that segment does, so the gap there is not specific to fighting. The fight shows no frame-time gap that #513 could profile; what separates the targets on this route is smaller than the 16.7 ms grid step.
+
+## Profiling `bb-run` (#513)
+
+Tracy is gone, so a slow frame is found with two tools: `perf` for where the threads spend CPU time, and frame counters for how much each part of the GPU thread's frame took.
+
+### perf
+
+```
+tools/rig/rig.py run bb-run yharnam-route --window --user-from USER --perf --cache-home DIR
+python3 tools/rig/perfmap.py --perf-data RUN/perf.data     # writes /tmp/perf-<pid>.map
+perf report -i RUN/perf.data --no-children --sort comm,symbol -g none --stdio
+```
+
+`--perf` runs `bb-run` under `perf record -e cpu-clock:u -F 499 --call-graph fp --user-callchains` into the run's `perf.data`. With `kernel.perf_event_paranoid=2` (no sysctl change, no sudo) only user-space samples of our own process work, and the callchain event fails to open without `--user-callchains` ("Failure to open any events"). The `relwithdebinfo` preset builds with `BB_FRAME_POINTERS=ON` (`-fno-omit-frame-pointer`), so `--call-graph fp` unwinds our code and the system libraries it calls; guest code has no frame pointers to follow, so a chain stops at the first guest frame. Without a call chain, `--sort comm` is the split by thread (the guest's thread names, `shadPS4:GpuComm` for the GPU thread, `GXWorker:N`, `game main`).
+
+`perfmap.py` writes the file perf reads for code outside any file: the guest functions of `symbols/functions.csv` at the eboot's load base (`loader::default_base`, 0x10000000, plus the link address). The file has only the functions named so far (a handful), so guest samples mostly show as raw addresses `0x1xxxxxxx`; subtract 0x10000000 for the link address in Ghidra. Samples are CPU time only: a thread that sleeps (a lock, a wait for the GPU) shows nothing, which is what the frame counters are for.
+
+Run it under `flock` when other agents use the GPU, and keep a perf run apart from a counter run, so the counters do not show up in the samples.
+
+### Frame counters
+
+`bb-run --log profile=debug` (`rig.py run bb-run SCENARIO --log profile=debug`) turns on the counters of `src/common/frame_profile.hpp`; without it a disabled counter costs one relaxed load. Once per frame (the guest's submit-done) the log gets one line:
+
+```
+debug [...] profile: Frame profile: at <ns> ns, <us> us since the last, commands=16372 us/74, draw=15810 us/1364, ...
+```
+
+Each part is `part=<us> us/<calls>` of the time since the previous line, summed over all threads. Times are inclusive (a part inside another counts in both), and a part with no call is left out. The parts:
+
+| part | what |
+|---|---|
+| `commands` | GPU thread running the command buffers (PM4 processing, all of the below that runs on it) |
+| `draw` | `Rasterizer` draw and dispatch calls |
+| `pipeline` | pipeline lookup (shader translation and waiting for a build are inside) |
+| `bind` | binding the resources of a draw: `buffer` and `texture` are inside |
+| `buffer`, `sync`, `resident` | buffer cache: obtaining a buffer; copying CPU-modified guest memory into it; making sparse blocks resident |
+| `texture`, `upload`, `detile` | texture cache work of a draw; refreshing a dirty image from guest memory; detiling it |
+| `render`, `vertex`, `state` | render pass setup; vertex and index buffer binding; dynamic state and descriptor writes |
+| `copy`, `irq`, `queue` | buffer copies and fills; interrupt handlers signalled on the GPU thread; callbacks queued to it |
+| `fault` | write-tracking SIGSEGV handler, whole, on any guest thread |
+| `inval_buffer`, `inval_texture` | the buffer and texture caches' share of a fault |
+| `protect` | `mprotect` calls of write tracking (from a fault or from a cache sync) |
+| `wait`, `submit`, `present` | the scheduler waiting for the GPU; end-of-frame housekeeping; the presenter thread's present call |
+| `flip_wait` | a flip request waiting from its queueing to the vblank that took it |
+
+A scope is two `clock_gettime` calls, about 40 ns, and a frame has 15 000 to 25 000 of them (`buffer` alone 10 000 to 17 000), so the counters add around 0.5 to 1 ms to a frame of the GPU thread: they are for finding the big things, not for exact small numbers. The fault part is the one that runs in a signal handler: it only reads the clock and adds to atomics.
+
+`tools/rig/frame_profile.py RUN [--segment GLOB]` reads a run's log, `events.csv` and `frames.csv` and prints for each scenario segment: the frame interval of the GPU thread (the submit-done to submit-done time), the slowest frames with their biggest parts (`build` is the `Pipeline build` and `Pipeline wait` time overlapping the frame), the parts' extra cost in a slow frame over a normal one, a normal frame, and the late presents (a present interval over 1.5 times the median): the time from the submit-done before the present to the present, and that frame's `commands`. Read it with `--cache-home` of an earlier run: a cold cache puts shader and pipeline builds into the slow frames and hides the rest.
+
+### What the profile of `yharnam-route` shows (2026-11-14)
+
+RADV, `relwithdebinfo`, `--window`, a warm shader cache (`--cache-home`, filled by an earlier run), `--log profile=debug`. Runs (in `analysis/rig/runs/`, suffix `-bb-run-yharnam-route`): `20261114-155217` and `20261114-155953` carry the full set of counters, `20261114-151347`, `-152257` and `-154434` an earlier subset, `-150551` is the cold-cache run and `-153241` the `--perf` run. All finished with `end,scenario finished`.
+
+**The worst segment is `play-walk`.** It has the longest interval of every run (94.8 to 103 ms) and three slow frames in each run, at the same places of the route: about 95, 59 and 56 to 58 ms against a median of 33.2 ms. Per segment the GPU thread's frame interval has a p95 of 35 to 37 ms; the p95 of the present interval, which `rig.py perf` reports, is 33.4 or 50 ms depending on the segment and the run (`20261114-155217`: 50 ms in `stand`, `attack`, `lockon` and `walk-again`, 33.5 ms elsewhere; `-155953` and the others differ), so the 50 ms in every segment of #528 comes from where the frames fall against the 16.7 ms flip grid in a run, not from the content of a segment.
+
+The three slow frames of `play-walk` (run `20261114-155953`, the other run matches within 3 ms; times in ms, summed over threads where it says so):
+
+| frame | `commands` | `sync` | `vertex` | `upload` (images) | faults (thread time) | what it is |
+|---|---|---|---|---|---|---|
+| 94.8 | 83.7 | 30.9 | 34.8 | 11.5 (279) | 2715 (105.5) | buffer sync, texture upload, fault storm |
+| 59.7 | 59.6 | 31.3 | 24.8 | 0 | 1270 (45.5) | buffer sync of about 31 ms |
+| 55.6 | 31.2 | 1.4 | 3.0 | 0 | 2584 (93.1) | the GPU thread is not slow: guest threads stalled in faults |
+| a normal frame | 23.8 | 1.3 | 2.7 | 0.1 (5) | 1204 (37) | |
+
+- **Write-tracking faults.** A normal frame of `play-walk` takes 1100 to 1250 write-tracking faults of 33 to 36 us each, 37 to 43 ms of thread time in all (`fault`), and 2200 to 2800 in the slow ones. 97 to 98 % of that is `inval_buffer` (the buffer cache marking the page CPU-modified), 8 to 9 ms is the `mprotect` calls (about 1250 of 7 us). The `perf` run shows the same: 27 % of the user samples of the `GXWorker:N` threads are inside the fault handler, 37 % of those in `pthread_mutex_lock` and 12 % in `mprotect`, so most of a fault is lock contention with the GPU thread, not work. A guest thread is stopped for all of it.
+- **Buffer sync on the GPU thread.** `sync` (copying CPU-modified guest memory into a buffer) is 1.3 ms in a normal frame and 29 to 31 ms in two of the three slow ones (4800 calls), almost all of it inside `vertex` (the vertex buffer binding). The same 31 ms in two runs points to a large range that the game rewrote at that point of the route.
+- **Texture upload.** 279 images refreshed in the 95 ms frame (11.5 ms, 0.7 ms of it detiling), against 5 in a normal frame.
+- **The GPU thread is busy for 17 to 26 ms of a 33.3 ms frame** (`commands`; `draw` is 96 % of it): about 1400 to 2000 draws at 12 to 13 us. Per normal `play-walk` frame: `bind` 7.5 to 8.5 ms (`buffer` 3.7 to 4.3, `texture` 2.3), `pipeline` lookup 2.3, `vertex` 2.7, `render` 1.7, `state` 0.9. In the perf samples of the GPU thread (21 % of all samples) the largest symbols are `TextureCache::FindImage` (1.6 % of all samples, 7 % of the thread), `memmove`, `radv_init_push_descriptor_set`, `XXH3` and `Rasterizer::ResetBindings`.
+- **Late presents are not slow frames.** Of the late presents (interval over 1.5 times the median), the GPU thread's `commands` is the same as an on-time frame's in most segments; they are 5 to 8 ms later from submit-done to present, and the flip request waited 14.7 ms for its vblank against 8.2 ms on average (`flip_wait`). A frame whose request reaches `video_out` just after a vblank misses it and shows 16.7 ms later; with a margin this thin, a jitter of 1 to 2 ms is enough.
+- **Pipeline builds** are not in these frames with a warm cache. In the cold run `20261114-150551` the slowest frames of the `logos` segment (416 and 227 ms) are 266 and 224 ms of build time.
+- **`game main`, 48 % of all samples, is a busy wait** of the guest on `gettimeofday` (guest code at link addresses 0x2034af0 to 0x2034b6f), 43 % of it in the vDSO `clock_gettime`, with `posix_gettimeofday`, `observe_gettimeofday` and `MainLoopProbe::count` of ours another 3 % of all samples. It costs a core but is not on the frame's critical path.
+
