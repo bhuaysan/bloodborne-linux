@@ -159,6 +159,33 @@ No segment is flagged: the p99 of `bb-run` is above the reference's by at most 1
 
 The p95 gap and the stutters go into a follow-up issue in R8.2 (candidate for the profile of #513), together with the question whether the flag should compare p95 too.
 
+**Cause and fix (#528).** The late presents were the flip grid, not slow frames (#513: a late present follows a GPU-thread frame with on-time `commands`, and its flip waited 14.7 ms for the vblank against 8.2 ms on average). The game paces its frames by its own clock, so its flips keep one phase against video out's 60 Hz vblank grid for seconds; where that phase sat within a frame's jitter of a vblank, a third of the flips missed it by a millisecond or two and were shown 16.7 ms late. `src/hle/video/vblank_grid.hpp` now gives a flip that is queued up to 4 ms after a vblank that vblank, and moves the grid after it (one period and 2 ms after the flip), so the next frames come before their vblank. The grid only moves later and a flip is never shown later than before, so no latency is added, and the 33.3 ms steps stay (a flip is still taken at every `flip_rate + 1`-th vblank).
+
+Measured again on 2026-11-14 and 15 after the fix (RADV, `relwithdebinfo`, `--window`, warm shader cache for `bb-run` after one discarded warm-up run, `--user-from` the save above, runs alternating `bb-run` and reference, all finished with `end,scenario finished`). `bb-run` is `20261114-222159`, `-224055`, `-225845`, `-231117` and `-232717`; the reference is `20261114-223122`, `-225018`, `-230326`, `-231854` and `-233526`. Medians over the runs, p95 and p99 with their spreads; nothing is flagged by the p95 or the p99 rule:
+
+| segment | | p95 (spread) | p99 (spread) | max | stutters |
+|---|---|---|---|---|---|
+| play-stand | `bb-run` | 33.35 (0.01) | 33.38 (0.03) | 33.45 | 0 |
+|  | reference | 33.44 (16.65) | 50.07 (17.14) | 50.15 | 0 |
+| play-walk | `bb-run` | 33.41 (2.02) | 36.45 (14.72) | 83.37 | 1 |
+|  | reference | 50.04 (16.8) | 50.16 (33.41) | 100.15 | 3 |
+| play-camera | `bb-run` | 33.73 (0.72) | 35.4 (0.01) | 36.29 | 0 |
+|  | reference | 33.44 (16.66) | 50.04 (0.25) | 50.12 | 0 |
+| play-sprint | `bb-run` | 33.38 (0.02) | 35.39 (0.04) | 36.13 | 0 |
+|  | reference | 49.97 (16.65) | 50.05 (16.93) | 66.75 | 3 |
+| play-dodge | `bb-run` | 33.37 (0.02) | 33.39 (0.34) | 35.43 | 0 |
+|  | reference | 33.41 (16.65) | 50.04 (17.18) | 50.12 | 0 |
+| play-attack | `bb-run` | 33.38 (18.7) | 35.4 (19.9) | 54.77 | 0 |
+|  | reference | 49.95 (16.61) | 50.1 (17.16) | 66.69 | 1 |
+| play-lockon | `bb-run` | 33.36 (18.74) | 33.4 (19.27) | 50.04 | 0 |
+|  | reference | 33.42 (16.59) | 50.09 (0.17) | 50.15 | 0 |
+| play-walk-again | `bb-run` | 33.38 (17.48) | 35.37 (20.3) | 37.09 | 0 |
+|  | reference | 33.44 (16.71) | 50.1 (16.77) | 50.12 | 0 |
+
+The p95 of `bb-run` is within the reference's in every `play-*` segment, and its stutters are 0 outside `play-walk` (reference 0 to 3). Before the fix the warm runs of #513 (`20261114-151347`, `-152257`, `-153241`, `-154434`, `-155217`, `-155953`, an earlier build) had a p99 of 50 ms in six of the eight segments; it is now 33 to 36 ms in seven. The reference itself sat on the 50 ms step in three segments in these runs, with the machine shared with other runs, so its p95 is no stricter than `bb-run`'s now. `play-walk` keeps its slow frames (#530, #531, #532).
+
+Run against the cold-cache runs above (`20261114-132516` ... `-140811`), the new p95 rule of `rig.py perf` flags `play-walk`, `play-sprint`, `play-dodge`, `play-attack` and `play-lockon` of `bb-run` (p95 50 ms against 33.4 ms with a spread of 16.7 ms at most on the side that has one: `play-stand`, `play-camera` and `play-walk-again` have a spread of 16.7 on the `bb-run` side and are excused), the p99 rule none; on the runs after the fix it flags nothing.
+
 ### Central Yharnam fighting route (`yharnam-fight.scn`)
 
 `yharnam-fight.scn` continues from a second save, made by playing the reference by hand from the great bonfire to just before a group of living enemies (not committed, `analysis/rig/manual/yharnam-enemies/work/user`; `--user-from` and `--bb-user` take it for both targets, as in the route above). After Continue the hunter stands under an arch with the street ahead and the enemies walk up while it stands, so the route starts at once. It walks out until they notice (`play-walk`), locks on and backs toward the arch (`play-lockon`), and fights in short exchanges of a swing, a roll, a swing and a roll to the side (`play-fight-first`, `play-fight-strong` with `R2`, `play-fight-last`), with a blood vial between them (`play-heal`, `play-heal-again`) and a sprint at the end (`play-sprint`). About 100 s of play.
