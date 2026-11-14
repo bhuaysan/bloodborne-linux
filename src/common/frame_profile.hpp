@@ -4,7 +4,7 @@
 // second thread may add to them. Once per frame (the guest's submit-done) log_frame() writes
 // one line with what each part took since the last one and clears the counters. Everything is
 // off unless the log filter enables channel "profile" at debug (BB_LOG=profile=debug or
-// `--log profile=debug`): a disabled Scope costs one relaxed load. Times are inclusive, so a
+// `--log profile=debug`): a disabled Scope costs a few ns (one call and branch). Times are inclusive, so a
 // part inside another counts in both (upload inside texture, protect inside fault).
 #pragma once
 
