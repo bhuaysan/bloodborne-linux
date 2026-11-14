@@ -1,3 +1,4 @@
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,12 @@ class PerfMapTest(unittest.TestCase):
                              ["10001000 100 first", "10001100 10000 second"])
             self.assertEqual(perfmap.perf_map_lines(csv_path, 0), ["1000 100 first",
                                                                      "1100 10000 second"])
+
+    def test_load_base_matches_the_loader(self) -> None:
+        header = Path(__file__).resolve().parents[2] / "src/loader/image.hpp"
+        m = re.search(r"default_base\s*=\s*(0x[0-9a-fA-F]+)", header.read_text())
+        self.assertIsNotNone(m)
+        self.assertEqual(perfmap.LOAD_BASE, int(m.group(1), 16))
 
     def test_the_real_symbols_parse(self) -> None:
         lines = perfmap.perf_map_lines(perfmap.ROOT / "symbols" / "functions.csv")

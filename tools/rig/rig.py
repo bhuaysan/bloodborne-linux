@@ -441,6 +441,8 @@ def run_target(args: argparse.Namespace) -> int:
     seconds = args.time or scenario.time_limit or DEFAULT_TIME
     memory = args.memory or scenario.memory_limit or DEFAULT_MEMORY
     check_game_read_only(game_dir)
+    if args.target == "reference" and (getattr(args, "log", None) or getattr(args, "perf", False)):
+        raise SystemExit("--log and --perf only apply to the bb-run target")
 
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
     run = rig_dir() / "runs" / f"{stamp}-{args.target}-{scenario_name}"
