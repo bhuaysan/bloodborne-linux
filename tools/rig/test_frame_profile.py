@@ -48,7 +48,7 @@ class ProfileTest(unittest.TestCase):
         late = prof.late_presents(frames, presents)
         self.assertEqual(late["late"], 1)
         self.assertAlmostEqual(late["on_time_lag_ms"], 3, places=1)
-        self.assertGreater(late["lag_ms"], 20)
+        self.assertAlmostEqual(late["lag_ms"], 20, places=1)
         self.assertIsNone(prof.late_presents(frames, presents[:5]))
 
     def test_too_few_frames(self) -> None:
