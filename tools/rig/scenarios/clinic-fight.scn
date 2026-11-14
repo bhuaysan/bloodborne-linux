@@ -1,0 +1,91 @@
+# The gameplay route of the frame-time report (R8.2): continue from the save of an r5-acceptance run
+# into the clinic, then walk, turn the camera, dodge, attack and lock on, each in a segment of its own
+# named play-*. Start it with --user-from the user/ directory of an r5-acceptance run, or use
+# `rig.py perf clinic-fight --runs 5 ...`. The route is as long as R7 has opened for gameplay; it
+# gets Central Yharnam once the game gets there.
+limit time=700
+
+log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
+sleep 1
+tap A                   # the notice about an unclean end of the last session, when there is one
+mark logos
+stable seconds=6 delta=1 timeout=120
+dpad D                  # Play Offline
+tap A
+# Notices come and go, so these presses may hit a notice or Continue. Once in the clinic they do nothing.
+tap A count=6 gap=3
+mark continue
+sleep 20                # the load
+stable seconds=3 delta=1 timeout=60
+sleep 10                # the loading page, if it is still up, goes
+stable seconds=3 delta=1 timeout=60
+shot 00-clinic
+mark play-stand
+sleep 20
+
+mark play-walk
+stick LY -32767
+changed delta=1 timeout=15
+sleep 6
+neutral
+stick RX 20000
+sleep 3
+neutral
+stick LY 32767
+sleep 6
+neutral
+
+mark play-camera
+stick RX 25000
+sleep 8
+stick RX -25000
+sleep 8
+neutral
+sleep 2
+
+mark play-dodge
+repeat 12
+stick LY -32767
+tap B
+sleep 1.5
+neutral
+tap B
+sleep 1.5
+end
+
+mark play-attack
+repeat 12
+tap RB
+sleep 1.2
+trigger R
+sleep 2
+end
+shot 01-attack
+
+mark play-lockon
+tap R3
+sleep 2
+repeat 8
+stick LX 32767
+sleep 1.5
+tap RB
+sleep 1
+tap B
+sleep 1.5
+stick LX -32767
+sleep 1.5
+trigger R
+sleep 2
+neutral
+end
+shot 02-lockon
+tap R3
+
+mark play-walk-again
+stick LY -32767
+sleep 8
+stick LY 32767
+sleep 8
+neutral
+shot 03-end
+sleep 2

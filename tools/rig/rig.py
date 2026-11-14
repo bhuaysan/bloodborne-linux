@@ -197,7 +197,7 @@ def bb_run_profile_data(work_root: Path) -> Path:
 
 
 def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_root: Path,
-                   cache_home: Path | None = None) -> Program:
+                   cache_home: Path | None = None, binary: Path | None = None) -> Program:
     # bb-run refuses runtime directories inside the source checkout, so its XDG roots are outside
     # analysis/. They are per run, so runs never share or inherit save data.
     env = {f"XDG_{kind}_HOME": str(work_root / kind.lower())
@@ -208,7 +208,7 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
     # As for the reference: the virtual gamepad's events count while the window has no focus.
     env["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = "1"
     env |= PAD_ONLY_VIRTUAL
-    argv = [str(find_bb_run(preset)), "--game-dir", str(game_dir), "--profile", "rig",
+    argv = [str(binary or find_bb_run(preset)), "--game-dir", str(game_dir), "--profile", "rig",
             "--no-log-file"]
     if not window:
         argv.append("--headless")
@@ -403,6 +403,8 @@ def output_failure(failure: str | None, expects_frames: bool, frames: dict | Non
 
 
 def run_target(args: argparse.Namespace) -> int:
+    """Runs one scenario on one target. Returns the exit status; args.run_dir_out, when the caller
+    sets it to a list, gets the run directory."""
     game_dir = toolenv.load_game_dir()
     if game_dir is None:
         raise SystemExit("BB_GAME_DIR is not set (environment or local.env)")
@@ -426,7 +428,8 @@ def run_target(args: argparse.Namespace) -> int:
     else:
         work_root = Path(tempfile.mkdtemp(prefix="bb-rig-",
                                           dir=os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"))
-        program = bb_run_program(run, game_dir, args.preset, args.window, work_root, args.cache_home)
+        program = bb_run_program(run, game_dir, args.preset, args.window, work_root, args.cache_home,
+                                 getattr(args, "bb_run", None))
         if args.user_from:
             shutil.copytree(args.user_from, bb_run_profile_data(work_root))
 
@@ -537,7 +540,47 @@ def run_target(args: argparse.Namespace) -> int:
     (run / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2))
     print(f"\noutput: {run}")
+    if isinstance(getattr(args, "run_dir_out", None), list):
+        args.run_dir_out.append(run)
     return 0 if failure is None and not faults and not changes else 1
+
+
+def perf_runs(args: argparse.Namespace) -> dict[str, list[Path]]:
+    """Runs the scenario args.runs times per column, a run at a time, and returns the run dirs."""
+    if not args.scenario:
+        raise SystemExit("--runs needs a scenario")
+    targets = [("branch", "bb-run", args.bb_user, None),
+               ("reference", "reference", args.reference_user, None)]
+    if args.main_bb_run:
+        targets.insert(1, ("main", "bb-run", args.bb_user, args.main_bb_run))
+    dirs: dict[str, list[Path]] = {}
+    for column, target, user, binary in targets:
+        if user is None:
+            raise SystemExit(f"the {column} column needs its --bb-user / --reference-user")
+        dirs[column] = []
+        for _ in range(args.runs):
+            run_args = argparse.Namespace(
+                target=target, scenario=args.scenario, time=args.time, memory=None, hold=0,
+                user_from=user, preset=args.preset, window=True, cache_home=None, audio=False,
+                no_layer=False, bb_run=binary, run_dir_out=dirs[column])
+            run_target(run_args)
+    return dirs
+
+
+def perf_command(args: argparse.Namespace) -> int:
+    dirs = perf_runs(args) if args.runs else {c: getattr(args, c) for c in report.PERF_COLUMNS}
+    columns = {c: [report.load_perf_run(d) for d in runs] for c, runs in dirs.items() if runs}
+    if "reference" not in columns:
+        raise SystemExit("the report needs reference runs")
+    for column, runs in columns.items():
+        unusable = [str(d) for d, r in zip(dirs[column], runs) if r is None]
+        for d in unusable:
+            print(f"left out, the scenario did not finish: {d}", file=sys.stderr)
+    text, flagged = report.perf_report(columns, args.only)
+    print(text)
+    for line in flagged:
+        print(f"p99 above the reference by more than the spread: {line}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -555,6 +598,7 @@ def main(argv: list[str] | None = None) -> int:
                      help="copy this user/ directory (the reference's, or an earlier bb-run's)")
     run.add_argument("--preset", default="relwithdebinfo", help="bb-run build preset")
     run.add_argument("--window", action="store_true", help="let bb-run open its window")
+    run.add_argument("--bb-run", type=Path, help="this bb-run binary instead of the preset's")
     run.add_argument("--cache-home", type=Path,
                      help="bb-run's XDG_CACHE_HOME, so its shader and pipeline cache persists "
                           "from run to run (default: a fresh directory per run, so every run is cold)")
@@ -567,7 +611,27 @@ def main(argv: list[str] | None = None) -> int:
                           help="two reference run directories, then ours")
     compared.add_argument("--shots", default=compare.DEFAULT_SHOTS,
                           help="which shots of each run to compare (a glob)")
+    perf = commands.add_parser(
+        "perf", help="frame times per scenario segment, bb-run (branch, main) and the reference",
+        description="With --runs N, first runs the scenario N times on each target given a "
+                    "save (--bb-user for bb-run, --reference-user for the reference), one run at "
+                    "a time, then reports. --main-bb-run adds a column for another binary. "
+                    "Without --runs the report reads the run directories given with "
+                    "--branch, --main and --reference.")
+    perf.add_argument("scenario", nargs="?", help="scenario to run with --runs")
+    perf.add_argument("--runs", type=int, default=0, help="runs of the scenario per target")
+    perf.add_argument("--bb-user", type=Path, help="user/ directory for bb-run runs")
+    perf.add_argument("--reference-user", type=Path, help="user/ directory for reference runs")
+    perf.add_argument("--main-bb-run", type=Path, help="bb-run binary built from main")
+    perf.add_argument("--preset", default="relwithdebinfo", help="bb-run build preset")
+    perf.add_argument("--time", type=int, help="time limit of each run in seconds")
+    perf.add_argument("--only", default="*", help="glob: only the segments with a matching name")
+    for column in report.PERF_COLUMNS:
+        perf.add_argument(f"--{column}", nargs="+", type=Path, default=[], metavar="RUN",
+                          help=f"run directories of the {column} column")
     args = parser.parse_args(argv)
+    if args.command == "perf":
+        return perf_command(args)
     if args.command == "compare":
         return compare.run_compare(*args.runs, args.shots)
     if args.command == "setup":

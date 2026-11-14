@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+import fnmatch
+import json
 import math
 import os
 import re
@@ -208,3 +210,82 @@ def segment_build_stalls(frames: list[Frame], builds: list[Build],
         result[name] = build_stalls([f for f in frames if start <= f.present_ns < end],
                                     [b for b in builds if start <= b.start_ns < end])
     return result
+
+
+# The columns of `rig.py perf`, in the order they print.
+PERF_COLUMNS = ("branch", "main", "reference")
+PERF_FIELDS = ("p50_ms", "p95_ms", "p99_ms", "max_ms", "stutters_over_2x_median")
+
+
+def load_perf_run(run: Path) -> dict | None:
+    """The summary of a run that finished its scenario, None for one that did not: a run that
+    failed or timed out gives no metric (its events.csv must end with `end,scenario finished`)."""
+    try:
+        summary = json.loads((run / "summary.json").read_text())
+        last = (run / "events.csv").read_text().splitlines()[-1]
+    except (OSError, ValueError, IndexError):
+        return None
+    if not summary.get("scenario_ok") or not last.endswith(",end,scenario finished"):
+        return None
+    return summary
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def perf_cell(runs: list[dict | None], segment: str) -> dict | None:
+    """Per field the median over the runs of the segment's value, and the spread (largest minus
+    smallest) of the p99 between runs. None when no run has frames in the segment."""
+    stats = [r["segments"].get(segment) for r in runs if r and r.get("segments")]
+    stats = [s for s in stats if s]
+    if not stats:
+        return None
+    cell = {f: round(_median([s[f] for s in stats]), 2) for f in PERF_FIELDS}
+    p99s = [s["p99_ms"] for s in stats]
+    cell["p99_spread_ms"] = round(max(p99s) - min(p99s), 2)
+    cell["runs"] = len(stats)
+    return cell
+
+
+def perf_flag(cell: dict | None, reference: dict | None) -> bool:
+    """The p99 of cell is above the reference's by more than the run-to-run spread, the larger of
+    the two spreads (the spread of one run is 0, so a single run never excuses anything)."""
+    if not cell or not reference:
+        return False
+    spread = max(cell["p99_spread_ms"], reference["p99_spread_ms"])
+    return cell["p99_ms"] - reference["p99_ms"] > spread
+
+
+def perf_report(columns: dict[str, list[dict | None]], only: str = "*") -> tuple[str, list[str]]:
+    """A table with one row per scenario segment and one block of numbers per column, and the
+    segments where a column other than the reference is flagged by perf_flag."""
+    names: list[str] = []
+    for runs in columns.values():
+        for run in runs:
+            for name in (run or {}).get("segments", {}):
+                if name not in names and fnmatch.fnmatch(name, only):
+                    names.append(name)
+    shown = [c for c in PERF_COLUMNS if c in columns]
+    lines = ["segment / column      runs   p50    p95    p99 (spread)     max  stutters"]
+    flagged = []
+    for name in names:
+        lines.append(name)
+        cells = {c: perf_cell(columns[c], name) for c in shown}
+        for column in shown:
+            cell = cells[column]
+            if not cell:
+                lines.append(f"  {column:<18} {len(columns[column]):>4}   no frames")
+                continue
+            mark = ""
+            if column != "reference" and perf_flag(cell, cells.get("reference")):
+                mark = "  > reference"
+                flagged.append(f"{name} ({column}): p99 {cell['p99_ms']} ms against "
+                               f"{cells['reference']['p99_ms']} ms, spread {cell['p99_spread_ms']}"
+                               f" and {cells['reference']['p99_spread_ms']} ms")
+            lines.append(f"  {column:<18} {cell['runs']:>4} {cell['p50_ms']:>6} {cell['p95_ms']:>6} "
+                         f"{cell['p99_ms']:>6} ({cell['p99_spread_ms']:>5}) {cell['max_ms']:>7} "
+                         f"{cell['stutters_over_2x_median']:>6.0f}{mark}")
+    return "\n".join(lines), flagged

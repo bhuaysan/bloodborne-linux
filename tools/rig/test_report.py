@@ -188,5 +188,51 @@ class ReportTests(unittest.TestCase):
             self.convert(1, 1, 999, bytes(4))
 
 
+class PerfReportTests(unittest.TestCase):
+    def run_of(self, p99: float, segment: str = "play-walk") -> dict:
+        stats = {"p50_ms": 33.33, "p95_ms": 33.4, "p99_ms": p99, "max_ms": p99 + 5,
+                 "stutters_over_2x_median": 0}
+        return {"segments": {segment: stats, "logos": None}}
+
+    def test_cell_takes_the_median_and_the_spread_of_p99(self) -> None:
+        cell = report.perf_cell([self.run_of(34), self.run_of(50), self.run_of(36), None],
+                                "play-walk")
+        self.assertEqual((cell["p99_ms"], cell["p99_spread_ms"], cell["runs"]), (36, 16, 3))
+
+    def test_cell_is_none_without_frames(self) -> None:
+        self.assertIsNone(report.perf_cell([self.run_of(34)], "logos"))
+        self.assertIsNone(report.perf_cell([None], "play-walk"))
+
+    def test_flag_needs_more_than_the_spread(self) -> None:
+        ours = report.perf_cell([self.run_of(60), self.run_of(62)], "play-walk")
+        within = report.perf_cell([self.run_of(50), self.run_of(58)], "play-walk")
+        steady = report.perf_cell([self.run_of(34), self.run_of(34.5)], "play-walk")
+        self.assertFalse(report.perf_flag(ours, within))
+        self.assertTrue(report.perf_flag(ours, steady))
+        self.assertFalse(report.perf_flag(None, steady))
+
+    def test_report_lists_flagged_segments_and_filters(self) -> None:
+        columns = {"branch": [self.run_of(60), self.run_of(60)],
+                   "reference": [self.run_of(34), self.run_of(34)]}
+        text, flagged = report.perf_report(columns)
+        self.assertIn("play-walk", text)
+        self.assertEqual(len(flagged), 1)
+        self.assertIn("play-walk (branch): p99 60.0 ms against 34.0 ms", flagged[0])
+        text, flagged = report.perf_report(columns, "play-run*")
+        self.assertEqual((len(text.splitlines()), flagged), (1, []))
+
+    def test_load_perf_run_needs_a_finished_scenario(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            self.assertIsNone(report.load_perf_run(run))
+            (run / "summary.json").write_text('{"scenario_ok": true, "segments": {}}')
+            (run / "events.csv").write_text("a,b,0,fail,timed out\n")
+            self.assertIsNone(report.load_perf_run(run))
+            (run / "events.csv").write_text("a,b,0,end,scenario finished\n")
+            self.assertEqual(report.load_perf_run(run)["segments"], {})
+            (run / "summary.json").write_text('{"scenario_ok": false}')
+            self.assertIsNone(report.load_perf_run(run))
+
+
 if __name__ == "__main__":
     unittest.main()
