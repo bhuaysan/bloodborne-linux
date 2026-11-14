@@ -81,6 +81,13 @@ static_assert(sizeof(FlipStatus) == 64);
 // The vblank period, 60 Hz rounded up to whole nanoseconds.
 inline constexpr std::chrono::nanoseconds vblank_period{16'666'667};
 
+// A flip queued up to flip_grace after a vblank still takes it, and the grid follows it and
+// flip_margin (vblank_grid.hpp). The grace is a quarter of a period: more than the jitter of a
+// game frame, and still a flip that is shown 4 ms late at most instead of 16.7 ms. The margin
+// is the jitter that the following frames get before their vblank.
+inline constexpr std::chrono::nanoseconds flip_grace{4'000'000};
+inline constexpr std::chrono::nanoseconds flip_margin{2'000'000};
+
 // What presents the flips: video_core's presenter on Liverpool's GPU thread in bb-run's window
 // (video_core_presenter.hpp), a fake in the tests. The calls are upstream's presenter and
 // Liverpool calls of driver.cpp; prepare_* run on the GPU thread, present on the present thread.

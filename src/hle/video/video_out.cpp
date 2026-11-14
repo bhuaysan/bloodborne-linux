@@ -5,7 +5,8 @@
 // Changed for bloodborne-linux, 2026-11-11: the driver and the eight exports the game imports on
 // our runtime. Flip events go to our EventQueue, the presenter and Liverpool calls through
 // FlipPresenter (none when headless), times from our libkernel. Vblanks on a fixed 60 Hz grid with
-// sleep_until instead of AccurateTimer, and a flip waits for the first vblank after it was queued.
+// sleep_until instead of AccurateTimer, and a flip waits for the first vblank after it was queued,
+// or takes the one just before when it was queued up to flip_grace late (vblank_grid.hpp, #528).
 // A flip still in flight when the port closes is presented but leaves the port alone. Negative
 // indices and counts, flip rates other than 0..2 and an unknown handle fail instead of being used.
 // Surfaces are registered outside the port lock. An EOP flip to a slot outside the port fails. No
@@ -16,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <deque>
 #include <mutex>
@@ -31,6 +33,7 @@
 #include "hle/hle.hpp"
 #include "hle/kernel/equeue.hpp"
 #include "hle/kernel/time.hpp"
+#include "hle/video/vblank_grid.hpp"
 #include "hle/video/video.hpp"
 
 namespace bb::hle::video {
@@ -267,14 +270,19 @@ private:
             frame = index == -1 ? presenter->prepare_blank_frame(false)
                                 : presenter->prepare_frame(group, address);
         }
-        const std::scoped_lock lock{mutex_};
-        requests_.push_back({frame, presenter, flip_arg, index, eop, generation, Clock::now()});
+        {
+            const std::scoped_lock lock{mutex_};
+            requests_.push_back(
+                {frame, presenter, flip_arg, index, eop, generation, Clock::now()});
+        }
+        request_cv_.notify_one();
     }
 
-    // The oldest request, if it was queued no later than `vblank`.
-    std::optional<Request> receive_request(Clock::time_point vblank) {
-        const std::scoped_lock lock{mutex_};
-        if (requests_.empty() || requests_.front().queued > vblank) {
+    // The oldest request, waiting for one until `deadline` when there is none yet.
+    std::optional<Request> receive_request(Clock::time_point deadline) {
+        std::unique_lock lock{mutex_};
+        request_cv_.wait_until(lock, deadline, [this] { return !requests_.empty(); });
+        if (requests_.empty()) {
             return std::nullopt;
         }
         const Request request = requests_.front();
@@ -340,17 +348,21 @@ private:
         }
     }
 
-    // One iteration per vblank, on a fixed grid. A vblank takes a flip only at every
-    // (flip_rate + 1)-th count; without one the presenter shows a blank frame while the port is
+    // One iteration per vblank. A vblank takes a flip only at every (flip_rate + 1)-th count; a
+    // flip that is queued up to flip_grace after it takes it too, and the grid follows
+    // (vblank_grid.hpp). Without a flip the presenter shows a blank frame while the port is
     // closed, or the last frame again when ImGui has to keep drawing.
     [[noreturn]] void present_thread() {
         common::set_thread_name("video-present");
-        Clock::time_point next = Clock::now();
+        VblankGrid grid{Clock::now(), vblank_period, flip_grace, flip_margin};
         for (;;) {
-            const Clock::time_point vblank = next;
+            const VblankGrid::Vblank vblank = grid.pass(Clock::now());
             std::optional<Request> request;
-            if (vblank_count_ % (port_.flip_rate + 1) == 0) {
-                request = receive_request(vblank);
+            if (vblank.count % (port_.flip_rate + 1) == 0) {
+                request = receive_request(grid.grace_end(vblank));
+                if (request && request->queued > vblank.time) {
+                    grid.follow(vblank, Clock::now());
+                }
             }
             if (request) {
                 flip(*request);
@@ -363,21 +375,15 @@ private:
                     }
                 }
             }
-            ++vblank_count_;
-            next += vblank_period;
-            const Clock::time_point now = Clock::now();
-            if (now > next + vblank_period) {
-                next = now;  // far behind, after a long present: no burst of vblanks
-            }
-            std::this_thread::sleep_until(next);
+            std::this_thread::sleep_until(grid.next());
         }
     }
 
     std::atomic<FlipPresenter*> presenter_{nullptr};
     Port port_;
     std::mutex mutex_;
+    std::condition_variable request_cv_;
     std::deque<Request> requests_;
-    std::uint64_t vblank_count_ = 0;  // the present thread's
     std::atomic<std::uint64_t> submitted_{0};
 };
 

@@ -310,6 +310,9 @@ struct FakePresenter final : FlipPresenter {
         EXPECT_EQ(frame, game_frame());
         EXPECT_FALSE(reusing);
         EXPECT_TRUE(is_game_frame);
+        present_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count();
         in_present = true;
         while (hold) {
             std::this_thread::sleep_for(1ms);
@@ -333,6 +336,7 @@ struct FakePresenter final : FlipPresenter {
     std::atomic<int> game_presents{0};
     std::atomic<int> blank_presents{0};
     std::atomic<std::uint64_t> count_at_present{~0ull};
+    std::atomic<std::int64_t> present_ns{0};  // steady_clock, when the last game frame came
     std::atomic<bool> defer{false};
     std::vector<std::function<void()>> deferred;
     std::atomic<int> gpu_blank_frames{0};
@@ -370,6 +374,45 @@ TEST(HleVideo, PresenterPresentsTheFlipBeforeTheEvent) {
         const std::scoped_lock lock{fake.mutex};
         EXPECT_EQ(fake.prepared, (std::vector<std::uint64_t>{Port::buffers[1]}));
         EXPECT_EQ(fake.prepared_width, 1920u);
+        start_video_out(nullptr);
+    }
+}
+
+// A flip queued shortly after a vblank takes it and does not wait a period for the next one. The
+// grid is not visible, so the vblank after a flip is a period after the flip's present; a
+// flip queued 1 ms after that is within the grace.
+TEST(HleVideo, FlipQueuedJustAfterAVblankIsPresentedAtOnce) {
+    static FakePresenter fake;
+    start_video_out(&fake);
+    {
+        const Port port;
+        const std::uint32_t timeout_us = 2'000'000;
+        const auto now_ns = [] {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        };
+        auto flip_and_wait = [&] {
+            const int before = fake.game_presents;
+            EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 0, 1, 0), 0);
+            while (fake.game_presents == before) {
+                EXPECT_EQ(wait_for(port.queue, &timeout_us).result, 0);
+            }
+        };
+        int prompt = 0;
+        constexpr int trials = 6;
+        for (int i = 0; i < trials; ++i) {
+            flip_and_wait();
+            const std::int64_t vblank = fake.present_ns + vblank_period.count();
+            std::this_thread::sleep_until(
+                std::chrono::steady_clock::time_point{std::chrono::nanoseconds{vblank + 1'000'000}});
+            const std::int64_t queued = now_ns();
+            flip_and_wait();
+            // A flip that waited for the next vblank is presented 15 ms after it was queued.
+            prompt += fake.present_ns - queued < 8'000'000;
+        }
+        // A loaded machine may delay a thread by more than the 3 ms of room.
+        EXPECT_GE(prompt, trials - 2);
         start_video_out(nullptr);
     }
 }

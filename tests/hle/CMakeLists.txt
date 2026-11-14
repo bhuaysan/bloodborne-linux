@@ -5,6 +5,7 @@ bb_add_test(hle_date_time_test SOURCES date_time_test.cpp LIBS bbhle bbhlesystem
 bb_add_test(hle_save_data_test SOURCES save_data_test.cpp LIBS bbhle bbhlesystem)
 # The stage register imports check their layouts against the shader files with shadPS4's decoder.
 bb_add_test(hle_video_test SOURCES video_test.cpp gnm_shader_test.cpp gnm_state_test.cpp
+            vblank_grid_test.cpp
             LIBS bbhle bbhlevideo bbshadps4)
 target_include_directories(hle_video_test SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/amd-gcn)
 target_link_libraries(hle_video_test PRIVATE bbtestguestwindow)  # submits from guest memory
