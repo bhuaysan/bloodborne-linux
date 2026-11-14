@@ -153,5 +153,36 @@ class LayerTests(unittest.TestCase):
             self.assertIn("vkNegotiateLoaderLayerInterfaceVersion", symbols)
 
 
+class PerfRunsTests(unittest.TestCase):
+    def test_runs_each_column_n_times_and_passes_the_binary(self) -> None:
+        calls = []
+
+        def fake(run_args):
+            calls.append((run_args.target, run_args.user_from, run_args.bb_run))
+            run_args.run_dir_out.append(Path(f"run{len(calls)}"))
+            return 0
+
+        args = rig.argparse.Namespace(
+            scenario="s", runs=2, bb_user=Path("bu"), reference_user=Path("ru"),
+            main_bb_run=Path("/main/bb-run"), time=None, preset="relwithdebinfo")
+        with unittest.mock.patch.object(rig, "run_target", fake):
+            dirs = rig.perf_runs(args)
+        self.assertEqual(list(dirs), ["branch", "main", "reference"])
+        self.assertTrue(all(len(v) == 2 for v in dirs.values()))
+        self.assertEqual(calls, [("bb-run", Path("bu"), None)] * 2
+                         + [("bb-run", Path("bu"), Path("/main/bb-run"))] * 2
+                         + [("reference", Path("ru"), None)] * 2)
+
+    def test_needs_a_scenario_and_a_save(self) -> None:
+        args = rig.argparse.Namespace(
+            scenario="s", runs=1, bb_user=None, reference_user=Path("ru"),
+            main_bb_run=None, time=None, preset="p")
+        with self.assertRaises(SystemExit):
+            rig.perf_runs(args)
+        args.scenario = None
+        with self.assertRaises(SystemExit):
+            rig.perf_runs(args)
+
+
 if __name__ == "__main__":
     unittest.main()
