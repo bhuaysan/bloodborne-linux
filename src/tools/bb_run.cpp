@@ -241,6 +241,7 @@ void open_display(const bb::tools::RunOptions& options) {
         end_run(2);
     }
     Storage::pipeline_cache_enabled = options.pipeline_cache;
+    Vulkan::async_pipeline_builds = options.async_pipelines;
     Vulkan::RendererOptions renderer{*gpu_id, validation, Vulkan::PresentMode::Mailbox};
     const char* present_mode_name = "mailbox";
     switch (options.present_mode) {

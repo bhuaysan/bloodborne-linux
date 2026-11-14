@@ -75,6 +75,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args) {
             options.validation_gpu = true;
         } else if (arg == "--no-pipeline-cache") {
             options.pipeline_cache = false;
+        } else if (arg == "--sync-pipelines") {
+            options.async_pipelines = false;
         } else if (arg == "--present-mode") {
             const std::string_view mode = value();
             if (mode == "fifo") {

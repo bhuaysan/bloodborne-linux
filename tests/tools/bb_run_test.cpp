@@ -62,11 +62,18 @@ TEST(RunOptions, Defaults) {
     EXPECT_FALSE(o.validation_gpu);
     EXPECT_EQ(o.present_mode, PresentMode::mailbox);
     EXPECT_TRUE(o.pipeline_cache);
+    EXPECT_TRUE(o.async_pipelines);
     EXPECT_FALSE(o.help);
 }
 
 TEST(RunOptions, NoPipelineCacheTurnsTheDiskCacheOff) {
     EXPECT_FALSE(parse({"--no-pipeline-cache"}).pipeline_cache);
+}
+
+TEST(RunOptions, SyncPipelinesBuildsOnTheGpuThread) {
+    const RunOptions o = parse({"--sync-pipelines"});
+    EXPECT_FALSE(o.async_pipelines);
+    EXPECT_TRUE(o.pipeline_cache);
 }
 
 TEST(RunOptions, ParsesEveryOption) {

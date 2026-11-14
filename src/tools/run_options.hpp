@@ -19,6 +19,7 @@ inline constexpr std::string_view run_usage =
     "              [--log SPEC] [--no-log-file] [--headless] [--device NAME]\n"
     "              [--validation] [--validation-sync] [--validation-gpu]\n"
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
+    "              [--sync-pipelines]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
@@ -40,7 +41,9 @@ inline constexpr std::string_view run_usage =
     "                       lacks it (default: mailbox)\n"
     "  --no-pipeline-cache  neither read nor write the shader and pipeline cache on disk (below\n"
     "                       $XDG_CACHE_HOME/bloodborne-linux); every shader is translated and\n"
-    "                       every pipeline built again, for comparison runs\n";
+    "                       every pipeline built again, for comparison runs\n"
+    "  --sync-pipelines     create every new pipeline on the GPU thread, so no draw is skipped\n"
+    "                       while its pipeline is created on a worker thread (the default)\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
@@ -62,6 +65,7 @@ struct RunOptions {
     bool validation_gpu = false;   // --validation-gpu, only with --validation
     PresentMode present_mode = PresentMode::mailbox;  // --present-mode
     bool pipeline_cache = true;  // false with --no-pipeline-cache
+    bool async_pipelines = true;  // false with --sync-pipelines
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 
