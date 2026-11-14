@@ -61,6 +61,22 @@ class CommandTests(unittest.TestCase):
             windowed = rig.bb_run_program(Path("/run"), Path("/g"), "debug", True, Path("/w"))
         self.assertNotIn("--headless", windowed.argv)
 
+    def test_bb_run_log_filter_is_passed_on(self) -> None:
+        with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
+            plain = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"))
+            logged = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"),
+                                        log="profile=debug")
+        self.assertNotIn("--log", plain.argv)
+        self.assertEqual(logged.argv[-2:], ["--log", "profile=debug"])
+
+    def test_bb_run_under_perf_record(self) -> None:
+        with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
+            program = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"),
+                                         perf=True)
+        self.assertEqual(program.argv[:2], ["perf", "record"])
+        self.assertIn("/run/perf.data", program.argv)
+        self.assertEqual(program.argv[program.argv.index("--") + 1], "/b/bb-run")
+
     def test_only_the_virtual_pad_is_visible_to_sdl(self) -> None:
         # A real controller on the machine took pad slot 0 in most runs (#520).
         description = vpad.device_description()

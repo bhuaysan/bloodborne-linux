@@ -212,7 +212,8 @@ def copy_user_for_bb_run(user_from: Path, dest: Path) -> None:
 
 
 def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_root: Path,
-                   cache_home: Path | None = None, binary: Path | None = None) -> Program:
+                   cache_home: Path | None = None, binary: Path | None = None,
+                   log: str | None = None, perf: bool = False) -> Program:
     # bb-run refuses runtime directories inside the source checkout, so its XDG roots are outside
     # analysis/. They are per run, so runs never share or inherit save data.
     env = {f"XDG_{kind}_HOME": str(work_root / kind.lower())
@@ -227,6 +228,16 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
             "--no-log-file"]
     if not window:
         argv.append("--headless")
+    if log:
+        # A log filter, e.g. profile=debug for the frame counters (docs/test-rig.md, "Profiling").
+        argv += ["--log", log]
+    if perf:
+        # User-space samples of bb-run's own threads (perf_event_paranoid=2 allows no more, and then
+        # only --user-callchains opens the event), with
+        # frame pointers (the relwithdebinfo preset keeps them). tools/rig/perfmap.py names the
+        # guest's functions afterwards.
+        argv = ["perf", "record", "-o", str(run / "perf.data"), "-F", "499", "-e", "cpu-clock:u",
+                "--call-graph", "fp", "--user-callchains", "--", *argv]
     return Program(argv, env, run)
 
 
@@ -444,7 +455,8 @@ def run_target(args: argparse.Namespace) -> int:
         work_root = Path(tempfile.mkdtemp(prefix="bb-rig-",
                                           dir=os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"))
         program = bb_run_program(run, game_dir, args.preset, args.window, work_root, args.cache_home,
-                                 getattr(args, "bb_run", None))
+                                 getattr(args, "bb_run", None), getattr(args, "log", None),
+                                 getattr(args, "perf", False))
         if args.user_from:
             copy_user_for_bb_run(args.user_from, bb_run_profile_data(work_root))
 
@@ -619,6 +631,9 @@ def main(argv: list[str] | None = None) -> int:
                           "from run to run (default: a fresh directory per run, so every run is cold)")
     run.add_argument("--audio", action="store_true",
                      help="record the sound with SDL's disk driver and report its level")
+    run.add_argument("--log", help="bb-run: log filter, e.g. profile=debug for the frame counters")
+    run.add_argument("--perf", action="store_true",
+                     help="bb-run: sample it with perf record into the run's perf.data")
     run.add_argument("--no-layer", action="store_true",
                      help="without the Vulkan layer, so no frame times and no picture steps")
     compared = commands.add_parser("compare", help="compare menu captures with the reference")
