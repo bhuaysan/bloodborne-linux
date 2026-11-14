@@ -45,3 +45,20 @@ A program is identified by its code. 21 of them come with more than one register
 A per-program comparison with the reference isn't possible: shadPS4 only translates what a run reaches. The reference run didn't crash, but it isn't known whether it reached any of these nine. R7 will show whether the game needs them.
 
 The per-program report goes to `analysis/shadps4-corpus-report.txt` and is never committed.
+
+## Translating ahead of time (#512)
+
+**No module is translated ahead of time from the archives, so there is no `bb-shader-cache` tool.** The renderer reuses a module only when its `StageSpecialization` equals the one of the draw: the runtime information (render-target formats, pixel inputs, vertex outputs, the register settings), the fetch shader, the first binding, and the formats and types of every bound V#, T# and sampler. Those come from the game's state at draw time and from guest memory, which the archives don't hold. A module the corpus translates with its fixed state could only be stored under a key the game never looks up, or under the game's key with SPIR-V the GPU thread would not have produced.
+
+`shadps4_shader_cache_match_test` measures this. Given the cache of a game run (`BB_SHADER_CACHE_DIR`), it translates the corpus program of every module in it with the corpus's state and the run's device profile and compares the specialization the renderer would compare, and the SPIR-V bytes. On 2026-11-14, with the caches of two cold runs (RADV):
+
+| Run | Modules | From the archives | Key matches | From programs in the executable |
+|---|---|---|---|---|
+| new-game-name to the opening movie (#507's run) | 81 | 38 | 0 | 43 (all 16 compute modules) |
+| start to the title (`20261114-032142-bb-run-new-game-name`, the pad did not reach the game) | 38 | 2 | 0 | 36 |
+
+Every pixel shader from the archives differs in its render targets and its buffer or image sharps, 11 of 19 also in pixel state. Every vertex shader differs in its fetch shader and its first binding (the pixel stage's bindings come first), most also in buffer sharps. Five pixel shaders give the same SPIR-V under a different key, which the renderer would not find. Half the modules come from programs embedded in `eboot.bin`, which the corpus does not read at all.
+
+The gain would also be small: the cold run to the title translated 38 shaders and built 30 pipelines in 55 ms in all (`Pipeline cache: ... 55 ms spent building them`). From the second run on, #507's cache loads every module and pipeline the game used.
+
+The vertex shaders also differ in their register settings, so `runtime_info_of` reads a vertex program's register block wrongly. It does not change the corpus test's result, and is left as it is.

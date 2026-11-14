@@ -17,6 +17,11 @@ if(TARGET bbvideocore)
     bb_add_test(shadps4_guest_memory_test
         SOURCES guest_memory_test.cpp
         LIBS bbvideocore bbhle bbvktest bbtestguestwindow)
+    # The modules of a game run's shader cache against the corpus's translations (#512): only
+    # with BB_SHADER_CACHE_DIR, the game and the extracted corpus.
+    bb_add_test(shadps4_shader_cache_match_test
+        SOURCES shader_cache_match_test.cpp program_state.cpp translate.cpp
+        LIBS bbvideocore bbhle bbcorpus bbvktest)
     # Liverpool behind the GNM driver, without a window; needs no Vulkan device.
     bb_add_test(shadps4_gnm_liverpool_test
         SOURCES gnm_liverpool_test.cpp
