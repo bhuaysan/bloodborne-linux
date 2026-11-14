@@ -296,7 +296,7 @@ class ShippedRouteTests(unittest.TestCase):
         # The route starts at once after the load: no idle step between the first picture and the walk.
         first = next(i for i, s in enumerate(parsed.steps) if s.op == "shot" and s.args[0] == "00-start")
         self.assertEqual([s.op for s in parsed.steps[first + 1:first + 3]], ["mark", "stick"])
-        self.assertLess(parsed.time_limit, 1000)
+        self.assertEqual(parsed.time_limit, 700)
 
 
 if __name__ == "__main__":
