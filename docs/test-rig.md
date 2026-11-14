@@ -12,6 +12,8 @@ tools/rig/rig.py compare REF_RUN REF_RUN OUR_RUN    # its menu against two refer
 tools/rig/rig.py run bb-run main-menu-offline --window   # on to the main menu, with the pad
 tools/rig/rig.py run bb-run r5-acceptance --window --audio   # a new game to the clinic, exit, continue
 tools/rig/rig.py run bb-run r5-soak --window --time 2200 --user-from RUN/user   # 25 minutes in the clinic
+tools/rig/rig.py perf clinic-fight --runs 5 --bb-user RUN/user --reference-user RUN/work/user   # frame times per segment
+tools/rig/rig.py perf --branch RUN... --main RUN... --reference RUN...   # the same report from finished runs
 ```
 
 A run writes `target.log`, `events.csv` (what the rig did, tied to places in the log), `frames.csv` (one line per present), `memory.csv` (`peak_program_bytes` in the summary leaves out the page cache of the game's files), `shots/*.png`, `kernel.log` and `summary.json`. For `bb-run`, `builds` and `segment_builds` in the summary spread the time its GPU thread spent on new pipelines (the `Pipeline build` and `Pipeline wait` lines in the log) over the frame intervals: the longest interval with a build in it and the most build time within one interval. The exit status is 0 when the scenario finished with no kernel GPU fault and an unchanged game directory. It is 1 after an out-of-memory kill, an unreadable kernel log, a target that exits before the scenario ends, a `shot` step without its picture, and a run with the layer in which the reference or a windowed `bb-run` presented no frame (a headless `bb-run` never presents).
@@ -93,3 +95,32 @@ The kernel log of the `bb-run` run is empty (no `amdgpu` line). Both are held at
 
 **`repeat COUNT` and `lognow` are scenario steps** (`tools/rig/scenario.py`). `repeat` writes the lines to the matching `end` out COUNT times and replaces `{i}` by the number, so a shot can be named per round. A mark inside it still can't be used twice.
 
+
+## Frame times per segment (`rig.py perf`)
+
+`perf SCENARIO --runs N` runs the scenario N times on `bb-run` of the checkout (the column `branch`), N times on the reference and, with `--main-bb-run BINARY`, N times on a `bb-run` built from `main` (the column `main`), one run at a time, then prints the report. Each target needs a save: `--bb-user` takes the `user/` directory of an `r5-acceptance` run and `--reference-user` that of a reference run (`work/user/`). Without `--runs` it reports on finished runs given with `--branch`, `--main` and `--reference`. A run that did not finish its scenario (its `events.csv` does not end with `end,scenario finished`) is left out with a message, since it gives no metric. `--only GLOB` limits the report to segments by name.
+
+Per segment and column the report gives the median over the runs of the p50, p95, p99 and maximum frame interval and of the stutters (intervals over twice the segment's median), and the spread of the p99 (largest minus smallest of the runs). A column is flagged where its p99 is above the reference's by more than the larger of the two spreads. A flagged segment gets its own issue in R8.2. The p99 of a 30 fps segment is 33.4 ms or 50 ms, since the game paces frames to the 33.33 ms grid and one late present moves a frame to the next 16.7 ms step, so the spread is 0 or a multiple of 16.7 ms.
+
+`clinic-fight.scn` is the gameplay route: Continue from the save into the clinic, then segments named `play-*` of standing (20 s), walking, camera turns, dodging, attacking (`RB`, `R2`), lock-on with strafing, attacking and dodging, and walking again, about 220 s of play in all. The character has no weapon in the clinic, so the attack presses show the attack animation of an unarmed hunter at best; the dodge, the lock-on and the walk are real. The route is as long as R7 has opened for gameplay, and Central Yharnam replaces it once the game gets there.
+
+Measured on 2026-11-14 (RADV, `relwithdebinfo`, `--window`, cold shader cache every run), five runs each, all finished with no kernel GPU fault. `bb-run` is `20261114-111713`, `-112225`, `-112738`, `-113250` and `-113803`; the reference is `20261114-114315`, `-114834`, `-115354`, `-115913` and `-120432` (all in `analysis/rig/runs/`, suffix `-bb-run-clinic-fight` and `-reference-clinic-fight`). A sixth, earlier `bb-run` run (`20261114-111141-bb-run-clinic-fight`) checked the scenario and is not in the table. No `main` column: the branch only changes tools, so its `bb-run` is the one of `main`.
+
+| segment | | p50 | p95 | p99 (spread) | max | stutters |
+|---|---|---|---|---|---|---|
+| play-stand | `bb-run` | 33.33 | 33.38 | 33.41 (16.63) | 33.55 | 0 |
+| | reference | 33.33 | 33.41 | 33.47 (16.73) | 49.97 | 0 |
+| play-walk | `bb-run` | 33.33 | 33.38 | 49.99 (0.06) | 50.04 | 0 |
+| | reference | 33.33 | 33.44 | 50.06 (50.16) | 50.09 | 0 |
+| play-camera | `bb-run` | 33.33 | 33.38 | 33.48 (16.61) | 50.05 | 0 |
+| | reference | 33.33 | 33.41 | 50.01 (48.76) | 50.19 | 0 |
+| play-dodge | `bb-run` | 33.33 | 33.38 | 33.40 (16.64) | 50.05 | 0 |
+| | reference | 33.33 | 49.97 | 50.05 (16.73) | 50.27 | 0 |
+| play-attack | `bb-run` | 33.33 | 33.37 | 33.40 (16.66) | 50.04 | 0 |
+| | reference | 33.33 | 33.39 | 33.43 (16.64) | 50.11 | 0 |
+| play-lockon | `bb-run` | 33.33 | 33.38 | 33.43 (16.63) | 50.08 | 0 |
+| | reference | 33.33 | 33.39 | 33.63 (16.65) | 50.12 | 0 |
+| play-walk-again | `bb-run` | 33.33 | 33.37 | 33.40 (16.63) | 33.43 | 0 |
+| | reference | 33.33 | 33.38 | 33.42 (16.63) | 50.00 | 0 |
+
+No segment is flagged: `bb-run` is at or below the reference's p99 everywhere, and neither has a stutter. The longest interval of a whole run is 500 ms on both (the loads before the route). The first two `bb-run` runs had a p99 of 50 ms in every segment, the next three 33.4 ms (except the walk, 50 ms in all five), the reference's first run likewise, so both targets show a run-to-run drift of the same size that the spread covers.
