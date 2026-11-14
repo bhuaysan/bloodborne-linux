@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/page_manager.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-14
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -50,6 +50,13 @@ public:
     /// Updates write watches in the pages touching the inclusive bounds using a mask.
     void UpdatePageWatchersForRegion(VAddr base_addr, const Bounds& bounds,
                                      const RegionBits& write_mask, PageOp write_op) const;
+
+    /// A write faulted on page `first_page` of the region at `base_addr`, a page the buffer cache
+    /// watches: drops that watch, and the watch of each of the next `max_pages` - 1 pages for
+    /// as long as the buffer cache is that page's only watcher, then unprotects them in one call.
+    /// Returns how many pages, from the first, lost the watch (0 only for an unknown page).
+    /// The caller holds the region's lock, and the buffer cache watches every one of the pages.
+    u64 UntrackForFault(VAddr base_addr, u64 first_page, u64 max_pages) const;
 
     /// Returns page aligned address.
     static constexpr VAddr GetPageAddr(VAddr addr) {

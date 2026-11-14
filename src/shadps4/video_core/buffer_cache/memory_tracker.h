@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/memory_tracker.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-14
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -62,6 +62,14 @@ public:
         IteratePages(cpu_addr, size, [](RegionManager* manager, u64 offset, u64 size) {
             manager->template ChangeRegionState<StateOp::Set, StateOp::None>(offset, size);
         });
+    }
+
+    /// A guest write faulted at the address: marks its page CPU modified, and up to
+    /// `max_pages` - 1 following pages with it (RegionManager::MarkCpuModifiedFromFault)
+    void MarkCpuModifiedFromFault(VAddr cpu_addr, u64 max_pages) noexcept {
+        if (auto* region = top_tier[cpu_addr >> HIGHER_PAGE_BITS]; region) {
+            region->MarkCpuModifiedFromFault(cpu_addr & HIGHER_PAGE_MASK, max_pages);
+        }
     }
 
     /// Call 'func' for each CPU modified range and unmark those pages as CPU modified

@@ -1286,6 +1286,21 @@ bool Rasterizer::InvalidateMemory(VAddr addr, u64 size) {
     return true;
 }
 
+bool Rasterizer::InvalidateFromFault(VAddr addr, u64 size) {
+    if (!IsMapped(addr, size)) {
+        return false;
+    }
+    {
+        bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::inval_buffer);
+        buffer_cache.InvalidateFromFault(addr);
+    }
+    {
+        bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::inval_texture);
+        texture_cache.InvalidateMemory(addr, size);
+    }
+    return true;
+}
+
 bool Rasterizer::IsMapped(VAddr addr, u64 size) {
     if (size == 0) {
         // There is no memory, so not mapped.

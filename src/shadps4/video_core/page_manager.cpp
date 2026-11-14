@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/page_manager.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-14
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -214,6 +214,41 @@ struct PageManager::Impl {
         }
     }
 
+    u64 UntrackForFault(VAddr base_addr, u64 first_page, u64 max_pages) {
+        const u64 first = (base_addr >> PM_PAGE_BITS) + first_page;
+        // Pages are locked in ascending order, as in the other updates, and stay locked until
+        // their protection matches their state.
+        u64 pages = 0;
+        for (; pages < max_pages; ++pages) {
+            PageState* const state = cached_pages.find(first + pages);
+            if (!state) {
+                break;
+            }
+            auto& lock = locks[first + pages];
+            lock.lock();
+            // Another watcher (an image of the texture cache) keeps a following page protected,
+            // and its fault must reach that watcher, so the run ends before it.
+            if (pages > 0 && state->num_write_watchers != 1) {
+                lock.unlock();
+                break;
+            }
+            state->Update(PageOp::Untrack);
+            if (pages == 0 && state->num_write_watchers != 0) {
+                // The first page stays protected for another watcher: nothing to unprotect.
+                locks[first].unlock();
+                return 1;
+            }
+        }
+        if (pages > 0) {
+            Protect(first << PM_PAGE_BITS, pages << PM_PAGE_BITS,
+                    Core::MemoryPermission::ReadWrite);
+        }
+        for (u64 page = first; page != first + pages; ++page) {
+            locks[page].unlock();
+        }
+        return pages;
+    }
+
     struct PageTraits {
         using Entry = PageState;
         static constexpr size_t ADDRESS_SPACE_BITS = ADDRESS_BITS;
@@ -263,7 +298,7 @@ struct SignalImpl : public PageManager::Impl {
         bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::fault);
         const auto addr = reinterpret_cast<VAddr>(fault_address);
         const auto size = std::min<u64>(8, PageManager::GetNextPageAddr(addr) - addr);
-        return rasterizer->InvalidateMemory(addr, size);
+        return rasterizer->InvalidateFromFault(addr, size);
     }
 
     Core::MemoryManager& memory;
@@ -286,6 +321,10 @@ void PageManager::OnGpuUnmap(VAddr address, size_t size) {
 
 void PageManager::UpdatePageWatchers(VAddr addr, u64 size, PageOp write_op) const {
     impl->UpdatePageWatchers(addr, size, write_op);
+}
+
+u64 PageManager::UntrackForFault(VAddr base_addr, u64 first_page, u64 max_pages) const {
+    return impl->UntrackForFault(base_addr, first_page, max_pages);
 }
 
 void PageManager::UpdatePageWatchersForRegion(VAddr base_addr, const Bounds& bounds,

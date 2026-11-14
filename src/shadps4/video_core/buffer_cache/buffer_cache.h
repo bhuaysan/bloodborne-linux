@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/buffer_cache.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-14
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -79,6 +79,15 @@ public:
 
     /// Invalidates any buffer in the logical page range.
     void InvalidateMemory(VAddr device_addr, u64 size);
+
+    /// A guest write faulted at the address: marks its page CPU modified, and the pages after it
+    /// that the guest is likely to write next (memory_tracker.h).
+    void InvalidateFromFault(VAddr device_addr);
+
+    /// The CPU and GPU modified state of guest memory, for tests.
+    [[nodiscard]] MemoryTracker& GetMemoryTracker() noexcept {
+        return *memory_tracker;
+    }
 
     /// Unmark a region as modified from the GPU.
     void UnmarkRegionAsGpuModified(VAddr device_addr, u64 size, bool is_write = false);

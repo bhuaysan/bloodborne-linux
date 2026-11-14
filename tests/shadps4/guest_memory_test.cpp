@@ -4,6 +4,7 @@
 // pages the caches protected, and the kernel's reads into guest memory lift the protection first.
 
 #include <dlfcn.h>
+#include <sys/uio.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -14,7 +15,11 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <atomic>
+#include <random>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -30,6 +35,8 @@
 #include "sdl_window.h"
 #include "shadps4_host/fault_handler.hpp"
 #include "video_core/amdgpu/liverpool.h"
+#include "video_core/buffer_cache/buffer_cache.h"
+#include "video_core/buffer_cache/memory_tracker.h"
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
@@ -437,6 +444,250 @@ TEST(GuestMemory, GuestWritesToTrackedPagesAreClaimed) {
         d.unmap();
     }
     liverpool.reset();
+}
+
+// The page of the write tracking, a quarter of the kernel's.
+constexpr u64 tp = VideoCore::BYTES_PER_PAGE;
+constexpr u64 pages_per_kernel_page = page_size / tp;
+
+// A rasterizer on lavapipe over the guest memory, with the process's fault handler, for the write
+// tracking tests below. Members are destroyed in reverse order: the rasterizer before the device,
+// Liverpool last.
+struct Gpu {
+    std::unique_ptr<AmdGpu::Liverpool> liverpool = std::make_unique<AmdGpu::Liverpool>(memory());
+    Frontend::WindowSDL window;
+    Vulkan::Instance instance{window, -1};
+    bool imgui = (start_imgui(instance), true);
+    Vulkan::Scheduler scheduler{instance};
+    Vulkan::Runtime runtime{instance, scheduler};
+    Vulkan::Rasterizer rasterizer{instance, scheduler, runtime, liverpool.get()};
+    Unregister unregister;
+
+    Gpu() {
+        bb::shadps4::install_fault_handler();
+    }
+    VideoCore::MemoryTracker& tracker() {
+        return rasterizer.GetBufferCache().GetMemoryTracker();
+    }
+    // What the buffer cache does for a draw that reads [start, start + size): the CPU modified
+    // pages in it are write protected again and their ranges returned, to be copied after.
+    std::vector<std::pair<u64, u64>> sync(std::uintptr_t start, u64 size) {
+        std::vector<std::pair<u64, u64>> ranges;
+        tracker().ForEachUploadRange(start, size, false,
+                                     [&](u64 at, u64 bytes) { ranges.emplace_back(at, bytes); });
+        return ranges;
+    }
+};
+
+// Whether the page at `p` takes a write without a fault: the host kernel's write into it fails
+// on a protected page. It writes back the byte that is there.
+bool writable(void* p) {
+    char byte = *static_cast<volatile char*>(p);
+    const iovec local{&byte, 1};
+    const iovec remote{p, 1};
+    return ::process_vm_writev(::getpid(), &local, 1, &remote, 1, 0) == 1;
+}
+
+// The first page of `pages` pages in `d` that lie in one 16 MiB region of the buffer cache's
+// tracking, where a fault's run of pages ends.
+char* in_one_region(const Direct& d, u64 pages) {
+    auto* const start = static_cast<char*>(d.address);
+    const std::uintptr_t region_end = (addr(start) | VideoCore::HIGHER_PAGE_MASK) + 1;
+    return addr(start) + pages * tp <= region_end ? start : start + pages * tp;
+}
+
+// A write fault on a page the buffer cache watches makes that page and the 15 after it writable
+// in one go (#530) and marks them modified by the CPU, so the guest's next writes there take no
+// fault and a sync uploads them.
+TEST(GuestMemory, AFaultMakesTheNextPagesWritable) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        Direct d(64 / pages_per_kernel_page);
+        char* const base = in_one_region(d, 32);
+        gpu.sync(addr(base), 32 * tp);
+        for (u64 page = 0; page < 32; ++page) {
+            ASSERT_FALSE(writable(base + page * tp)) << page;
+        }
+        EXPECT_FALSE(gpu.tracker().IsRegionCpuModified(addr(base), 32 * tp));
+
+        const std::uint64_t claimed = bb::shadps4::claimed_faults();
+        static_cast<volatile char*>(base)[8] = 'a';
+        EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 1);
+        for (u64 page = 0; page < 16; ++page) {
+            EXPECT_TRUE(writable(base + page * tp)) << page;
+            EXPECT_TRUE(gpu.tracker().IsRegionCpuModified(addr(base) + page * tp, 1));
+        }
+        for (u64 page = 16; page < 32; ++page) {
+            EXPECT_FALSE(writable(base + page * tp)) << page;
+            EXPECT_FALSE(gpu.tracker().IsRegionCpuModified(addr(base) + page * tp, 1));
+        }
+        for (u64 page = 1; page < 16; ++page) {
+            static_cast<volatile char*>(base)[page * tp] = 'b';
+        }
+        EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 1);
+
+        // The sync uploads the 16 pages as one range and protects them again.
+        const auto ranges = gpu.sync(addr(base), 32 * tp);
+        ASSERT_EQ(ranges.size(), 1u);
+        EXPECT_EQ(ranges[0].first, addr(base));
+        EXPECT_EQ(ranges[0].second, 16 * tp);
+        for (u64 page = 0; page < 32; ++page) {
+            EXPECT_FALSE(writable(base + page * tp)) << page;
+        }
+
+        // A fault near the end of the tracked range takes only what is left of it: pages the
+        // buffer cache does not watch (CPU modified already) end the run.
+        gpu.sync(addr(base), 32 * tp);
+        static_cast<volatile char*>(base)[28 * tp] = 'c';
+        EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 2);
+        for (u64 page = 28; page < 32; ++page) {
+            EXPECT_TRUE(writable(base + page * tp)) << page;
+        }
+        EXPECT_FALSE(writable(base + 27 * tp));
+        d.unmap();
+    }
+}
+
+// The run of pages a fault makes writable ends before a page the GPU wrote (an upload of guest
+// memory would overwrite what it wrote) and before a page an image of the texture cache watches
+// too (that page's fault has to reach the image).
+TEST(GuestMemory, AFaultsRunEndsAtGpuWrittenAndImagePages) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        Direct d(64 / pages_per_kernel_page);
+        char* const base = in_one_region(d, 32);
+        gpu.sync(addr(base), 32 * tp);
+        gpu.tracker().MarkRegionAsGpuModified(addr(base) + 4 * tp, tp);
+        const std::uint64_t claimed = bb::shadps4::claimed_faults();
+        static_cast<volatile char*>(base)[0] = 'a';
+        EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 1);
+        for (u64 page = 0; page < 4; ++page) {
+            EXPECT_TRUE(writable(base + page * tp)) << page;
+        }
+        EXPECT_FALSE(writable(base + 4 * tp));
+        EXPECT_FALSE(gpu.tracker().IsRegionCpuModified(addr(base) + 4 * tp, tp));
+
+        // A 64 x 64 linear image over pages 16 to 19 (16 KiB).
+        Libraries::VideoOut::BufferAttributeGroup group{};
+        group.is_occupied = true;
+        group.attrib.pixel_format = Libraries::VideoOut::PixelFormat::A8R8G8B8Srgb;
+        group.attrib.tiling_mode = Libraries::VideoOut::TilingMode::Linear;
+        group.attrib.width = group.attrib.height = group.attrib.pitch_in_pixel = 64;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        char* const image_at = base + 16 * tp;
+        VideoCore::TextureCache::ImageDesc desc{group, addr(image_at)};
+        const VideoCore::ImageId image = textures.FindImage(desc);
+        ASSERT_EQ(textures.GetImage(image).info.guest_size, 4 * tp);
+        textures.UpdateImage(image);
+        const auto cpu_dirty = [&] {
+            return True(textures.GetImage(image).flags & VideoCore::ImageFlagBits::CpuDirty);
+        };
+        ASSERT_FALSE(cpu_dirty());
+        static_cast<volatile char*>(base)[10 * tp] = 'b';
+        EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 2);
+        for (u64 page = 10; page < 16; ++page) {
+            EXPECT_TRUE(writable(base + page * tp)) << page;
+        }
+        EXPECT_FALSE(writable(image_at));
+        EXPECT_FALSE(cpu_dirty());
+        static_cast<volatile char*>(image_at)[tp + 4] = 'c';
+        EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 3);
+        EXPECT_TRUE(cpu_dirty());
+        EXPECT_EQ(image_at[tp + 4], 'c');
+        d.unmap();
+    }
+}
+
+// Write tracking under load: guest threads write runs of pages, each write to a protected page a
+// fault that marks pages modified by the CPU and unprotects them, while the GPU thread syncs the
+// range (protecting the modified pages again and copying them into its copy of the memory) and
+// keeps an image over part of it tracked. A write the tracking missed would leave the copy stale:
+// once the writers stop, one more sync has to make it equal to guest memory, with every page
+// protected again.
+TEST(GuestMemory, ConcurrentFaultsAndSyncsMissNoWrite) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        constexpr u64 pages = 512;  // 2 MiB, 8 words of the region bits
+        constexpr u64 words_per_page = tp / sizeof(u64);
+        Direct d(pages / pages_per_kernel_page);
+        auto* const words = static_cast<u64*>(d.address);
+        const std::uintptr_t start = addr(d.address);
+        const u64 size = pages * tp;
+        std::vector<u64> copy(pages * words_per_page);
+        const auto upload = [&](const std::vector<std::pair<u64, u64>>& ranges) {
+            for (const auto& [at, bytes] : ranges) {
+                const u64 first = (at - start) / sizeof(u64);
+                for (u64 i = first; i < first + bytes / sizeof(u64); ++i) {
+                    copy[i] = std::atomic_ref<u64>(words[i]).load(std::memory_order_relaxed);
+                }
+            }
+        };
+        upload(gpu.sync(start, size));
+
+        Libraries::VideoOut::BufferAttributeGroup group{};
+        group.is_occupied = true;
+        group.attrib.pixel_format = Libraries::VideoOut::PixelFormat::A8R8G8B8Srgb;
+        group.attrib.tiling_mode = Libraries::VideoOut::TilingMode::Linear;
+        group.attrib.width = group.attrib.height = group.attrib.pitch_in_pixel = 64;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        VideoCore::TextureCache::ImageDesc desc{group, start + 100 * tp};
+        const VideoCore::ImageId image = textures.FindImage(desc);
+
+        const std::uint64_t claimed = bb::shadps4::claimed_faults();
+        constexpr int writers = 4;
+        std::atomic<bool> stop{false};
+        std::vector<std::thread> threads;
+        for (int t = 0; t < writers; ++t) {
+            threads.emplace_back([&, t] {
+                std::mt19937_64 random(t + 1);
+                for (u64 run = 0; !stop.load(std::memory_order_relaxed); ++run) {
+                    const u64 first = random() % pages;
+                    const u64 length = std::min<u64>(1 + random() % 24, pages - first);
+                    for (u64 page = first; page < first + length; ++page) {
+                        const u64 at = page * words_per_page + random() % words_per_page;
+                        std::atomic_ref<u64>(words[at]).store(
+                            (u64(t) << 56) | (run << 16) | page, std::memory_order_relaxed);
+                    }
+                }
+            });
+        }
+        // Every other sync takes the whole range, the others a random part of it.
+        std::mt19937_64 random(99);
+        constexpr u64 syncs = 500;
+        for (u64 sync = 0; sync < syncs; ++sync) {
+            const u64 first = sync % 2 == 0 ? 0 : random() % pages;
+            const u64 length =
+                sync % 2 == 0 ? pages : std::min<u64>(1 + random() % 64, pages - first);
+            upload(gpu.sync(start + first * tp, length * tp));
+            if (sync % 64 == 0) {
+                textures.UpdateImage(image);
+            }
+        }
+        stop.store(true);
+        for (auto& thread : threads) {
+            thread.join();
+        }
+        upload(gpu.sync(start, size));
+        u64 stale = 0;
+        for (u64 i = 0; i < copy.size(); ++i) {
+            stale += copy[i] != words[i] ? 1 : 0;
+        }
+        EXPECT_EQ(stale, 0u);
+        for (u64 page = 0; page < pages; ++page) {
+            EXPECT_FALSE(writable(&words[page * words_per_page])) << page;
+        }
+        EXPECT_GT(bb::shadps4::claimed_faults() - claimed, 1000u);
+        d.unmap();
+    }
 }
 
 }  // namespace

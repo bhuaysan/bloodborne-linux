@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/region_manager.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-14
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
 
+#include <algorithm>
+#include <mutex>
 #include <utility>
 
 #include "common/adaptive_mutex.h"
@@ -101,6 +103,35 @@ public:
         IterateWords(bounds,
                      [&](u64 index, u64 mask) { UpdateState<cpu_op, gpu_op>(index, mask); });
         mutex.unlock();
+    }
+
+    // A guest write faulted on the page at `offset`: marks it CPU modified and drops the buffer
+    // cache's write watch on it, as ChangeRegionState<Set, None> would. The guest mostly writes
+    // runs of pages front to back (#530: on yharnam-route 82 % of the faults hit the page after
+    // the thread's last one), so up to `max_pages` - 1 following pages go with it, in the same
+    // mprotect call, while the buffer cache is their only watcher and the GPU has not written
+    // them (an upload of guest memory would overwrite what it wrote). Marking a page CPU modified
+    // that the guest then does not write only costs its upload. Locks as ChangeRegionState: this
+    // mutex, then the page manager's page locks in ascending order, so the bits and the page
+    // protection change together and no other fault or sync sees one without the other.
+    void MarkCpuModifiedFromFault(u64 offset, u64 max_pages) {
+        const u64 page = offset / BYTES_PER_PAGE;
+        std::scoped_lock lock{mutex};
+        if (cpu.GetPage(page)) {
+            // Not watched by the buffer cache: the fault is the texture cache's, or another
+            // thread's fault on this page came first.
+            return;
+        }
+        u64 candidates = 1;
+        while (candidates < max_pages && page + candidates < NUM_REGION_PAGES &&
+               !cpu.GetPage(page + candidates) && !gpu.GetPage(page + candidates)) {
+            ++candidates;
+        }
+        const u64 pages = std::max<u64>(1, tracker->UntrackForFault(cpu_addr, page, candidates));
+        IterateWords(GetBounds(page * BYTES_PER_PAGE, pages * BYTES_PER_PAGE),
+                     [&](u64 index, u64 mask) {
+                         UpdateState<StateOp::Set, StateOp::None>(index, mask);
+                     });
     }
 
     template <Type type, StateOp cpu_op, StateOp gpu_op, bool locked = true>

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/buffer_cache.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-14
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -113,6 +113,16 @@ BufferCache::~BufferCache() = default;
 
 void BufferCache::InvalidateMemory(VAddr device_addr, u64 size) {
     memory_tracker->MarkRegionAsCpuModified(device_addr, size);
+}
+
+// How many pages a write fault makes writable at most, the faulting one and those after it. The
+// guest writes most of its per-frame data in runs of 16 pages (64 KiB); in a fault trace of
+// yharnam-route's play-walk this many cut the faults to 13 % for about 2 pages marked CPU modified
+// and not written per fault.
+constexpr u64 FAULT_PAGES = 16;
+
+void BufferCache::InvalidateFromFault(VAddr device_addr) {
+    memory_tracker->MarkCpuModifiedFromFault(device_addr, FAULT_PAGES);
 }
 
 void BufferCache::UnmarkRegionAsGpuModified(VAddr device_addr, u64 size, bool is_write) {
