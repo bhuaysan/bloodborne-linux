@@ -488,6 +488,7 @@ def run_target(args: argparse.Namespace) -> int:
     frames = report.read_frames(run / "frames.csv")
     conversion_errors = convert_shots(run)
     frame_summary = report.frame_stats(frames)
+    builds = report.read_builds((run / "target.log").read_text(errors="replace"))
     missing = missing_shots(run, shot_names)
     # A headless bb-run never presents, so only the reference and a windowed bb-run owe frames.
     expects_frames = not args.no_layer and (args.target == "reference" or args.window)
@@ -521,6 +522,8 @@ def run_target(args: argparse.Namespace) -> int:
         "oom_kills": memory_sampler.oom_kills,
         "frames": frame_summary,
         "segments": report.segment_stats(frames, events.marks),
+        "builds": report.build_stalls(frames, builds),
+        "segment_builds": report.segment_build_stalls(frames, builds, events.marks),
         "kernel_gpu_faults": faults, "game_dir_changes": changes,
         "zenity_called": zenity.exists(), "shot_errors": conversion_errors,
         "missing_shots": missing,

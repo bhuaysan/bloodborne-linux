@@ -65,6 +65,47 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(sorted(segments), ["a", "empty"])
         self.assertIsNone(segments["empty"])
 
+    def test_builds_are_read_from_the_log(self) -> None:
+        log = ("12:00:00.000 info [1] Render: x.cpp:1 LogBuild: Pipeline build: graphics 0x1f at "
+               "5000000 ns, 1500 us total, 2 shaders translated in 300 us, modules 6 us, "
+               "pipeline 700 us\nunrelated line\n"
+               "12:00:00.001 info [1] Render: x.cpp:2 WaitForPending: Pipeline wait: graphics 0x2a "
+               "at 7000000 ns, 800 us, ready\n"
+               "12:00:00.002 info [2] Render: x.cpp:3 operator(): Pipeline created: graphics 0x2a "
+               "on a worker in 4000 us\n")
+        self.assertEqual(report.read_builds(log), [report.Build(5_000_000, 1_500_000),
+                                                   report.Build(7_000_000, 800_000)])
+
+    def test_build_stalls_attribute_builds_to_the_intervals_they_overlap(self) -> None:
+        # Presents at 0, 10, 20, 80, 90 ms; one build inside the 20-80 ms interval, one across the
+        # 0-10 and 10-20 ms intervals.
+        frames = [report.Frame(ms * 1_000_000, False) for ms in (0, 10, 20, 80, 90)]
+        builds = [report.Build(30_000_000, 40_000_000), report.Build(8_000_000, 4_000_000)]
+        stalls = report.build_stalls(frames, builds)
+        self.assertEqual(stalls["builds"], 2)
+        self.assertEqual(stalls["total_ms"], 44.0)
+        self.assertEqual(stalls["longest_build_ms"], 40.0)
+        self.assertEqual(stalls["intervals_with_builds"], 3)
+        self.assertEqual(stalls["max_interval_with_builds_ms"], 60.0)
+        self.assertEqual(stalls["max_build_ms_in_one_interval"], 40.0)
+        self.assertEqual(stalls["intervals_over_50ms_with_builds"], 1)
+
+    def test_build_stalls_leave_out_captured_intervals_and_need_builds(self) -> None:
+        frames = [report.Frame(ms * 1_000_000, ms == 10) for ms in (0, 10, 20)]
+        stalls = report.build_stalls(frames, [report.Build(5_000_000, 1_000_000)])
+        self.assertEqual(stalls["intervals_with_builds"], 0)
+        self.assertEqual(stalls["max_interval_with_builds_ms"], 0)
+        self.assertIsNone(report.build_stalls(frames, []))
+
+    def test_build_stalls_split_at_marks(self) -> None:
+        frames = [report.Frame(ms * 1_000_000, False) for ms in (0, 10, 100, 110)]
+        builds = [report.Build(2_000_000, 1_000_000), report.Build(102_000_000, 3_000_000)]
+        segments = report.segment_build_stalls(frames, builds, [(0, "a"), (50_000_000, "b"),
+                                                                (200_000_000, "c")])
+        self.assertEqual(segments["a"]["total_ms"], 1.0)
+        self.assertEqual(segments["b"]["max_build_ms_in_one_interval"], 3.0)
+        self.assertIsNone(segments["c"])
+
     def test_read_frames_skips_a_cut_off_last_line(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "frames.csv"

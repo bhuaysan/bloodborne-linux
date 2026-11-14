@@ -141,10 +141,70 @@ def frame_stats(frames: list[Frame]) -> dict | None:
     }
 
 
+# The time bb-run's GPU thread spent on one new pipeline (vk_pipeline_cache.cpp): translating its
+# shaders and building it, or the part before a worker creates it ("Pipeline build"), and waiting
+# for a worker ("Pipeline wait"). The start is CLOCK_MONOTONIC, the clock of frames.csv.
+BUILD_LINE = re.compile(r"Pipeline (?:build|wait): \w+ 0x[0-9a-f]+ at (\d+) ns, (\d+) us")
+
+
+@dataclass
+class Build:
+    start_ns: int
+    duration_ns: int
+
+
+def read_builds(log: str) -> list[Build]:
+    return [Build(int(m[1]), int(m[2]) * 1000) for m in BUILD_LINE.finditer(log)]
+
+
+def build_stalls(frames: list[Frame], builds: list[Build]) -> dict | None:
+    """How the builds spread over the frame intervals, None without builds. A build counts against
+    each interval it overlaps, by the overlap; the intervals a capture lengthened are left out, as
+    in intervals_ms. The longest interval with a build in it is the stall the builds took part in."""
+    if not builds:
+        return None
+    builds = sorted(builds, key=lambda b: b.start_ns)
+    in_interval: list[tuple[float, float]] = []  # (interval ms, build ms within it)
+    first = 0
+    for previous, current in zip(frames, frames[1:]):
+        if previous.captured or current.captured:
+            continue
+        while first < len(builds) and \
+                builds[first].start_ns + builds[first].duration_ns <= previous.present_ns:
+            first += 1
+        overlap = 0
+        for build in builds[first:]:
+            if build.start_ns >= current.present_ns:
+                break
+            overlap += min(build.start_ns + build.duration_ns, current.present_ns) - \
+                max(build.start_ns, previous.present_ns)
+        if overlap > 0:
+            in_interval.append(((current.present_ns - previous.present_ns) / 1e6, overlap / 1e6))
+    return {
+        "builds": len(builds),
+        "total_ms": round(sum(b.duration_ns for b in builds) / 1e6, 1),
+        "longest_build_ms": round(max(b.duration_ns for b in builds) / 1e6, 2),
+        "intervals_with_builds": len(in_interval),
+        "max_interval_with_builds_ms": round(max((i for i, _ in in_interval), default=0), 2),
+        "max_build_ms_in_one_interval": round(max((b for _, b in in_interval), default=0), 2),
+        "intervals_over_50ms_with_builds": sum(1 for i, _ in in_interval if i > 50),
+    }
+
+
 def segment_stats(frames: list[Frame], marks: list[tuple[int, str]]) -> dict[str, dict | None]:
     """Frame statistics per named segment, None for one with no presents. A mark (ns, name) starts
     a segment."""
     result = {}
     for (start, name), (end, _) in zip(marks, [*marks[1:], (1 << 63, "")]):
         result[name] = frame_stats([f for f in frames if start <= f.present_ns < end])
+    return result
+
+
+def segment_build_stalls(frames: list[Frame], builds: list[Build],
+                         marks: list[tuple[int, str]]) -> dict[str, dict | None]:
+    """build_stalls per named segment, by the start of each build, as segment_stats splits."""
+    result = {}
+    for (start, name), (end, _) in zip(marks, [*marks[1:], (1 << 63, "")]):
+        result[name] = build_stalls([f for f in frames if start <= f.present_ns < end],
+                                    [b for b in builds if start <= b.start_ns < end])
     return result
