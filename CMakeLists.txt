@@ -14,11 +14,16 @@ check_pie_supported()
 
 option(BB_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(BB_WERROR "Treat compiler warnings as errors" OFF)
+option(BB_FRAME_POINTERS "Keep frame pointers, so perf can unwind with --call-graph fp" OFF)
 option(BB_BUILD_TESTS "Build the unit tests" ON)
 
 # Warning flags for our own targets. Link it to every library and executable.
 add_library(bb_warnings INTERFACE)
 target_compile_options(bb_warnings INTERFACE -Wall -Wextra -Wpedantic $<$<BOOL:${BB_WERROR}>:-Werror>)
+
+if(BB_FRAME_POINTERS)
+    add_compile_options(-fno-omit-frame-pointer)
+endif()
 
 if(BB_SANITIZE)
     add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)

@@ -15,6 +15,8 @@
 #include <stdexcept>
 #include <system_error>
 
+#include "common/frame_profile.hpp"
+
 namespace bb::common {
 namespace {
 
@@ -135,6 +137,7 @@ LogLevel LogFilter::level(std::string_view channel) const {
 }
 
 void set_log_filter(LogFilter filter) {
+    frame_profile::set_enabled(filter.enabled(LogLevel::debug, "profile"));
     Logger& l = logger();
     const std::lock_guard lock(l.mutex);
     l.filter.store(l.filters.emplace_back(new LogFilter(std::move(filter))).get());

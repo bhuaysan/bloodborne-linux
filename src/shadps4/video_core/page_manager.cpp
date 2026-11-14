@@ -17,6 +17,7 @@
 #include "core/signals.h"
 #include "video_core/page_manager.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "common/frame_profile.hpp"
 
 namespace VideoCore {
 
@@ -247,6 +248,7 @@ struct SignalImpl : public PageManager::Impl {
     }
 
     void Protect(VAddr address, size_t size, Core::MemoryPermission perms) override {
+        bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::protect);
         auto& impl = memory.GetAddressSpace();
         ASSERT_MSG(perms != Core::MemoryPermission::Write,
                    "Attempted to protect region as write-only which is not a valid permission");
@@ -258,6 +260,7 @@ struct SignalImpl : public PageManager::Impl {
         if (!Common::IsWriteError(context)) {
             return false;
         }
+        bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::fault);
         const auto addr = reinterpret_cast<VAddr>(fault_address);
         const auto size = std::min<u64>(8, PageManager::GetNextPageAddr(addr) - addr);
         return rasterizer->InvalidateMemory(addr, size);

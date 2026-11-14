@@ -20,6 +20,7 @@
 #include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
+#include "common/frame_profile.hpp"
 
 namespace Vulkan {
 
@@ -374,6 +375,7 @@ PipelineCache::~PipelineCache() {
 
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectParams params) {
     draw_indirect_params = params;
+    bb::common::frame_profile::Scope profile_pipeline(bb::common::frame_profile::Part::pipeline);
     pending_start.reset();
     if (!RefreshGraphicsKey()) {
         return nullptr;
@@ -480,6 +482,7 @@ bool PipelineCache::WaitForPending(const GraphicsPipelineKey& key) {
 }
 
 const ComputePipeline* PipelineCache::GetComputePipeline() {
+    bb::common::frame_profile::Scope profile_pipeline(bb::common::frame_profile::Part::pipeline);
     pending_start.reset();
     if (!RefreshComputeKey()) {
         return nullptr;

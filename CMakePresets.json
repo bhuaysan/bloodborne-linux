@@ -18,7 +18,7 @@
       "name": "relwithdebinfo",
       "inherits": "base",
       "displayName": "Optimized with debug info",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "BB_FRAME_POINTERS": "ON" }
     },
     {
       "name": "release",

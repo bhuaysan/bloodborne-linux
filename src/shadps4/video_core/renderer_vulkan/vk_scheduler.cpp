@@ -8,6 +8,7 @@
 #include "imgui/renderer/texture_manager.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "common/frame_profile.hpp"
 
 namespace Vulkan {
 
@@ -115,6 +116,7 @@ void Scheduler::Finish() {
 }
 
 void Scheduler::Wait(u64 tick) {
+    bb::common::frame_profile::Scope profile_wait(bb::common::frame_profile::Part::wait);
     if (tick >= work_semaphore.CurrentTick()) {
         // Make sure we are not waiting for the current tick without signalling
         SubmitInfo info{};

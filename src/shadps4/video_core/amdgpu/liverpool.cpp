@@ -14,6 +14,7 @@
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "common/frame_profile.hpp"
 
 namespace AmdGpu {
 
@@ -93,6 +94,7 @@ void Liverpool::ProcessCommands() {
             command_queue.pop();
             --num_commands;
         }
+        bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::queue);
         callback();
     }
 }
@@ -128,7 +130,11 @@ void Liverpool::Process(std::stop_token stoken) {
                 }
                 task = queue.submits.front();
             }
-            task.resume();
+            {
+                bb::common::frame_profile::Scope profile(
+                    bb::common::frame_profile::Part::commands);
+                task.resume();
+            }
 
             if (task.done()) {
                 task.destroy();

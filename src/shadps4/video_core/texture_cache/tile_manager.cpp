@@ -28,6 +28,7 @@
 
 #include <magic_enum/magic_enum.hpp>
 #include <vk_mem_alloc.h>
+#include "common/frame_profile.hpp"
 
 namespace VideoCore {
 
@@ -201,6 +202,7 @@ std::pair<const Buffer*, u64> TileManager::DetileImage(const VideoCore::Buffer* 
     if (!info.props.is_tiled) {
         return {in_buffer, in_offset};
     }
+    bb::common::frame_profile::Scope profile_detile(bb::common::frame_profile::Part::detile);
 
     TilingInfo params{};
     params.bank_swizzle = info.bank_swizzle;

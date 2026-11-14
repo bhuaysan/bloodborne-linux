@@ -17,6 +17,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <queue>
+#include "common/frame_profile.hpp"
 
 namespace Platform {
 
@@ -68,6 +69,7 @@ struct IrqController {
     void Signal(InterruptId irq) {
         ASSERT_MSG(static_cast<u32>(irq) <= static_cast<u32>(InterruptId::InterruptIdMax),
                    "Unexpected IRQ signaled");
+        bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::irq);
         auto& ctx = irq_contexts.try_emplace(irq).first->second;
         std::unique_lock lock{ctx.m_lock};
 

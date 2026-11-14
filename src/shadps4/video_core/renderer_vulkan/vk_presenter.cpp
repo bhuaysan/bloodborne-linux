@@ -23,6 +23,7 @@
 #include <vector>
 #include <imgui.h>
 #include <vk_mem_alloc.h>
+#include "common/frame_profile.hpp"
 
 namespace Vulkan {
 
@@ -403,6 +404,7 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
 }
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
+    bb::common::frame_profile::Scope profile_present(bb::common::frame_profile::Part::present);
     // Free the frame for reuse
     const auto free_frame = [&] {
         if (!is_reusing_frame) {

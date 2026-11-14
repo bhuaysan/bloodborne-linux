@@ -20,6 +20,7 @@
 #include "video_core/renderer_vulkan/vk_shader_hle.h"
 #include "video_core/texture_cache/image_view.h"
 #include "video_core/texture_cache/texture_cache.h"
+#include "common/frame_profile.hpp"
 
 namespace Vulkan {
 
@@ -102,6 +103,8 @@ bool Rasterizer::FilterDraw() {
 }
 
 void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
+    bb::common::frame_profile::Scope profile_render(
+        bb::common::frame_profile::Part::render);
     // Prefetch render targets to handle overlaps with bound textures (e.g. mipgen)
     const auto& key = pipeline->GetGraphicsKey();
     const auto& regs = liverpool->regs;
@@ -177,6 +180,7 @@ void Rasterizer::EliminateFastClear() {
 }
 
 void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
+    bb::common::frame_profile::Scope profile_draw(bb::common::frame_profile::Part::draw);
 
     scheduler.PopPendingOperations();
 
@@ -205,7 +209,10 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         runtime.FlushBarriers();
     }
 
-    pipeline->BindResources(set_writes, push_data);
+    {
+        bb::common::frame_profile::Scope profile_state(bb::common::frame_profile::Part::state);
+        pipeline->BindResources(set_writes, push_data);
+    }
     UpdateDynamicState(pipeline, is_indexed);
     scheduler.BeginRendering(state);
 
@@ -231,7 +238,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
 void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u32 stride,
                               u32 max_count, VAddr count_address, u16 vertex_sgpr_offset,
                               u16 instance_sgpr_offset) {
-
+    bb::common::frame_profile::Scope profile_draw(bb::common::frame_profile::Part::draw);
     scheduler.PopPendingOperations();
 
     if (!FilterDraw()) {
@@ -277,7 +284,10 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         runtime.FlushBarriers();
     }
 
-    pipeline->BindResources(set_writes, push_data);
+    {
+        bb::common::frame_profile::Scope profile_state(bb::common::frame_profile::Part::state);
+        pipeline->BindResources(set_writes, push_data);
+    }
     UpdateDynamicState(pipeline, is_indexed);
     scheduler.BeginRendering(state);
 
@@ -310,6 +320,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
 }
 
 void Rasterizer::DispatchDirect() {
+    bb::common::frame_profile::Scope profile_draw(bb::common::frame_profile::Part::draw);
 
     scheduler.PopPendingOperations();
 
@@ -333,7 +344,10 @@ void Rasterizer::DispatchDirect() {
     }
 
     scheduler.EndRendering();
-    pipeline->BindResources(set_writes, push_data);
+    {
+        bb::common::frame_profile::Scope profile_state(bb::common::frame_profile::Part::state);
+        pipeline->BindResources(set_writes, push_data);
+    }
 
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
@@ -344,6 +358,7 @@ void Rasterizer::DispatchDirect() {
 }
 
 void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
+    bb::common::frame_profile::Scope profile_draw(bb::common::frame_profile::Part::draw);
 
     scheduler.PopPendingOperations();
 
@@ -366,7 +381,10 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     }
 
     scheduler.EndRendering();
-    pipeline->BindResources(set_writes, push_data);
+    {
+        bb::common::frame_profile::Scope profile_state(bb::common::frame_profile::Part::state);
+        pipeline->BindResources(set_writes, push_data);
+    }
 
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
@@ -388,12 +406,19 @@ void Rasterizer::Finish() {
 }
 
 void Rasterizer::OnSubmit() {
-    pipeline_cache.NewFrame();
-    texture_cache.RunGarbageCollector();
-    runtime.TickFrame();
+    {
+        bb::common::frame_profile::Scope profile_submit(
+            bb::common::frame_profile::Part::submit);
+        pipeline_cache.NewFrame();
+        texture_cache.RunGarbageCollector();
+        runtime.TickFrame();
+    }
+    // The line of the frame that just ended: the guest calls submit-done once per frame.
+    bb::common::frame_profile::log_frame();
 }
 
 bool Rasterizer::BindResources(const Pipeline* pipeline) {
+    bb::common::frame_profile::Scope profile_bind(bb::common::frame_profile::Part::bind);
     if (IsComputeImageCopy(pipeline) || IsComputeMetaClear(pipeline) ||
         IsComputeImageClear(pipeline)) {
         return false;
@@ -421,6 +446,8 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
 }
 
 void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
+    bb::common::frame_profile::Scope profile_vertex(
+        bb::common::frame_profile::Part::vertex);
     const auto& regs = liverpool->regs;
     VertexInputs<vk::VertexInputAttributeDescription2EXT> attributes;
     VertexInputs<vk::VertexInputBindingDescription2EXT> bindings;
@@ -520,6 +547,8 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
 }
 
 void Rasterizer::BindIndexBuffer(u32 index_offset, bool is_indirect) {
+    bb::common::frame_profile::Scope profile_vertex(
+        bb::common::frame_profile::Part::vertex);
     const auto& regs = liverpool->regs;
 
     // Figure out index type and size.
@@ -830,6 +859,7 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
 }
 
 void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindings& binding) {
+    bb::common::frame_profile::Scope profile_texture(bb::common::frame_profile::Part::texture);
     const u32 first_image_idx = image_infos.size();
     // To emulate storing to explicit mip levels, build a descriptor array with each mip level.
     boost::container::small_vector<u32, 8> image_descriptor_array_sizes;
@@ -995,6 +1025,8 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 }
 
 RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
+    bb::common::frame_profile::Scope profile_render(
+        bb::common::frame_profile::Part::render);
     attachment_feedback_loop = false;
     const auto& regs = liverpool->regs;
     const auto& key = pipeline->GetGraphicsKey();
@@ -1175,6 +1207,7 @@ void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
 }
 
 void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds) {
+    bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::copy);
     ASSERT_MSG(address % 4 == 0 && num_bytes % 4 == 0,
                "FillBuffer address and size must be a multiple of 4 bytes");
     if (!is_gds) {
@@ -1196,6 +1229,7 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
 }
 
 void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds) {
+    bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::copy);
     if (!dst_gds && !buffer_cache.IsRegionGpuModified(dst, num_bytes)) {
         if (!src_gds && !buffer_cache.IsRegionGpuModified(src, num_bytes) &&
             !texture_cache.FindImageFromRange(src, num_bytes)) {
@@ -1241,8 +1275,14 @@ bool Rasterizer::InvalidateMemory(VAddr addr, u64 size) {
         // Not GPU mapped memory, can skip invalidation logic entirely.
         return false;
     }
-    buffer_cache.InvalidateMemory(addr, size);
-    texture_cache.InvalidateMemory(addr, size);
+    {
+        bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::inval_buffer);
+        buffer_cache.InvalidateMemory(addr, size);
+    }
+    {
+        bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::inval_texture);
+        texture_cache.InvalidateMemory(addr, size);
+    }
     return true;
 }
 
@@ -1282,6 +1322,8 @@ void Rasterizer::UnmapMemory(VAddr addr, u64 size) {
 }
 
 void Rasterizer::UpdateDynamicState(const GraphicsPipeline* pipeline, const bool is_indexed) const {
+    bb::common::frame_profile::Scope profile_state(
+        bb::common::frame_profile::Part::state);
     UpdateViewportScissorState();
     UpdateDepthStencilState();
     UpdatePrimitiveState(is_indexed);

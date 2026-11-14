@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <deque>
 #include <mutex>
@@ -24,6 +25,7 @@
 #include <vector>
 
 #include "common/assert.h"
+#include "common/frame_profile.hpp"
 #include "common/log.hpp"
 #include "core/platform.h"
 #include "hle/hle.hpp"
@@ -281,6 +283,13 @@ private:
     }
 
     void flip(const Request& req) {
+        if (common::frame_profile::enabled()) {
+            // A request queued just after a vblank waits a whole flip period for the next one.
+            common::frame_profile::add(
+                common::frame_profile::Part::flip_wait,
+                std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - req.queued)
+                    .count());
+        }
         if (req.presenter != nullptr) {
             req.presenter->present(req.frame, false, true);
         }
