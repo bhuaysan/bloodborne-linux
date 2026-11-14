@@ -48,6 +48,12 @@ TEST(ShadPs4Signals, TriesHandlersByPriority) {
     EXPECT_TRUE(dispatch.DispatchAccessViolation(nullptr, nullptr));
     EXPECT_EQ(fault_calls, (std::vector<int>{0, 1, 2}));
 
+    // A handler registered again keeps its one entry (each page manager registers its handler).
+    dispatch.RegisterAccessViolationHandler(fault_handler_a, 0);
+    fault_calls.clear();
+    EXPECT_TRUE(dispatch.DispatchAccessViolation(nullptr, nullptr));
+    EXPECT_EQ(fault_calls, (std::vector<int>{0, 1, 2}));
+
     // A handler that claims the fault ends the dispatch.
     claim_fault = true;
     fault_calls.clear();
@@ -60,7 +66,7 @@ TEST(ShadPs4SignalsDeathTest, HandlerBeyondTheStorageIsFatal) {
         {
             Core::SignalDispatch dispatch;
             for (int i = 0; i < 5; ++i) {
-                dispatch.RegisterAccessViolationHandler(fault_handler_a, 0);
+                dispatch.RegisterAccessViolationHandler(fault_handler_a, i);
             }
         },
         "no room for another handler");

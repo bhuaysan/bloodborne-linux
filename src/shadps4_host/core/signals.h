@@ -18,9 +18,15 @@ using AccessViolationHandler = bool (*)(void* context, void* fault_address);
 class SignalDispatch {
 public:
     // Lower priorities run first, equal ones in registration order. Fixed storage, so a fault on
-    // another thread never reads freed memory; registration is unsynchronized, as upstream.
+    // another thread never reads freed memory; registration is unsynchronized, as upstream. A
+    // handler registered again keeps its one entry: each page manager registers the same one.
     void RegisterAccessViolationHandler(AccessViolationHandler handler, u32 priority) {
         size_t at = count.load(std::memory_order_relaxed);
+        for (size_t i = 0; i < at; ++i) {
+            if (handlers[i].handler == handler && handlers[i].priority == priority) {
+                return;
+            }
+        }
         if (at == handlers.size()) {
             bb::common::log_fatal("shadps4", "Core::SignalDispatch: no room for another handler");
         }
