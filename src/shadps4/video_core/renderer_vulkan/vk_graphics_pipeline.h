@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_graphics_pipeline.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-14
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -93,8 +93,13 @@ public:
                      std::span<const Shader::RuntimeInfo, MaxShaderStages> runtime_infos,
                      const Shader::Gcn::FetchShaderData* fetch_shader,
                      std::span<const vk::ShaderModule> modules, SerializationSupport& sdata,
-                     bool preloading);
+                     bool preloading, bool deferred = false);
     ~GraphicsPipeline();
+
+    // Creates the Vulkan pipeline. The constructor does it unless `deferred`; then the caller
+    // calls this once, on any thread, with the same `sdata` and `modules`. It reads only these,
+    // the key and what the constructor set up, never the draw state, which moves on.
+    void Create(const SerializationSupport& sdata, std::span<const vk::ShaderModule> modules);
 
     const Shader::Gcn::FetchShaderData& GetFetchShader() const noexcept {
         return fetch_shader;
@@ -117,6 +122,8 @@ private:
 private:
     GraphicsPipelineKey key;
     Shader::Gcn::FetchShaderData fetch_shader{};
+    vk::PipelineCache pipeline_cache;
+    bool fs_clip_distance_emulation{};
 };
 
 struct ClipDistanceShaderKey {

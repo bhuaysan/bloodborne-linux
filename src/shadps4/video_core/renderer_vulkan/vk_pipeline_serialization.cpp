@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_pipeline_serialization.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-14
 // License texts: third_party/shadps4/LICENSES/
 
 #include <chrono>
@@ -419,13 +419,19 @@ void PipelineCache::SaveDriverCache() {
     }
     std::scoped_lock lock{save_mutex};
     saved_pipelines = num_new_pipelines.load();
-    LOG_INFO(Render, "Pipeline cache: {} pipelines preloaded, {} built and {} shaders translated "
-                     "since start, {} ms spent building them",
-             num_preloaded, saved_pipelines, num_new_shaders.load(),
-             std::chrono::duration_cast<std::chrono::milliseconds>(
-                 std::chrono::steady_clock::duration{build_ns.load()})
-                 .count());
+    const auto ms = [](u64 ns) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::duration{ns})
+            .count();
+    };
+    LOG_INFO(Render,
+             "Pipeline cache: {} pipelines preloaded, {} built and {} shaders translated since "
+             "start, {} ms spent building them on the GPU thread and {} ms on workers, {} draws "
+             "skipped while their pipeline was being created",
+             num_preloaded, saved_pipelines, num_new_shaders.load(), ms(build_ns.load()),
+             ms(worker_ns.load()), num_skipped_draws.load());
     last_save = std::chrono::steady_clock::now();
+    const auto save_start = last_save;
     auto [result, data] = instance.GetDevice().getPipelineCacheData(*pipeline_cache);
     if (result != vk::Result::eSuccess || data.empty()) {
         return;
@@ -434,7 +440,13 @@ void PipelineCache::SaveDriverCache() {
     const auto key = GetDriverCacheKey(instance);
     std::memcpy(blob.data(), &key, sizeof(key));
     std::memcpy(blob.data() + sizeof(key), data.data(), data.size());
+    const size_t size = blob.size();
     db.Save(Storage::BlobType::DriverCache, DriverCacheName, std::move(blob));
+    LOG_INFO(Render, "Driver pipeline cache: {} KiB saved at {} ns in {} us", size / 1024,
+             save_start.time_since_epoch().count(),
+             std::chrono::duration_cast<std::chrono::microseconds>(
+                 std::chrono::steady_clock::now() - save_start)
+                 .count());
 }
 
 void PipelineCache::SaveDriverCacheIfDue() {
@@ -462,6 +474,9 @@ void PipelineCache::UnregisterActive() {
 void PipelineCache::FlushActive() {
     std::scoped_lock lock{active_mutex};
     if (active_cache) {
+        if (active_cache->workers) {
+            active_cache->workers->WaitIdle(); // so the driver's cache holds what they built
+        }
         active_cache->SaveDriverCache();
         Storage::DataBase::Instance().Flush();
     }
@@ -538,6 +553,9 @@ void PipelineCache::WarmUp() {
 }
 
 void PipelineCache::Sync() {
+    if (workers) {
+        workers->WaitIdle();
+    }
     SaveDriverCache();
     Storage::DataBase::Instance().Close();
 }

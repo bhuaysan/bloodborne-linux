@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_pipeline_cache.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-14
 // License texts: third_party/shadps4/LICENSES/
 
+#include <algorithm>
 #include <ranges>
+#include <thread>
 
 #include "common/hash.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -26,6 +28,15 @@ using Shader::Output;
 using Shader::SwStage;
 
 constexpr static auto SpirvVersion1_6 = 0x00010600U;
+
+bool async_pipeline_builds = true;
+
+// How long the GPU thread waits for pipelines the workers create: at most 8 ms in a frame, a
+// quarter of a frame at the game's 30 FPS. A pipeline takes 4 ms on average, so one or two new
+// pipelines in a frame are waited for and no draw goes missing; a burst of them (78 in one frame
+// as the intro starts, #521) is spread over the workers while its draws are skipped for a few
+// frames.
+constexpr static auto PipelineWaitPerFrame = std::chrono::milliseconds(8);
 
 constexpr static std::array DescriptorHeapSizes = {
     vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 512},
@@ -269,7 +280,8 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(HwStage stage, SwStag
 PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                              AmdGpu::Liverpool* liverpool_)
     : instance{instance_}, scheduler{scheduler_}, liverpool{liverpool_},
-      desc_heap{instance, scheduler.GetWorkSemaphore(), DescriptorHeapSizes} {
+      desc_heap{instance, scheduler.GetWorkSemaphore(), DescriptorHeapSizes},
+      wait_budget{PipelineWaitPerFrame} {
     const auto& vk12_props = instance.GetVk12Properties();
     profile = Shader::Profile{
         .max_viewport_width = instance.GetMaxViewportWidth(),
@@ -347,6 +359,11 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     pipeline_cache = std::move(cache);
     last_save = std::chrono::steady_clock::now();
     WarmUp();
+    if (async_pipeline_builds) {
+        // A quarter of the cores, at most four: the game's own threads need the rest.
+        workers.emplace(std::clamp(std::thread::hardware_concurrency() / 4, 1U, 4U),
+                        "PipelineBuild");
+    }
     RegisterActive();
 }
 
@@ -357,6 +374,7 @@ PipelineCache::~PipelineCache() {
 
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectParams params) {
     draw_indirect_params = params;
+    pending_start.reset();
     if (!RefreshGraphicsKey()) {
         return nullptr;
     }
@@ -366,20 +384,103 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x}", pipeline_hash);
 
         const auto build_start = std::chrono::steady_clock::now();
-        GraphicsPipeline::SerializationSupport sdata{};
+        // On a worker, everything the pipeline takes from the draw state is read here, and the
+        // driver's part, which takes most of the time, runs while the GPU thread goes on.
+        auto pending = workers ? std::make_unique<PendingGraphics>() : nullptr;
+        GraphicsPipeline::SerializationSupport local_sdata{};
+        auto& sdata = pending ? pending->sdata : local_sdata;
         it.value() = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
-            runtime_infos, fetch_shader, modules, sdata, false);
+            runtime_infos, fetch_shader, modules, sdata, false, pending != nullptr);
 
+        const auto create = std::chrono::steady_clock::now() - build_start;
+        // The same blob as for a pipeline built here: Create does not change sdata.
         RegisterPipelineData(graphics_key, pipeline_hash, sdata);
         build_ns += (std::chrono::steady_clock::now() - build_start).count();
         ++num_new_pipelines;
+        LogBuild("graphics", pipeline_hash, build_start, create, pending != nullptr);
+        if (pending) {
+            pending->hash = pipeline_hash;
+            pending->modules = modules;
+            CreateOnWorker(*it.value(), std::move(pending));
+        }
         SaveDriverCacheIfDue();
+    }
+    if (!pending_graphics.empty() && !WaitForPending(graphics_key)) {
+        ++num_skipped_draws;
+        return nullptr;
     }
     return it->second.get();
 }
 
+void PipelineCache::CreateOnWorker(GraphicsPipeline& pipeline,
+                                   std::unique_ptr<PendingGraphics> pending) {
+    std::promise<void> promise;
+    pending->done = promise.get_future();
+    auto* data = pending.get();
+    pending_graphics.emplace(graphics_key, std::move(pending));
+    workers->Submit([this, &pipeline, data, promise = std::move(promise)]() mutable {
+        const auto start = std::chrono::steady_clock::now();
+        try {
+            pipeline.Create(data->sdata, data->modules);
+        } catch (...) {
+            // Raised again on the GPU thread, where the draw would have raised it.
+            promise.set_exception(std::current_exception());
+            return;
+        }
+        const auto took = std::chrono::steady_clock::now() - start;
+        worker_ns += took.count();
+        LOG_INFO(Render, "Pipeline created: graphics {:#x} on a worker in {} us", data->hash,
+                 std::chrono::duration_cast<std::chrono::microseconds>(took).count());
+        promise.set_value();
+    });
+}
+
+void PipelineCache::NewFrame() {
+    wait_budget.NewFrame();
+    // Drawing goes through WaitForPending while any pipeline is pending, so finished ones go.
+    for (auto it = pending_graphics.begin(); it != pending_graphics.end();) {
+        if (it->second->done.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            it->second->done.get(); // raises what Create raised, as the next draw would
+            it = pending_graphics.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+bool PipelineCache::WaitForPending(const GraphicsPipelineKey& key) {
+    const auto it = pending_graphics.find(key);
+    if (it == pending_graphics.end()) {
+        return true;
+    }
+    auto& done = it->second->done;
+    if (done.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        const auto start = std::chrono::steady_clock::now();
+        const auto allowance = wait_budget.Allowance();
+        if (allowance == std::chrono::steady_clock::duration{}) {
+            return false;
+        }
+        const bool ready = done.wait_for(allowance) == std::future_status::ready;
+        const auto waited = std::chrono::steady_clock::now() - start;
+        wait_budget.Spend(waited);
+        build_ns += waited.count();
+        // The start is CLOCK_MONOTONIC, as in the build lines (tools/rig/report.py reads both).
+        LOG_INFO(Render, "Pipeline wait: graphics {:#x} at {} ns, {} us, {}", it->second->hash,
+                 start.time_since_epoch().count(),
+                 std::chrono::duration_cast<std::chrono::microseconds>(waited).count(),
+                 ready ? "ready" : "draws skipped until it is");
+        if (!ready) {
+            return false;
+        }
+    }
+    done.get(); // raises what Create raised
+    pending_graphics.erase(it);
+    return true;
+}
+
 const ComputePipeline* PipelineCache::GetComputePipeline() {
+    pending_start.reset();
     if (!RefreshComputeKey()) {
         return nullptr;
     }
@@ -393,9 +494,11 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                                        *pipeline_cache, compute_key, *infos[0],
                                                        modules[0], sdata, false);
+        const auto create = std::chrono::steady_clock::now() - build_start;
         RegisterPipelineData(compute_key, sdata);
         build_ns += (std::chrono::steady_clock::now() - build_start).count();
         ++num_new_pipelines;
+        LogBuild("compute", pipeline_hash, build_start, create);
         SaveDriverCacheIfDue();
     }
     return it->second.get();
@@ -641,10 +744,22 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
     const auto ir_program = Shader::TranslateProgram(code, pools, info, runtime_info, profile);
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);
 
+    const auto translated = std::chrono::steady_clock::now();
     const vk::ShaderModule module = CompileSPV(spv, instance.GetDevice());
+    const auto created = std::chrono::steady_clock::now();
 
     RegisterShaderBinary(std::move(spv), info.pgm_hash, perm_idx);
-    build_ns += (std::chrono::steady_clock::now() - build_start).count();
+    const auto end = std::chrono::steady_clock::now();
+    build_ns += (end - build_start).count();
+    if (!pending_start) {
+        pending_start = build_start;
+        pending_translate = {};
+        pending_module = {};
+        pending_shaders = 0;
+    }
+    pending_translate += (translated - build_start) + (end - created);
+    pending_module += created - translated;
+    ++pending_shaders;
 
     const auto name = GetShaderName(info.hw_stage, info.pgm_hash, perm_idx);
     Vulkan::SetObjectName(instance.GetDevice(), module, name);
@@ -701,6 +816,25 @@ PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_sta
         fetch_shader = &fetch;
     }
     return std::make_tuple(&program->info, module, perm_hash);
+}
+
+void PipelineCache::LogBuild(std::string_view kind, u64 hash,
+                             std::chrono::steady_clock::time_point start,
+                             std::chrono::steady_clock::duration create, bool on_worker) {
+    using std::chrono::microseconds;
+    const auto us = [](auto d) { return std::chrono::duration_cast<microseconds>(d).count(); };
+    const u32 shaders = pending_start ? pending_shaders : 0;
+    const auto first = pending_start ? *pending_start : start;
+    const auto translate = pending_start ? pending_translate : decltype(create){};
+    const auto module = pending_start ? pending_module : decltype(create){};
+    // The start is CLOCK_MONOTONIC, as frames.csv of the rig (tools/rig/report.py reads both).
+    LOG_INFO(Render,
+             "Pipeline build: {} {:#x} at {} ns, {} us total, {} shaders translated in {} us, "
+             "modules {} us, pipeline {} us{}",
+             kind, hash, first.time_since_epoch().count(),
+             us(std::chrono::steady_clock::now() - first), shaders, us(translate), us(module),
+             us(create), on_worker ? " before a worker creates it" : "");
+    pending_start.reset();
 }
 
 std::string PipelineCache::GetShaderName(Shader::HwStage stage, u64 hash,
