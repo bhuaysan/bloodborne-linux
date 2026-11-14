@@ -158,3 +158,32 @@ Measured on 2026-11-14 (RADV, `relwithdebinfo`, `--window`, cold shader cache ev
 No segment is flagged: the p99 of `bb-run` is above the reference's by at most 16.7 ms (one step of the 16.7 ms grid), which is within the spread of the runs. The p95 is another matter. It is 33.4 ms for the reference in every segment and 50 ms for `bb-run`, including `play-stand`, where the hunter stands still: more than 5 % of the frames of `bb-run` in the street present one step late. `bb-run` also has stutters (intervals over twice the median) in every moving segment against none (two in `play-walk`) for the reference. The cold shader cache adds to `play-walk` (70 to 82 pipeline builds there, 250 to 270 ms in all, against 1 to 16 builds in the other segments).
 
 The p95 gap and the stutters go into a follow-up issue in R8.2 (candidate for the profile of #513), together with the question whether the flag should compare p95 too.
+
+### Central Yharnam fighting route (`yharnam-fight.scn`)
+
+`yharnam-fight.scn` continues from a second save, made by playing the reference by hand from the great bonfire to just before a group of living enemies (not committed, `analysis/rig/manual/yharnam-enemies/work/user`; `--user-from` and `--bb-user` take it for both targets, as in the route above). After Continue the hunter stands under an arch with the street ahead and the enemies walk up while it stands, so the route starts at once. It walks out until they notice (`play-walk`), locks on and backs toward the arch (`play-lockon`), and fights in short exchanges of a swing, a roll, a swing and a roll to the side (`play-fight-first`, `play-fight-strong` with `R2`, `play-fight-last`), with a blood vial between them (`play-heal`, `play-heal-again`) and a sprint at the end (`play-sprint`). About 100 s of play.
+
+The route is blind: it does not steer by the picture. The pictures of the ten runs below show the hunter alive in all of them (the echoes stay at 154, so no kill), the enemies in `01-enemies`, and a camera that often ends behind fences or walls in the later shots, so how long the enemies stay in contact differs between runs. In the fourth reference run (`20261114-183749`) the `Y` presses opened item descriptions (Beckoning Bell, Sinister Resonant Bell), so its heal and strong-attack segments were played in a menu; it is in the table as it finished.
+
+Measured on 2026-11-14 (RADV, `relwithdebinfo`, `--window`, cold shader cache every run), five runs each, all finished with `end,scenario finished` and no kernel GPU fault. `bb-run` is `20261114-181407`, `-181703`, `-181957`, `-182253` and `-182549`; the reference is `20261114-182845`, `-183147`, `-183449`, `-183749` and `-184054` (in `analysis/rig/runs/`, suffix `-bb-run-yharnam-fight` and `-reference-yharnam-fight`).
+
+| segment | | p50 | p95 | p99 (spread) | max | stutters |
+|---|---|---|---|---|---|
+| play-walk | `bb-run` | 33.33 | 33.4 | 50.03 (16.7) | 50.03 | 0 |
+| | reference | 33.33 | 33.43 | 50.07 (0.24) | 50.07 | 0 |
+| play-lockon | `bb-run` | 33.33 | 33.39 | 50.0 (0.08) | 50.03 | 0 |
+| | reference | 33.33 | 33.39 | 50.01 (16.71) | 50.03 | 0 |
+| play-fight-first | `bb-run` | 33.33 | 33.38 | 50.02 (0.06) | 50.05 | 0 |
+| | reference | 33.33 | 33.38 | 50.09 (16.71) | 50.13 | 0 |
+| play-heal | `bb-run` | 33.33 | 33.36 | 50.02 (0.04) | 50.03 | 0 |
+| | reference | 33.33 | 33.39 | 33.42 (16.74) | 50.02 | 0 |
+| play-fight-strong | `bb-run` | 33.33 | 50.0 | 50.03 (16.67) | 50.06 | 0 |
+| | reference | 33.33 | 33.38 | 50.0 (16.77) | 50.13 | 0 |
+| play-heal-again | `bb-run` | 33.33 | 33.36 | 50.01 (16.68) | 50.03 | 0 |
+| | reference | 33.33 | 33.39 | 50.09 (16.77) | 50.14 | 0 |
+| play-fight-last | `bb-run` | 33.33 | 33.36 | 33.39 (16.59) | 50.02 | 0 |
+| | reference | 33.33 | 33.37 | 33.4 (16.71) | 50.04 | 0 |
+| play-sprint | `bb-run` | 33.33 | 33.37 | 50.02 (16.61) | 50.04 | 0 |
+| | reference | 33.33 | 33.37 | 50.0 (16.72) | 50.04 | 0 |
+
+No segment is flagged: the p99 of `bb-run` is never above the reference's by more than the spread of the runs. Neither target has a stutter in the fight, and the maximum is 50 ms (one late present) on both. The one p95 difference is `play-fight-strong` (`bb-run` 50.0 ms, reference 33.38 ms). In the open street of the route above `bb-run` showed a p95 of 50 ms in every segment and stutters; here only that segment does, so the gap there is not specific to fighting. The fight shows no frame-time gap that #513 could profile; what separates the targets on this route is smaller than the 16.7 ms grid step.

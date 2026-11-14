@@ -281,5 +281,23 @@ class InterpreterTests(unittest.TestCase):
         self.assertEqual(clock.now, 4)
 
 
+class ShippedRouteTests(unittest.TestCase):
+    def test_yharnam_fight_segments_and_pad_use(self) -> None:
+        parsed = scn.parse((HERE / "scenarios" / "yharnam-fight.scn").read_text())
+        marks = [s.args[0] for s in parsed.steps if s.op == "mark"]
+        play = [m for m in marks if m.startswith("play-")]
+        self.assertEqual(len(play), len(set(play)), "segment names are unique")
+        for name in ("play-walk", "play-lockon", "play-fight-first", "play-heal", "play-fight-strong",
+                     "play-fight-last", "play-sprint"):
+            self.assertIn(name, play)
+        taps = {s.args[0] for s in parsed.steps if s.op == "tap"}
+        self.assertTrue({"R3", "RB", "B", "Y"} <= taps)  # lock-on, attack, dodge, blood vial
+        self.assertTrue(any(s.op == "trigger" for s in parsed.steps))  # strong attack
+        # The route starts at once after the load: no idle step between the first picture and the walk.
+        first = next(i for i, s in enumerate(parsed.steps) if s.op == "shot" and s.args[0] == "00-start")
+        self.assertEqual([s.op for s in parsed.steps[first + 1:first + 3]], ["mark", "stick"])
+        self.assertLess(parsed.time_limit, 1000)
+
+
 if __name__ == "__main__":
     unittest.main()

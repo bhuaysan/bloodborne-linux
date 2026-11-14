@@ -1,0 +1,128 @@
+# The fighting route of the frame-time report (R8.2, #526): continue from a save made by playing the
+# reference by hand from the great bonfire in Central Yharnam to just before a group of living enemies
+# (`--user-from` takes its user/ directory, for the reference as for bb-run, which converts the
+# layout), walk the few steps to them, lock on, fight in short exchanges with many dodges and heal,
+# each part in a segment of its own named play-*. Use
+# `rig.py perf yharnam-fight --runs 5 --bb-user DIR --reference-user DIR`.
+# After Continue the hunter stands under an arch with the street and its fire ahead. A group of
+# enemies stands in the street, and in the open they kill the hunter within a minute (both targets
+# in the first runs). So the route walks out until they notice, locks on and backs into the arch,
+# where only one or two can reach the hunter at a time, and fights there in short exchanges (a
+# swing, a roll, a swing, a roll to the side) with a blood vial between them. The pictures of a
+# run (shots 01 to 08) show whether the hunter died: the echoes in the top right drop to 0 then.
+limit time=700
+
+log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
+sleep 1
+tap A                   # the notice about an unclean end of the last session, when there is one
+mark logos
+stable seconds=6 delta=1 timeout=120
+dpad D                  # Play Offline
+tap A
+# Notices come and go, so these presses may hit a notice or Continue. Once in the clinic they do nothing.
+tap A count=6 gap=3
+mark continue
+sleep 20                # the load
+stable seconds=3 delta=1 timeout=60
+shot 00-start           # the picture is the world by now; enemies near the hunter walk up while it
+                        # idles, so the route starts at once (no further wait, no play-stand)
+
+mark play-walk
+stick LY -32767
+sleep 3
+neutral
+shot 01-enemies
+
+mark play-lockon
+tap R3
+sleep 0.5
+stick LY 32767
+sleep 3.5
+neutral
+shot 02-arch
+
+mark play-fight-first
+repeat 4
+tap RB
+sleep 0.9
+stick LY 32767
+tap B
+sleep 1.2
+neutral
+tap RB
+sleep 0.9
+stick LX 32767
+tap B
+sleep 1.2
+neutral
+end
+shot 03-fight
+
+mark play-heal
+stick LY 32767
+tap B
+sleep 1.2
+neutral
+tap Y
+sleep 2.5
+shot 04-heal
+
+mark play-fight-strong
+repeat 4
+trigger R
+sleep 1.8
+stick LY 32767
+tap B
+sleep 1.2
+neutral
+tap RB
+sleep 0.9
+stick LX -32767
+tap B
+sleep 1.2
+neutral
+end
+shot 05-strong
+
+mark play-heal-again
+stick LY 32767
+tap B
+sleep 1.2
+neutral
+tap Y
+sleep 2.5
+shot 06-heal
+
+mark play-fight-last
+repeat 4
+tap RB
+sleep 0.9
+tap RB
+sleep 0.9
+stick LY 32767
+tap B
+sleep 1.2
+neutral
+stick LX 32767
+tap B
+sleep 1.2
+neutral
+end
+shot 07-fight-last
+
+mark play-sprint
+stick LX -32767
+tap B
+sleep 1.2
+neutral
+tap R3
+sleep 0.5
+stick RX 25000
+sleep 2
+neutral
+stick LY 32767
+tap B ms=2500
+neutral
+sleep 1
+shot 08-end
+sleep 2
