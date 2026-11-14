@@ -5,6 +5,7 @@
 # play-*. Use `rig.py perf yharnam-route --runs 5 --bb-user DIR --reference-user DIR`.
 # The character starts in an alcove by the carriage, and the camera swings behind it as it moves,
 # so the walk steers by the pictures of the first runs (shots 01 to 06). No enemy is near on the way.
+# So the attack, lock-on and dodge segments run in an empty street; the fighting route of #526 is open.
 limit time=700
 
 log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
