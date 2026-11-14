@@ -171,9 +171,16 @@ def reference_program(run: Path, game_dir: Path, user_from: Path | None) -> Prog
     stubs.mkdir()
     (stubs / "zenity").write_text(ZENITY_STUB)
     (stubs / "zenity").chmod(0o755)
-    env = {"PATH": f"{stubs}:{os.environ['PATH']}", "SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS": "1"}
+    env = {"PATH": f"{stubs}:{os.environ['PATH']}", "SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS": "1",
+           **PAD_ONLY_VIRTUAL}
     return Program([str(root / "squashfs-root" / "AppRun"), "-f", "false",
                     "-g", str(game_dir / "eboot.bin")], env, work)
+
+
+# Only the rig's virtual pad counts: a real controller on the machine would be enumerated too, and
+# the game takes the first one SDL lists, so the taps went to the real one in most runs (#520).
+# The ids are those of vpad.py's device description.
+PAD_ONLY_VIRTUAL = {"SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT": "0x045e/0x028e"}
 
 
 def find_bb_run(preset: str) -> Path:
@@ -200,6 +207,7 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
         env["XDG_CACHE_HOME"] = str(cache_home)
     # As for the reference: the virtual gamepad's events count while the window has no focus.
     env["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = "1"
+    env |= PAD_ONLY_VIRTUAL
     argv = [str(find_bb_run(preset)), "--game-dir", str(game_dir), "--profile", "rig",
             "--no-log-file"]
     if not window:

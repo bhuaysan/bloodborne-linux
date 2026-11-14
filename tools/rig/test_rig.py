@@ -7,6 +7,7 @@ No test here starts the game or needs a GPU, /dev/uinput or systemd.
 from __future__ import annotations
 
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import rig  # noqa: E402
+import vpad  # noqa: E402
 
 
 class CommandTests(unittest.TestCase):
@@ -58,6 +60,16 @@ class CommandTests(unittest.TestCase):
         with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
             windowed = rig.bb_run_program(Path("/run"), Path("/g"), "debug", True, Path("/w"))
         self.assertNotIn("--headless", windowed.argv)
+
+    def test_only_the_virtual_pad_is_visible_to_sdl(self) -> None:
+        # A real controller on the machine took pad slot 0 in most runs (#520).
+        description = vpad.device_description()
+        vendor, product = struct.unpack_from("HH", description, 82)
+        allowed = rig.PAD_ONLY_VIRTUAL["SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT"]
+        self.assertEqual(allowed, f"0x{vendor:04x}/0x{product:04x}")
+        with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
+            program = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"))
+        self.assertEqual(program.env["SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT"], allowed)
 
     def test_bb_run_cache_is_cold_unless_asked(self) -> None:
         with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
