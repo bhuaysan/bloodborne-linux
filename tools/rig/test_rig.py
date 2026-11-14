@@ -184,5 +184,28 @@ class PerfRunsTests(unittest.TestCase):
             rig.perf_runs(args)
 
 
+class UserCopyTests(unittest.TestCase):
+    def test_reference_layout_is_converted_for_bb_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "user"
+            save = src / "home" / "1000" / "savedata" / "CUSA00207" / "SPRJ0005"
+            (save / "sce_sys").mkdir(parents=True)
+            (save / "userdata0001").write_bytes(b"a")
+            (save / "sce_sys" / "param.sfo").write_bytes(b"x")
+            dest = Path(tmp) / "out"
+            rig.copy_user_for_bb_run(src, dest)
+            self.assertEqual((dest / "savedata" / "SPRJ0005" / "userdata0001").read_bytes(), b"a")
+            self.assertFalse((dest / "savedata" / "SPRJ0005" / "sce_sys").exists())
+
+    def test_bb_run_layout_is_copied_as_is(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "user"
+            (src / "savedata" / "SPRJ0005").mkdir(parents=True)
+            (src / "savedata" / "SPRJ0005" / "userdata0001").write_bytes(b"b")
+            dest = Path(tmp) / "out"
+            rig.copy_user_for_bb_run(src, dest)
+            self.assertEqual((dest / "savedata" / "SPRJ0005" / "userdata0001").read_bytes(), b"b")
+
+
 if __name__ == "__main__":
     unittest.main()

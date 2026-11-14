@@ -13,6 +13,7 @@ tools/rig/rig.py run bb-run main-menu-offline --window   # on to the main menu, 
 tools/rig/rig.py run bb-run r5-acceptance --window --audio   # a new game to the clinic, exit, continue
 tools/rig/rig.py run bb-run r5-soak --window --time 2200 --user-from RUN/user   # 25 minutes in the clinic
 tools/rig/rig.py perf clinic-fight --runs 5 --bb-user RUN/user --reference-user RUN/work/user   # frame times per segment
+tools/rig/rig.py perf yharnam-route --runs 5 --bb-user USER --reference-user USER   # Central Yharnam, USER = a reference run's work/user
 tools/rig/rig.py perf --branch RUN... --main RUN... --reference RUN...   # the same report from finished runs
 ```
 
@@ -124,3 +125,32 @@ Measured on 2026-11-14 (RADV, `relwithdebinfo`, `--window`, cold shader cache ev
 | | reference | 33.33 | 33.38 | 33.42 (16.63) | 50.00 | 0 |
 
 No segment is flagged: `bb-run` is at or below the reference's p99 everywhere, and neither has a stutter. The longest interval of a whole run is 500 ms on both (the loads before the route). The first two `bb-run` runs had a p99 of 50 ms in every segment, the next three 33.4 ms (except the walk, 50 ms in all five), the reference's first run likewise, so both targets show a run-to-run drift of the same size that the spread covers. The reference's second run (`20261114-114834`) is an outlier in `play-walk` (p50 35.98 ms, p99 83.63 ms, max 100 ms); it causes the 50.16 ms spread there, and the "not flagged" verdict for `play-walk` depends on it.
+
+### Central Yharnam route (`yharnam-route.scn`)
+
+`yharnam-route.scn` continues from a save at the great bonfire in Central Yharnam, made by playing the reference by hand (not committed, under `analysis/rig/manual/`). Both targets load it: `--user-from` (and `--bb-user`) takes the reference's `user/` directory (`home/ID/savedata/TITLE/SPRJ0005`) for `bb-run` too, and `rig.py` copies the save files into the layout `bb-run` uses (`savedata/SPRJ0005`). After Continue the picture shows the hunter by the carriage in Central Yharnam on both targets (`00-start`). The segments are `play-stand` (15 s), `play-walk` (out of the alcove into the street with the fire, under the arch), `play-camera`, `play-sprint` (`B` held 2.5 s, back and forth), `play-dodge`, `play-attack`, `play-lockon` and `play-walk-again`, about 235 s of play.
+
+The route steers by pictures: the character starts in a cluttered alcove and the camera swings behind it as it moves, so one walk reaches the arch (the reference in the three runs viewed, `bb-run` in the first of three viewed) and another stops at the pyre by the fence (the other two `bb-run` runs viewed). In the pictures viewed the character never died or took a fight: no enemy is near on the way, so there is no lock-on target, and the lock-on press only re-centres the camera. A route that fights needs the way to the first enemies, which the hand-played save does not show.
+
+Measured on 2026-11-14 (RADV, `relwithdebinfo`, `--window`, cold shader cache every run), five runs each, all finished with `end,scenario finished` and no kernel GPU fault. `bb-run` is `20261114-132516`, `-132959`, `-133444`, `-133929` and `-134414`; the reference is `20261114-134858`, `-135346`, `-135834`, `-140323` and `-140811` (in `analysis/rig/runs/`, suffix `-bb-run-yharnam-route` and `-reference-yharnam-route`). Two earlier reference runs (`20261114-131457`, `-132013`) checked the route and are not in the table.
+
+| segment | | p50 | p95 | p99 (spread) | max | stutters |
+|---|---|---|---|---|---|---|
+| play-stand | `bb-run` | 33.33 | 50.02 | 50.16 (0.5) | 51.36 | 0 |
+|  | reference | 33.33 | 33.39 | 50.06 (16.66) | 50.11 | 0 |
+| play-walk | `bb-run` | 33.34 | 50.11 | 66.69 (16.94) | 83.34 | 4 |
+|  | reference | 33.33 | 33.46 | 50.09 (0.06) | 100.0 | 2 |
+| play-camera | `bb-run` | 33.34 | 50.08 | 51.46 (16.64) | 66.79 | 1 |
+|  | reference | 33.33 | 33.43 | 50.07 (16.64) | 50.15 | 0 |
+| play-sprint | `bb-run` | 33.35 | 50.09 | 65.0 (16.24) | 83.37 | 2 |
+|  | reference | 33.33 | 33.44 | 50.05 (16.61) | 50.46 | 0 |
+| play-dodge | `bb-run` | 33.34 | 50.06 | 51.03 (16.53) | 67.58 | 2 |
+|  | reference | 33.33 | 33.41 | 49.92 (16.67) | 50.13 | 0 |
+| play-attack | `bb-run` | 33.34 | 50.1 | 51.4 (16.12) | 83.36 | 3 |
+|  | reference | 33.33 | 33.45 | 49.98 (16.65) | 50.19 | 0 |
+| play-lockon | `bb-run` | 33.34 | 50.06 | 50.94 (16.24) | 83.35 | 3 |
+|  | reference | 33.33 | 33.42 | 50.1 (0.08) | 50.24 | 0 |
+| play-walk-again | `bb-run` | 33.34 | 50.04 | 50.29 (15.96) | 66.7 | 1 |
+|  | reference | 33.33 | 33.43 | 50.1 (16.63) | 50.17 | 0 |
+
+No segment is flagged: the p99 of `bb-run` is above the reference's by at most 16.7 ms (one step of the 16.7 ms grid), which is within the spread of the runs. The p95 is another matter. It is 33.4 ms for the reference in every segment and 50 ms for `bb-run`, including `play-stand`, where the hunter stands still: more than 5 % of the frames of `bb-run` in the street present one step late. `bb-run` also has stutters (intervals over twice the median) in every moving segment against none (two in `play-walk`) for the reference. The cold shader cache adds to `play-walk` (70 to 82 pipeline builds there, 250 to 270 ms in all, against 1 to 16 builds in the other segments).

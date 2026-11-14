@@ -1,0 +1,103 @@
+# The Central Yharnam route of the frame-time report (R8.2, #526): continue from the save at the
+# great bonfire (made by playing the reference by hand; `--user-from` takes its user/ directory, for
+# the reference as for bb-run, which converts the layout), then walk into the open street with the
+# fire, turn the camera, dodge, attack, lock on and sprint, each in a segment of its own named
+# play-*. Use `rig.py perf yharnam-route --runs 5 --bb-user DIR --reference-user DIR`.
+# The character starts in an alcove by the carriage, and the camera swings behind it as it moves,
+# so the walk steers by the pictures of the first runs (shots 01 to 06). No enemy is near on the way.
+limit time=700
+
+log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
+sleep 1
+tap A                   # the notice about an unclean end of the last session, when there is one
+mark logos
+stable seconds=6 delta=1 timeout=120
+dpad D                  # Play Offline
+tap A
+# Notices come and go, so these presses may hit a notice or Continue. Once in the clinic they do nothing.
+tap A count=6 gap=3
+mark continue
+sleep 20                # the load
+stable seconds=3 delta=1 timeout=60
+sleep 10                # the loading page, if it is still up, goes
+stable seconds=3 delta=1 timeout=60
+shot 00-start
+mark play-stand
+sleep 15
+
+mark play-walk
+stick RX -25000
+sleep 2
+neutral
+stick LX -20000
+stick LY -20000
+sleep 2
+neutral
+stick LX -2000
+stick LY -32767
+sleep 6
+neutral
+shot 01-street
+
+mark play-camera
+stick RX 25000
+sleep 6
+stick RX -25000
+sleep 6
+neutral
+sleep 2
+shot 02-camera
+
+mark play-sprint
+repeat 4
+stick LY 32767
+tap B ms=2500
+neutral
+sleep 1
+stick LY -32767
+tap B ms=2500
+neutral
+sleep 1
+end
+shot 03-sprint
+
+mark play-dodge
+repeat 20
+tap B
+sleep 1.5
+end
+
+mark play-attack
+repeat 12
+tap RB
+sleep 1.2
+trigger R
+sleep 2
+end
+shot 04-attack
+
+mark play-lockon
+tap R3
+sleep 2
+repeat 6
+stick LX 32767
+sleep 1.2
+tap B
+sleep 1.5
+stick LX -32767
+sleep 1.2
+tap RB
+sleep 1.5
+neutral
+end
+tap R3
+shot 05-lockon
+
+mark play-walk-again
+stick LY 32767
+sleep 4
+stick LY -32767
+sleep 4
+neutral
+shot 06-end
+sleep 2

@@ -196,6 +196,21 @@ def bb_run_profile_data(work_root: Path) -> Path:
     return work_root / "data" / "bloodborne-linux" / "profiles" / "rig"
 
 
+def copy_user_for_bb_run(user_from: Path, dest: Path) -> None:
+    """Copy a save for bb-run. A `user/` directory of a reference run keeps the saves under
+    home/ID/savedata/TITLE/SPRJ0005 (with sce_sys); bb-run keeps savedata/SPRJ0005 in its profile
+    (the save files themselves are the same), so that layout is converted."""
+    found = sorted(user_from.glob("home/*/savedata/*/SPRJ0005"))
+    if not found:
+        shutil.copytree(user_from, dest)
+        return
+    target = dest / "savedata" / "SPRJ0005"
+    target.mkdir(parents=True)
+    for f in found[0].iterdir():
+        if f.is_file():
+            shutil.copy2(f, target / f.name)
+
+
 def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_root: Path,
                    cache_home: Path | None = None, binary: Path | None = None) -> Program:
     # bb-run refuses runtime directories inside the source checkout, so its XDG roots are outside
@@ -431,7 +446,7 @@ def run_target(args: argparse.Namespace) -> int:
         program = bb_run_program(run, game_dir, args.preset, args.window, work_root, args.cache_home,
                                  getattr(args, "bb_run", None))
         if args.user_from:
-            shutil.copytree(args.user_from, bb_run_profile_data(work_root))
+            copy_user_for_bb_run(args.user_from, bb_run_profile_data(work_root))
 
     env = {**os.environ, **program.env, "BB_RIG_DIR": str(run)}
     audio_file = run / "audio.raw"
