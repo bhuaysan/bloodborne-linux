@@ -19,7 +19,7 @@ The PS4 CPU is x86-64, so the game's machine code can run directly on a Linux PC
 
 **Derive first, rewrite later.** Code from shadPS4 goes in nearly unchanged and has to work first. After that we rewrite it piece by piece where that measurably helps, and compare each step against the reference run and the shader corpus. We don't rewrite before it works: that is how M4 ended with 17,000 lines of GPU code and no frame of the game.
 
-**A compatibility layer first, not a strict port.** The game still produces PS4 GPU commands, and we translate them at run time. Two later steps make it more native: translating the shaders ahead of time, and replacing engine render functions with hooks that call Vulkan directly, where that measurably helps performance or quality.
+**A compatibility layer first, not a strict port.** The game still produces PS4 GPU commands, and we translate them at run time. Translated shaders and pipelines are cached on disk and built off the GPU thread. Shaders can't be translated ahead of time, because their keys hold draw-time state the shader archives don't have (#512). A later step makes it more native: replacing engine render functions with hooks that call Vulkan directly, where that measurably helps performance or quality.
 
 The goal is **functional equivalence**, not byte-matching. Sony's compiler is not available to us.
 
