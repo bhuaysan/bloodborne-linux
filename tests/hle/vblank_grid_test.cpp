@@ -66,8 +66,9 @@ struct Flips {
 };
 
 Flips simulate(const std::vector<Clock::time_point>& arrivals, Clock::time_point grid_start,
-               std::chrono::nanoseconds grace, int flip_rate = 0) {
-    VblankGrid grid{grid_start, vblank_period, grace, grace == 0ns ? 0ns : flip_margin};
+               std::chrono::nanoseconds grace, int flip_rate = 0,
+               std::chrono::nanoseconds margin = flip_margin) {
+    VblankGrid grid{grid_start, vblank_period, grace, grace == 0ns ? 0ns : margin};
     Flips result;
     std::vector<Clock::time_point> flips;
     std::size_t next = 0;
@@ -116,13 +117,19 @@ TEST(VblankGrid, ArrivalsOnTheGridNoLongerMissTheVblank) {
     const auto arrivals = frames_at(t0 + 2s, 450);  // 15 s, the length of a segment
     const Flips fixed = simulate(arrivals, t0 + 2s, 0ns);
     // Without the grace, a third of the flips are 16.7 ms late and the next one is early.
-    EXPECT_GT(fixed.late, 450u * 15 / 100);
     EXPECT_GE(fixed.latest, 15ms);
 
     const Flips followed = simulate(arrivals, t0 + 2s, flip_grace);
-    EXPECT_LT(followed.late, 450u * 2 / 100);
-    EXPECT_LE(followed.latest, 8ms);  // the grid ends up a few ms after the arrivals
-    EXPECT_LT(followed.off_grid, 450u * 2 / 100);  // few frames off the 33.3 ms steps
+    // The generator is deterministic, so the counts are exact: no frame is late, one is off the
+    // 33.3 ms steps (when the grid settles) and none waits more than 3.7 ms. Without the margin
+    // the grid stays within the jitter of the arrivals and four frames are off.
+    EXPECT_EQ(fixed.late, 110u);
+    EXPECT_EQ(followed.late, 0u);
+    EXPECT_EQ(followed.off_grid, 1u);
+    EXPECT_GE(followed.latest, 3600us);
+    EXPECT_LE(followed.latest, 3700us);
+    const Flips nomargin = simulate(arrivals, t0 + 2s, flip_grace, 0, 0ns);
+    EXPECT_EQ(nomargin.off_grid, 4u);
     for (const auto interval : followed.intervals) {
         // A frame is never shown sooner than the one before it and a period.
         EXPECT_GE(interval, vblank_period);
@@ -135,9 +142,12 @@ TEST(VblankGrid, DriftingArrivalsMoveTheGridRarely) {
     const auto arrivals = frames_at(t0 + 2s, 450, 33'340us);
     const Flips followed = simulate(arrivals, t0 + 2s, flip_grace);
     EXPECT_EQ(followed.late, 0u);
-    EXPECT_LT(followed.off_grid, 450u * 2 / 100);
     const Flips fixed = simulate(arrivals, t0 + 2s, 0ns);
-    EXPECT_GT(fixed.late, 450u * 5 / 100);
+    const Flips nomargin = simulate(arrivals, t0 + 2s, flip_grace, 0, 0ns);
+    EXPECT_EQ(fixed.late, 40u);
+    EXPECT_EQ(followed.off_grid, 3u);
+    EXPECT_EQ(nomargin.late, 0u);
+    EXPECT_EQ(nomargin.off_grid, 7u);
 }
 
 // A grid half a period away from the arrivals stays where it is: the flips wait as before.

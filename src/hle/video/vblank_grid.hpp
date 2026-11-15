@@ -9,8 +9,11 @@
 // vblank and follows it: the next vblank is one period and a margin after the flip, so that
 // the next frames, with their jitter, come before it. A grid that sits within the jitter of the
 // arrivals moves later until the arrivals come before the vblanks, and stays there. It never
-// moves earlier and no flip is presented later than before, so it adds no latency, and no flip
-// comes sooner than a period (times the flip rate) after the last.
+// moves earlier and a flip is never shown later than the next vblank of the grid it found, so
+// it adds no latency to the flip; the later grid can show a later frame a little later than the
+// old one would have (up to the grace and the margin, once per move). A flip is still taken
+// only at every (flip rate + 1)-th vblank and, unless the present thread woke more than the
+// grace late, a period or more after the last.
 #pragma once
 
 #include <algorithm>
