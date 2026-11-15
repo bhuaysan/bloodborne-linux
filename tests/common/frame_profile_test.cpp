@@ -91,6 +91,7 @@ TEST_F(FrameProfile, NamesFollowTheEnumerators) {
     EXPECT_EQ(fp::part_name(fp::Part::protect), "protect");
     EXPECT_EQ(fp::part_name(fp::Part::flip_wait), "flip_wait");
     EXPECT_EQ(fp::part_name(fp::Part::irq), "irq");
+    EXPECT_EQ(fp::part_name(fp::Part::upload_new), "upload_new");
     EXPECT_EQ(fp::part_name(fp::Part::copy), "copy");
     EXPECT_EQ(fp::part_name(fp::Part::queue), "queue");
 }

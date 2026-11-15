@@ -33,6 +33,16 @@ class ProfileTest(unittest.TestCase):
         self.assertAlmostEqual(result["excess_us"]["draw"], 0)
         self.assertEqual(result["slowest"][0].interval_us, 50_000)
 
+    def test_upload_bursts_say_how_many_images_were_new(self) -> None:
+        frames = [prof.GpuFrame(i * 33_000_000, 33_333, {"upload": 100}, {"upload": 5})
+                  for i in range(1, 30)]
+        frames.append(prof.GpuFrame(10**9, 33_333, {"upload": 9000, "upload_new": 8000},
+                                    {"upload": 176, "upload_new": 172}))
+        result = prof.analyse(frames)
+        self.assertEqual(result["upload_bursts"], [(176, 172)])
+        self.assertIn("frames with over 50 image refreshes: 176 (172 new images)",
+                      prof.format_segment("s", result))
+
     def test_builds_overlapping_a_frame_are_added(self) -> None:
         frame = prof.GpuFrame(100_000_000, 33_000)  # spans 67 ms .. 100 ms
         prof.add_builds([frame], [report.Build(90_000_000, 20_000_000),  # 10 ms inside

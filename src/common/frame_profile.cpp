@@ -11,7 +11,7 @@ namespace {
 constexpr std::size_t parts = static_cast<std::size_t>(Part::count);
 constexpr std::array<std::string_view, parts> names = {
     "commands", "draw",   "pipeline", "bind",         "buffer",        "sync", "resident", "texture", "render",
-    "vertex",   "state",  "upload",   "detile",       "fault",         "inval_buffer",
+    "vertex",   "state",  "upload",   "detile",   "upload_new",    "fault",         "inval_buffer",
     "inval_texture", "protect", "copy", "irq", "queue", "submit", "wait",     "present", "flip_wait"};
 
 struct Counters {

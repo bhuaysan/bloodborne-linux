@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <xxhash.h>
 
 #include "common/assert.h"
@@ -834,6 +835,14 @@ void TextureCache::RefreshImage(Image& image) {
     }
 
     image.gpu_hash = 0;
+
+    // A burst of refreshes in one frame is mostly images that show up for the first time (the
+    // game streams a new area in), which must be uploaded: count those apart from re-uploads.
+    std::optional<bb::common::frame_profile::Scope> profile_new;
+    if (!image.uploaded) {
+        profile_new.emplace(bb::common::frame_profile::Part::upload_new);
+        image.uploaded = true;
+    }
 
     const u32 num_layers = image.info.resources.layers;
     const u32 num_mips = image.info.resources.levels;

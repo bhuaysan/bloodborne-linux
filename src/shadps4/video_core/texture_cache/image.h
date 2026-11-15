@@ -178,6 +178,7 @@ public:
     u64 gpu_hash{};
     u64 head_hash{};
     u64 tail_hash{};
+    bool uploaded{}; ///< Set after the first upload from guest memory (profile counters only)
 
     struct {
         u32 texture : 1;

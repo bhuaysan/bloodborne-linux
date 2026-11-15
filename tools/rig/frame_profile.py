@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import report  # noqa: E402
 
 LINE = re.compile(r"Frame profile: at (\d+) ns, (\d+) us since the last((?:, \w+=\d+ us/\d+)*)")
+UPLOAD_BURST = 50  # refreshes in one frame; a normal frame has about 5
 PART = re.compile(r", (\w+)=(\d+) us/(\d+)")
 
 
@@ -91,6 +92,8 @@ def analyse(frames: list[GpuFrame], factor: float = 1.5, top: int = 5) -> dict |
         "slowest": sorted(slow, key=lambda f: -f.interval_us)[:top],
         "excess_us": dict(sorted(excess.items(), key=lambda kv: -kv[1])),
         "normal_us": {p: _mean([f.us.get(p, 0) for f in normal]) for p in parts},
+        "upload_bursts": [(f.calls["upload"], f.calls.get("upload_new", 0))
+                          for f in frames if f.calls.get("upload", 0) > UPLOAD_BURST],
     }
 
 
@@ -144,6 +147,9 @@ def format_segment(name: str, result: dict | None, late: dict | None = None) -> 
         out.append("  a normal frame (ms, inclusive): " + ", ".join(
             f"{p} {us / 1000:.2f}" for p, us in
             sorted(result["normal_us"].items(), key=lambda kv: -kv[1])[:8]))
+    if result["upload_bursts"]:
+        out.append(f"  frames with over {UPLOAD_BURST} image refreshes: " + ", ".join(
+            f"{n} ({new} new images)" for n, new in result["upload_bursts"]))
     if late:
         out.append(f"  late presents: {late['late']} of {late['presents']}; "
                    f"submit-done to present {late['lag_ms']:.1f} ms "
