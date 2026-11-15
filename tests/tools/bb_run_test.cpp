@@ -155,47 +155,38 @@ TEST(EntryArgs, MatchesTheEntrysReads) {
 
 // ---- the main-loop probe ------------------------------------------------------------------------
 
-TEST(MainLoopProbe, CoversTheFramePacer) {
-    EXPECT_EQ(bb::tools::frame_pacer + bb::tools::frame_pacer_size, 0x2034fbcU);
+TEST(MainLoopProbe, ReportsTheThresholdthCall) {
     EXPECT_EQ(bb::tools::main_loop_calls, 60U);
-}
-
-// A synthetic range [0x5000, 0x5100) and a threshold of 3.
-TEST(MainLoopProbe, CountsReturnAddressesInsideTheRange) {
-    MainLoopProbe probe(0x5000, 0x5100, 3);
-    for (const std::uintptr_t outside : {0x4fffU, 0x5100U, 0U, 0x12345678U}) {
-        EXPECT_FALSE(probe.count(outside)) << outside;
-    }
-    EXPECT_EQ(probe.calls(), 0U);
-    EXPECT_FALSE(probe.count(0x5000));  // the first byte counts
-    EXPECT_FALSE(probe.count(0x50ff));  // and the last
+    MainLoopProbe probe(3);
+    EXPECT_FALSE(probe.count());
+    EXPECT_FALSE(probe.count());
     EXPECT_EQ(probe.calls(), 2U);
-    EXPECT_TRUE(probe.count(0x5080));  // the third reaches the threshold
+    EXPECT_TRUE(probe.count());  // the third reaches the threshold
     EXPECT_EQ(probe.calls(), 3U);
     // Only once: later calls don't report again, and stop counting.
     for (int i = 0; i < 10; ++i) {
-        EXPECT_FALSE(probe.count(0x5080));
+        EXPECT_FALSE(probe.count());
     }
     EXPECT_EQ(probe.calls(), 3U);
 }
 
 TEST(MainLoopProbe, StopsCountingOnceMainHasReturned) {
-    MainLoopProbe probe(0x5000, 0x5100, 2);
-    EXPECT_FALSE(probe.count(0x5010));
+    MainLoopProbe probe(2);
+    EXPECT_FALSE(probe.count());
     probe.main_returned();
-    EXPECT_FALSE(probe.count(0x5010));
-    EXPECT_FALSE(probe.count(0x5010));
+    EXPECT_FALSE(probe.count());
+    EXPECT_FALSE(probe.count());
     EXPECT_EQ(probe.calls(), 1U);
 }
 
 TEST(MainLoopProbe, ReportsExactlyOnceAcrossThreads) {
-    MainLoopProbe probe(0x5000, 0x5100);  // the default threshold, 60
+    MainLoopProbe probe;  // the default threshold, 60
     std::atomic<int> reports{0};
     std::vector<std::thread> threads;
     for (int t = 0; t < 4; ++t) {
         threads.emplace_back([&] {
             for (int i = 0; i < 100; ++i) {
-                reports += probe.count(0x5040) ? 1 : 0;
+                reports += probe.count() ? 1 : 0;
             }
         });
     }

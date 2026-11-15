@@ -15,13 +15,14 @@ address,name,signature,status,file
 0x01d978e0,graphics_apply_flip_settings,void graphics_apply_flip_settings(void),named,
 0x01e2bc10,chr_ai_step,,named,
 0x01e4a6c0,game_main,int game_main(void),named,
-0x02018d20,main_loop_tick,bool main_loop_tick(void),named,
+0x02018d20,main_loop_tick,bool main_loop_tick(void),replaced,src/game/frame/main_loop.cpp
 0x02018f00,shutdown_loop_tick,bool shutdown_loop_tick(void),named,
 0x02034520,flipper_construct,void flipper_construct(SprjFlipper * self),named,
-0x02034770,flipper_wait_frame,void flipper_wait_frame(SprjFlipper * self),named,
+0x02034770,flipper_wait_frame,void flipper_wait_frame(SprjFlipper * self),replaced,src/game/frame/flipper.cpp
 0x02035480,flipper_debug_label,"void flipper_debug_label(SprjFlipper * self, void * item, int which)",named,
 0x02035630,flipper_register_debug_menu,"void flipper_register_debug_menu(SprjFlipper * self, void * menu)",named,
 0x020512a0,task_manager_run_frame,"void task_manager_run_frame(void * unused, FD4TaskData * data)",named,
+0x020b55b0,fd4_singleton_missing,"void fd4_singleton_missing(char * file, int line, char * format, char * name, ...)",named,
 0x020eba00,config_get_int,"int config_get_int(void * config, void * key, int fallback)",named,
 0x021b2fb0,swap_chain_present,"void swap_chain_present(void * self, int present_interval)",named,
 0x026d5dd0,present_flip,"int present_flip(void * self, uint present_interval)",named,

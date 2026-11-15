@@ -1,7 +1,6 @@
 #include "hle/kernel/time.hpp"
 
 #include <pthread.h>
-#include <sys/mman.h>
 #include <sys/prctl.h>
 
 #include <atomic>
@@ -279,68 +278,38 @@ TEST(KernelTime, Getrusage) {
     }
 }
 
-std::atomic<std::uintptr_t> observed{0};
-std::atomic<int> observed_calls{0};
-
-void observe(std::uintptr_t return_address) {
-    observed = return_address;
-    ++observed_calls;
-}
-
-// A guest-style caller: `call` to a PLT entry that jumps through a GOT cell to the import.
-//   0x00 sub rsp, 8 ; 0x04 call 0x10 ; 0x09 add rsp, 8 ; 0x0d ret
-//   0x10 jmp [rip + 2] ; 0x18 the GOT cell
-class SyntheticCaller {
-public:
-    explicit SyntheticCaller(std::uintptr_t target) {
-        page_ = mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        EXPECT_NE(page_, MAP_FAILED);
-        const std::uint8_t code[] = {0x48, 0x83, 0xec, 0x08, 0xe8, 0x07, 0x00, 0x00,
-                                     0x00, 0x48, 0x83, 0xc4, 0x08, 0xc3, 0xcc, 0xcc,
-                                     0xff, 0x25, 0x02, 0x00, 0x00, 0x00, 0xcc, 0xcc};
-        std::memcpy(page_, code, sizeof code);
-        std::memcpy(static_cast<std::uint8_t*>(page_) + 0x18, &target, sizeof target);
-        EXPECT_EQ(mprotect(page_, 4096, PROT_READ | PROT_EXEC), 0);
-    }
-    ~SyntheticCaller() { munmap(page_, 4096); }
-
-    int operator()(GuestTimeval* tv, GuestTimezone* tz) const {
-        return reinterpret_cast<int (*)(GuestTimeval*, GuestTimezone*)>(page_)(tv, tz);
-    }
-    std::uintptr_t return_site() const { return reinterpret_cast<std::uintptr_t>(page_) + 9; }
-
-private:
-    void* page_;
-};
-
 bb::loader::Import function_import(const char* library, const char* nid) {
     return {nid, library, "libkernel", 2 /* STT_FUNC */};
 }
 
-TEST(KernelTime, ObserverSeesTheCallersReturnAddress) {
-    const std::uintptr_t posix = bb::hle::resolve(function_import("libScePosix", "n88vx3C5nW8"));
-    const std::uintptr_t kernel = bb::hle::resolve(function_import("libkernel", "n88vx3C5nW8"));
+GuestTimeval fixed_time() {
+    return {1234, 567};
+}
+
+TEST(KernelTime, WallClockReplacesTheHostClock) {
+    const auto posix = reinterpret_cast<int (*)(GuestTimeval*, GuestTimezone*)>(
+        bb::hle::resolve(function_import("libScePosix", "n88vx3C5nW8")));
+    const auto kernel = reinterpret_cast<int (*)(GuestTimeval*, GuestTimezone*)>(
+        bb::hle::resolve(function_import("libkernel", "n88vx3C5nW8")));
     ASSERT_EQ(bb::hle::binding("libScePosix", "n88vx3C5nW8"), bb::hle::Binding::implemented);
     ASSERT_EQ(bb::hle::binding("libkernel", "n88vx3C5nW8"), bb::hle::Binding::implemented);
 
-    observed = 0;
-    observed_calls = 0;
-    EXPECT_EQ(set_gettimeofday_observer(&observe), nullptr);
-    const SyntheticCaller via_posix(posix);
+    EXPECT_EQ(set_wall_clock(&fixed_time), nullptr);
+    for (auto* gettimeofday : {posix, kernel}) {
+        GuestTimeval tv{};
+        GuestTimezone tz{-1, -1};
+        EXPECT_EQ(gettimeofday(&tv, &tz), 0);
+        EXPECT_EQ(tv.tv_sec, 1234);
+        EXPECT_EQ(tv.tv_usec, 567);
+        EXPECT_NE(tz.dsttime, -1);  // the time zone still comes from the host
+    }
     GuestTimeval tv{};
-    EXPECT_EQ(via_posix(&tv, nullptr), 0);
-    EXPECT_GT(tv.tv_sec, 0);
-    EXPECT_EQ(observed_calls, 1);
-    EXPECT_EQ(observed, via_posix.return_site());
+    EXPECT_EQ(sceKernelGettimeofday(&tv), 0);
+    EXPECT_EQ(tv.tv_sec, 1234);
 
-    // libkernel's gettimeofday (libc.prx's) doesn't report.
-    const SyntheticCaller via_kernel(kernel);
-    EXPECT_EQ(via_kernel(&tv, nullptr), 0);
-    EXPECT_EQ(observed_calls, 1);
-
-    EXPECT_EQ(set_gettimeofday_observer(nullptr), &observe);
-    EXPECT_EQ(via_posix(&tv, nullptr), 0);
-    EXPECT_EQ(observed_calls, 1);
+    EXPECT_EQ(set_wall_clock(nullptr), &fixed_time);
+    EXPECT_EQ(posix(&tv, nullptr), 0);
+    EXPECT_GT(tv.tv_sec, 1234);
 }
 
 TEST(KernelTime, EveryTimeImportIsImplemented) {

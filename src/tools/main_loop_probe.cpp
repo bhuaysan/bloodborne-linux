@@ -2,9 +2,8 @@
 
 namespace bb::tools {
 
-bool MainLoopProbe::count(std::uintptr_t return_address) {
-    if (return_address < begin_ || return_address >= end_ ||
-        main_returned_.load(std::memory_order_acquire)) {
+bool MainLoopProbe::count() {
+    if (main_returned_.load(std::memory_order_acquire)) {
         return false;
     }
     // Stop counting once the threshold is passed, so the counter never wraps around to it again.

@@ -248,6 +248,8 @@ template <class F> F* fn(uint64_t link);  // image().fn<F>(link)
 // in a replacement:
 bb::game::fn<void(Foo*)>(0x123450)(foo);
 auto* flags = reinterpret_cast<uint32_t*>(bb::game::image().runtime(0x5100000));
+void*& window = bb::game::global<void*>(0x5540500);           // a game variable, e.g. a singleton
+bb::game::vcall<bool>(window, 0x18);                         // call [vtable + 0x18](window)
 ```
 
 `image()` without an image prints `game: no image is loaded (bb::game::set_image was not called)` and aborts: a replacement that runs before loading is a bug, not an error to handle. `set_image(nullptr)` unsets it. `fn` throws `std::out_of_range` unless the address lies inside an executable segment, like `Image::fn`. `bbgame` is an `OBJECT` library that links `bbhook` and only the compile-time requirements of `bbhle`; executables link `bbgame` and `bbhle` themselves.

@@ -10,15 +10,15 @@
 
 namespace bb::hle::kernel {
 
-// ---- main-loop probe ---------------------------------------------------------------------------
+// ---- test seam ---------------------------------------------------------------------------------
 
-// Receives the return address of every libScePosix gettimeofday call: in game code, the
-// instruction after the call.
-using GettimeofdayObserver = void (*)(std::uintptr_t return_address);
+// The wall clock that the gettimeofday imports (libkernel, libScePosix, sceKernelGettimeofday)
+// read, for differential tests of game code that reads the time. nullptr (the default) is the
+// host's CLOCK_REALTIME.
+using WallClock = GuestTimeval (*)();
 
-// Installs `observer` (nullptr removes it) and returns the one it replaces. The observer runs on
-// the calling thread, inside gettimeofday.
-GettimeofdayObserver set_gettimeofday_observer(GettimeofdayObserver observer);
+// Installs `clock` (nullptr restores the host's) and returns the one it replaces.
+WallClock set_wall_clock(WallClock clock);
 
 // ---- the HLE functions, declared for the tests -------------------------------------------------
 
@@ -39,8 +39,7 @@ struct GuestRusage {
 
 // POSIX convention: 0, or -1 with the guest errno set.
 int guest_clock_gettime(std::int32_t clock, GuestTimespec* out);
-int guest_gettimeofday(GuestTimeval* tv, GuestTimezone* tz);  // libkernel
-int posix_gettimeofday(GuestTimeval* tv, GuestTimezone* tz);  // libScePosix: tells the observer
+int guest_gettimeofday(GuestTimeval* tv, GuestTimezone* tz);  // libkernel and libScePosix
 int guest_nanosleep(const GuestTimespec* request, GuestTimespec* remain);
 int guest_usleep(std::uint32_t microseconds);
 int guest_getrusage(std::int32_t who, GuestRusage* out);  // who 0 (RUSAGE_SELF) only

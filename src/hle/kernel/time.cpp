@@ -19,7 +19,7 @@ static_assert(sizeof(GuestTimezone) == 8);
 // libc 0x2eef0 reserves 0x90 bytes for it and reads the two timevals at 0 and 16.
 static_assert(sizeof(GuestRusage) == 144 && offsetof(GuestRusage, stime) == 16);
 
-std::atomic<GettimeofdayObserver> observer{nullptr};
+std::atomic<WallClock> wall_clock{nullptr};
 
 // Logs an unknown clock id on calls 1 to 10 of `call`, then every 1000th, as for stubs. The
 // count is per call site, not per clock id.
@@ -78,8 +78,12 @@ LocalOffset local_offset() {
 
 int gettimeofday_impl(GuestTimeval* tv, GuestTimezone* tz) {
     if (tv != nullptr) {
-        const timespec t = now(CLOCK_REALTIME);
-        *tv = {t.tv_sec, t.tv_nsec / 1000};
+        if (const WallClock clock = wall_clock.load(std::memory_order_acquire)) {
+            *tv = clock();
+        } else {
+            const timespec t = now(CLOCK_REALTIME);
+            *tv = {t.tv_sec, t.tv_nsec / 1000};
+        }
     }
     if (tz != nullptr) {
         const LocalOffset offset = local_offset();
@@ -90,8 +94,8 @@ int gettimeofday_impl(GuestTimeval* tv, GuestTimezone* tz) {
 
 }  // namespace
 
-GettimeofdayObserver set_gettimeofday_observer(GettimeofdayObserver next) {
-    return observer.exchange(next, std::memory_order_acq_rel);
+WallClock set_wall_clock(WallClock clock) {
+    return wall_clock.exchange(clock, std::memory_order_acq_rel);
 }
 
 int guest_clock_gettime(std::int32_t clock, GuestTimespec* out) {
@@ -109,14 +113,6 @@ int guest_clock_gettime(std::int32_t clock, GuestTimespec* out) {
 }
 
 int guest_gettimeofday(GuestTimeval* tv, GuestTimezone* tz) {
-    return gettimeofday_impl(tv, tz);
-}
-
-// Not inlined, so that its return address is the guest's call site.
-[[gnu::noinline]] int posix_gettimeofday(GuestTimeval* tv, GuestTimezone* tz) {
-    if (const GettimeofdayObserver o = observer.load(std::memory_order_acquire)) {
-        o(reinterpret_cast<std::uintptr_t>(__builtin_return_address(0)));
-    }
     return gettimeofday_impl(tv, tz);
 }
 
@@ -219,6 +215,6 @@ BB_HLE_FUNCTION("libkernel", "4J2sUJmuHZQ", bk::process_time_usec);    // sceKer
 BB_HLE_FUNCTION("libkernel", "-2IRUCO--PM", bk::process_counter_nsec);  // sceKernelReadTsc
 BB_HLE_FUNCTION("libkernel", "QBi7HCK03hw", bk::clock_gettime_sce);     // sceKernelClockGettime
 BB_HLE_FUNCTION("libkernel", "kOcnerypnQA", bk::local_time_offsets);    // sceKernelGettimezone
-BB_HLE_FUNCTION("libScePosix", "n88vx3C5nW8", bk::posix_gettimeofday);
+BB_HLE_FUNCTION("libScePosix", "n88vx3C5nW8", bk::guest_gettimeofday);
 BB_HLE_FUNCTION("libScePosix", "0wu33hunNdE", bk::guest_sleep);
 BB_HLE_FUNCTION("libScePosix", "QcteRwbsnV0", bk::guest_usleep);

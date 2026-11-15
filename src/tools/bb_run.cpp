@@ -39,6 +39,7 @@
 #include "common/log.hpp"
 #include "common/runtime_dirs.hpp"
 #include "common/signal_stack.hpp"
+#include "game/frame/frame.hpp"
 #include "game/image.hpp"
 #include "hle/kernel/paths.hpp"
 #include "hle/kernel/thread.hpp"
@@ -159,9 +160,9 @@ struct MainLoop {
 };
 MainLoop* main_loop = nullptr;
 
-// The gettimeofday observer (libScePosix), on the calling game thread.
-void observe_gettimeofday(std::uintptr_t return_address) {
-    if (!main_loop->probe.count(return_address)) {
+// The frame observer, on the game's main thread.
+void observe_frame() {
+    if (!main_loop->probe.count()) {
         return;
     }
     const std::chrono::duration<double> elapsed =
@@ -409,12 +410,8 @@ int start(const bb::tools::RunOptions& options) {
     bb::hle::kernel::path_map().mount_game(*game_dir);
     bb::hle::system::set_save_data_root(bb::hle::system::save_data_root(dirs));
     bb::hle::system::set_user_name(options.profile);
-    main_loop = new MainLoop{
-        bb::tools::MainLoopProbe(
-            game->eboot->runtime(bb::tools::frame_pacer),
-            game->eboot->runtime(bb::tools::frame_pacer + bb::tools::frame_pacer_size)),
-        options.stop_at_main_loop, start_time};
-    bb::hle::kernel::set_gettimeofday_observer(&observe_gettimeofday);
+    main_loop = new MainLoop{bb::tools::MainLoopProbe(), options.stop_at_main_loop, start_time};
+    bb::game::set_frame_observer(&observe_frame);
 #ifdef BB_HAVE_WINDOW
     if (!options.headless) {
         open_display(options);
