@@ -1,5 +1,6 @@
-# Builds every CMake preset, runs the unit tests and checks the commits of
-# a PR (or a push to main) with tools/privacy-check.sh.
+# Builds the CMake presets (all three on main, debug and release on PRs),
+# runs the unit tests and checks the commits of a PR (or a push to main) with
+# tools/privacy-check.sh.
 #
 # CI never has the game: BB_GAME_DIR is unset and the checkout has no
 # local.env, so tests that need the game skip.
@@ -13,9 +14,43 @@ on:
 permissions:
   contents: read
 
+# A new push to a PR cancels the PR's run still going; runs on main all finish.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Whether the change needs the build: a PR that only changes docs doesn't.
+  # docs/source-policy.md is the exception, a test reads its hash table.
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - id: diff
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          code=true
+          if [ -n "$PR_BASE" ] &&
+             ! git diff --name-only "$PR_BASE...HEAD" |
+               grep -qvE '^docs/|^[^/]+\.md$' &&
+             ! git diff --name-only "$PR_BASE...HEAD" | grep -qx 'docs/source-policy.md'; then
+              code=false
+          fi
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+
   build:
     name: build (${{ matrix.preset }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     # Fedora 44, the reference machine's distribution: its Vulkan headers,
     # lavapipe, SPIR-V tools, LLVM and SDL3 are what the code is written
@@ -28,7 +63,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        preset: [debug, relwithdebinfo, release]
+        # relwithdebinfo compiles about what release does; PRs leave it out,
+        # main builds all three.
+        preset: ${{ fromJSON(github.event_name == 'push' && '["debug","relwithdebinfo","release"]' || '["debug","release"]') }}
+    env:
+      # ccache through the launcher variables CMake reads; the cache directory
+      # is kept per preset between runs (actions/cache below).
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      CCACHE_DIR: /ccache
+      CCACHE_MAXSIZE: 500M
+      CTEST_OUTPUT_ON_FAILURE: 1
     steps:
       # git first, so that the checkout is a repository: the tests ask git for
       # the main checkout (tests/CMakeLists.txt).
@@ -42,7 +87,7 @@ jobs:
           dnf -y --setopt=install_weak_deps=False install git cmake ninja-build gcc-c++ \
               libasan libubsan gtest-devel python3 spirv-headers-devel spirv-tools \
               vulkan-headers glslang vulkan-loader-devel mesa-vulkan-drivers llvm SDL3-devel \
-              ffmpeg-free-devel
+              ffmpeg-free-devel ccache
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -52,6 +97,15 @@ jobs:
       - name: Trust the checkout
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      # Each run saves its own entry and starts from the newest one of its
+      # preset (PRs also see main's).
+      - name: Restore the compiler cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: /ccache
+          key: ccache-${{ matrix.preset }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.preset }}-
+
       - name: Check the graphics packages
         run: |
           test -f /usr/include/spirv/unified1/spirv.hpp11
@@ -60,12 +114,17 @@ jobs:
           test -f /usr/include/vulkan/vulkan.h
           ls /usr/share/vulkan/icd.d/lvp_icd*.json
           test -f /usr/include/SDL3/SDL.h
+          # Whether the memfd can take huge pages here (#549).
+          cat /sys/kernel/mm/transparent_hugepage/shmem_enabled || true
 
       - name: Configure
         run: cmake --preset "${{ matrix.preset }}" -DBB_WERROR=ON
 
       - name: Build
-        run: cmake --build --preset "${{ matrix.preset }}"
+        run: |
+          ccache --zero-stats
+          cmake --build --preset "${{ matrix.preset }}"
+          ccache --show-stats
 
       # The runner kernels use 32 bits of mmap randomisation, with which
       # AddressSanitizer's shadow memory can collide with randomly placed
