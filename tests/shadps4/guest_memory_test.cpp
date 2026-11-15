@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <memory>
 #include <atomic>
@@ -263,14 +264,56 @@ bool make_hole(std::uint64_t offset, std::uint64_t length) {
     return !any_data(offset, length);
 }
 
+// The selected value of a THP setting in sysfs ("always [never] ..."), empty if there is none.
+std::string thp_setting(const std::filesystem::path& file) {
+    std::ifstream in(file);
+    std::string line;
+    std::getline(in, line);
+    const auto open = line.find('['), close = line.find(']');
+    return open == std::string::npos || close == std::string::npos || close < open
+               ? std::string{}
+               : line.substr(open + 1, close - open - 1);
+}
+
+// The shmem huge page setting that lets the memfd's pages come in folios larger than one page,
+// or an empty string if the host keeps shmem in small pages: shmem_enabled never or deny, and
+// no size of multi-size THP turned on for shmem on its own.
+std::string shmem_huge_pages() {
+    const std::filesystem::path thp = "/sys/kernel/mm/transparent_hugepage";
+    const std::string all = thp_setting(thp / "shmem_enabled");
+    if (all == "deny") {
+        return {};
+    }
+    if (!all.empty() && all != "never") {
+        return "shmem_enabled " + all;
+    }
+    std::error_code error;
+    for (const auto& size : std::filesystem::directory_iterator(thp, error)) {
+        if (!size.path().filename().string().starts_with("hugepages-")) {
+            continue;
+        }
+        const std::string own = thp_setting(size.path() / "shmem_enabled");
+        if (!own.empty() && own != "never" && own != "inherit") {
+            return size.path().filename().string() + " " + own;
+        }
+    }
+    return {};
+}
+
 // Whether the memfd kept a page the test never wrote, at each of `unwritten`, as a hole next to
-// the pages it wrote. In huge pages a write, or a read of a hole, takes its whole 2 MiB block,
-// and no hole is left next to it. That is decided per mapping (the mapping's address has to lie
-// at the block's offset modulo 2 MiB), so each test asks about its own memory, after its writes
-// and before its copies: what this checks depends on the host only, never on the copy under
-// test. Without page holes the copies stay correct (a step over data copies zeros from memory)
-// and are still checked; only the checks of which parts are still holes don't apply.
+// the pages it wrote. In huge pages a write, or a read of a hole, takes its whole block, and no
+// hole is left next to it. Where the host puts shmem in huge pages at all, khugepaged also
+// collapses blocks of the memfd later, at a time no test controls, and with one present page
+// (its max_ptes_none is 511 by default): a probe before the copy can't tell what stays a hole
+// (#549). So the checks of holes need a host that keeps shmem in small pages, and the probe of
+// the test's own memory after its writes stays as a check of that. Without page holes the copies
+// stay correct (a step over data copies zeros from memory) and are still checked; only the
+// checks of which parts are still holes don't apply.
 bool keeps_page_holes(std::initializer_list<std::uint64_t> unwritten) {
+    if (const std::string huge = shmem_huge_pages(); !huge.empty()) {
+        std::printf("shmem in huge pages (%s): the checks of holes are left out\n", huge.c_str());
+        return false;
+    }
     for (const std::uint64_t offset : unwritten) {
         if (has_data(offset)) {
             std::printf("no page hole at %#llx (huge pages): the checks of holes are left out\n",
