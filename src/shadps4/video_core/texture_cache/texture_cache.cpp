@@ -838,6 +838,7 @@ void TextureCache::RefreshImage(Image& image) {
 
     // A burst of refreshes in one frame is mostly images that show up for the first time (the
     // game streams a new area in), which must be uploaded: count those apart from re-uploads.
+    // The flag is on the Image object: an image evicted and created again counts as first.
     std::optional<bb::common::frame_profile::Scope> profile_new;
     if (!image.uploaded) {
         profile_new.emplace(bb::common::frame_profile::Part::upload_new);

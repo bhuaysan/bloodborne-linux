@@ -40,7 +40,7 @@ class ProfileTest(unittest.TestCase):
                                     {"upload": 176, "upload_new": 172}))
         result = prof.analyse(frames)
         self.assertEqual(result["upload_bursts"], [(176, 172)])
-        self.assertIn("frames with over 50 image refreshes: 176 (172 new images)",
+        self.assertIn("frames with over 50 image refreshes: 176 (172 first uploads)",
                       prof.format_segment("s", result))
 
     def test_builds_overlapping_a_frame_are_added(self) -> None:

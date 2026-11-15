@@ -30,7 +30,7 @@ enum class Part : unsigned {
     state,     // dynamic state and descriptor writes of a draw or dispatch
     upload,    // refreshing a dirty image from guest memory
     detile,    // detiling an image into its upload buffer (inside upload)
-    upload_new,  // the first upload of an image: a new texture, not a refresh (inside upload)
+    upload_new,  // the first upload of a cache image object: a new or evicted and recreated texture, not a refresh (inside upload)
     fault,     // write-tracking faults, any thread (the whole handler)
     inval_buffer,   // the buffer cache's share of a fault
     inval_texture,  // the texture cache's share of a fault

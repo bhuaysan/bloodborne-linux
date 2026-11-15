@@ -149,7 +149,7 @@ def format_segment(name: str, result: dict | None, late: dict | None = None) -> 
             sorted(result["normal_us"].items(), key=lambda kv: -kv[1])[:8]))
     if result["upload_bursts"]:
         out.append(f"  frames with over {UPLOAD_BURST} image refreshes: " + ", ".join(
-            f"{n} ({new} new images)" for n, new in result["upload_bursts"]))
+            f"{n} ({new} first uploads)" for n, new in result["upload_bursts"]))
     if late:
         out.append(f"  late presents: {late['late']} of {late['presents']}; "
                    f"submit-done to present {late['lag_ms']:.1f} ms "
