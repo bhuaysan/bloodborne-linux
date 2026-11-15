@@ -70,6 +70,14 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn("--log", plain.argv)
         self.assertEqual(logged.argv[-2:], ["--log", "profile=debug"])
 
+    def test_bb_run_frame_rate_is_passed_on(self) -> None:
+        with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
+            plain = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"))
+            sixty = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"),
+                                       frame_rate=60)
+        self.assertNotIn("--frame-rate", plain.argv)
+        self.assertEqual(sixty.argv[-2:], ["--frame-rate", "60"])
+
     def test_bb_run_under_perf_record(self) -> None:
         with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
             program = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"),
@@ -209,25 +217,27 @@ class PerfRunsTests(unittest.TestCase):
         calls = []
 
         def fake(run_args):
-            calls.append((run_args.target, run_args.user_from, run_args.bb_run))
+            calls.append((run_args.target, run_args.user_from, run_args.bb_run,
+                          run_args.frame_rate))
             run_args.run_dir_out.append(Path(f"run{len(calls)}"))
             return 0
 
         args = rig.argparse.Namespace(
             scenario="s", runs=2, bb_user=Path("bu"), reference_user=Path("ru"),
-            main_bb_run=Path("/main/bb-run"), time=None, preset="relwithdebinfo")
+            main_bb_run=Path("/main/bb-run"), time=None, preset="relwithdebinfo", frame_rate=60)
         with unittest.mock.patch.object(rig, "run_target", fake):
             dirs = rig.perf_runs(args)
         self.assertEqual(list(dirs), ["branch", "main", "reference"])
         self.assertTrue(all(len(v) == 2 for v in dirs.values()))
-        self.assertEqual(calls, [("bb-run", Path("bu"), None)] * 2
-                         + [("bb-run", Path("bu"), Path("/main/bb-run"))] * 2
-                         + [("reference", Path("ru"), None)] * 2)
+        # The frame rate goes to both bb-run columns, never to the reference.
+        self.assertEqual(calls, [("bb-run", Path("bu"), None, 60)] * 2
+                         + [("bb-run", Path("bu"), Path("/main/bb-run"), 60)] * 2
+                         + [("reference", Path("ru"), None, None)] * 2)
 
     def test_needs_a_scenario_and_a_save(self) -> None:
         args = rig.argparse.Namespace(
             scenario="s", runs=1, bb_user=None, reference_user=Path("ru"),
-            main_bb_run=None, time=None, preset="p")
+            main_bb_run=None, time=None, preset="p", frame_rate=None)
         with self.assertRaises(SystemExit):
             rig.perf_runs(args)
         args.scenario = None

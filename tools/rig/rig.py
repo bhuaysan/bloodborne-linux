@@ -218,7 +218,7 @@ def copy_user_for_bb_run(user_from: Path, dest: Path) -> None:
 def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_root: Path,
                    cache_home: Path | None = None, binary: Path | None = None,
                    log: str | None = None, perf: bool = False,
-                   pad_input: Path | None = None) -> Program:
+                   pad_input: Path | None = None, frame_rate: int | None = None) -> Program:
     # bb-run refuses runtime directories inside the source checkout, so its XDG roots are outside
     # analysis/. They are per run, so runs never share or inherit save data.
     env = {f"XDG_{kind}_HOME": str(work_root / kind.lower())
@@ -235,6 +235,9 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
         argv += ["--pad-input", str(pad_input)]
     if not window:
         argv.append("--headless")
+    if frame_rate:
+        # The game's target frame rate, 30 or 60 (docs/design/frame-rate.md).
+        argv += ["--frame-rate", str(frame_rate)]
     if log:
         # A log filter, e.g. profile=debug for the frame counters (docs/test-rig.md, "Profiling").
         argv += ["--log", log]
@@ -473,7 +476,8 @@ def run_target(args: argparse.Namespace) -> int:
         program = bb_run_program(run, game_dir, args.preset, args.window, work_root, args.cache_home,
                                  getattr(args, "bb_run", None), getattr(args, "log", None),
                                  getattr(args, "perf", False),
-                                 run / "pad" if scenario.uses_pad() else None)
+                                 run / "pad" if scenario.uses_pad() else None,
+                                 getattr(args, "frame_rate", None))
         if args.user_from:
             copy_user_for_bb_run(args.user_from, bb_run_profile_data(work_root))
 
@@ -608,7 +612,8 @@ def perf_runs(args: argparse.Namespace) -> dict[str, list[Path]]:
             run_args = argparse.Namespace(
                 target=target, scenario=args.scenario, time=args.time, memory=None, hold=0,
                 user_from=user, preset=args.preset, window=True, cache_home=None, audio=False,
-                no_layer=False, bb_run=binary, run_dir_out=dirs[column])
+                no_layer=False, bb_run=binary, run_dir_out=dirs[column],
+                frame_rate=args.frame_rate if target == "bb-run" else None)
             run_target(run_args)
     return dirs
 
@@ -651,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--audio", action="store_true",
                      help="record the sound with SDL's disk driver and report its level")
     run.add_argument("--log", help="bb-run: log filter, e.g. profile=debug for the frame counters")
+    run.add_argument("--frame-rate", type=int, choices=[30, 60], help="bb-run: target frame rate")
     run.add_argument("--perf", action="store_true",
                      help="bb-run: sample it with perf record into the run's perf.data")
     run.add_argument("--no-layer", action="store_true",
@@ -675,6 +681,8 @@ def main(argv: list[str] | None = None) -> int:
     perf.add_argument("--preset", default="relwithdebinfo", help="bb-run build preset")
     perf.add_argument("--time", type=int, help="time limit of each run in seconds")
     perf.add_argument("--only", default="*", help="glob: only the segments with a matching name")
+    perf.add_argument("--frame-rate", type=int, choices=[30, 60],
+                      help="bb-run runs (branch and main): target frame rate")
     for column in report.PERF_COLUMNS:
         perf.add_argument(f"--{column}", nargs="+", type=Path, default=[], metavar="RUN",
                           help=f"run directories of the {column} column")
