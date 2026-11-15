@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -660,10 +661,19 @@ TEST(GuestMemory, ConcurrentFaultsAndSyncsMissNoWrite) {
                 }
             });
         }
-        // Every other sync takes the whole range, the others a random part of it.
+        // Every other sync takes the whole range, the others a random part of it. The syncs go
+        // on until the writers have faulted often enough: an optimized build can finish a fixed
+        // number of syncs before the writer threads write anything, which would test nothing.
         std::mt19937_64 random(99);
-        constexpr u64 syncs = 500;
-        for (u64 sync = 0; sync < syncs; ++sync) {
+        constexpr u64 min_syncs = 500;
+        constexpr u64 min_faults = 1000;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        u64 sync = 0;
+        for (; sync < min_syncs || bb::shadps4::claimed_faults() - claimed <= min_faults;
+             ++sync) {
+            if (std::chrono::steady_clock::now() > deadline) {
+                break;
+            }
             const u64 first = sync % 2 == 0 ? 0 : random() % pages;
             const u64 length =
                 sync % 2 == 0 ? pages : std::min<u64>(1 + random() % 64, pages - first);
@@ -685,7 +695,8 @@ TEST(GuestMemory, ConcurrentFaultsAndSyncsMissNoWrite) {
         for (u64 page = 0; page < pages; ++page) {
             EXPECT_FALSE(writable(&words[page * words_per_page])) << page;
         }
-        EXPECT_GT(bb::shadps4::claimed_faults() - claimed, 1000u);
+        EXPECT_GE(sync, min_syncs);
+        EXPECT_GT(bb::shadps4::claimed_faults() - claimed, min_faults) << sync << " syncs";
         d.unmap();
     }
 }
