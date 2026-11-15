@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <functional>
 #include <limits>
 #include <optional>
@@ -55,6 +56,15 @@ public:
     ~FakeClockGuard() { bb::hle::kernel::set_wall_clock(nullptr); }
     FakeClockGuard(const FakeClockGuard&) = delete;
     FakeClockGuard& operator=(const FakeClockGuard&) = delete;
+};
+
+// Sets the frame rate for one test and puts back the default, 30, also when the test fails early.
+class FrameRateGuard {
+public:
+    explicit FrameRateGuard(unsigned fps) { bb::game::set_frame_rate(fps); }
+    ~FrameRateGuard() { bb::game::set_frame_rate(bb::game::default_frame_rate); }
+    FrameRateGuard(const FrameRateGuard&) = delete;
+    FrameRateGuard& operator=(const FrameRateGuard&) = delete;
 };
 
 // Starts the clock at `start_us`, moving `step_us` per read, with its read counter in `a`.
@@ -196,6 +206,26 @@ std::vector<PacerCase> pacer_cases() {
                          f.clear_skip_once = 1;
                      }});
     cases.push_back({"skip wait", [](SprjFlipper& f) { f.skip_wait = 1; }});
+    cases.push_back({"clear skip once with debug maxima", [](SprjFlipper& f) {
+                         f.no_skip = 0;
+                         f.flip_mode = 3;
+                         f.clear_skip_once = 1;
+                         f.foreground_skip_max_debug = 3;
+                         f.background_skip_max_debug = 7;
+                     }});
+    cases.push_back({"late with skip wait", [](SprjFlipper& f) {
+                         f.no_skip = 0;
+                         f.late = 1;
+                         f.skip_wait = 1;
+                         f.foreground_skip_max_debug = 3;
+                         late_frames(f, {40000, 36000});
+                     }});
+    cases.push_back({"no skip and forced default mode", [](SprjFlipper& f) {
+                         f.flip_mode = 0;
+                         f.no_skip = 1;
+                         f.force_default_mode = 1;
+                         f.foreground_skip_max_debug = 2;
+                     }});
     // Making up for late frames: the budget above the late frames, below them, and equal.
     const std::pair<const char*, std::vector<std::uint64_t>> late[] = {
         {"late, budget left", {40000, 36000}},
@@ -251,7 +281,7 @@ std::vector<PacerCase> pacer_cases() {
 TEST_F(EbootTest, FlipperWaitFrameMatches) {
     EXPECT_EQ(image().function_size(flipper_wait_frame), std::optional<std::uint64_t>{0x84c});
     const FakeClockGuard clock;
-    bb::game::set_frame_rate(30);
+    const FrameRateGuard rate(30);
     for (const PacerCase& c : pacer_cases()) {
         const Result r = harness().compare<void(SprjFlipper*)>(
             flipper_wait_frame, &bb::game::flipper_wait_frame, pacer_inputs(c));
@@ -259,26 +289,40 @@ TEST_F(EbootTest, FlipperWaitFrameMatches) {
     }
 }
 
-// At 60 FPS modes 3 and 4 and the forced mode take 1/60 s as their frame time, and modes 3 and 4
-// wait for it.
+// At 60 FPS modes 3 and 4 and the forced mode take 1/60 s as their frame time; modes 0 and 1 keep
+// 1/30 and mode 2 its own 1/60, each with its present interval and tearing.
 TEST_F(EbootTest, FlipperWaitFrameAt60) {
     const FakeClockGuard clock;
-    bb::game::set_frame_rate(60);
-    for (const auto& [mode, forced] : {std::pair{4U, false}, {3U, false}, {0U, true}}) {
+    const FrameRateGuard rate(60);
+    struct Expected {
+        std::uint32_t mode;
+        bool forced;
+        float frame_time;
+        std::int32_t interval;
+        std::uint8_t tearing;
+        std::uint64_t waited_us;
+    };
+    // The wait ends with the first read after the frame time since the last frame (5 ms before
+    // the clock's start, reads 100 us apart). The forced mode doesn't wait.
+    const Expected cases[] = {{4, false, 1.0f / 60.0f, 1, 0, 16700},
+                              {3, false, 1.0f / 60.0f, 1, 0, 16700},
+                              {0, true, 1.0f / 60.0f, 1, 0, 5000},
+                              {0, false, 1.0f / 30.0f, 2, 1, 33400},
+                              {1, false, 1.0f / 30.0f, 2, 1, 33400},
+                              {2, false, 1.0f / 60.0f, 1, 1, 16700}};
+    for (const Expected& e : cases) {
         harness().restore();
         SprjFlipper* f = std::get<0>(pacer_inputs({"60", {}, 100})(harness().arena()));
-        f->flip_mode = mode;
-        f->force_default_mode = forced ? 1 : 0;
+        f->flip_mode = e.mode;
+        f->force_default_mode = e.forced ? 1 : 0;
         bb::game::flipper_wait_frame(f);
-        EXPECT_EQ(f->target_frame_time, 1.0f / 60.0f) << mode;
-        EXPECT_EQ(f->present_interval, 1) << mode;
-        EXPECT_EQ(f->tearing, 0) << mode;
-        // The wait ends with the first read after 16666 us since the last frame (5 ms before the
-        // clock's start). The forced mode doesn't wait.
-        EXPECT_EQ(f->now_time_us - f->prev_time_us, forced ? 5000U : 16700U) << mode;
-        EXPECT_EQ(f->late, 0) << mode;
+        SCOPED_TRACE(std::format("mode {}, forced {}", e.mode, e.forced));
+        EXPECT_EQ(f->target_frame_time, e.frame_time);
+        EXPECT_EQ(f->present_interval, e.interval);
+        EXPECT_EQ(f->tearing, e.tearing);
+        EXPECT_EQ(f->now_time_us - f->prev_time_us, e.waited_us);
+        EXPECT_EQ(f->late, 0);
     }
-    bb::game::set_frame_rate(30);
 }
 
 int observed_frames = 0;
@@ -286,11 +330,12 @@ int observed_frames = 0;
 TEST_F(EbootTest, FlipperWaitFrameTellsTheObserver) {
     const FakeClockGuard clock;
     observed_frames = 0;
-    EXPECT_EQ(bb::game::set_frame_observer([] { ++observed_frames; }), nullptr);
+    const bb::game::FrameObserver observer = [] { ++observed_frames; };
+    EXPECT_EQ(bb::game::set_frame_observer(observer), nullptr);
     SprjFlipper* f = std::get<0>(pacer_inputs({"observed", {}})(harness().arena()));
     bb::game::flipper_wait_frame(f);
     bb::game::flipper_wait_frame(f);
-    EXPECT_NE(bb::game::set_frame_observer(nullptr), nullptr);
+    EXPECT_EQ(bb::game::set_frame_observer(nullptr), observer);
     bb::game::flipper_wait_frame(f);
     EXPECT_EQ(observed_frames, 2);
 }
@@ -299,9 +344,11 @@ TEST(FrameRate, RefusesOtherRates) {
     EXPECT_THROW(bb::game::set_frame_rate(0), std::invalid_argument);
     EXPECT_THROW(bb::game::set_frame_rate(120), std::invalid_argument);
     EXPECT_EQ(bb::game::frame_rate(), 30U);
-    bb::game::set_frame_rate(60);
-    EXPECT_EQ(bb::game::frame_step(), 1.0f / 60.0f);
-    bb::game::set_frame_rate(30);
+    {
+        const FrameRateGuard rate(60);
+        EXPECT_EQ(bb::game::frame_step(), 1.0f / 60.0f);
+    }
+    EXPECT_EQ(bb::game::frame_rate(), 30U);
     std::uint32_t bits = 0;
     const float step = bb::game::frame_step();
     std::memcpy(&bits, &step, sizeof bits);
@@ -360,7 +407,7 @@ auto tick_inputs(const TickCase& c) {
 TEST_F(EbootTest, MainLoopTickMatches) {
     EXPECT_EQ(image().function_size(main_loop_tick), std::optional<std::uint64_t>{0x1e0});
     const FakeClockGuard clock;
-    bb::game::set_frame_rate(30);
+    const FrameRateGuard rate(30);
     std::vector<TickCase> cases;
     for (std::uint8_t window : {0, 1, 2, 0xff}) {
         for (std::uint8_t quit : {0, 1, 3}) {
@@ -384,7 +431,7 @@ TEST_F(EbootTest, MainLoopTickMatches) {
 // At 60 FPS every task gets a step of 1/60 s, and the global task data holds it.
 TEST_F(EbootTest, MainLoopTickAt60) {
     const FakeClockGuard clock;
-    bb::game::set_frame_rate(60);
+    const FrameRateGuard rate(60);
     tick_inputs({})(harness().arena());
     EXPECT_EQ(bb::game::main_loop_tick(), 1);
     std::uint32_t bits = 0;
@@ -396,7 +443,6 @@ TEST_F(EbootTest, MainLoopTickAt60) {
               reinterpret_cast<const void*>(bb::game::image().runtime(0x52efd40)));
     EXPECT_EQ(tick_objects.line->arg1, 0x1111U);
     EXPECT_EQ(tick_objects.line->arg3, 0xffffffffU);
-    bb::game::set_frame_rate(30);
 }
 
 }  // namespace

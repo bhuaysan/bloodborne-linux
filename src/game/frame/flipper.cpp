@@ -75,8 +75,9 @@ void flipper_wait_frame(SprjFlipper* self) {
     self->heavy_last = heavy;
     self->heavy = 0;
     const std::uint32_t mode = heavy != 0 ? self->flip_mode_heavy : self->flip_mode;
-    // Mode: present interval, tearing, frame time, foreground and background skip maxima.
-    // Modes 3 and 4 take frame_step(), which is the game's 1/30 at 30 FPS.
+    // Mode: present interval, tearing, frame time and foreground skip maximum; the background
+    // skip maximum is 30 in every mode. Modes 3 and 4 take frame_step(), which is the game's 1/30
+    // at 30 FPS.
     const auto set_mode = [self](std::int32_t interval, std::uint8_t tearing, float frame_time,
                                  std::uint32_t foreground_skip) {
         self->present_interval = interval;
@@ -181,7 +182,9 @@ void flipper_wait_frame(SprjFlipper* self) {
     }
 
     // Record the frame. It is late when it took longer than the frame time and 1 %, or, while
-    // making up, than the frames it makes up for.
+    // making up, than the frames it makes up for, unless the skips are used up (all skip_max
+    // counted while late, else skip_max 0), which counts as on time. With skip_wait it is always
+    // late.
     const std::uint32_t index = (self->record_index + 1) & 31;
     self->record_index = index;
     self->records[index].duration_us = now - self->prev_time_us;
