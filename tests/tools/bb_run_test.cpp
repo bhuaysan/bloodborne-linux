@@ -112,6 +112,12 @@ TEST(RunOptions, ParsesTheRendererOptions) {
               "--validation-sync and --validation-gpu need --validation");
 }
 
+TEST(RunOptions, ParsesThePadInput) {
+    EXPECT_FALSE(parse({}).pad_input);
+    EXPECT_EQ(parse({"--pad-input", "/run/pad"}).pad_input, std::filesystem::path("/run/pad"));
+    EXPECT_EQ(parse_error({"--pad-input"}), "--pad-input needs a value");
+}
+
 TEST(RunOptions, RefusesBadArguments) {
     EXPECT_EQ(parse_error({"--frobnicate"}), "unknown argument \"--frobnicate\"");
     EXPECT_EQ(parse_error({"eboot.bin"}), "unknown argument \"eboot.bin\"");

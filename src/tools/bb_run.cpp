@@ -380,6 +380,15 @@ int start(const bb::tools::RunOptions& options) {
     // The imported system libraries (docs/design/os-libraries.md), before the imports are linked.
     // A NID that src/hle registers too throws here.
     Core::Loader::SymbolsResolver symbols;
+    if (options.pad_input && !options.headless) {
+        // Before the libraries: the pad library gives slot 0 to the first pad SDL lists when it
+        // registers, so the input's pad has to be there, and the other controllers ignored.
+        std::string why;
+        if (!Libraries::Pad::OpenPadInput(options.pad_input->string(), why)) {
+            bb::common::log(LogLevel::error, channel, "--pad-input: {}", why);
+            end_run(1);
+        }
+    }
     Libraries::InitHLELibs(&symbols, *guest_memory);
 #endif
     // Never destroyed: the game runs in it until the process ends.

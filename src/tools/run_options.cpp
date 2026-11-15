@@ -77,6 +77,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args) {
             options.pipeline_cache = false;
         } else if (arg == "--sync-pipelines") {
             options.async_pipelines = false;
+        } else if (arg == "--pad-input") {
+            options.pad_input = std::filesystem::path(value());
         } else if (arg == "--present-mode") {
             const std::string_view mode = value();
             if (mode == "fifo") {

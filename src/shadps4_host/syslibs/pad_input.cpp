@@ -9,11 +9,21 @@
 
 #include "core/libraries/pad_input.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <algorithm>
+#include <cerrno>
 #include <cstdlib>
+#include <cstring>
+#include <format>
+#include <stdexcept>
+#include <thread>
 
 #include <SDL3/SDL.h>
 
+#include "common/log.hpp"
+#include "common/pad_stream.hpp"
 #include "common/singleton.h"
 #include "core/libraries/pad/pad.h"
 #include "input/controller.h"
@@ -169,6 +179,83 @@ void HandleGamepadEvent(const SDL_Event& event) {
     }
 }
 
+
+namespace {
+
+void Apply(SDL_Joystick* joystick, const std::vector<bb::common::PadUpdate>& updates) {
+    for (const bb::common::PadUpdate& u : updates) {
+        if (u.is_axis) {
+            SDL_SetJoystickVirtualAxis(joystick, u.index, static_cast<Sint16>(u.value));
+        } else {
+            SDL_SetJoystickVirtualButton(joystick, u.index, u.value != 0);
+        }
+    }
+}
+
+// Reads the stream until the process ends. Each line is applied as it arrives, so a tap lasts as
+// long as the writer waits between its two lines, as it does on a uinput device.
+void ReadPadStream(int fd, SDL_Joystick* joystick) {
+    std::string pending;
+    char buffer[4096];
+    for (;;) {
+        const ssize_t got = read(fd, buffer, sizeof(buffer));
+        if (got < 0 && errno == EINTR) {
+            continue;
+        }
+        if (got <= 0) {
+            return;
+        }
+        pending.append(buffer, static_cast<std::size_t>(got));
+        for (std::size_t end; (end = pending.find('\n')) != std::string::npos;
+             pending.erase(0, end + 1)) {
+            const std::string line = pending.substr(0, end);
+            bb::common::log(bb::common::LogLevel::debug, "pad", "pad input \"{}\"", line);
+            try {
+                Apply(joystick, bb::common::parse_pad_line(line));
+            } catch (const std::invalid_argument& e) {
+                bb::common::log(bb::common::LogLevel::warn, "pad", "pad input \"{}\": {}", line,
+                                e.what());
+            }
+        }
+    }
+}
+
+}  // namespace
+
+bool OpenPadInput(const std::string& path, std::string& why) {
+    // Read-write, so the open neither waits for a writer on a FIFO nor sees an end of file when
+    // the writer is not there yet.
+    const int fd = open(path.c_str(), O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        why = path + ": " + std::strerror(errno);
+        return false;
+    }
+    // Only the virtual pad counts. The environment's value of the hint, which the rig sets for
+    // the reference, must not win.
+    const std::string only = std::format("0x{:04x}/0x{:04x}", bb::common::pad_stream_vendor,
+                                         bb::common::pad_stream_product);
+    SDL_SetHintWithPriority(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT, only.c_str(),
+                            SDL_HINT_OVERRIDE);
+    SDL_VirtualJoystickDesc desc;
+    SDL_INIT_INTERFACE(&desc);
+    desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    desc.vendor_id = bb::common::pad_stream_vendor;
+    desc.product_id = bb::common::pad_stream_product;
+    desc.naxes = bb::common::pad_stream_axes;
+    desc.nbuttons = bb::common::pad_stream_buttons;
+    desc.name = "bloodborne-linux input stream";
+    const SDL_JoystickID id =
+        SDL_InitSubSystem(SDL_INIT_GAMEPAD) ? SDL_AttachVirtualJoystick(&desc) : 0;
+    SDL_Joystick* const joystick = id != 0 ? SDL_OpenJoystick(id) : nullptr;
+    if (joystick == nullptr) {
+        why = SDL_GetError();
+        close(fd);
+        return false;
+    }
+    Apply(joystick, bb::common::neutral_pad_updates());
+    std::thread(ReadPadStream, fd, joystick).detach();
+    return true;
+}
 
 void StartPolling() {
     // As upstream's InitTimers: each pad slot pushes its state every 4 ms, which is what moves

@@ -2,6 +2,8 @@
 // docs/design/os-libraries.md): their registration in the HLE registry, and the host pieces they
 // run on (guest threads, paths, versions, the AAC decoder that is left out).
 
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <array>
@@ -11,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <format>
 #include <mutex>
 #include <span>
 #include <stdexcept>
@@ -299,6 +302,63 @@ TEST(SysLibsHost, PadFollowsAVirtualSDLGamepad) {
     SDL_UpdateJoysticks();
     pump();  // the device removed: the slot is free again
     EXPECT_EQ((*Common::Singleton<Input::GameControllers>::Instance())[0]->m_sdl_gamepad, nullptr);
+}
+
+// --pad-input: the stream's lines move the in-process gamepad, which the first pad slot takes
+// like a real one. No /dev/uinput, window or GPU.
+TEST(SysLibsHost, PadFollowsThePadInputStream) {
+    init_once();
+    ASSERT_TRUE(SDL_InitSubSystem(SDL_INIT_GAMEPAD | SDL_INIT_EVENTS)) << SDL_GetError();
+    const std::filesystem::path fifo =
+        std::filesystem::temp_directory_path() / std::format("bb-pad-input-{}", ::getpid());
+    ASSERT_EQ(::mkfifo(fifo.c_str(), 0600), 0);
+    std::string why;
+    ASSERT_TRUE(Libraries::Pad::OpenPadInput(fifo.string(), why)) << why;
+    EXPECT_FALSE(Libraries::Pad::OpenPadInput("/nonexistent/pad", why));
+    EXPECT_FALSE(why.empty());
+
+    const int writer = ::open(fifo.c_str(), O_RDWR);
+    ASSERT_GE(writer, 0);
+    const auto send = [&](const std::string& text) {
+        ASSERT_EQ(::write(writer, text.data(), text.size()), static_cast<ssize_t>(text.size()));
+    };
+    auto& pad = *(*Common::Singleton<Input::GameControllers>::Instance())[0];
+    // Pumps SDL until the slot's state satisfies `done`, for at most two seconds.
+    const auto wait_for = [&](auto done) {
+        for (int i = 0; i < 200; ++i) {
+            SDL_UpdateJoysticks();
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                Libraries::Pad::HandleGamepadEvent(event);
+            }
+            pad.PollState();
+            if (done(pad.ReadState())) {
+                return true;
+            }
+            SDL_Delay(10);
+        }
+        return false;
+    };
+    using Libraries::Pad::OrbisPadButtonDataOffset;
+    const auto held = [](const Input::State& s, OrbisPadButtonDataOffset button) {
+        return (s.buttonsState & button) == button;
+    };
+
+    ASSERT_TRUE(wait_for([&](const Input::State&) { return pad.m_sdl_gamepad != nullptr; }));
+    // The d-pad, a button, a trigger, and a line the parser refuses between them.
+    send("button A 1\naxis HY 1\nbutton nonsense\naxis RT 255\n");
+    EXPECT_TRUE(wait_for([&](const Input::State& s) {
+        return held(s, OrbisPadButtonDataOffset::Cross) && held(s, OrbisPadButtonDataOffset::Down) &&
+               held(s, OrbisPadButtonDataOffset::R2);
+    }));
+    EXPECT_FALSE(held(pad.ReadState(), OrbisPadButtonDataOffset::L2));
+    send("neutral\n");
+    EXPECT_TRUE(wait_for([&](const Input::State& s) {
+        return !held(s, OrbisPadButtonDataOffset::Cross) && !held(s, OrbisPadButtonDataOffset::Down) &&
+               !held(s, OrbisPadButtonDataOffset::R2);
+    }));
+    ::close(writer);
+    std::filesystem::remove(fifo);
 }
 
 }  // namespace

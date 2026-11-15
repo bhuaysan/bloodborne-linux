@@ -19,7 +19,7 @@ inline constexpr std::string_view run_usage =
     "              [--log SPEC] [--no-log-file] [--headless] [--device NAME]\n"
     "              [--validation] [--validation-sync] [--validation-gpu]\n"
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
-    "              [--sync-pipelines]\n"
+    "              [--sync-pipelines] [--pad-input PATH]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
@@ -43,7 +43,10 @@ inline constexpr std::string_view run_usage =
     "                       $XDG_CACHE_HOME/bloodborne-linux); every shader is translated and\n"
     "                       every pipeline built again, for comparison runs\n"
     "  --sync-pipelines     create every new pipeline on the GPU thread, so no draw is skipped\n"
-    "                       while its pipeline is created on a worker thread (the default)\n";
+    "                       while its pipeline is created on a worker thread (the default)\n"
+    "  --pad-input PATH     read pad states from the file or FIFO PATH and give them to the game\n"
+    "                       through a gamepad that exists only in this process (docs/test-rig.md);\n"
+    "                       needs a window; other controllers are then ignored\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
@@ -66,6 +69,7 @@ struct RunOptions {
     PresentMode present_mode = PresentMode::mailbox;  // --present-mode
     bool pipeline_cache = true;  // false with --no-pipeline-cache
     bool async_pipelines = true;  // false with --sync-pipelines
+    std::optional<std::filesystem::path> pad_input;  // --pad-input
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 
