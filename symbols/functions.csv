@@ -10,7 +10,7 @@ address,name,signature,status,file
 0x012a43b0,target_bank_scan_tick,,named,
 0x014368b0,cam_mode_update,,named,
 0x0143a0e0,chase_cam_construct,,named,
-0x0143ac60,chase_cam_update,,named,
+0x0143ac60,chase_cam_update,"void chase_cam_update(void * cam, void * chr, void * world, float dt)",replaced,src/game/camera/chase_cam.cpp
 0x0150e690,chr_turn_update,,named,
 0x01533940,walk_anim_update,,named,
 0x01548740,chr_frame_update,,named,
