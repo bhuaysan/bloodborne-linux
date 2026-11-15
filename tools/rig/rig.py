@@ -443,6 +443,13 @@ def open_stream_pad(path: Path) -> vpad.StreamPad:
     return vpad.StreamPad(open(os.open(path, os.O_RDWR), "wb", buffering=0))
 
 
+def check_target_options(args: argparse.Namespace) -> None:
+    """Refuses the options that only bb-run takes on a reference run, instead of dropping them."""
+    if args.target == "reference" and (getattr(args, "log", None) or getattr(args, "perf", False)
+                                       or getattr(args, "frame_rate", None)):
+        raise SystemExit("--log, --perf and --frame-rate only apply to the bb-run target")
+
+
 def run_target(args: argparse.Namespace) -> int:
     """Runs one scenario on one target. Returns the exit status; args.run_dir_out, when the caller
     sets it to a list, gets the run directory."""
@@ -456,8 +463,7 @@ def run_target(args: argparse.Namespace) -> int:
     seconds = args.time or scenario.time_limit or DEFAULT_TIME
     memory = args.memory or scenario.memory_limit or DEFAULT_MEMORY
     check_game_read_only(game_dir)
-    if args.target == "reference" and (getattr(args, "log", None) or getattr(args, "perf", False)):
-        raise SystemExit("--log and --perf only apply to the bb-run target")
+    check_target_options(args)
 
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
     run = rig_dir() / "runs" / f"{stamp}-{args.target}-{scenario_name}"

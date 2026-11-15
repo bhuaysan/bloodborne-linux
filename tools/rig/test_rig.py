@@ -78,6 +78,16 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn("--frame-rate", plain.argv)
         self.assertEqual(sixty.argv[-2:], ["--frame-rate", "60"])
 
+    def test_reference_refuses_bb_run_options(self) -> None:
+        for options in ({"frame_rate": 60}, {"frame_rate": 30}, {"log": "profile=debug"},
+                        {"perf": True}):
+            args = rig.argparse.Namespace(target="reference", **options)
+            with self.assertRaises(SystemExit, msg=str(options)):
+                rig.check_target_options(args)
+            rig.check_target_options(rig.argparse.Namespace(target="bb-run", **options))
+        rig.check_target_options(rig.argparse.Namespace(target="reference", frame_rate=None,
+                                                        log=None, perf=False))
+
     def test_bb_run_under_perf_record(self) -> None:
         with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
             program = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"),
