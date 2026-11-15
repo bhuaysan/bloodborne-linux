@@ -6,6 +6,7 @@ No test here starts the game or needs a GPU, /dev/uinput or systemd.
 
 from __future__ import annotations
 
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -122,10 +123,22 @@ class FakeTarget:
         self.shots.append(name)
 
 
+class TimedFrames(FakeTarget):
+    """A target that presents a frame every period seconds of the fake clock."""
+
+    def __init__(self, clock: "FakeClock", period: float, alive_until: float = 1e9):
+        super().__init__(clock, alive_until=alive_until)
+        self.period = period
+
+    def frame_count(self) -> int:
+        return max(0, math.floor((self.clock.now - 0.005) / self.period) + 1)
+
+
 class FakeClock:
     def __init__(self) -> None:
         self.now = 0.0
         self.ticks = 0
+        self.sleeps: list[float] = []
 
     def __call__(self) -> float:
         return self.now
@@ -133,6 +146,7 @@ class FakeClock:
     def sleep(self, seconds: float) -> None:
         self.now += seconds
         self.ticks += 1
+        self.sleeps.append(seconds)
 
 
 def interpreter(target: FakeTarget, clock: FakeClock, events: list | None = None) -> scn.Interpreter:
@@ -222,6 +236,28 @@ class InterpreterTests(unittest.TestCase):
         target = FakeTarget(clock, frames=[100, 100, 103, 110])
         run("frames 5\n", target, clock)
         self.assertEqual(clock.ticks, 3)
+
+    def test_frames_ends_within_a_frame_of_its_count(self) -> None:
+        # Presents every 1/60 s from 0.005 s on; a hold of N frames at 30 or 60 FPS (#562).
+        for rate in (30, 60):
+            for count in (1, 15, 30, 90, 600):
+                clock = FakeClock()
+                target = TimedFrames(clock, 1 / rate)
+                run(f"frames {count}\n", target, clock)
+                nth = 0.005 + (count - 1) / rate
+                self.assertGreaterEqual(clock.now, nth)
+                self.assertLess(clock.now - nth, 0.0025, (rate, count))
+                self.assertEqual(target.frame_count(), count)
+                # No busy spin: long sleeps until the last frames, 2 ms polls only near the end.
+                self.assertLessEqual(max(clock.sleeps), 0.25)
+                self.assertLess(clock.ticks, 60 + count / rate * 4, (rate, count))
+
+    def test_frames_still_notices_a_dead_target(self) -> None:
+        clock = FakeClock()
+        target = TimedFrames(clock, 1 / 30, alive_until=1.0)
+        with self.assertRaisesRegex(scn.StepFailed, "exited"):
+            run("frames 300\n", target, clock)
+        self.assertLess(clock.now, 1.3)
 
     def test_nonblack_waits_for_the_level(self) -> None:
         clock = FakeClock()

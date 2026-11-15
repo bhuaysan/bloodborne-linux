@@ -177,7 +177,7 @@ The scenarios hold the stick for a time on the wall clock (`stick`, `sleep 0.5`,
 
 The 60 runs turn the camera less and differ from each other: mean picture difference after the turn is 0.4 between 30 runs, 5.7 to 7.7 between 60 runs and 10 to 11 between the rates. #514's two 60 runs had 95 % and 99.5 % of their steps in the walk segment, so part of their offset is this too.
 
-A check at 60 against 30 therefore has to hold inputs for a number of steps: the rig's `frames N` step, with N doubled at 60. The rig polls every 0.25 s, so `frames` can overshoot by several frames. For the runs below, a local rig copy polled every 2 ms (not committed; see #562). The pacer's records show the holds exact: 15/30, 18/36, 45/90 presents.
+A check at 60 against 30 therefore has to hold inputs for a number of steps: the rig's `frames N` step, with N doubled at 60. `frames` polls the frame count every 2 ms near the end of its count, so it ends within a frame of the Nth present (#562; the runs below used a local rig copy with the same poll). The pacer's records show the holds exact: 15/30, 18/36, 45/90 presents.
 
 ### The chase camera
 

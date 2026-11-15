@@ -12,7 +12,8 @@ A scenario is a list of steps, one per line, `#` starts a comment. Options are k
   log REGEX [timeout=60]               a new complete line of the target's log matches (quote the
                                        regex in single quotes when it has backslashes or a #)
   lognow                               the next log wait starts with what the target logs from here
-  frames N [timeout=60]                N more presents happened
+  frames N [timeout=60]                N more presents happened; the wait ends within a frame
+                                       of the Nth, so a stick hold with it covers N game steps
   nonblack [level=16] [timeout=60]     the picture's mean luma reaches level
   expect_level [min=0] [max=255] [timeout=60]  the picture's mean luma is within min and max now,
                                        else the scenario fails (a check of what the picture shows,
@@ -47,6 +48,9 @@ AXES = frozenset("LX LY RX RY".split())
 SHOT_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 _DEFAULT_TIMEOUT = 60.0
+# A frames wait sleeps as if presents came this often, so it wakes before the last of them even on
+# a fast target. Polls get finer only near the end of the count, not during the whole wait (#562).
+_FASTEST_FRAME = 1 / 240
 
 
 class ScenarioError(Exception):
@@ -261,6 +265,7 @@ class Interpreter:
     target: Target
     event: Callable[[str, str], None]  # (kind, text)
     poll: float = 0.25
+    frame_poll: float = 0.002  # the poll of a frames wait at its last frame
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
     _log_buffer: str = ""
@@ -338,11 +343,11 @@ class Interpreter:
     def _deadline(self, step: Step) -> float:
         return self.clock() + step.number("timeout", _DEFAULT_TIMEOUT)
 
-    def _tick(self, step: Step, deadline: float) -> None:
+    def _tick(self, step: Step, deadline: float, seconds: float | None = None) -> None:
         self._check_alive()
         if self.clock() >= deadline:
             raise StepFailed(f"timed out: {step.text()}")
-        self.sleep(self.poll)
+        self.sleep(self.poll if seconds is None else seconds)
 
     def _wait_log(self, pattern: re.Pattern[str], step: Step) -> None:
         deadline = self._deadline(step)
@@ -367,8 +372,10 @@ class Interpreter:
     def _wait_frames(self, count: int, step: Step) -> None:
         deadline = self._deadline(step)
         goal = self.target.frame_count() + count
-        while self.target.frame_count() < goal:
-            self._tick(step, deadline)
+        while (left := goal - self.target.frame_count()) > 0:
+            # Long sleeps while many frames are left, 2 ms polls for the last one: a stick hold
+            # with frames N then ends at the Nth present, not up to 0.25 s later (#562).
+            self._tick(step, deadline, min(self.poll, max(self.frame_poll, (left - 1) * _FASTEST_FRAME)))
 
     def _picture(self, step: Step, deadline: float) -> bytes:
         while True:
