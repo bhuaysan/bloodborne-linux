@@ -231,8 +231,9 @@ u64 MemoryManager::ClampRangeSize(VAddr virtual_addr, u64 size) {
 namespace {
 
 // Copies of at least this many bytes look for holes in the memfd first (CopyBacking), in steps of
-// this many bytes.
+// this many bytes after a hole. Over data the step doubles up to MAX_HOLE_CHECK_STEP.
 constexpr u64 HOLE_CHECK_SIZE = 64_KB;
+constexpr u64 MAX_HOLE_CHECK_STEP = 1_MB;
 
 // Copies [offset, offset + size) of the memfd, mapped at `backing`, to `dest`: the holes as zeros,
 // without reading them, and the rest with memcpy.
@@ -246,9 +247,12 @@ constexpr u64 HOLE_CHECK_SIZE = 64_KB;
 // lseek's SEEK_DATA finds the next data from `at` (swapped-out pages count as data; mincore would
 // count them as missing) in about 1 us, also across gigabytes of holes. SEEK_HOLE is no use here:
 // it walks the data page by page up to the next hole, however far past the copy that lies (6 ms
-// for 512 MiB of data). So the data is copied in steps of HOLE_CHECK_SIZE, each from the data
-// SEEK_DATA found to the end of its step, holes inside a step read as before. On an lseek error
-// the rest is copied with memcpy, as before.
+// for 512 MiB of data). So the data is copied in steps, each from the data SEEK_DATA found to the
+// end of its step, holes inside a step read as before. A step is HOLE_CHECK_SIZE after a hole and
+// doubles, up to MAX_HOLE_CHECK_STEP, while SEEK_DATA finds data right where the step starts: on
+// shmem each lseek takes the inode's lock, and an upload of 85 MiB of data would otherwise make
+// 1360 of them. The cost is reading at most MAX_HOLE_CHECK_STEP of holes after a long run of data.
+// On an lseek error the rest is copied with memcpy, as before.
 //
 // No lock is needed and none is taken: the result is the same as a memcpy at some moment of the
 // copy. A page that turns from hole to data while we copy was written by the guest after the
@@ -266,6 +270,7 @@ void CopyBacking(const u8* backing, u64 offset, u8* dest, u64 size) {
     }
     const u64 end = offset + size;
     u64 at = offset;
+    u64 step = HOLE_CHECK_SIZE;
     while (at < end) {
         const off_t data = ::lseek(fd, static_cast<off_t>(at), SEEK_DATA);
         if (data < 0 && errno != ENXIO) {
@@ -273,14 +278,21 @@ void CopyBacking(const u8* backing, u64 offset, u8* dest, u64 size) {
         }
         // ENXIO: no data after `at`, the rest is one hole.
         const u64 data_start = data < 0 ? end : std::min<u64>(static_cast<u64>(data), end);
-        std::memset(dest + (at - offset), 0, data_start - at);
-        at = data_start;
+        const bool on_data = data_start == at;
+        if (!on_data) {
+            std::memset(dest + (at - offset), 0, data_start - at);
+            at = data_start;
+            step = HOLE_CHECK_SIZE;
+        }
         if (at == end) {
             return;
         }
-        const u64 step_end = std::min<u64>((at / HOLE_CHECK_SIZE + 1) * HOLE_CHECK_SIZE, end);
+        const u64 step_end = std::min<u64>(at - at % HOLE_CHECK_SIZE + step, end);
         std::memcpy(dest + (at - offset), backing + (at - offset), step_end - at);
         at = step_end;
+        if (on_data) {
+            step = std::min(2 * step, MAX_HOLE_CHECK_STEP);
+        }
     }
     std::memcpy(dest + (at - offset), backing + (at - offset), end - at);
 }

@@ -280,6 +280,35 @@ TEST(GuestMemory, LargeCopiesSkipTheHolesOfTheBacking) {
     EXPECT_EQ(release_direct(offset, 2 * half), 0);
 }
 
+// Over a long run of data the large copy's steps grow (fewer lseek calls), and after it they read
+// at most 1 MiB of the hole that follows: a hole further on stays one, and the data after it is
+// copied.
+TEST(GuestMemory, LargeCopiesReadBoundedHolesAfterLongData) {
+    memory();
+    constexpr std::uint64_t size = 4 * 1024 * 1024;
+    constexpr std::uint64_t data = 1536 * 1024;  // 1.5 MiB written from the start
+    void* range = nullptr;
+    std::uint64_t offset = 0;
+    ASSERT_EQ(allocate_direct(0, direct_memory_size(), size, 4 * page_size, 0, &offset), 0);
+    ASSERT_EQ(map_direct(&range, size, 3, 0, offset, 0), 0);
+    ASSERT_FALSE(has_data(offset));  // a fresh allocation is one hole
+    auto* const guest = static_cast<u8*>(range);
+    std::vector<u8> expected(size, 0);
+    for (std::uint64_t i = 0; i < data; ++i) {
+        expected[i] = static_cast<u8>(i * 7 + 1);
+    }
+    expected[size - 3] = 0x66;
+    std::memcpy(guest, expected.data(), data);
+    guest[size - 3] = 0x66;
+    std::vector<u8> read(size, 0xee);
+    memory().CopySparseMemory(addr(range), read.data(), size);
+    EXPECT_TRUE(std::equal(read.begin(), read.end(), expected.begin()));
+    EXPECT_FALSE(has_data(offset + data + 1024 * 1024));
+    EXPECT_FALSE(has_data(offset + size - 2 * page_size));
+    EXPECT_EQ(sceKernelMunmap(range, size), 0);
+    EXPECT_EQ(release_direct(offset, size), 0);
+}
+
 // The coverage bb-run logs: every GPU-visible region is backed page by page, and the table holds
 // no other entries.
 TEST(GuestMemory, CoverageCountsTheBackedRegions) {
