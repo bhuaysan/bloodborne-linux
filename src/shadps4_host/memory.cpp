@@ -21,6 +21,8 @@
 #include <bit>
 #include <cerrno>
 #include <cstring>
+#include <functional>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -268,16 +270,33 @@ void CopyBacking(const u8* backing, u64 offset, u8* dest, u64 size) {
         std::memcpy(dest, backing, size);
         return;
     }
+    CopyBackingWith(backing, offset, dest, size,
+                    [fd](u64 at) { return NextBackingData(fd, at); });
+}
+
+}  // namespace
+
+s64 NextBackingData(int fd, u64 at) {
+    const off_t data = ::lseek(fd, static_cast<off_t>(at), SEEK_DATA);
+    if (data >= 0) {
+        return data;
+    }
+    // ENXIO: no data after `at`.
+    return errno == ENXIO ? std::numeric_limits<s64>::max() : -1;
+}
+
+// The steps of CopyBacking (see there), with the memfd's SEEK_DATA as `next_data`. Ours (#531).
+void CopyBackingWith(const u8* backing, u64 offset, u8* dest, u64 size,
+                     const std::function<s64(u64)>& next_data) {
     const u64 end = offset + size;
     u64 at = offset;
     u64 step = HOLE_CHECK_SIZE;
     while (at < end) {
-        const off_t data = ::lseek(fd, static_cast<off_t>(at), SEEK_DATA);
-        if (data < 0 && errno != ENXIO) {
+        const s64 data = next_data(at);
+        if (data < 0) {
             break;
         }
-        // ENXIO: no data after `at`, the rest is one hole.
-        const u64 data_start = data < 0 ? end : std::min<u64>(static_cast<u64>(data), end);
+        const u64 data_start = std::min<u64>(static_cast<u64>(data), end);
         const bool on_data = data_start == at;
         if (!on_data) {
             std::memset(dest + (at - offset), 0, data_start - at);
@@ -296,8 +315,6 @@ void CopyBacking(const u8* backing, u64 offset, u8* dest, u64 size) {
     }
     std::memcpy(dest + (at - offset), backing + (at - offset), end - at);
 }
-
-}  // namespace
 
 void MemoryManager::CopySparseMemory(VAddr virtual_addr, u8* dest, u64 size) {
     const auto& backing_pages = impl.BackingPages();

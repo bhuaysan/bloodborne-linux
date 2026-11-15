@@ -8,6 +8,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -63,6 +64,18 @@ private:
     u8* backing_base{};
     BackingPageTable backing_pages;
 };
+
+// Ours (#531): the large copy of the memfd's [offset, offset + size), mapped at `backing`, to
+// `dest`, with `next_data(at)` in place of the memfd's SEEK_DATA: the offset of the next data at
+// or after `at` (past the copy's end when there is none), or a negative value on an error, after
+// which the rest is copied with memcpy. MemoryManager's copies pass lseek on the memfd
+// (memory.cpp); the tests pass a hole map of their own.
+void CopyBackingWith(const u8* backing, u64 offset, u8* dest, u64 size,
+                     const std::function<s64(u64)>& next_data);
+
+// Ours (#531): the `next_data` of MemoryManager's copies, SEEK_DATA on the memfd `fd`: the offset
+// of the next data at or after `at`, INT64_MAX when there is none, -1 on another error.
+s64 NextBackingData(int fd, u64 at);
 
 class MemoryManager {
 public:

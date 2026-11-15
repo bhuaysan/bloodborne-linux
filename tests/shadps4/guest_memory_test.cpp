@@ -6,6 +6,7 @@
 #include <dlfcn.h>
 #include <sys/uio.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -16,8 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
-#include <initializer_list>
+#include <limits>
 #include <memory>
 #include <atomic>
 #include <random>
@@ -248,10 +248,12 @@ bool any_data(std::uint64_t offset, std::uint64_t length) {
 // allocates whole blocks.
 constexpr std::uint64_t huge_page = 2 * 1024 * 1024;
 
-// A fresh allocation is one hole. A CI run once found data at the start of one (#531), cause
-// not found (nothing in the process had written the memfd yet); a test that starts on holes
-// punches its blocks then, before it writes anything, so the memory reads zeros either way.
-// Whether [offset, offset + length) is one hole now.
+// A fresh allocation is one hole. In CI the memfd's holes have turned into data on their own,
+// within 200 ms and also while the test only slept (#549: in the release jobs on Azure and
+// AWS kernels, never in the debug job or locally; the cause isn't known), so tests here never rely
+// on a hole staying one: a test that starts on holes punches its blocks first, so its memory reads
+// zeros either way, and the checks of which parts a large copy reads use CopyBackingWith with a
+// hole map of their own (below). Whether [offset, offset + length) is one hole now.
 bool make_hole(std::uint64_t offset, std::uint64_t length) {
     if (any_data(offset, length)) {
         std::printf("data in a fresh allocation at %#llx: punched\n",
@@ -262,66 +264,6 @@ bool make_hole(std::uint64_t offset, std::uint64_t length) {
         }
     }
     return !any_data(offset, length);
-}
-
-// The selected value of a THP setting in sysfs ("always [never] ..."), empty if there is none.
-std::string thp_setting(const std::filesystem::path& file) {
-    std::ifstream in(file);
-    std::string line;
-    std::getline(in, line);
-    const auto open = line.find('['), close = line.find(']');
-    return open == std::string::npos || close == std::string::npos || close < open
-               ? std::string{}
-               : line.substr(open + 1, close - open - 1);
-}
-
-// The shmem huge page setting that lets the memfd's pages come in folios larger than one page,
-// or an empty string if the host keeps shmem in small pages: shmem_enabled never or deny, and
-// no size of multi-size THP turned on for shmem on its own.
-std::string shmem_huge_pages() {
-    const std::filesystem::path thp = "/sys/kernel/mm/transparent_hugepage";
-    const std::string all = thp_setting(thp / "shmem_enabled");
-    if (all == "deny") {
-        return {};
-    }
-    if (!all.empty() && all != "never") {
-        return "shmem_enabled " + all;
-    }
-    std::error_code error;
-    for (const auto& size : std::filesystem::directory_iterator(thp, error)) {
-        if (!size.path().filename().string().starts_with("hugepages-")) {
-            continue;
-        }
-        const std::string own = thp_setting(size.path() / "shmem_enabled");
-        if (!own.empty() && own != "never" && own != "inherit") {
-            return size.path().filename().string() + " " + own;
-        }
-    }
-    return {};
-}
-
-// Whether the memfd kept a page the test never wrote, at each of `unwritten`, as a hole next to
-// the pages it wrote. In huge pages a write, or a read of a hole, takes its whole block, and no
-// hole is left next to it. Where the host puts shmem in huge pages at all, khugepaged also
-// collapses blocks of the memfd later, at a time no test controls, and with one present page
-// (its max_ptes_none is 511 by default): a probe before the copy can't tell what stays a hole
-// (#549). So the checks of holes need a host that keeps shmem in small pages, and the probe of
-// the test's own memory after its writes stays as a check of that. Without page holes the copies
-// stay correct (a step over data copies zeros from memory) and are still checked; only the
-// checks of which parts are still holes don't apply.
-bool keeps_page_holes(std::initializer_list<std::uint64_t> unwritten) {
-    if (const std::string huge = shmem_huge_pages(); !huge.empty()) {
-        std::printf("shmem in huge pages (%s): the checks of holes are left out\n", huge.c_str());
-        return false;
-    }
-    for (const std::uint64_t offset : unwritten) {
-        if (has_data(offset)) {
-            std::printf("no page hole at %#llx (huge pages): the checks of holes are left out\n",
-                        static_cast<unsigned long long>(offset));
-            return false;
-        }
-    }
-    return true;
 }
 
 // A large copy (#531) reads the memfd's holes, which the guest never wrote, as zeros without
@@ -353,20 +295,12 @@ TEST(GuestMemory, LargeCopiesSkipTheHolesOfTheBacking) {
     write(5 * page_size + 100, 0x33, 3 * page_size);   // several pages
     write(half - 1, 0x44, 2);                          // across the two mappings
     write(2 * half - 1, 0x55, 1);                      // the last byte
-    // Pages of each mapping that were not written.
-    const bool page_holes = keeps_page_holes({offset + half + 2 * page_size, offset + page_size});
     const std::uint64_t from = 1, length = 2 * half - 2;
     std::vector<u8> read(length, 0xee);
     memory().CopySparseMemory(addr(range) + from, read.data(), length);
     EXPECT_TRUE(std::equal(read.begin(), read.end(), expected.begin() + from));
-    // The steps without a written page are still holes (the backing of the second half comes
-    // first in the memfd).
+    // The written pages are data (the backing of the second half comes first in the memfd).
     EXPECT_TRUE(has_data(offset + half));
-    if (page_holes) {
-        EXPECT_FALSE(has_data(offset + half + 12 * page_size));
-        EXPECT_FALSE(has_data(offset + half + 20 * page_size));
-        EXPECT_FALSE(has_data(offset + 4 * page_size));
-    }
     // A copy under the size that looks for holes reads the same.
     std::vector<u8> small(3 * page_size, 0xee);
     memory().CopySparseMemory(addr(range) + 4 * page_size, small.data(), small.size());
@@ -375,37 +309,113 @@ TEST(GuestMemory, LargeCopiesSkipTheHolesOfTheBacking) {
     EXPECT_EQ(release_direct(offset, huge_page), 0);
 }
 
-// Over a long run of data the large copy's steps grow (fewer lseek calls), and after it they read
-// at most 1 MiB of the hole that follows: a hole further on stays one, and the data after it is
+// A backing for CopyBackingWith: anonymous memory, zeros where nothing is written, whose pages
+// in the ranges given to forbid() can't be read, so a copy that reads one ends the test with
+// SIGSEGV. With its hole map, the checks of which parts a large copy reads depend on nothing the
+// host does to the memfd (#549).
+struct HoleMap {
+    u8* base = nullptr;
+    std::uint64_t size = 0;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> data;  // [start, end), ascending
+    int seeks = 0;
+
+    explicit HoleMap(std::uint64_t bytes) : size(bytes) {
+        void* const p =
+            ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) {
+            std::perror("mmap");
+            std::abort();
+        }
+        base = static_cast<u8*>(p);
+    }
+    ~HoleMap() {
+        ::munmap(base, size);
+    }
+    // Writes `length` bytes of a pattern at `at` into the backing and `expected`, as data.
+    void write(std::uint64_t at, std::uint64_t length, std::vector<u8>& expected) {
+        for (std::uint64_t i = at; i < at + length; ++i) {
+            base[i] = expected[i] = static_cast<u8>(i * 7 + 1);
+        }
+        data.emplace_back(at - at % page_size, (at + length + page_size - 1) / page_size * page_size);
+    }
+    void forbid(std::uint64_t start, std::uint64_t end) {
+        EXPECT_EQ(::mprotect(base + start, end - start, PROT_NONE), 0);
+    }
+    // SEEK_DATA over the map: the next data at or after `at`, or past the end.
+    s64 next_data(std::uint64_t at) {
+        ++seeks;
+        for (const auto& [start, end] : data) {
+            if (end > at) {
+                return static_cast<s64>(std::max(start, at));
+            }
+        }
+        return std::numeric_limits<s64>::max();
+    }
+    void copy(std::uint64_t from, u8* dest, std::uint64_t length) {
+        Core::CopyBackingWith(base + from, from, dest, length,
+                              [this](u64 at) { return next_data(at); });
+    }
+};
+
+// The seek large copies of the memfd use: the next data, past the end where there is none, and
+// an error for a bad descriptor.
+TEST(GuestMemory, TheBackingSeekFindsDataAndTheEnd) {
+    // Whole huge-page blocks, so the data stays one block wherever shmem takes larger folios.
+    const int fd = ::memfd_create("bb-seek-test", MFD_CLOEXEC);
+    ASSERT_GE(fd, 0);
+    ASSERT_EQ(::ftruncate(fd, 3 * huge_page), 0);
+    const u8 byte = 1;
+    ASSERT_EQ(::pwrite(fd, &byte, 1, huge_page), 1);
+    EXPECT_EQ(Core::NextBackingData(fd, 0), static_cast<s64>(huge_page));
+    EXPECT_EQ(Core::NextBackingData(fd, huge_page), static_cast<s64>(huge_page));
+    EXPECT_EQ(Core::NextBackingData(fd, 2 * huge_page), std::numeric_limits<s64>::max());
+    ::close(fd);
+    EXPECT_EQ(Core::NextBackingData(-1, 0), -1);
+}
+
+// A large copy reads the holes in a step with data and skips the steps without, also the hole
+// before the data in a step it starts on, and copies the data around them.
+TEST(GuestMemory, LargeCopiesReadOnlyTheStepsWithData) {
+    constexpr std::uint64_t size = 1024 * 1024, step = 64 * 1024;
+    HoleMap map(size);
+    std::vector<u8> expected(size, 0);
+    map.write(0, 3, expected);                            // the first bytes, in step 0
+    map.write(5 * step + 2 * page_size - 2, 4, expected);  // across a page boundary, in step 5
+    map.write(size - page_size + 100, 3, expected);       // in the last page, step 15
+    map.forbid(step, 5 * step + page_size);  // up to the data's page in step 5
+    map.forbid(6 * step, size - page_size);
+    const std::uint64_t from = 1, length = size - 2;
+    std::vector<u8> read(length, 0xee);
+    map.copy(from, read.data(), length);
+    EXPECT_TRUE(std::equal(read.begin(), read.end(), expected.begin() + from));
+    EXPECT_EQ(map.seeks, 3);  // at 1, 64 KiB and 384 KiB
+    // A copy that ends in a hole: the next data the seek finds lies past its end, and nothing is
+    // written after the copy's end.
+    const std::uint64_t head = 5 * step;
+    std::vector<u8> head_read(head + page_size, 0xee);
+    map.copy(0, head_read.data(), head);
+    EXPECT_TRUE(std::equal(head_read.begin(), head_read.begin() + head, expected.begin()));
+    EXPECT_TRUE(std::all_of(head_read.begin() + head, head_read.end(),
+                            [](u8 b) { return b == 0xee; }));
+}
+
+// Over a long run of data the large copy's steps grow (fewer seeks), and after it they read at
+// most 1 MiB of the hole that follows: a hole further on isn't read, and the data after it is
 // copied.
 TEST(GuestMemory, LargeCopiesReadBoundedHolesAfterLongData) {
-    memory();
-    constexpr std::uint64_t size = 4 * 1024 * 1024;
-    constexpr std::uint64_t data = 1536 * 1024;  // 1.5 MiB written from the start
-    void* range = nullptr;
-    std::uint64_t offset = 0;
-    ASSERT_EQ(allocate_direct(0, direct_memory_size(), size, huge_page, 0, &offset), 0);
-    ASSERT_TRUE(make_hole(offset, size));
-    ASSERT_EQ(map_direct(&range, size, 3, 0, offset, 0), 0);
-    auto* const guest = static_cast<u8*>(range);
+    constexpr std::uint64_t size = 8 * 1024 * 1024;
+    constexpr std::uint64_t data = 2560 * 1024;  // 2.5 MiB written from the start
+    HoleMap map(size);
     std::vector<u8> expected(size, 0);
-    for (std::uint64_t i = 0; i < data; ++i) {
-        expected[i] = static_cast<u8>(i * 7 + 1);
-    }
-    expected[size - 3] = 0x66;
-    std::memcpy(guest, expected.data(), data);
-    guest[size - 3] = 0x66;
-    // The page after the data and the start of the second block, which holds only the last page.
-    const bool page_holes = keeps_page_holes({offset + data, offset + huge_page});
+    map.write(0, data, expected);
+    map.write(size - 3, 1, expected);
+    map.forbid(data + 1024 * 1024, size - page_size);
     std::vector<u8> read(size, 0xee);
-    memory().CopySparseMemory(addr(range), read.data(), size);
+    map.copy(0, read.data(), size);
     EXPECT_TRUE(std::equal(read.begin(), read.end(), expected.begin()));
-    if (page_holes) {
-        EXPECT_FALSE(has_data(offset + data + 1024 * 1024));
-        EXPECT_FALSE(has_data(offset + size - 2 * page_size));
-    }
-    EXPECT_EQ(sceKernelMunmap(range, size), 0);
-    EXPECT_EQ(release_direct(offset, size), 0);
+    // Steps of 64, 128, 256, 512, 1024 and 1024 KiB, of which the last reads 448 KiB of the hole,
+    // and one seek to the last page.
+    EXPECT_EQ(map.seeks, 7);
 }
 
 // The coverage bb-run logs: every GPU-visible region is backed page by page, and the table holds
