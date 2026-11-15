@@ -8,6 +8,7 @@
 #include <format>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -23,9 +24,17 @@ namespace {
 
 using Bytes = std::array<std::byte, patch_size>;
 
-// A live hook: the bytes it replaced and the patch it wrote.
+// An executable page with a trampoline, unmapped with the hook.
+struct Unmap {
+    void operator()(void* page) const { ::munmap(page, common::page_size()); }
+};
+using Trampoline = std::unique_ptr<void, Unmap>;
+
+// A live hook: the bytes it replaced, the patch it wrote and, for a wrapped function, the
+// trampoline to its original.
 struct Saved {
     Bytes original, patch;
+    Trampoline trampoline;
 };
 
 using Key = std::pair<std::uintptr_t, std::uint64_t>;  // image base, link address
@@ -107,6 +116,23 @@ void write(loader::Image& image, std::uint64_t link, const Bytes& bytes) {
     protect(start, end, code_segment(image, link)->prot);
 }
 
+// The prologue of `r`, then jmp [rip+0] to the instruction behind it, in a page of its own.
+Trampoline make_trampoline(const loader::Image& image, const Replacement& r) {
+    void* page = ::mmap(nullptr, common::page_size(), PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (page == MAP_FAILED) {
+        refuse(r, "no memory for the trampoline");
+    }
+    Trampoline out(page);
+    auto* code = static_cast<std::byte*>(page);
+    std::memcpy(code, r.prologue.data(), r.prologue.size());
+    Bytes jump = patch_for(reinterpret_cast<void*>(image.base + r.link_addr + r.prologue.size()));
+    std::memcpy(code + r.prologue.size(), jump.data(), jump.size());
+    protect(reinterpret_cast<std::uintptr_t>(page),
+            reinterpret_cast<std::uintptr_t>(page) + common::page_size(), PROT_READ | PROT_EXEC);
+    return out;
+}
+
 std::vector<Replacement>& registry() {
     static std::vector<Replacement> registered;
     return registered;
@@ -140,6 +166,18 @@ void apply(loader::Image& image, std::span<const Replacement> replaced) {
         if (*size < patch_size) {
             refuse(r, std::format("the function is {} bytes, a hook needs {}", *size, patch_size));
         }
+        if (!r.prologue.empty()) {
+            const std::size_t n = r.prologue.size();
+            if (n < patch_size || n > max_prologue || n > *size) {
+                refuse(r, std::format("a prologue of {} bytes, it needs {} to {} within the "
+                                      "function's {}",
+                                      n, patch_size, max_prologue, *size));
+            }
+            if (std::memcmp(reinterpret_cast<const void*>(image.base + r.link_addr),
+                            r.prologue.data(), n) != 0) {
+                refuse(r, "the prologue differs from the bytes in memory");
+            }
+        }
         for (std::uint64_t at = r.link_addr - std::min(r.link_addr, std::uint64_t{patch_size - 1});
              at < r.link_addr + patch_size; ++at) {
             if (live(image, at) != saved().end()) {
@@ -150,7 +188,8 @@ void apply(loader::Image& image, std::span<const Replacement> replaced) {
     for (const Replacement& r : replaced) {
         // Recorded first: if the write fails, live() finds no patch and drops the entry.
         Saved& hook = saved()[{image.base, r.link_addr}];
-        hook = Saved{read(image, r.link_addr), patch_for(r.impl)};
+        hook = Saved{read(image, r.link_addr), patch_for(r.impl),
+                     r.prologue.empty() ? Trampoline{} : make_trampoline(image, r)};
         write(image, r.link_addr, hook.patch);
     }
 }
@@ -167,6 +206,17 @@ void remove(loader::Image& image, std::span<const Replacement> replaced) {
         write(image, r.link_addr, it->second.original);
         saved().erase(it);
     }
+}
+
+void* original(const loader::Image& image, std::uint64_t link) {
+    auto it = live(image, link);
+    if (it == saved().end()) {
+        return reinterpret_cast<void*>(image.base + link);
+    }
+    if (!it->second.trampoline) {
+        throw HookError(std::format("hook at {:#x}: no prologue, so no original", link));
+    }
+    return it->second.trampoline.get();
 }
 
 }  // namespace bb::hook

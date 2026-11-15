@@ -6,6 +6,7 @@
 #include <cstring>
 #include <fstream>
 #include <initializer_list>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -33,9 +34,15 @@ struct Function {
     std::uint8_t value;
 };
 // 0x18 lies inside 0x10, as with overlapping FDEs, 0x40 is one byte shorter than a patch, and the
-// patch at 0xff8 crosses a page boundary.
+// patch at 0xff8 crosses a page boundary. 0x100 gets the code `summing` instead.
 constexpr Function functions[] = {
-    {0x10, 0x20, 42}, {0x18, 0x18, 9}, {0x40, 0xd, 13}, {0xff8, 0x20, 7}};
+    {0x10, 0x20, 42}, {0x18, 0x18, 9}, {0x40, 0xd, 13}, {0x100, 0x18, 0}, {0xff8, 0x20, 7}};
+
+// mov eax, 1; mov ecx, 2; mov edx, 3 (the prologue a wrapper declares), add eax, ecx;
+// add eax, edx; ret: returns 6.
+constexpr std::array<std::uint8_t, 15> summing_prologue = {
+    0xb8, 1, 0, 0, 0, 0xb9, 2, 0, 0, 0, 0xba, 3, 0, 0, 0};
+constexpr std::uint8_t summing_tail[] = {0x01, 0xc8, 0x01, 0xd0, 0xc3};
 
 template <class T>
 void put(Bytes& out, std::size_t offset, T value) {
@@ -88,6 +95,9 @@ Bytes build_elf() {
         const std::uint8_t code[] = {0xb8, f.value, 0, 0, 0, 0xc3};  // mov eax, value; ret
         std::memcpy(elf.data() + 0x1000 + f.start, code, sizeof code);
     }
+    std::memcpy(elf.data() + 0x1000 + 0x100, summing_prologue.data(), summing_prologue.size());
+    std::memcpy(elf.data() + 0x1000 + 0x100 + summing_prologue.size(), summing_tail,
+                sizeof summing_tail);
     add_unwind_tables(elf);
 
     // DynamicInfo needs only the module info record and the (here empty) tables.
@@ -296,6 +306,58 @@ TEST(Hook, ForgetsTheHooksOfAnUnmappedImage) {
     image.finalize_protection();
     EXPECT_EQ(image.fn<int()>(0x10)(), 1001);
     bb::hook::remove(image, hook);
+}
+
+const Image* wrapped_image = nullptr;
+
+int wrapper() {
+    return 100 + reinterpret_cast<int (*)()>(bb::hook::original(*wrapped_image, 0x100))();
+}
+
+TEST(Hook, CallsTheOriginalThroughATrampoline) {
+    Image image = map_elf(build_elf(), test_base);
+    image.finalize_protection();
+    wrapped_image = &image;
+    EXPECT_EQ(wrapper(), 106);  // not hooked: original() is the function itself
+    const Replacement hook[] = {
+        {0x100, reinterpret_cast<void*>(&wrapper), "wrapper", summing_prologue}};
+    bb::hook::apply(image, hook);
+    EXPECT_EQ(image.fn<int()>(0x100)(), 106);
+    void* trampoline = bb::hook::original(image, 0x100);
+    EXPECT_NE(trampoline, reinterpret_cast<void*>(image.base + 0x100));
+    EXPECT_EQ(protection(reinterpret_cast<std::uintptr_t>(trampoline)), "r-xp");
+    EXPECT_EQ(reinterpret_cast<int (*)()>(trampoline)(), 6);
+    bb::hook::remove(image, hook);
+    EXPECT_EQ(protection(reinterpret_cast<std::uintptr_t>(trampoline)), "unmapped");
+    EXPECT_EQ(bb::hook::original(image, 0x100), reinterpret_cast<void*>(image.base + 0x100));
+    EXPECT_EQ(image.fn<int()>(0x100)(), 6);
+
+    const Replacement plain[] = {{0x10, reinterpret_cast<void*>(&replacement_a), "a"}};
+    bb::hook::apply(image, plain);
+    expect_refusal([&] { bb::hook::original(image, 0x10); },
+                   "hook at 0x10: no prologue, so no original");
+    bb::hook::remove(image, plain);
+    wrapped_image = nullptr;
+}
+
+TEST(Hook, RefusesBadPrologues) {
+    Image image = map_elf(build_elf(), test_base);
+    image.finalize_protection();
+    auto* w = reinterpret_cast<void*>(&wrapper);
+    auto apply = [&](std::span<const std::uint8_t> prologue) {
+        const Replacement hook[] = {{0x100, w, "w", prologue}};
+        bb::hook::apply(image, hook);
+    };
+    expect_refusal([&] { apply(std::span(summing_prologue).first(10)); },
+                   "hook w at 0x100: a prologue of 10 bytes, it needs 14 to 32 within the "
+                   "function's 24");
+    std::array<std::uint8_t, 25> long_one{};
+    std::copy(summing_prologue.begin(), summing_prologue.end(), long_one.begin());
+    expect_refusal([&] { apply(long_one); }, "a prologue of 25 bytes");
+    auto changed = summing_prologue;
+    changed[11] = 4;
+    expect_refusal([&] { apply(changed); }, "the prologue differs from the bytes in memory");
+    EXPECT_EQ(image.fn<int()>(0x100)(), 6);  // nothing patched
 }
 
 TEST(HookGame, PatchesAnEbootFunction) {
