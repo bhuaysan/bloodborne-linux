@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-15: TrimRing keeps the first RING_KEPT_BLOCKS blocks.
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -21,6 +21,12 @@ using VideoCore::MemoryType;
 namespace {
 
 constexpr u64 RING_IDLE_FRAMES = 300;
+// Ours (#531): the blocks of a ring TrimRing keeps however long they are idle, 192 MiB. A fresh
+// block costs a page fault per page on the CPU's first write into it: on yharnam-route a frame
+// that synced 121 MiB of vertex data into buffers copied at 23 GB/s while the ring's blocks
+// lasted and at 4 to 7 GB/s in the blocks it added, 11 ms more in all, because the blocks the
+// loading screens had added were idle and gone by then.
+constexpr size_t RING_KEPT_BLOCKS = 12;
 constexpr u64 LARGE_IDLE_FRAMES = 120;
 constexpr u64 LARGE_MIN_GRANULARITY = 64_KB;
 constexpr u64 BLOCK_SIZE = 16_MB;
@@ -157,7 +163,7 @@ void StagingBufferPool::TickFrame() {
 
 void StagingBufferPool::TrimRing(Ring& ring) {
     auto& blocks = ring.blocks;
-    for (size_t i = blocks.size(); i-- > 0;) {
+    for (size_t i = blocks.size(); i-- > RING_KEPT_BLOCKS;) {
         const Block& block = blocks[i];
         if (frame - block.last_used_frame < RING_IDLE_FRAMES ||
             !scheduler.IsFree(block.buffer->LastTick())) {
@@ -173,6 +179,10 @@ void StagingBufferPool::TrimRing(Ring& ring) {
     if (ring.current >= blocks.size()) {
         ring.current = 0;
     }
+}
+
+size_t StagingBufferPool::RingBlocks(VideoCore::MemoryType type) const {
+    return rings[u32(type)].blocks.size();
 }
 
 void StagingBufferPool::TrimLarge(std::vector<LargeBuffer>& cache) {

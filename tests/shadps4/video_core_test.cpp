@@ -31,6 +31,7 @@
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 
 namespace {
 
@@ -134,6 +135,45 @@ TEST(VideoCore, CreatesAndDestroysRendererOnLavapipe) {
             EXPECT_GT(draw_scheduler.CurrentTick(), tick);
             EXPECT_TRUE(draw_scheduler.IsFree(tick));
         }
+    }
+    liverpool.reset();
+}
+
+// The staging ring keeps its first 12 blocks of 16 MiB however long they are idle (#531): a
+// fresh block costs a page fault per page on its first write. The blocks after those go once
+// they have been idle for 300 frames.
+TEST(VideoCore, StagingRingKeepsItsFirstBlocks) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    Core::MemoryManager memory;
+    auto liverpool = std::make_unique<AmdGpu::Liverpool>(memory);
+    Frontend::WindowSDL window;
+    Vulkan::Instance instance{window, -1};
+    start_imgui(instance);
+    {
+        Vulkan::Scheduler scheduler{instance};
+        Vulkan::StagingBufferPool pool{instance, scheduler};
+        constexpr u64 block = u64{16} << 20;
+        constexpr auto type = VideoCore::MemoryType::HostUncached;
+        // Whole blocks in one tick that has not completed: each takes a new block.
+        for (int i = 0; i < 14; ++i) {
+            const auto ref = pool.Request(block, type);
+            ASSERT_NE(ref.mapped, nullptr);
+            ref.mapped[block - 1] = 1;
+        }
+        EXPECT_EQ(pool.RingBlocks(type), 14u);
+        scheduler.Finish();
+        for (int frame = 0; frame < 299; ++frame) {
+            pool.TickFrame();
+        }
+        EXPECT_EQ(pool.RingBlocks(type), 14u);
+        pool.TickFrame();
+        EXPECT_EQ(pool.RingBlocks(type), 12u);
+        for (int frame = 0; frame < 1000; ++frame) {
+            pool.TickFrame();
+        }
+        EXPECT_EQ(pool.RingBlocks(type), 12u);
     }
     liverpool.reset();
 }
