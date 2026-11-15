@@ -1,7 +1,10 @@
-"""A virtual Xbox 360 style gamepad through raw uinput. It needs write access to /dev/uinput.
+"""The rig's scripted gamepad, in two forms with the same taps and timing.
 
-The target sees an ordinary controller, so the reference and, once it has a pad, our program get
-the same input. Button and axis codes are those of Linux's input-event-codes.h.
+VirtualPad is an Xbox 360 style controller made through raw uinput (write access to /dev/uinput).
+Every program on the desktop session sees it, so only the reference, a black box that reads
+controllers from SDL, gets it. StreamPad writes the same states as text lines to bb-run's
+--pad-input (src/common/pad_stream.hpp), which turns them into a gamepad inside its own process:
+no device exists on the machine. Button and axis codes are those of Linux's input-event-codes.h.
 """
 
 from __future__ import annotations
@@ -24,18 +27,79 @@ DEFAULT_RANGE = (-32768, 32767)
 DPAD_AXES = {"U": ("HY", -1), "D": ("HY", 1), "L": ("HX", -1), "R": ("HX", 1)}
 EVENT = struct.Struct("qqHHi")  # struct input_event on x86-64
 
+# The uinput pad is not a real Xbox 360 pad's 045e:028e: programs that use SDL can ignore it with
+# SDL_GAMECONTROLLER_IGNORE_DEVICES=0x1209/0xb4b5 without hiding real Xbox pads. The ids are
+# arbitrary ones from the vendor id pid.codes shares among open hardware without an id of its own.
+VENDOR_ID, PRODUCT_ID, VERSION = 0x1209, 0xB4B5, 0x0110
+DEVICE_NAME = b"bloodborne-linux rig pad"
+# SDL does not know the pad, so the reference needs its mapping (SDL_GAMECONTROLLERCONFIG). It is
+# the one SDL has for Xbox 360 pads on Linux, because the buttons and axes are the same.
+SDL_MAPPING_BODY = ("a:b0,b:b1,x:b2,y:b3,back:b6,guide:b8,start:b7,leftstick:b9,rightstick:b10,"
+                    "leftshoulder:b4,rightshoulder:b5,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,"
+                    "leftx:a0,lefty:a1,rightx:a3,righty:a4,lefttrigger:a2,righttrigger:a5")
+
+
+def sdl_guid() -> str:
+    """SDL's GUID of the uinput pad on Linux: bus (USB), 0, vendor, 0, product, 0, version, 0."""
+    return struct.pack("<8H", 3, 0, VENDOR_ID, 0, PRODUCT_ID, 0, VERSION, 0).hex()
+
+
+def sdl_mapping() -> str:
+    return f"{sdl_guid()},{DEVICE_NAME.decode()},{SDL_MAPPING_BODY},platform:Linux,"
+
 
 def device_description() -> bytes:
     """struct uinput_user_dev for the pad: name, ids, then the four 64-entry axis arrays."""
     maximum, minimum = [0] * 64, [0] * 64
     for axis, code in AXIS_CODES.items():
         minimum[code], maximum[code] = AXIS_RANGES.get(axis, DEFAULT_RANGE)
-    return (struct.pack("80sHHHHI", b"Microsoft X-Box 360 pad", 3, 0x045E, 0x028E, 0x0110, 0)
+    return (struct.pack("80sHHHHI", DEVICE_NAME, 3, VENDOR_ID, PRODUCT_ID, VERSION, 0)
             + struct.pack("64i", *maximum) + struct.pack("64i", *minimum)
             + struct.pack("64i", *[0] * 64) + struct.pack("64i", *[0] * 64))
 
 
-class VirtualPad:
+class Pad:
+    """The scripted inputs, on top of _key, _axis, neutral and close of a subclass."""
+
+    _sleep: Callable[[float], None]
+
+    def _key(self, name: str, down: bool) -> None:
+        raise NotImplementedError
+
+    def _axis(self, name: str, value: int) -> None:
+        raise NotImplementedError
+
+    def neutral(self) -> None:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        raise NotImplementedError
+
+    def tap(self, name: str, ms: int = 120) -> None:
+        self._key(name, True)
+        self._sleep(ms / 1000)
+        self._key(name, False)
+        self._sleep(0.12)
+
+    def dpad(self, direction: str, ms: int = 120) -> None:
+        axis, value = DPAD_AXES[direction]
+        self._axis(axis, value)
+        self._sleep(ms / 1000)
+        self._axis(axis, 0)
+        self._sleep(0.15)
+
+    def trigger(self, side: str, ms: int = 200) -> None:
+        axis = "LT" if side == "L" else "RT"
+        self._axis(axis, 255)
+        self._sleep(ms / 1000)
+        self._axis(axis, 0)
+        self._sleep(0.15)
+
+    def stick(self, axis: str, value: int) -> None:
+        self._axis(axis, value)
+
+
+class VirtualPad(Pad):
     def __init__(self, device: BinaryIO | None = None,
                  ioctl: Callable[[int, int, int], object] = fcntl.ioctl,
                  sleep: Callable[[float], None] = time.sleep):
@@ -70,29 +134,6 @@ class VirtualPad:
         self._event(EV_ABS, AXIS_CODES[name], value)
         self._sync()
 
-    def tap(self, name: str, ms: int = 120) -> None:
-        self._key(name, True)
-        self._sleep(ms / 1000)
-        self._key(name, False)
-        self._sleep(0.12)
-
-    def dpad(self, direction: str, ms: int = 120) -> None:
-        axis, value = DPAD_AXES[direction]
-        self._axis(axis, value)
-        self._sleep(ms / 1000)
-        self._axis(axis, 0)
-        self._sleep(0.15)
-
-    def trigger(self, side: str, ms: int = 200) -> None:
-        axis = "LT" if side == "L" else "RT"
-        self._axis(axis, 255)
-        self._sleep(ms / 1000)
-        self._axis(axis, 0)
-        self._sleep(0.15)
-
-    def stick(self, axis: str, value: int) -> None:
-        self._axis(axis, value)
-
     def neutral(self) -> None:
         for code in BUTTON_CODES.values():
             self._event(EV_KEY, code, 0)
@@ -104,3 +145,29 @@ class VirtualPad:
         self.neutral()
         self._control(UI_DEV_DESTROY, 0)
         self._device.close()
+
+
+class StreamPad(Pad):
+    """The pad as text lines on a stream, for bb-run's --pad-input. Nothing is created on the
+    machine, so no other program sees the input."""
+
+    def __init__(self, stream: BinaryIO, sleep: Callable[[float], None] = time.sleep):
+        self._stream = stream
+        self._sleep = sleep
+
+    def _line(self, text: str) -> None:
+        self._stream.write(text.encode() + b"\n")
+        self._stream.flush()
+
+    def _key(self, name: str, down: bool) -> None:
+        self._line(f"button {name} {int(down)}")
+
+    def _axis(self, name: str, value: int) -> None:
+        self._line(f"axis {name} {value}")
+
+    def neutral(self) -> None:
+        self._line("neutral")
+
+    def close(self) -> None:
+        self.neutral()
+        self._stream.close()

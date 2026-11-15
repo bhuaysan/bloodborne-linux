@@ -177,10 +177,14 @@ def reference_program(run: Path, game_dir: Path, user_from: Path | None) -> Prog
                     "-g", str(game_dir / "eboot.bin")], env, work)
 
 
-# Only the rig's virtual pad counts: a real controller on the machine would be enumerated too, and
-# the game takes the first one SDL lists, so the taps went to the real one in most runs (#520).
-# The ids are those of vpad.py's device description.
-PAD_ONLY_VIRTUAL = {"SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT": "0x045e/0x028e"}
+# The reference reads the rig's uinput pad. Only that pad counts: a real controller on the machine
+# would be enumerated too, and the game takes the first one SDL lists, so the taps went to the real
+# one in most runs (#520). The pad has ids of its own (vpad.py), which SDL has no mapping for.
+# bb-run needs none of this: its pad exists only inside its process (--pad-input).
+PAD_ONLY_VIRTUAL = {
+    "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT": f"0x{vpad.VENDOR_ID:04x}/0x{vpad.PRODUCT_ID:04x}",
+    "SDL_GAMECONTROLLERCONFIG": vpad.sdl_mapping(),
+}
 
 
 def find_bb_run(preset: str) -> Path:
@@ -213,7 +217,8 @@ def copy_user_for_bb_run(user_from: Path, dest: Path) -> None:
 
 def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_root: Path,
                    cache_home: Path | None = None, binary: Path | None = None,
-                   log: str | None = None, perf: bool = False) -> Program:
+                   log: str | None = None, perf: bool = False,
+                   pad_input: Path | None = None) -> Program:
     # bb-run refuses runtime directories inside the source checkout, so its XDG roots are outside
     # analysis/. They are per run, so runs never share or inherit save data.
     env = {f"XDG_{kind}_HOME": str(work_root / kind.lower())
@@ -221,11 +226,13 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
     if cache_home:
         # The shader and pipeline cache of an earlier run, or of several runs in a row (--cache-home).
         env["XDG_CACHE_HOME"] = str(cache_home)
-    # As for the reference: the virtual gamepad's events count while the window has no focus.
+    # As for the reference: the pad's events count while the window has no focus.
     env["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = "1"
-    env |= PAD_ONLY_VIRTUAL
     argv = [str(binary or find_bb_run(preset)), "--game-dir", str(game_dir), "--profile", "rig",
             "--no-log-file"]
+    if pad_input:
+        # The scenario's pad states arrive on this FIFO, with no device on the machine.
+        argv += ["--pad-input", str(pad_input)]
     if not window:
         argv.append("--headless")
     if log:
@@ -255,7 +262,7 @@ def loaded_scenario(name: str | None) -> tuple[scn.Scenario, str]:
 class RunningTarget:
     """A started target as the scenario interpreter sees it."""
 
-    def __init__(self, run: Path, process: subprocess.Popen, pad: vpad.VirtualPad | None):
+    def __init__(self, run: Path, process: subprocess.Popen, pad: vpad.Pad | None):
         self.run_dir = run
         self.process = process
         self.pad = pad
@@ -428,6 +435,11 @@ def output_failure(failure: str | None, expects_frames: bool, frames: dict | Non
     return failure
 
 
+def open_stream_pad(path: Path) -> vpad.StreamPad:
+    """The write end of bb-run's pad FIFO. Read-write, so that it opens before bb-run does."""
+    return vpad.StreamPad(open(os.open(path, os.O_RDWR), "wb", buffering=0))
+
+
 def run_target(args: argparse.Namespace) -> int:
     """Runs one scenario on one target. Returns the exit status; args.run_dir_out, when the caller
     sets it to a list, gets the run directory."""
@@ -456,9 +468,12 @@ def run_target(args: argparse.Namespace) -> int:
     else:
         work_root = Path(tempfile.mkdtemp(prefix="bb-rig-",
                                           dir=os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"))
+        if scenario.uses_pad():
+            os.mkfifo(run / "pad")
         program = bb_run_program(run, game_dir, args.preset, args.window, work_root, args.cache_home,
                                  getattr(args, "bb_run", None), getattr(args, "log", None),
-                                 getattr(args, "perf", False))
+                                 getattr(args, "perf", False),
+                                 run / "pad" if scenario.uses_pad() else None)
         if args.user_from:
             copy_user_for_bb_run(args.user_from, bb_run_profile_data(work_root))
 
@@ -471,7 +486,9 @@ def run_target(args: argparse.Namespace) -> int:
         env |= {"VK_LAYER_PATH": str(layer), "VK_INSTANCE_LAYERS": LAYER_NAME}
     unit = f"bb-rig-{stamp}"
     command = wrap_command(program.argv, game_dir, unit, seconds, memory)
-    pad = vpad.VirtualPad() if scenario.uses_pad() else None
+    pad: vpad.Pad | None = None
+    if scenario.uses_pad():
+        pad = (vpad.VirtualPad() if args.target == "reference" else open_stream_pad(run / "pad"))
     before = report.tree_state(game_dir)
     started = time.time()
     events = Events(run / "events.csv", run / "target.log")

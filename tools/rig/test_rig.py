@@ -6,6 +6,7 @@ No test here starts the game or needs a GPU, /dev/uinput or systemd.
 
 from __future__ import annotations
 
+import os
 import shutil
 import struct
 import subprocess
@@ -77,15 +78,49 @@ class CommandTests(unittest.TestCase):
         self.assertIn("/run/perf.data", program.argv)
         self.assertEqual(program.argv[program.argv.index("--") + 1], "/b/bb-run")
 
-    def test_only_the_virtual_pad_is_visible_to_sdl(self) -> None:
+    def test_reference_sees_only_the_virtual_pad_and_knows_its_mapping(self) -> None:
         # A real controller on the machine took pad slot 0 in most runs (#520).
         description = vpad.device_description()
         vendor, product = struct.unpack_from("HH", description, 82)
         allowed = rig.PAD_ONLY_VIRTUAL["SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT"]
         self.assertEqual(allowed, f"0x{vendor:04x}/0x{product:04x}")
+        self.assertEqual(rig.PAD_ONLY_VIRTUAL["SDL_GAMECONTROLLERCONFIG"], vpad.sdl_mapping())
+        with tempfile.TemporaryDirectory() as temp, \
+                unittest.mock.patch.object(rig, "reference_root", return_value=Path(temp)), \
+                unittest.mock.patch.object(rig, "sha256", return_value=rig.REFERENCE_BIN_SHA256):
+            binary = Path(temp) / "squashfs-root" / "usr" / "bin" / "shadps4"
+            binary.parent.mkdir(parents=True)
+            binary.touch()
+            run = Path(temp) / "run"
+            run.mkdir()
+            program = rig.reference_program(run, Path("/g"), None)
+        for name, value in rig.PAD_ONLY_VIRTUAL.items():
+            self.assertEqual(program.env[name], value)
+
+    def test_bb_run_gets_its_pad_in_process_not_from_the_environment(self) -> None:
         with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
-            program = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"))
-        self.assertEqual(program.env["SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT"], allowed)
+            program = rig.bb_run_program(Path("/run"), Path("/g"), "debug", True, Path("/w"),
+                                         pad_input=Path("/run/pad"))
+            without = rig.bb_run_program(Path("/run"), Path("/g"), "debug", True, Path("/w"))
+        self.assertEqual(program.argv[program.argv.index("--pad-input") + 1], "/run/pad")
+        self.assertNotIn("--pad-input", without.argv)
+        for name in rig.PAD_ONLY_VIRTUAL:
+            self.assertNotIn(name, program.env)
+
+    def test_stream_pad_writes_to_the_fifo(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fifo = Path(temp) / "pad"
+            os.mkfifo(fifo)
+            reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                pad = rig.open_stream_pad(fifo)
+                pad._sleep = lambda s: None
+                pad.tap("START")
+                pad.close()
+                self.assertEqual(os.read(reader, 4096).decode().splitlines(),
+                                 ["button START 1", "button START 0", "neutral"])
+            finally:
+                os.close(reader)
 
     def test_bb_run_cache_is_cold_unless_asked(self) -> None:
         with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
