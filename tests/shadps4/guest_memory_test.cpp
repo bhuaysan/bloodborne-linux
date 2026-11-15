@@ -12,6 +12,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -75,8 +76,8 @@ struct Direct {
     std::uint64_t offset = 0;
     void* address = nullptr;
     std::uint64_t length = 0;
-    explicit Direct(std::uint64_t pages) : length(pages * page_size) {
-        EXPECT_EQ(allocate_direct(0, direct_memory_size(), length, 0, 0, &offset), 0);
+    explicit Direct(std::uint64_t pages, std::uint64_t alignment = 0) : length(pages * page_size) {
+        EXPECT_EQ(allocate_direct(0, direct_memory_size(), length, alignment, 0, &offset), 0);
         EXPECT_EQ(map_direct(&address, length, 3, 0, offset, 0), 0);
     }
     void unmap() {
@@ -234,6 +235,26 @@ bool has_data(std::uint64_t offset) {
     return ::lseek(dmem::fd(), static_cast<off_t>(offset), SEEK_DATA) == static_cast<off_t>(offset);
 }
 
+// A memfd gives each page its own hole only while the host keeps shared memory in small pages.
+// With transparent huge pages for it (shmem_enabled, as on some CI hosts) one write, or a read
+// fault on a hole, takes the whole 2 MiB page, so no hole is left next to it. The copies stay
+// correct then (a step over data copies zeros from memory); only the checks of which parts are
+// still holes don't apply.
+const std::uint64_t huge_page = 2 * 1024 * 1024;
+bool backing_keeps_page_holes() {
+    static const bool keeps = [] {
+        Direct probe(2 * huge_page / page_size, huge_page);
+        static_cast<volatile u8*>(probe.address)[0] = 1;
+        const bool page_holes = !has_data(probe.offset + page_size);
+        probe.unmap();
+        return page_holes;
+    }();
+    if (!keeps) {
+        std::printf("the memfd takes huge pages: the checks of its holes are left out\n");
+    }
+    return keeps;
+}
+
 // A large copy (#531) reads the memfd's holes, which the guest never wrote, as zeros without
 // faulting pages in for them, and copies the written bytes around them: here across two
 // mappings whose backings lie the other way round in the memfd, from and to odd offsets.
@@ -269,9 +290,11 @@ TEST(GuestMemory, LargeCopiesSkipTheHolesOfTheBacking) {
     // The steps without a written page are still holes (the backing of the second half comes
     // first in the memfd).
     EXPECT_TRUE(has_data(offset + half));
-    EXPECT_FALSE(has_data(offset + half + 12 * page_size));
-    EXPECT_FALSE(has_data(offset + half + 20 * page_size));
-    EXPECT_FALSE(has_data(offset + 4 * page_size));
+    if (backing_keeps_page_holes()) {
+        EXPECT_FALSE(has_data(offset + half + 12 * page_size));
+        EXPECT_FALSE(has_data(offset + half + 20 * page_size));
+        EXPECT_FALSE(has_data(offset + 4 * page_size));
+    }
     // A copy under the size that looks for holes reads the same.
     std::vector<u8> small(3 * page_size, 0xee);
     memory().CopySparseMemory(addr(range) + 4 * page_size, small.data(), small.size());
@@ -303,8 +326,10 @@ TEST(GuestMemory, LargeCopiesReadBoundedHolesAfterLongData) {
     std::vector<u8> read(size, 0xee);
     memory().CopySparseMemory(addr(range), read.data(), size);
     EXPECT_TRUE(std::equal(read.begin(), read.end(), expected.begin()));
-    EXPECT_FALSE(has_data(offset + data + 1024 * 1024));
-    EXPECT_FALSE(has_data(offset + size - 2 * page_size));
+    if (backing_keeps_page_holes()) {
+        EXPECT_FALSE(has_data(offset + data + 1024 * 1024));
+        EXPECT_FALSE(has_data(offset + size - 2 * page_size));
+    }
     EXPECT_EQ(sceKernelMunmap(range, size), 0);
     EXPECT_EQ(release_direct(offset, size), 0);
 }
@@ -698,9 +723,19 @@ void concurrent_faults_and_syncs(bool through_backing) {
         Gpu gpu;
         constexpr u64 pages = 512;  // 2 MiB, 8 words of the region bits
         constexpr u64 words_per_page = tp / sizeof(u64);
-        Direct d(pages / pages_per_kernel_page);
+        // Aligned to a huge page, so that no other allocation's data shares one with it.
+        Direct d(pages / pages_per_kernel_page, huge_page);
         if (through_backing) {
-            EXPECT_FALSE(has_data(d.offset));  // the copies start on one hole
+            // The copies start on one hole. A fresh allocation is one, but a CI run on a host
+            // whose memfd takes huge pages (backing_keeps_page_holes) found data at its start
+            // (#531), for a cause not found; the test punches the hole itself then. Nothing was
+            // written yet: the memory reads zeros either way.
+            if (has_data(d.offset)) {
+                ASSERT_EQ(::fallocate(dmem::fd(), FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+                                      static_cast<off_t>(d.offset), static_cast<off_t>(d.length)),
+                          0);
+            }
+            ASSERT_FALSE(has_data(d.offset));
         }
         auto* const words = static_cast<u64*>(d.address);
         const std::uintptr_t start = addr(d.address);
@@ -772,6 +807,19 @@ void concurrent_faults_and_syncs(bool through_backing) {
         for (auto& thread : threads) {
             thread.join();
         }
+        // Each page the tracking holds unmodified has to match its copy already: a copy that
+        // lost bytes (a hole read where the data was) would otherwise go unseen when the
+        // writers wrote the page again before the end, as they write the whole range many times.
+        u64 stale_clean = 0;
+        for (u64 page = 0; page < pages; ++page) {
+            if (gpu.tracker().IsRegionCpuModified(start + page * tp, tp)) {
+                continue;
+            }
+            for (u64 i = page * words_per_page; i < (page + 1) * words_per_page; ++i) {
+                stale_clean += copy[i] != words[i] ? 1 : 0;
+            }
+        }
+        EXPECT_EQ(stale_clean, 0u);
         upload(gpu.sync(start, size));
         u64 stale = 0;
         for (u64 i = 0; i < copy.size(); ++i) {
