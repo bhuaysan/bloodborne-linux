@@ -291,3 +291,23 @@ The three slow frames of `play-walk` (run `20261114-155953`, the other run match
 - **Pipeline builds** are not in these frames with a warm cache. In the cold run `20261114-150551` the slowest frames of the `logos` segment (416 and 227 ms) are 266 and 224 ms of build time.
 - **`game main`, 48 % of all samples, is a busy wait** of the guest on `gettimeofday` (guest code at link addresses 0x2034af0 to 0x2034b6f), 43 % of it in the vDSO `clock_gettime`, with `posix_gettimeofday`, `observe_gettimeofday` and `MainLoopProbe::count` of ours another 3 % of all samples. It costs a core but is not on the frame's critical path.
 
+
+### The buffer sync of the Yharnam walk (#531, 2026-11-15)
+
+Found with a temporary log of every sync slower than 0.15 ms (address, size, bytes copied and the time of each step) in runs `20261115-030755`, `-032104` and `-033450` (main's state plus the log; suffix `-bb-run-yharnam-route`, warm `--cache-home`, `--log profile=debug`). The two slow `sync` frames of `play-walk` have different causes, and neither is #530: its larger runs of CPU-modified pages add no copies there.
+
+- **The 55 to 60 ms frame: holes of the memfd.** Its 20 to 32 ms of `sync` are 8 syncs of 4 MiB vertex buffers (V# ranges of 0x400010 to 0x400024 bytes, 4 MiB apart) at 2.8 to 3.9 ms each. The game had written 0 to 6 of the 1024 pages of each (`mincore`); the rest are holes of the direct memory memfd, which read as zeros, but each 4 KiB read through the backing mapping faults in and clears a page (1.4 GB/s). They count as CPU-modified because the buffer cache starts so on memory it never synced, and the vertex binding syncs the V#'s whole range. Now `MemoryManager::CopySparseMemory` writes zeros for the holes of copies of 64 KiB or more without reading them (`lseek` `SEEK_DATA`, in 64 KiB steps; `SEEK_HOLE` walks the data up to the next hole, 6 ms for 512 MiB, and `mincore` counts swapped-out pages as holes). That frame no longer shows in `sync`.
+- **The 85 to 95 ms frame: a real upload.** It has 2140 draws against 1260 in a normal frame and syncs 113 to 121 MiB of vertex data the game had written, in about 70 large syncs. The copies ran at 23 GB/s for the first 40 MiB and at 4 to 7 GB/s after: the staging ring added 16 MiB blocks (a request took 75 to 88 us at each), and the first write to each page of a fresh block faults. The blocks the loading screens had added were gone by then (freed after 300 idle frames). Now the ring keeps its first 12 blocks (192 MiB). The copies then run at 9 to 10 GB/s throughout: what stays is the first read of each page through the backing mapping (the game wrote it through its own mapping), about 85 MiB in 8.3 ms, the write protection of the synced pages again (2.7 ms) and about 4800 smaller syncs (5 to 6 ms).
+
+Five runs with both changes (`20261115-041211`, `-042138` with the sync log on top, `-043441`, `-044303`, `-045307`, all `end,scenario finished`) against main's state (`20261114-220756`, `-221718`, `-222640`, `-223614`, `-224537`, before #528, and `20261115-030755`, `-032104`, `-033450` after it):
+
+| | main's state | with #531 |
+|---|---|---|
+| largest `sync` of a `play-walk` frame | 26.1 to 32.1 ms | 15.8 to 17.2 ms |
+| second and third largest `sync` of a `play-walk` frame | 20.5 to 31.5 ms (the hole frame), 2.9 to 11.5 ms | 2.8 to 8.8 ms, 2.8 to 4.2 ms |
+| longest GPU-thread frame of `play-walk` | 78.1 to 89.1 ms | 62.0 to 75.5 ms |
+| `play-walk` present max (`rig.py perf`) | 83.3 to 100.1 ms | 66.7 to 69.5 ms |
+
+The p95 of `play-walk` stays at 35.4 ms, as on main after #528. The reference has the same stall: its `play-walk` present max is 100.15 ms (median of five runs, `20261114-223122` and the four after it in the table above).
+
+The issue's check (at most 5 ms of `sync` in every `play-walk` frame and a present max of 50 ms or less) is not reached: the upload frame copies about 85 MiB in a frame of twice the usual draws. Cutting it further needs one of: syncing only the part of a vertex buffer the draw reads (a non-indexed draw gives its vertex range; an indexed one needs its index range), letting the GPU copy from guest memory imported into Vulkan (`VK_EXT_external_memory_host`) instead of the CPU copying into staging, or splitting the copy over threads.
