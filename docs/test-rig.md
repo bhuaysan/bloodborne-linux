@@ -303,11 +303,11 @@ Five runs with both changes (`20261115-041211`, `-042138` with the sync log on t
 
 | | main's state | with #531 |
 |---|---|---|
-| largest `sync` of a `play-walk` frame | 26.1 to 32.1 ms | 15.8 to 17.2 ms |
+| largest `sync` of a `play-walk` frame | 26.1 to 34.8 ms (33.2 and 34.8 in `-032104` and `-033450`, which carry the sync log) | 15.8 to 17.2 ms |
 | second and third largest `sync` of a `play-walk` frame | 20.5 to 31.5 ms (the hole frame), 2.9 to 11.5 ms | 2.8 to 8.8 ms, 2.8 to 4.2 ms |
 | longest GPU-thread frame of `play-walk` | 78.1 to 89.1 ms | 62.0 to 75.5 ms |
-| `play-walk` present max (`rig.py perf`) | 83.3 to 100.1 ms | 66.7 to 69.5 ms |
+| `play-walk` present max (`rig.py perf`) | 83.3 to 84.0 ms | 66.7 to 69.5 ms |
 
 The p95 of `play-walk` stays at 35.4 ms, as on main after #528. The reference has the same stall: its `play-walk` present max is 100.15 ms (median of five runs, `20261114-223122` and the four after it in the table above).
 
-The issue's check (at most 5 ms of `sync` in every `play-walk` frame and a present max of 50 ms or less) is not reached: the upload frame copies about 85 MiB in a frame of twice the usual draws. Cutting it further needs one of: syncing only the part of a vertex buffer the draw reads (a non-indexed draw gives its vertex range; an indexed one needs its index range), letting the GPU copy from guest memory imported into Vulkan (`VK_EXT_external_memory_host`) instead of the CPU copying into staging, or splitting the copy over threads.
+The issue's check (at most 5 ms of `sync` in every `play-walk` frame and a present max of 50 ms or less) is not reached, so #531 is not done: the upload frame copies about 85 MiB in a frame of twice the usual draws. Cutting it further needs one of: syncing only the part of a vertex buffer the draw reads (a non-indexed draw gives its vertex range; an indexed one needs its index range), letting the GPU copy from guest memory imported into Vulkan (`VK_EXT_external_memory_host`) instead of the CPU copying into staging, or splitting the copy over threads.
