@@ -62,7 +62,7 @@ Some code does not take the step from the task data but has 1/30 built in. These
 | 0x1e2bcd4 | `chr_ai_step` 0x1e2bc10 | Per-character navigation and Havok AI (`SprjWorldNvmManager`, `SprjHkAiManager`) with task data of 1/30 | AI navigation steps twice as fast |
 | 0x12a4416 (`addss [+0x2c], 1/30`) | `target_bank_scan_tick` 0x12a43b0 | `SprjTargetBankManager`: a timer advanced by 1/30 per call rescans all characters when it reaches an interval; a 100-entry ring indexed at 30 slots a second (`seconds * 30`, 0x12ab623) | rescans twice as often, and the ring covers half the time it is read as covering |
 | 0x180f647 | `chr_list_fade_step` 0x180f5e0 | a fade `+0x1c0 = min(fade + 1/30, 1)` per call over the character list | fades in 0.5 s instead of 1 s |
-| 0x143e2b2 | 0x143ac60 (`RendMan`) | smoothing `x += (target - x) / 30` per call | converges twice as fast (minor) |
+| 0x143e2b2 | `chase_cam_update` 0x143ac60 | the player's chase camera eases its follow weight `+0x198 += (+0x19c - +0x198) / 30` per call (first read as a `RendMan` smoothing; see #558 below) | one of the camera's per-call smoothings |
 | 0x173456e, 0x15dc1f7, 0x1044943, 0x1f77d4a, 0x227784b, 0x18bc4f7 | menu item lists (`Ins_change_tab_select`), the equipment icon dialog, and four updates not identified | an `update(1/30)` call with a literal | menu and UI animations twice as fast |
 
 **Task data with a literal 1/30 that probably needs no change** (not verified that the callees ignore `delta_time`): the event system runs a new event once at creation (`SprjEmkSystem`, 0x12efd00); a menu task (0x1b96b00); teardown (0xf73330); and about 30 small step-machine functions (0x1aa3fc0–0x1aa6080, 0x1ab5390–0x1ac3ef0, 0x1b03210–0x1c12bf0) that enter a state through a virtual call with task data of 1/30, most referencing `FrpgNetMan` (the online flow).
@@ -145,7 +145,7 @@ No stutter in play. The clinic holds an even 16.7 ms median; in `play-stand` and
 | backsteps (8) | 2.23 | 1.92 | 3.97 |
 | walks and camera turn (4) | 2.71 | 3.15 | 6.16 |
 
-The two rates differ by about twice the noise of either, and the 60 runs agree with each other: something still depends on the frame rate. In the pictures it is the place of the camera and of the hunter, not the phase of an animation: after the first 2 s walk the hunter of both 60 runs stands a little nearer the shelf and the camera follows a little closer, and later pictures keep that offset. Which system does it is not found; the candidates are the remaining per-frame sites of "The step" and the camera's smoothing.
+The two rates differ by about twice the noise of either, and the 60 runs agree with each other: something still depends on the frame rate. In the pictures it is the place of the camera and of the hunter, not the phase of an animation: after the first 2 s walk the hunter of both 60 runs stands a little nearer the shelf and the camera follows a little closer, and later pictures keep that offset. "Camera and hunter at 60 FPS" below traces it (#558).
 
 **30 FPS is unchanged.** `rig.py compare` of the branch's `main-menu` at 30 (`-163040`) against two runs of `main` (`-163121`, `-163204`, the same occasion): noise floor 0.0257, ours 0.0254 (ratio 0.99), time to the menu 18.77 s against 19.82 and 18.75 s (ratio 0.97). `clinic-fight` at 30 (`-162014` busy, `-163848` quiet): 30.0 presents a second, p50 33.33 ms in every segment. The 60 FPS `main-menu` run passes the same comparison (ratio 1.49, within twice the floor; time ratio 0.98).
 
@@ -157,10 +157,75 @@ Each is a decomp issue of its own, checked at 60 against a 30 FPS run:
 - **AI step** (`chr_ai_step`, 0x1e2bc10, 0xaf2 bytes): navigation and Havok AI with task data of 1/30. Needs enemies to check (Central Yharnam).
 - **Target bank** (`target_bank_scan_tick`, 0x12a43b0, and the ring's 30 slots a second at 0x12ab623): rescans twice as often, and the ring covers half the time.
 - **Fades** (`chr_list_fade_step`, 0x180f5e0) and the menu `update(1/30)` calls (0x173456e, 0x15dc1f7, 0x1044943, 0x1f77d4a, 0x227784b, 0x18bc4f7): twice as fast.
-- **`RendMan` smoothing** (0x143ac60, `x += (target - x) / 30`, inside a 0x4e6c-byte function): converges twice as fast.
+- **Chase camera** (`chase_cam_update`, 0x143ac60, 0x4e6c bytes; #557): the player camera's follow filters work per call, not per second (see the next section). This is the main cause of the camera and hunter offset at 60.
 - **`chr_pad_step`** (0x1572900) is not the player's input: its 1/30 goes to 0x1d145b0, which turns a matrix by the pad's axes times π/2 and −π/3 rad/s, a debug free camera behind a mode check. Low priority.
-- **The offset of camera and hunter** of the check runs above, not yet traced to a site.
+- **The offset of camera and hunter** of the check runs above: mostly the rig's inputs and the chase camera, see the next section. A small difference in the hunter's own motion after a short side step is not traced yet.
 
+
+## Camera and hunter at 60 FPS (#558)
+
+The 30-vs-60 picture difference of #514's runs has two causes: the way the rig's scenario times its inputs, and the chase camera's per-call smoothing. None of the known 1/30 sites (#553 to #556) is involved. A small difference in the hunter's own motion remains.
+
+### The inputs: seconds, not steps
+
+The scenarios hold the stick for a time on the wall clock (`stick`, `sleep 0.5`, `neutral`). The game advances 1/F per frame and never makes up a late frame (modes 2 and 4 have no frame skip). So a hold covers fewer game steps whenever frames miss their slot. At 30 FPS that hardly happens. At 60 FPS on a busy machine it does. Presents during the holds of the local scenario `fr558` (as `fr514`, with a 0.5 s camera turn, a 0.6 s walk and 1.5 s sideways walks, pictures right after them), CPU load average 6 to 12 from other jobs (2026-11-15):
+
+| | 0.5 s turn | 1.5 s side walk |
+|---|---|---|
+| 30 FPS (3 runs) | 14 to 15 of 15 | 44 to 46 of 45 |
+| 60 FPS (4 runs) | 22 to 25 of 30 | 55 to 90 of 90 |
+
+The 60 runs turn the camera less and differ from each other: mean picture difference after the turn is 0.4 between 30 runs, 5.7 to 7.7 between 60 runs and 10 to 11 between the rates. #514's two 60 runs had 95 % and 99.5 % of their steps in the walk segment, so part of their offset is this too.
+
+A check at 60 against 30 therefore has to hold inputs for a number of steps: the rig's `frames N` step, with N doubled at 60. The rig polls every 0.25 s, so `frames` can overshoot by several frames. For the runs below, a local rig copy polled every 2 ms (not committed; see #562). The pacer's records show the holds exact: 15/30, 18/36, 45/90 presents.
+
+### The chase camera
+
+With equal steps per input (scenario `fr558f`, five runs at 30 and five at 60), the right-stick camera turn agrees between the rates. For each picture and run, the table gives the difference to the nearest other run of the same rate and to the nearest run of the other rate:
+
+| pictures | same rate | other rate |
+|---|---|---|
+| after a 0.5 s camera turn (3 pictures) | 0.74 to 1.03 | 1.40 to 2.03 |
+| after a 0.6 s walk | 3.23 | 4.89 |
+| during and after a 1.5 s side walk (4 pictures) | 4.26 to 6.03 | 8.96 to 15.68 |
+
+Walking sideways separates the rates. Every 60 run is 10 to 13 away from every 30 run right at the end of the walk, and the 60 runs are 2 to 9 apart. In the pictures the hunter sits in the same place on screen, while the view at 60 has panned further in the walking direction. After an R3 reset, which puts the camera behind the hunter, the 60 hunter faces further to that side. The stick moves him relative to the camera, so a camera that swings more while he walks also bends his path.
+
+The camera is `chase_cam_update` (0x143ac60), called by `cam_mode_update` (0x14368b0, at 0x1436c00 and 0x1436e15) with the step in `xmm0`. 1/60 arrives there at 60, so the step itself reaches it. Its stick turn, the timers and the wall slide (+0x294) scale with the step. Several filters work per call instead:
+
+| Field | Value (set by `chase_cam_construct` 0x143a0e0) | Use | Per call |
+|---|---|---|---|
+| +0x198 | 0.1 (imm 0x143a8b7), lerps toward +0x19c (0.1, 0x143a8c1) by 1/30 a call (0x143e2b2, rodata 0x4925e94), reset to +0x1a0 (0.25, 0x143a8cb) | follow point `+0x90 += (target − +0x90) · +0x198` (0x143ba97). The yaw is re-derived from the follow point every call. | yes |
+| +0x1ac, +0x1b0, +0x1b4, +0x1b8, +0x1c4 to +0x1cc | 0.1, 0.1, 0.25, 0.03, 0.4, 0.4, 0.3 | lag of the camera position +0xf0 (0x143e2f2 to 0x143e980) | yes |
+| +0x240 | 0.3 (0x143aa5b) | yaw and pitch easing while turning on its own (R3 reset, lock-on; 0x143c30f, 0x143c784, 0x143cea0) | yes |
+| +0x1a8 | 0.3 (0x143a8df) | pitch pull toward +0x150 (0x143cef0) | yes |
+| +0x330 | 0.05 (0x143a7de) | eases the camera parameters (FOV +0x50, +0x160, +0x188, +0x1f0, +0x248) toward the parameter row (0x143ae75 to 0x143af70); debug label "lock camera param interpolation rate" | yes |
+| +0x184 | 0.1 (rodata 0x4925e68, one use) | `+0x184 += (+0x188 − +0x184) · 0.1` (0x143af8c) | yes |
+
+The follow filter is the one that explains the swing: the follow point catches up with the hunter faster at 60, so the camera turns further during a short walk. A per-call factor k matches 30 FPS at 60 as 1 − (1 − k)^½. For a decomp it becomes 1 − (1 − k)^(30·dt).
+
+**Check runs.** Scenario `fr558s`: side steps of 10, 30 and 60 steps at 30 (doubled at 60), each followed by 45 steps of rest. Two runs per rate (`194619`, `194948` at 30; `194801`, `195131` at 60; stamps `20261115-…`, UTC). The first side step gives the clearest picture: 0.4 between the 30 runs right after it and 0.1 after the rest, 7.4 to 8.0 and 7.8 to 10.2 between the rates. The patched 60 runs below were measured against the nearer of the two 30 runs. The rows marked `fr558f` use that scenario's side walk and its two pictures instead (5 runs at 30):
+
+| Variant at 60 (bytes written after loading) | end of step | after rest |
+|---|---|---|
+| none | 7.4, 7.9 | 7.8, 10.2 |
+| Havok world step, AI step or both at 1/60 (0x17f9b74, 0x1e2bcd7; `fr558f`, 1.5 s side walk, 4 runs) | 10.3 to 12.1 | 7.4 to 9.6 |
+| rodata 0x4925e94, 0x4925e68 and +0x330 at the per-60 value (`fr558f`, 1.5 s side walk) | 10.3 | 7.4 |
+| follow filter: +0x198, +0x19c, +0x1a0 and 0x4925e94 (`204639`, `205003`) | 3.9, 6.1 | 9.1, 7.7 |
+| follow filter, lag group and +0x240, +0x1a8 (`204821`) | 3.9 | 7.5 |
+| `chase_cam_update` only every second call, with twice the step (`205343`, `205526`) | 0.8, 5.9 | 8.9, 9.0 |
+
+Running the whole camera at 30 updates a second (the last row, a local call-site redirect in `bb-run`) brings the end of the side step to the 30 noise in one of two runs. The other run lands on the second of two outcomes that ±1 step of input timing gives at either rate (two 30 runs of `fr558f` differ by 7.7 the same way). So the camera's per-call filters are the main site. Scaling only the constants found does less (3.9 to 6.1): some per-call smoothing in the function is still missed, so a decomp has to go through all of 0x143ac60.
+
+After the rest, the patched runs still differ by 7.5 to 9. The pictures show why: at the end of the step the camera matches and the hunter's pose differs slightly, and the rest of the camera motion follows his slightly different stop. That remaining difference is in the hunter's motion, not the camera, and it is not traced. Ruled out by reading the code or by runs:
+
+- The character's turn toward the stick (`chr_turn_update` 0x150e690: the step per call is capped at rate · π/180 · dt) and the walk start ramp (`walk_anim_update` 0x1533940: `+= dt / ramp time`) scale with the step.
+- `chr_anim_step_sync` (0x15985a0) pulls the character's animation step toward a reference phase with a per-call gain of 0.1 (rodata 0x4926b88, used at 0x1598663; its clamps scale with dt). Switching it off (`jne` at 0x15985b8 → `jmp`) changes nothing at 30 (0.2 to 0.4 against the unpatched 30 runs), so the phase error is zero in a walk. Setting the gain to 1 − 0.9^½ at 60 changes nothing either.
+- The Havok world step (#553) and the AI step (#554): no change (table). The target bank (#555) and the fades and menu updates (#556) are not in the player's path.
+
+Not resolved: the step of the Havok behaviour (animation) graph. `chr_anim_state_update` (0x15a30f0) takes the task step or `chr_anim_step_sync`'s, and the root motion (0x1836d50) uses it. Where `hkbGetTimestep` (0x47d5e84) gets its value is still open, and it is the next candidate for the hunter's motion.
+
+One 60 run (`185636`) crashed in the logo sequence with the `GXRenderThread` segfault at guest 0x263b8e7 (#559).
 
 ## Open questions
 
