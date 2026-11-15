@@ -118,6 +118,17 @@ TEST(RunOptions, ParsesThePadInput) {
     EXPECT_EQ(parse_error({"--pad-input"}), "--pad-input needs a value");
 }
 
+TEST(RunOptions, ParsesTheFrameRate) {
+    EXPECT_EQ(parse({}).frame_rate, 30U);
+    EXPECT_EQ(parse({"--frame-rate", "60"}).frame_rate, 60U);
+    EXPECT_EQ(parse({"--frame-rate", "60", "--frame-rate", "30"}).frame_rate, 30U);
+    EXPECT_EQ(parse_error({"--frame-rate"}), "--frame-rate needs a value");
+    for (std::string_view fps : {"0", "45", "120", "60.0", " 60", "", "sixty"}) {
+        EXPECT_EQ(parse_error({"--frame-rate", fps}),
+                  std::format("--frame-rate: \"{}\" is not 30 or 60", fps));
+    }
+}
+
 TEST(RunOptions, RefusesBadArguments) {
     EXPECT_EQ(parse_error({"--frobnicate"}), "unknown argument \"--frobnicate\"");
     EXPECT_EQ(parse_error({"eboot.bin"}), "unknown argument \"eboot.bin\"");

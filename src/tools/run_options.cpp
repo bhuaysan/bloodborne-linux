@@ -79,6 +79,13 @@ RunOptions parse_run_options(std::span<const std::string_view> args) {
             options.async_pipelines = false;
         } else if (arg == "--pad-input") {
             options.pad_input = std::filesystem::path(value());
+        } else if (arg == "--frame-rate") {
+            const std::string_view fps = value();
+            if (fps != "30" && fps != "60") {
+                throw std::invalid_argument(
+                    std::format("--frame-rate: \"{}\" is not 30 or 60", fps));
+            }
+            options.frame_rate = fps == "30" ? 30 : 60;
         } else if (arg == "--present-mode") {
             const std::string_view mode = value();
             if (mode == "fifo") {

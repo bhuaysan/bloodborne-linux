@@ -19,7 +19,7 @@ inline constexpr std::string_view run_usage =
     "              [--log SPEC] [--no-log-file] [--headless] [--device NAME]\n"
     "              [--validation] [--validation-sync] [--validation-gpu]\n"
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
-    "              [--sync-pipelines] [--pad-input PATH]\n"
+    "              [--sync-pipelines] [--pad-input PATH] [--frame-rate 30|60]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
@@ -46,7 +46,9 @@ inline constexpr std::string_view run_usage =
     "                       while its pipeline is created on a worker thread (the default)\n"
     "  --pad-input PATH     read pad states from the file or FIFO PATH and give them to the game\n"
     "                       through a gamepad that exists only in this process (docs/test-rig.md);\n"
-    "                       needs a window; other controllers are then ignored\n";
+    "                       needs a window; other controllers are then ignored\n"
+    "  --frame-rate FPS     the game's target frame rate, 30 (the game's own, default) or 60; the\n"
+    "                       simulation steps 1/FPS seconds a frame (docs/design/frame-rate.md)\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
@@ -70,14 +72,15 @@ struct RunOptions {
     bool pipeline_cache = true;  // false with --no-pipeline-cache
     bool async_pipelines = true;  // false with --sync-pipelines
     std::optional<std::filesystem::path> pad_input;  // --pad-input
+    unsigned frame_rate = 30;  // --frame-rate: 30 or 60
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 
 // Parses the arguments after argv[0]. Throws std::invalid_argument, naming the argument, for an
 // unknown option, a missing value, a profile name that valid_profile_name refuses, a timeout that
 // isn't a whole number from 1 to 86400, a log spec that LogFilter::parse refuses, a --present-mode
-// that is none of fifo, mailbox and immediate, and --validation-sync or --validation-gpu without
-// --validation.
+// that is none of fifo, mailbox and immediate, a --frame-rate other than 30 and 60, and
+// --validation-sync or --validation-gpu without --validation.
 RunOptions parse_run_options(std::span<const std::string_view> args);
 
 // The eboot's entry reads argc from +0 of its first argument and takes argv at +8 (link address

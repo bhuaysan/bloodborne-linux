@@ -412,6 +412,8 @@ int start(const bb::tools::RunOptions& options) {
     bb::hle::system::set_user_name(options.profile);
     main_loop = new MainLoop{bb::tools::MainLoopProbe(), options.stop_at_main_loop, start_time};
     bb::game::set_frame_observer(&observe_frame);
+    bb::game::set_frame_rate(options.frame_rate);
+    bb::common::log(LogLevel::info, channel, "target frame rate {} FPS", options.frame_rate);
 #ifdef BB_HAVE_WINDOW
     if (!options.headless) {
         open_display(options);
