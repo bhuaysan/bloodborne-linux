@@ -103,23 +103,69 @@ All six runs finished their scenario with no GPU fault in the kernel log. What t
 - **The step is per frame.** At 60 FPS with the 1/30 step the timed part of the logo sequence (its length minus the 6 s stable wait) shrinks from 16.6 s to 9.2 s, and in the clinic runs (the same segment, 1 s later start) from 14.5 s to 7.2 s: the game runs at twice its speed. With the step at 1/60 it is back to 15.4 s and 14.3 s. After the first 2 s walk the hunter of the 60 run stands nearer the wall (picture `02-walked`) than in base and 60+step, which end in about the same place.
 - **The literal sites can be changed in place.** A fourth clinic run (`20261115-123635`) also set the Havok step (0x17f9b74), the pad step (0x1572a80) and the AI step (0x1e2bcd7) to 1/60. It finished with no GPU fault, the logo sequence took its normal 14.4 s, and dodges and attacks ran at 60.0 presents a second; the other segments ran at 44 to 54, because another program used the GPU of the shared machine during that run, so it gives no frame times. Whether play is right with these changes needs input-driven checks (#514).
 
-## What #514 changes
+## The option (#514)
 
-A target frame rate F (30 default, 60) and step 1/F. At F = 30 every change below must give the game's own values, so the default run is unchanged.
+`bb-run --frame-rate 30|60` (default 30) sets the target frame rate F; `rig.py run` and `rig.py perf` pass it on (`--frame-rate`, to `bb-run` only). Two game functions are replaced, in `src/game/frame/`, and are hooked at every frame rate:
 
-1. **Wait: replace `flipper_wait_frame` (0x2034770, 0x84c bytes by its FDE).** Same logic, with `target_frame_time` = 1/F after the mode switch for modes 3 and 4 (the default and the online one). Keep the mode's `present_interval` (1) and `tearing` (0): mode 2 would also set `tearing` = 1, which we have not followed through the render thread, so switching the fallback to 2 (what the check run did) is not the way. The busy wait may become a sleep for all but the last millisecond (the background branch's `sceKernelUsleep` shows the game accepts one); that saves the core that `game main` spins on, and is optional.
-2. **Step: replace `main_loop_tick` (0x2018d20, 0x1df bytes).** The same calls, with `delta_time` = 1/F in the task data it builds (0x2018e36).
-3. **Physics: replace `havok_world_step` (0x17f99d0)** with the step record's 1/F, and give the world parameter of `hkp_world_cinfo_init` (0x63fad0, +0x70) and the three data blocks (0x2bda86c, 0x2bdc3d4, 0x2bdf7e4, if they are used) the same 1/F.
-4. **The literal per-frame sites of "The step"**: `chr_pad_step` (0x1572900), `chr_ai_step` (0x1e2bc10), `target_bank_scan_tick` (0x12a43b0, also the ring's 30 slots a second), `chr_list_fade_step` (0x180f5e0), the `RendMan` smoothing (0x143ac60) and the menu `update(1/30)` calls. Each is a decomp candidate of its own, checked at 60 FPS against a 30 FPS run (the same input, the same outcome).
+1. **`flipper_wait_frame` (0x2034770, 0x84c bytes by its FDE).** The same logic, with `bb::game::frame_step()` = 1/F as the frame time of modes 3 and 4 (the default and the online one) and of the forced default mode. Modes 0 and 1 keep 1/30 (their present interval of 2 caps them at 30 anyway) and mode 2 keeps its 1/60 and its `tearing` = 1, so the game's own 60 FPS mode is not what the option selects. The busy wait stays a busy wait: a sleep would change the frame times we measure against, and it costs only the core the game's main thread already has.
+2. **`main_loop_tick` (0x2018d20, 0x1e0 bytes by its FDE).** The same calls, with `delta_time` = 1/F in the task data it hands to the task manager, so every task and the global task data (0x54b7e08) get the step.
 
-Items 1 and 2 are what #514 needs for a 60 FPS option that runs at the right speed in menus and the world (the check run). Items 3 and 4 decide whether play is right. Expected to break or change at 60 FPS until they are done, and to be checked in combat and outdoor scenes (R8.3 needs the areas R7 opens): physics (ragdolls, thrown objects, breakable props, cloth, which may run its own step), the player's input timing (pad buffer, charge attacks with `R2`, dodges), AI navigation and the enemy target scan, hit-stop (`SprjChrHitStopModule`, not analysed), fades and menu animations. Animation and events that convert their 30 FPS frame data to seconds should stay right.
+At F = 30, 1/F is the game's own 0x3d088889, and the replacements do what the originals do: their differential tests (`tests/game/frame_test.cpp`) run the original and the replacement from the same state and compare every byte they touch. The pacer reads the clock, so the tests give `gettimeofday` a fake wall clock (`bb::hle::kernel::set_wall_clock`) that moves on by a fixed step with every read; the original and the replacement then wait the same number of reads. The singletons are fakes in the harness's arena whose virtual functions are ours, and the task manager's frame runs for real down to a fake task line that records the task data it gets. Not covered by the tests: the pacer's background branch (`window_is_foreground`, 0xfe3980, always returns true), the creation of the pacer on the first tick (it needs the game's configuration and allocator), the `fd4_singleton_missing` reports (0x20b55b0) and the system object's creation (0x20e2550); these are for the disassembly review.
 
-Frame times at 60: the flip grid of #528 (`src/hle/video/vblank_grid.hpp`) was tuned on the 30 FPS clock; at 60 FPS each frame has one vblank, and the clinic showed a p99 of 18.8 ms where a frame misses its slot by a little. #514 should run `rig.py perf` at both rates.
+Replacing the pacer moved `bb-run`'s main-loop probe: it counted the pacer's `gettimeofday` calls by their return address, which now lies in our code. The pacer reports each call to `bb::game::set_frame_observer`, and the probe counts 60 calls.
+
+**Hooks for the other sites.** Function-entry hooks are the only mechanism the repository has for game code; the HLE data initializers cover imported data only. The 1/30 of the remaining sites is an immediate in code (`mov [rbp-0x48], 0x3d088889`) or a load from a constant next to the function. Changing those bytes in place would be a new mechanism, outside the differential harness and the disassembly review, so each site is replaced as a function, like the two above. Two sites need nothing:
+
+- **`HavokWorldUpdate_Post` (0x17f9ce0).** It loads 1/30 into `xmm0` (0x17f9d26, from 0x4927554, read by nothing else) and tail-calls 0xfde7f0, which never reads `xmm0`: it zeroes it (0xfde83e) before the only call that could take a float. The 1/30 is dead.
+- **The three data blocks with 1/30 at the place of `hkp_world_cinfo_init`'s +0x70** (0x2bda86c, 0x2bdc3d4, 0x2bdf7e4) have no references in the analysis.
+
+### Check runs (#514)
+
+`relwithdebinfo`, RADV, `--window`, a shared `--cache-home` for the clinic runs, 2026-11-15, runs in `analysis/rig/runs/` (stamps `20261115-...`). The machine was shared: no other program used the GPU, but another program's processes kept the CPU load average at 13 to 16 on 16 threads until about `-1630` and at 3 to 5 after. Runs in the busy part are marked; the 30 FPS runs show it too (a p99 of 50 to 52 ms where the quiet runs have 33.4 ms).
+
+**Frame times at 60.** `clinic-fight` (the `rig.py perf` route), three runs at 60 that finished (`-162527`, `-163337`, `-164359`, the first two in the busy and the quiet part), against the five reference runs of 2026-11-14 (`rig.py perf --branch ... --reference ...`), p50 / p95 / p99 / max in ms, median over the runs:
+
+| segment | 60 FPS | reference (30 FPS) |
+|---|---|---|
+| `play-stand` | 16.67 / 16.73 / 18.73 / 19.31 | 33.33 / 33.41 / 33.47 / 49.97 |
+| `play-walk` | 16.67 / 18.69 / 18.77 / 19.86 | 33.33 / 33.44 / 50.06 / 50.09 |
+| `play-camera` | 16.67 / 16.70 / 16.82 / 18.76 | 33.33 / 33.41 / 50.01 / 50.19 |
+| `play-dodge` | 16.67 / 16.70 / 16.72 / 17.03 | 33.33 / 49.97 / 50.05 / 50.27 |
+| `play-attack` | 16.67 / 16.70 / 16.73 / 16.95 | 33.33 / 33.39 / 33.43 / 50.11 |
+| `play-lockon` | 16.67 / 16.70 / 16.72 / 17.50 | 33.33 / 33.39 / 33.63 / 50.12 |
+| `play-walk-again` | 16.67 / 16.69 / 16.72 / 16.86 | 33.33 / 33.38 / 33.42 / 50.00 |
+
+No stutter in play. The clinic holds an even 16.7 ms median; in `play-stand` and `play-walk` about 1 to 5 % of the frames miss their slot by 2 ms (18.7 ms), as in #509's check run, which the flip grid of #528, tuned on 30 FPS, may explain. A fourth run at 60 (`-161738`, busy part) ended in `play-dodge` with a segfault of a `GXWorker` thread at guest 0x263b8e7, reading 0x4300000000 while unlinking from a list; the same address faulted in a 30 FPS `main-menu` run of `main` on 2026-11-12 (`20261112-133325`), so it is older than this change, and a frame rate twice as high may only make it more likely. The main menu at 60 (`-163245`): 60.0 presents a second, p50 16.67 ms, p99 16.72 ms.
+
+**Game speed.** The local scenario `fr514` (as #509's, with pictures at fixed delays after each input: 0.35 s and 1.85 s after a backstep, 0.5 s and 2 s after an attack, 1 s after each 2 s walk and after a 2 s camera turn), two runs at 30 (`-160755`, `-161249`) and two at 60 (`-161515`, `-164910`, both 57 to 60 presents a second in every segment). The time from the logos to the still title is 15.51 and 15.53 s at 30 and 15.34 and 14.32 s at 60; the main menu (`main-menu`) took 18.77 s at 30 and 18.86 s at 60. The rig looks at a picture at most once a second, so these agree within that resolution, not within a frame. In the pictures the backsteps and attacks of the 60 runs are in the same phase as at 30 (the same pose 0.35 s and 0.5 s after the press), where #509's 60 run without the step was twice as fast. The mean absolute difference of the same pictures (0 to 255):
+
+| pictures | 30 against 30 | 60 against 60 | 30 against 60 |
+|---|---|---|---|
+| attacks (8) | 1.55 | 2.12 | 5.07 |
+| backsteps (8) | 2.23 | 1.92 | 3.97 |
+| walks and camera turn (4) | 2.71 | 3.15 | 6.16 |
+
+The two rates differ by about twice the noise of either, and the 60 runs agree with each other: something still depends on the frame rate. In the pictures it is the place of the camera and of the hunter, not the phase of an animation: after the first 2 s walk the hunter of both 60 runs stands a little nearer the shelf and the camera follows a little closer, and later pictures keep that offset. Which system does it is not found; the candidates are the remaining per-frame sites of "The step" and the camera's smoothing.
+
+**30 FPS is unchanged.** `rig.py compare` of the branch's `main-menu` at 30 (`-163040`) against two runs of `main` (`-163121`, `-163204`, the same occasion): noise floor 0.0257, ours 0.0254 (ratio 0.99), time to the menu 18.77 s against 19.82 and 18.75 s (ratio 0.97). `clinic-fight` at 30 (`-162014` busy, `-163848` quiet): 30.0 presents a second, p50 33.33 ms in every segment. The 60 FPS `main-menu` run passes the same comparison (ratio 1.49, within twice the floor; time ratio 0.98).
+
+## What is left at 60 FPS
+
+Each is a decomp issue of its own, checked at 60 against a 30 FPS run:
+
+- **Havok world step** (`havok_world_step`, 0x17f99d0): the physics world steps 1/30 s a frame, so at 60 ragdolls, props and anything simulated by the world run twice as fast. The step record's 1/30 (0x17f9b74) feeds the collide (0xb5a2e0) and solve (0xb5b100) stages, so a differential test needs a real Havok world (the full load set), not fakes. With it, `hkp_world_cinfo_init`'s +0x70 (0x63fc3c).
+- **AI step** (`chr_ai_step`, 0x1e2bc10, 0xaf2 bytes): navigation and Havok AI with task data of 1/30. Needs enemies to check (Central Yharnam).
+- **Target bank** (`target_bank_scan_tick`, 0x12a43b0, and the ring's 30 slots a second at 0x12ab623): rescans twice as often, and the ring covers half the time.
+- **Fades** (`chr_list_fade_step`, 0x180f5e0) and the menu `update(1/30)` calls (0x173456e, 0x15dc1f7, 0x1044943, 0x1f77d4a, 0x227784b, 0x18bc4f7): twice as fast.
+- **`RendMan` smoothing** (0x143ac60, `x += (target - x) / 30`, inside a 0x4e6c-byte function): converges twice as fast.
+- **`chr_pad_step`** (0x1572900) is not the player's input: its 1/30 goes to 0x1d145b0, which turns a matrix by the pad's axes times π/2 and −π/3 rad/s, a debug free camera behind a mode check. Low priority.
+- **The offset of camera and hunter** of the check runs above, not yet traced to a site.
+
 
 ## Open questions
 
 - Mode 2's `tearing` = 1: where `graphics +0x104`, 0x513ac84 and the render list's byte at +8 end up (presumably the hsync flip when late).
-- Whether the Havok behaviour and cloth updates take the task data's step; the `HavokWorldUpdate_Post` functor's 1/30 (0x17f9ce0).
+- Whether the Havok behaviour and cloth updates take the task data's step.
 - Whether the step-machine functions with task data of 1/30 read `delta_time`.
 - `skip_wait` (+0x273, set by 0x1cf4c70 with `SprjScaleform`) and `request_0x274` (sets +0x4c, +0x4d and 60 at +0x50 of the object at 0x5540e00): what state skips the wait.
 - The remaining uses of 1/30 and 30.0f that the survey did not classify.
