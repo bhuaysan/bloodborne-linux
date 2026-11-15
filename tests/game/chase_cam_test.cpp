@@ -125,7 +125,7 @@ protected:
 TEST_F(ChaseCam, AtTheGamesRateOnlyCallsTheOriginal) {
     Camera direct = make_camera(), wrapped = make_camera();
     stand_in(&direct, nullptr, nullptr, 1.0f / 30);
-    chase_cam_update_scaled(&stand_in, 1.0, &wrapped, nullptr, nullptr, 1.0f / 30);
+    chase_cam_update_scaled(&stand_in, 1.0, true, &wrapped, nullptr, nullptr, 1.0f / 30);
     EXPECT_EQ(std::memcmp(seen.bytes.data(), make_camera().bytes.data(), cam_size), 0);
     EXPECT_EQ(std::memcmp(direct.bytes.data(), wrapped.bytes.data(), cam_size), 0);
 }
@@ -133,7 +133,7 @@ TEST_F(ChaseCam, AtTheGamesRateOnlyCallsTheOriginal) {
 TEST_F(ChaseCam, ScalesTheFactorsForOneCall) {
     const Camera own = make_camera();
     Camera cam = own;
-    chase_cam_update_scaled(&stand_in, 2.0, &cam, nullptr, nullptr, 1.0f / 60);
+    chase_cam_update_scaled(&stand_in, 2.0, true, &cam, nullptr, nullptr, 1.0f / 60);
     for (std::uint32_t offset : factors) {
         if (offset != lag_rate) {
             EXPECT_FLOAT_EQ(seen.get(offset), half(own.get(offset))) << offset;
@@ -163,23 +163,29 @@ TEST_F(ChaseCam, ScalesTheFactorsForOneCall) {
 TEST_F(ChaseCam, KeepsAResetOfTheEasedFactors) {
     Camera cam = make_camera();
     path = Path::reset;
-    chase_cam_update_scaled(&stand_in, 2.0, &cam, nullptr, nullptr, 1.0f / 60);
+    chase_cam_update_scaled(&stand_in, 2.0, true, &cam, nullptr, nullptr, 1.0f / 60);
     EXPECT_EQ(cam.get(follow_rate), 0.25f);
     EXPECT_EQ(cam.get(lag_rate), 0.25f);
+    // The reset call uses the reset lag factor, scaled; the reset values stay their own.
+    EXPECT_FLOAT_EQ(cam.get(lag_used), half(0.25f));
+    EXPECT_EQ(cam.get(follow_rate_reset), 0.25f);
+    EXPECT_EQ(cam.get(lag_rate_reset), 0.25f);
 }
 
 TEST_F(ChaseCam, LeavesEasedFactorsThatTheCallLeftAlone) {
     Camera cam = make_camera();
     path = Path::skip;
-    chase_cam_update_scaled(&stand_in, 2.0, &cam, nullptr, nullptr, 1.0f / 60);
+    chase_cam_update_scaled(&stand_in, 2.0, false, &cam, nullptr, nullptr, 1.0f / 60);
     EXPECT_EQ(cam.get(follow_rate), 0.2f);
     EXPECT_EQ(cam.get(lag_rate), 0.15f);
+    EXPECT_FLOAT_EQ(cam.get(lag_used), half(0.15f));
+    EXPECT_FLOAT_EQ(seen.get(follow_rate), half(0.2f));
 }
 
 TEST_F(ChaseCam, KeepsTheWeightOfCameraInput) {
     Camera cam = make_camera();
     camera_input = true;
-    chase_cam_update_scaled(&stand_in, 2.0, &cam, nullptr, nullptr, 1.0f / 60);
+    chase_cam_update_scaled(&stand_in, 2.0, true, &cam, nullptr, nullptr, 1.0f / 60);
     EXPECT_EQ(cam.get(input_weight), 1.0f);
     EXPECT_EQ(cam.get(weight_used), 1.0f);
 }
@@ -187,16 +193,16 @@ TEST_F(ChaseCam, KeepsTheWeightOfCameraInput) {
 TEST_F(ChaseCam, ScalesAHeldWeightWithoutDroppingIt) {
     Camera cam = make_camera();
     cam.set(input_hold, 0.1f);
-    chase_cam_update_scaled(&stand_in, 2.0, &cam, nullptr, nullptr, 1.0f / 60);
+    chase_cam_update_scaled(&stand_in, 2.0, true, &cam, nullptr, nullptr, 1.0f / 60);
     EXPECT_FLOAT_EQ(cam.get(weight_used), half(0.6f));
     EXPECT_EQ(cam.get(input_weight), 0.6f);
 }
 
 TEST_F(ChaseCam, TwoCallsAt60MatchOneAt30) {
     Camera at30 = make_camera(), at60 = make_camera(), unscaled = make_camera();
-    chase_cam_update_scaled(&stand_in, 1.0, &at30, nullptr, nullptr, 1.0f / 30);
+    chase_cam_update_scaled(&stand_in, 1.0, true, &at30, nullptr, nullptr, 1.0f / 30);
     for (int i = 0; i < 2; ++i) {
-        chase_cam_update_scaled(&stand_in, 2.0, &at60, nullptr, nullptr, 1.0f / 60);
+        chase_cam_update_scaled(&stand_in, 2.0, true, &at60, nullptr, nullptr, 1.0f / 60);
         stand_in(&unscaled, nullptr, nullptr, 1.0f / 60);
     }
     // Exact for filters with a constant factor, the eases and the weight.
@@ -217,7 +223,7 @@ TEST_F(ChaseCam, LeavesFactorsOutsideZeroToOne) {
     Camera cam = make_camera();
     cam.set(0x240, 1.5f);
     cam.set(pitch_keep, -0.5f);
-    chase_cam_update_scaled(&stand_in, 2.0, &cam, nullptr, nullptr, 1.0f / 60);
+    chase_cam_update_scaled(&stand_in, 2.0, true, &cam, nullptr, nullptr, 1.0f / 60);
     EXPECT_EQ(seen.get(0x240), 1.5f);
     EXPECT_EQ(seen.get(pitch_keep), -0.5f);
 }

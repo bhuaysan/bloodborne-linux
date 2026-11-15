@@ -238,7 +238,7 @@ The scaling is per frame rate, not per `dt`: at 60 every call stands for half a 
 | factor k per call | +0x1b8, +0x1c4, +0x1c8, +0x1cc, +0x23c, +0x240, +0x288, +0x330 | 1 − (1 − k)^(1/c) |
 | kept fraction f (pitch pull-back, 0x143cef0) | +0x1a8 | f^(1/c) |
 | turn per call (lock-on stick, added to the angles at 0x143ca30 without dt) | +0x280, +0x284 | / c |
-| factor eased by 1/30 a call (0x143e2b2), or reset by a wall slide | +0x198 (read before the ease), +0x1ac (read after it) | set so that the factor the game uses is the scaled one; afterwards the ease over 1/c of a call, the reset value, or the own value when the call skipped the ease (collision off, 0x143d6d2) |
+| factor eased by 1/30 a call (0x143e2b2), or reset to +0x1a0 / +0x1b4 by a wall slide (0x143e271) | +0x198 (read before the ease), +0x1ac (read after it, also in a reset call) | set so that the factor the game uses is the scaled one; +0x1b4 scaled for the call; the game's camera collision byte (0x5127a94, tested at 0x143d6d2) tells beforehand whether the call eases. Afterwards the ease over 1/c of a call, the reset value, or the own value when the call skipped the ease |
 | weight that pulls the lag factors toward 1 (0x143e7da) | +0x130, set to 1 by camera input, held for +0x134 s, dropped by dt / +0x1e4 before its use | set so that the dropped value is the scaled one; afterwards 1, the own value or the dropped one |
 
 What stays approximate: a factor that the game changes within a step (the ease, the weight's drop) is sampled twice a step at 60 and once at 30, and the lag factor is multiplied by a ramp the call computes (0x143e7d6). In the unit test of the wrapper the two-calls-at-60 result is within 1/5 of the original's 60 FPS error for these, and exact for the rest.

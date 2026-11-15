@@ -59,7 +59,8 @@ public:
 // Not thread-safe: hooks are applied and removed while no other thread runs game code.
 //
 // An entry with a prologue is also refused when the prologue is shorter than patch_size, longer
-// than the function or than max_prologue, or differs from the bytes in memory.
+// than the function or than max_prologue, or differs from the bytes in memory, and any entry
+// whose patch overlaps the prologue of a live hook (the trampoline jumps back behind it).
 void apply(loader::Image& image, std::span<const Replacement> replaced);
 
 // The longest prologue a trampoline takes.
@@ -69,7 +70,8 @@ inline constexpr std::size_t max_prologue = 32;
 // is hooked with a prologue, a trampoline that runs the prologue and jumps to the instruction
 // behind it; while it isn't hooked (as in the harness), the function itself. Throws HookError
 // when it is hooked without a prologue. The trampoline lives until the hook is removed, so
-// callers ask again instead of keeping the address.
+// callers ask again instead of keeping the address. Safe from any thread while no apply or
+// remove runs.
 void* original(const loader::Image& image, std::uint64_t link);
 
 // Restores the original bytes of each entry and forgets them. Checks every entry first and

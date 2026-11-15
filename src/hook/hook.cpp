@@ -35,6 +35,7 @@ using Trampoline = std::unique_ptr<void, Unmap>;
 struct Saved {
     Bytes original, patch;
     Trampoline trampoline;
+    std::size_t span = patch_size;  // the bytes that must stay as they are: patch or prologue
 };
 
 using Key = std::pair<std::uintptr_t, std::uint64_t>;  // image base, link address
@@ -178,18 +179,29 @@ void apply(loader::Image& image, std::span<const Replacement> replaced) {
                 refuse(r, "the prologue differs from the bytes in memory");
             }
         }
-        for (std::uint64_t at = r.link_addr - std::min(r.link_addr, std::uint64_t{patch_size - 1});
-             at < r.link_addr + patch_size; ++at) {
-            if (live(image, at) != saved().end()) {
+        // A live hook covers its patch and, with a prologue, the bytes its trampoline jumps
+        // back behind; this one must not overlap that, nor its own span another hook's patch.
+        const std::uint64_t span = std::max(patch_size, r.prologue.size());
+        const std::uint64_t first =
+            r.link_addr - std::min(r.link_addr, std::uint64_t{max_prologue - 1});
+        for (std::uint64_t at = first; at < r.link_addr + span; ++at) {
+            auto it = live(image, at);
+            if (it != saved().end() && at + it->second.span > r.link_addr) {
                 refuse(r, std::format("double hook: the patch overlaps the hook at {:#x}", at));
             }
         }
     }
+    // Trampolines first, so a failure there patches nothing.
+    std::vector<Trampoline> trampolines;
     for (const Replacement& r : replaced) {
+        trampolines.push_back(r.prologue.empty() ? Trampoline{} : make_trampoline(image, r));
+    }
+    for (std::size_t i = 0; i < replaced.size(); ++i) {
+        const Replacement& r = replaced[i];
         // Recorded first: if the write fails, live() finds no patch and drops the entry.
         Saved& hook = saved()[{image.base, r.link_addr}];
-        hook = Saved{read(image, r.link_addr), patch_for(r.impl),
-                     r.prologue.empty() ? Trampoline{} : make_trampoline(image, r)};
+        hook = Saved{read(image, r.link_addr), patch_for(r.impl), std::move(trampolines[i]),
+                     std::max(patch_size, r.prologue.size())};
         write(image, r.link_addr, hook.patch);
     }
 }

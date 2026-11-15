@@ -34,9 +34,10 @@ struct Function {
     std::uint8_t value;
 };
 // 0x18 lies inside 0x10, as with overlapping FDEs, 0x40 is one byte shorter than a patch, and the
-// patch at 0xff8 crosses a page boundary. 0x100 gets the code `summing` instead.
-constexpr Function functions[] = {
-    {0x10, 0x20, 42}, {0x18, 0x18, 9}, {0x40, 0xd, 13}, {0x100, 0x18, 0}, {0xff8, 0x20, 7}};
+// patch at 0xff8 crosses a page boundary. 0x100 gets the code `summing` instead, and 0x10e lies
+// within its prologue.
+constexpr Function functions[] = {{0x10, 0x20, 42}, {0x18, 0x18, 9},  {0x40, 0xd, 13},
+                                  {0x100, 0x18, 0}, {0x10e, 0x10, 0}, {0xff8, 0x20, 7}};
 
 // mov eax, 1; mov ecx, 2; mov edx, 3 (the prologue a wrapper declares), add eax, ecx;
 // add eax, edx; ret: returns 6.
@@ -337,6 +338,13 @@ TEST(Hook, CallsTheOriginalThroughATrampoline) {
     expect_refusal([&] { bb::hook::original(image, 0x10); },
                    "hook at 0x10: no prologue, so no original");
     bb::hook::remove(image, plain);
+
+    // A hook inside the prologue would change the bytes the trampoline jumps back behind.
+    bb::hook::apply(image, hook);
+    const Replacement inside[] = {{0x10e, reinterpret_cast<void*>(&replacement_a), "inside"}};
+    expect_refusal([&] { bb::hook::apply(image, inside); },
+                   "hook inside at 0x10e: double hook: the patch overlaps the hook at 0x100");
+    bb::hook::remove(image, hook);
     wrapped_image = nullptr;
 }
 
