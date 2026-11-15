@@ -39,11 +39,15 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           code=true
-          if [ -n "$PR_BASE" ] &&
-             ! git diff --name-only "$PR_BASE...HEAD" |
-               grep -qvE '^docs/|^[^/]+\.md$' &&
-             ! git diff --name-only "$PR_BASE...HEAD" | grep -qx 'docs/source-policy.md'; then
-              code=false
+          if [ -n "$PR_BASE" ]; then
+              # Without renames, so that a file moved into docs/ shows its old
+              # path too. Captured first: grep -q leaving a pipe early would
+              # fail git with SIGPIPE under pipefail.
+              files=$(git diff --name-only --no-renames "$PR_BASE...HEAD")
+              if ! printf '%s\n' "$files" | grep -vE '^docs/|^[^/]+\.md$' >/dev/null &&
+                 ! printf '%s\n' "$files" | grep -x 'docs/source-policy.md' >/dev/null; then
+                  code=false
+              fi
           fi
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"
 
@@ -87,7 +91,7 @@ jobs:
           dnf -y --setopt=install_weak_deps=False install git cmake ninja-build gcc-c++ \
               libasan libubsan gtest-devel python3 spirv-headers-devel spirv-tools \
               vulkan-headers glslang vulkan-loader-devel mesa-vulkan-drivers llvm SDL3-devel \
-              ffmpeg-free-devel ccache
+              ffmpeg-free-devel ccache tar zstd
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -115,7 +119,8 @@ jobs:
           ls /usr/share/vulkan/icd.d/lvp_icd*.json
           test -f /usr/include/SDL3/SDL.h
           # Whether the memfd can take huge pages here (#549).
-          cat /sys/kernel/mm/transparent_hugepage/shmem_enabled || true
+          grep -H . /sys/kernel/mm/transparent_hugepage/shmem_enabled \
+              /sys/kernel/mm/transparent_hugepage/hugepages-*/shmem_enabled || true
 
       - name: Configure
         run: cmake --preset "${{ matrix.preset }}" -DBB_WERROR=ON
