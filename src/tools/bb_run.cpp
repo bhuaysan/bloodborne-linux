@@ -217,6 +217,9 @@ void open_display(const bb::tools::RunOptions& options) {
     if (std::getenv("WAYLAND_DISPLAY") == nullptr && std::getenv("DISPLAY") == nullptr) {
         bb::common::log(LogLevel::warn, channel,
                         "no window, running headless: neither WAYLAND_DISPLAY nor DISPLAY is set");
+        if (options.pad_input) {
+            bb::common::log(LogLevel::warn, channel, "--pad-input is not read without a window");
+        }
         return;
     }
     std::string why;
@@ -380,7 +383,9 @@ int start(const bb::tools::RunOptions& options) {
     // The imported system libraries (docs/design/os-libraries.md), before the imports are linked.
     // A NID that src/hle registers too throws here.
     Core::Loader::SymbolsResolver symbols;
-    if (options.pad_input && !options.headless) {
+    if (options.pad_input && options.headless) {
+        bb::common::log(LogLevel::warn, channel, "--pad-input is ignored: --headless has no window");
+    } else if (options.pad_input) {
         // Before the libraries: the pad library gives slot 0 to the first pad SDL lists when it
         // registers, so the input's pad has to be there, and the other controllers ignored.
         std::string why;
@@ -419,6 +424,9 @@ int start(const bb::tools::RunOptions& options) {
 #else
     bb::hle::video::start_video_out(nullptr);
     bb::hle::video::start_gnm(nullptr);
+    if (options.pad_input) {
+        bb::common::log(LogLevel::warn, channel, "--pad-input is ignored: built without a window");
+    }
 #endif
     run_game(*game, options.timeout_seconds);
 }

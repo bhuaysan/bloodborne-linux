@@ -3,7 +3,7 @@
 
   rig.py setup                          download and check the reference (shadPS4 v.0.21.0)
   rig.py run reference new-game-to-clinic    a scenario from tools/rig/scenarios/ on the reference
-  rig.py run bb-run --time 120          our program under the same limits, with the same virtual gamepad
+  rig.py run bb-run --time 120          our program under the same limits, with the same scripted input
   rig.py run TARGET --user-from DIR ...   start with a copy of the user/ directory of an earlier run
   rig.py compare REF_RUN REF_RUN OUR_RUN     our menu captures and time against two reference runs
 

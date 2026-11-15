@@ -4,9 +4,11 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <array>
+#include <csignal>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -345,6 +347,9 @@ TEST(SysLibsHost, PadFollowsThePadInputStream) {
     };
 
     ASSERT_TRUE(wait_for([&](const Input::State&) { return pad.m_sdl_gamepad != nullptr; }));
+    // Slot 0 is the stream's pad. (SDL lists a second virtual joystick whatever the ignore hint
+    // says, so a decoy cannot show the other controllers being ignored; the rig run does.)
+    EXPECT_STREQ(SDL_GetGamepadName(pad.m_sdl_gamepad), "bloodborne-linux input stream");
     // The d-pad, a button, a trigger, and a line the parser refuses between them.
     send("button A 1\naxis HY 1\nbutton nonsense\naxis RT 255\n");
     EXPECT_TRUE(wait_for([&](const Input::State& s) {
@@ -359,6 +364,36 @@ TEST(SysLibsHost, PadFollowsThePadInputStream) {
     }));
     ::close(writer);
     std::filesystem::remove(fifo);
+    // The hint OpenPadInput set must not hide the other tests' pad.
+    SDL_SetHintWithPriority(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT, "0x1234/0x5678",
+                            SDL_HINT_OVERRIDE);
+}
+
+// SIGTERM must still end the process after OpenPadInput, as `timeout` and the rig's stop need.
+// SDL installs its own handlers when it starts, unless the hint is set first, so the child stops
+// SDL (which also forgets the hints) and starts it again through OpenPadInput.
+TEST(SysLibsHost, PadInputKeepsSigtermFatal) {
+    const std::filesystem::path fifo =
+        std::filesystem::temp_directory_path() / std::format("bb-pad-term-{}", ::getpid());
+    ASSERT_EQ(::mkfifo(fifo.c_str(), 0600), 0);
+    const pid_t child = ::fork();
+    ASSERT_GE(child, 0);
+    if (child == 0) {
+        ::alarm(10);
+        SDL_Quit();
+        std::string why;
+        if (!Libraries::Pad::OpenPadInput(fifo.string(), why)) {
+            ::_exit(3);
+        }
+        ::raise(SIGTERM);
+        ::usleep(500 * 1000);  // a handler would have turned it into an SDL quit event
+        ::_exit(7);
+    }
+    int status = 0;
+    ASSERT_EQ(::waitpid(child, &status, 0), child);
+    std::filesystem::remove(fifo);
+    ASSERT_TRUE(WIFSIGNALED(status)) << "exit status " << WEXITSTATUS(status);
+    EXPECT_EQ(WTERMSIG(status), SIGTERM);
 }
 
 }  // namespace

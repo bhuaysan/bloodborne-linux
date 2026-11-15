@@ -29,7 +29,8 @@ EVENT = struct.Struct("qqHHi")  # struct input_event on x86-64
 
 # The uinput pad is not a real Xbox 360 pad's 045e:028e: programs that use SDL can ignore it with
 # SDL_GAMECONTROLLER_IGNORE_DEVICES=0x1209/0xb4b5 without hiding real Xbox pads. The ids are
-# arbitrary ones from the vendor id pid.codes shares among open hardware without an id of its own.
+# an unregistered pair under 0x1209, the vendor id pid.codes shares among open source hardware,
+# chosen so that they collide with no real Xbox pad.
 VENDOR_ID, PRODUCT_ID, VERSION = 0x1209, 0xB4B5, 0x0110
 DEVICE_NAME = b"bloodborne-linux rig pad"
 # SDL does not know the pad, so the reference needs its mapping (SDL_GAMECONTROLLERCONFIG). It is

@@ -195,7 +195,9 @@ void Apply(SDL_Joystick* joystick, const std::vector<bb::common::PadUpdate>& upd
 // Reads the stream until the process ends. Each line is applied as it arrives, so a tap lasts as
 // long as the writer waits between its two lines, as it does on a uinput device.
 void ReadPadStream(int fd, SDL_Joystick* joystick) {
+    constexpr std::size_t max_line = 256;  // the longest valid line has about 20 characters
     std::string pending;
+    bool dropping = false;  // inside a line that was too long, up to its newline
     char buffer[4096];
     for (;;) {
         const ssize_t got = read(fd, buffer, sizeof(buffer));
@@ -203,9 +205,22 @@ void ReadPadStream(int fd, SDL_Joystick* joystick) {
             continue;
         }
         if (got <= 0) {
+            bb::common::log(bb::common::LogLevel::warn, "pad", "pad input ends, {}: no more input",
+                            got == 0 ? "end of file" : std::strerror(errno));
             return;
         }
         pending.append(buffer, static_cast<std::size_t>(got));
+        if (dropping) {
+            const std::size_t nl = pending.find('\n');
+            pending.erase(0, nl == std::string::npos ? pending.size() : nl + 1);
+            dropping = nl == std::string::npos;
+        }
+        if (!dropping && pending.find('\n') == std::string::npos && pending.size() > max_line) {
+            bb::common::log(bb::common::LogLevel::warn, "pad",
+                            "pad input line longer than {} bytes dropped", max_line);
+            pending.clear();
+            dropping = true;
+        }
         for (std::size_t end; (end = pending.find('\n')) != std::string::npos;
              pending.erase(0, end + 1)) {
             const std::string line = pending.substr(0, end);
@@ -230,6 +245,9 @@ bool OpenPadInput(const std::string& path, std::string& why) {
         why = path + ": " + std::strerror(errno);
         return false;
     }
+    // As InitHLELibs does, and before SDL starts: a later hint would not remove the handlers SDL
+    // installs for SIGINT and SIGTERM, so `timeout` and the rig's stop would not end the run.
+    SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     // Only the virtual pad counts. The environment's value of the hint, which the rig sets for
     // the reference, must not win.
     const std::string only = std::format("0x{:04x}/0x{:04x}", bb::common::pad_stream_vendor,
