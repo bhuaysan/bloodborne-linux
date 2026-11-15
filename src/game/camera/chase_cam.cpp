@@ -2,6 +2,7 @@
 // camera"): a wrapper around the game's update that scales its per-call filters.
 #include "game/camera/chase_cam.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -42,16 +43,27 @@ struct Scaled {
     float own, scaled;
 };
 
-// The game's ease of an eased factor: `rate` toward `target` by rate_ease a call, or `reset`
-// when the camera resets it. Redone from the value before the call over 1/calls of a call.
-void ease_again(void* cam, const Scaled& rate, std::uint32_t target, std::uint32_t reset,
-                double calls) {
-    const float now = load(cam, rate.offset);
-    if (now == load(cam, reset)) {
-        return;  // reset during the call
+// An eased factor (follow_rate, lag_rate): the game sets it to `reset` or moves it toward
+// `target` by rate_ease a call, or leaves it alone.
+struct Eased {
+    std::uint32_t offset, target, reset;
+    float own, eased, set;  // eased: over 1 / calls of a call; set: the value before the call
+
+    // After the call: a reset stays, a skipped ease gives the own value back, an ease the eased
+    // one.
+    void settle(void* cam) const {
+        const float now = load(cam, offset);
+        if (now != load(cam, reset)) {
+            store(cam, offset, now == set ? own : eased);
+        }
     }
-    const float k = scale_factor(chase_cam::rate_ease, calls);
-    store(cam, rate.offset, rate.own + (load(cam, target) - rate.own) * k);
+};
+
+Eased eased_factor(const void* cam, std::uint32_t offset, std::uint32_t target,
+                   std::uint32_t reset, double calls) {
+    const float own = load(cam, offset);
+    const float eased = own + (load(cam, target) - own) * scale_factor(chase_cam::rate_ease, calls);
+    return {offset, target, reset, own, eased, scale_factor(own, calls)};
 }
 
 }  // namespace
@@ -63,32 +75,57 @@ void chase_cam_update_scaled(ChaseCamUpdate* original, double calls, void* cam, 
         return;
     }
     using namespace chase_cam;
-    Scaled fields[factors.size() + 3];
+
+    // Fields the game only reads: scaled for the call, their own value afterwards.
+    Scaled plain[factors.size() + 1];
     std::size_t n = 0;
     for (std::uint32_t offset : factors) {
-        const float own = load(cam, offset);
-        fields[n++] = {offset, own, scale_factor(own, calls)};
+        if (offset != follow_rate && offset != lag_rate) {
+            const float own = load(cam, offset);
+            plain[n++] = {offset, own, scale_factor(own, calls)};
+        }
     }
     const float keep = load(cam, pitch_keep);
-    fields[n++] = {pitch_keep, keep, scale_kept(keep, calls)};
+    plain[n++] = {pitch_keep, keep, scale_kept(keep, calls)};
     for (std::uint32_t offset : {stick_x_scale, stick_y_scale}) {
         const float own = load(cam, offset);
-        fields[n++] = {offset, own, static_cast<float>(own / calls)};
+        plain[n++] = {offset, own, static_cast<float>(own / calls)};
     }
-    for (const Scaled& f : fields) {
-        store(cam, f.offset, f.scaled);
+
+    // follow_rate is read before its ease, so it is set to the scaled value. lag_rate is read
+    // after it, so it is set to what eases into the scaled value of its eased value.
+    Eased follow = eased_factor(cam, follow_rate, follow_rate_target, follow_rate_reset, calls);
+    Eased lag = eased_factor(cam, lag_rate, lag_rate_target, lag_rate_reset, calls);
+    const float lag_used = scale_factor(lag.eased, calls);
+    lag.set = (lag_used - load(cam, lag_rate_target) * rate_ease) / (1.0f - rate_ease);
+
+    // input_weight: the game drops it by `fade` once the hold has run out (as it computes
+    // that), then uses it. It is set so that the dropped value is the scaled one.
+    const float own_weight = load(cam, input_weight);
+    const float fade = dt / load(cam, input_fade_time);
+    const bool fades = !(0.0f < std::max(0.0f, load(cam, input_hold) - dt));
+    const float weight = fades ? std::max(0.0f, own_weight - fade) : own_weight;
+    const float weight_used = scale_factor(weight, calls);
+    const float weight_set = fades ? weight_used + fade : weight_used;
+
+    for (std::size_t i = 0; i < n; ++i) {
+        store(cam, plain[i].offset, plain[i].scaled);
     }
+    store(cam, follow_rate, follow.set);
+    store(cam, lag_rate, lag.set);
+    store(cam, input_weight, weight_set);
 
     original(cam, chr, world, dt);
 
-    for (const Scaled& f : fields) {
-        if (f.offset == follow_rate) {
-            ease_again(cam, f, follow_rate_target, follow_rate_reset, calls);
-        } else if (f.offset == lag_rate) {
-            ease_again(cam, f, lag_rate_target, lag_rate_reset, calls);
-        } else if (load(cam, f.offset) == f.scaled) {
-            store(cam, f.offset, f.own);  // a field the call wrote keeps the new value
-        }
+    for (std::size_t i = 0; i < n; ++i) {
+        store(cam, plain[i].offset, plain[i].own);
+    }
+    follow.settle(cam);
+    lag.settle(cam);
+    // Camera input sets the weight to 1; a call that didn't drop it gives the own value back.
+    const float now_weight = load(cam, input_weight);
+    if (now_weight != 1.0f) {
+        store(cam, input_weight, now_weight == weight_set ? own_weight : weight);
     }
 }
 

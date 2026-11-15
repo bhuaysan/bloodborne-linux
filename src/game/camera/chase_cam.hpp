@@ -20,11 +20,17 @@ inline constexpr std::array<std::uint8_t, 20> chase_cam_prologue = {
 // value toward its target by k per call; a kept fraction keeps that much of the distance per
 // call; a stick scale is the turn per call and stick unit.
 namespace chase_cam {
+// The weight that pulls the lag factors toward 1: set to 1 by camera input, then held for
+// +0x134 seconds and dropped by one per +0x1e4 seconds. The game decays it before its use.
+inline constexpr std::uint32_t input_weight = 0x130;
+inline constexpr std::uint32_t input_hold = 0x134;
+inline constexpr std::uint32_t input_fade_time = 0x1e4;
 inline constexpr std::uint32_t follow_rate = 0x198;  // follow point, eased toward +0x19c
 inline constexpr std::uint32_t follow_rate_target = 0x19c;
 inline constexpr std::uint32_t follow_rate_reset = 0x1a0;
 inline constexpr std::uint32_t pitch_keep = 0x1a8;  // kept fraction of the pitch pull-back
-inline constexpr std::uint32_t lag_rate = 0x1ac;    // position lag, eased toward +0x1b0
+// Horizontal position lag, eased toward +0x1b0. Unlike follow_rate it is read after its ease.
+inline constexpr std::uint32_t lag_rate = 0x1ac;
 inline constexpr std::uint32_t lag_rate_target = 0x1b0;
 inline constexpr std::uint32_t lag_rate_reset = 0x1b4;
 inline constexpr std::uint32_t stick_x_scale = 0x280;  // lock-on stick turn
@@ -39,9 +45,11 @@ inline constexpr float rate_ease = 1.0f / 30.0f;
 
 // Runs `original` once on `cam` as if it ran `calls` times as often: every per-call factor k
 // becomes 1 - (1 - k)^(1 / calls), every kept fraction f becomes f^(1 / calls) and every stick
-// scale is divided by `calls`, for this call only. The two eased factors then take their ease
-// over the step again. With calls == 1 it only calls `original`. Factors outside [0, 1] stay
-// as they are.
+// scale is divided by `calls`, for this call only. Fields the game changes inside the call
+// before it uses them (the eased factors, input_weight) are set so that the value the game
+// uses is the scaled one, and afterwards get the value the game would give them at its own
+// rate over 1 / calls of a call; a path that leaves them alone gets their own value back.
+// With calls == 1 it only calls `original`. Factors outside [0, 1] stay as they are.
 void chase_cam_update_scaled(ChaseCamUpdate* original, double calls, void* cam, void* chr,
                              void* world, float dt);
 
