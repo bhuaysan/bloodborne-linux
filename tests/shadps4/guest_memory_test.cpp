@@ -229,6 +229,57 @@ TEST(GuestMemory, LargeRangesFromFreeSpaceAreClampedToo) {
     EXPECT_EQ(release_direct(offset, gib), 0);
 }
 
+// Whether the memfd has a page at `offset`, or a hole there that reads as zeros.
+bool has_data(std::uint64_t offset) {
+    return ::lseek(dmem::fd(), static_cast<off_t>(offset), SEEK_DATA) == static_cast<off_t>(offset);
+}
+
+// A large copy (#531) reads the memfd's holes, which the guest never wrote, as zeros without
+// faulting pages in for them, and copies the written bytes around them: here across two
+// mappings whose backings lie the other way round in the memfd, from and to odd offsets.
+TEST(GuestMemory, LargeCopiesSkipTheHolesOfTheBacking) {
+    memory();
+    constexpr std::uint64_t half = 32 * page_size;  // 512 KiB
+    void* range = nullptr;
+    ASSERT_EQ(reserve_range(&range, 2 * half, 0, 0), 0);
+    std::uint64_t offset = 0;
+    // Aligned to the copy's 64 KiB steps, which read the holes in a step with data.
+    ASSERT_EQ(allocate_direct(0, direct_memory_size(), 2 * half, 4 * page_size, 0, &offset), 0);
+    ASSERT_FALSE(has_data(offset));  // a fresh allocation is one hole
+    const BatchEntry swapped[2] = {
+        {addr(range), offset + half, half, 3, {}, dmem::batch_map},
+        {addr(range) + half, offset, half, 3, {}, dmem::batch_map},
+    };
+    ASSERT_EQ(map_direct_batch(swapped, 2, nullptr), 0);
+    auto* const guest = static_cast<u8*>(range);
+    std::vector<u8> expected(2 * half, 0);
+    const auto write = [&](std::uint64_t at, u8 value, std::uint64_t length) {
+        std::memset(guest + at, value, length);
+        std::memset(expected.data() + at, value, length);
+    };
+    write(0, 0x11, 3);                                 // the first bytes
+    write(page_size - 2, 0x22, 4);                     // across a page boundary
+    write(5 * page_size + 100, 0x33, 3 * page_size);   // several pages
+    write(half - 1, 0x44, 2);                          // across the two mappings
+    write(2 * half - 1, 0x55, 1);                      // the last byte
+    const std::uint64_t from = 1, length = 2 * half - 2;
+    std::vector<u8> read(length, 0xee);
+    memory().CopySparseMemory(addr(range) + from, read.data(), length);
+    EXPECT_TRUE(std::equal(read.begin(), read.end(), expected.begin() + from));
+    // The steps without a written page are still holes (the backing of the second half comes
+    // first in the memfd).
+    EXPECT_TRUE(has_data(offset + half));
+    EXPECT_FALSE(has_data(offset + half + 12 * page_size));
+    EXPECT_FALSE(has_data(offset + half + 20 * page_size));
+    EXPECT_FALSE(has_data(offset + 4 * page_size));
+    // A copy under the size that looks for holes reads the same.
+    std::vector<u8> small(3 * page_size, 0xee);
+    memory().CopySparseMemory(addr(range) + 4 * page_size, small.data(), small.size());
+    EXPECT_TRUE(std::equal(small.begin(), small.end(), expected.begin() + 4 * page_size));
+    EXPECT_EQ(sceKernelMunmap(range, 2 * half), 0);
+    EXPECT_EQ(release_direct(offset, 2 * half), 0);
+}
+
 // The coverage bb-run logs: every GPU-visible region is backed page by page, and the table holds
 // no other entries.
 TEST(GuestMemory, CoverageCountsTheBackedRegions) {
@@ -610,16 +661,18 @@ TEST(GuestMemory, AFaultsRunEndsAtGpuWrittenAndImagePages) {
 // range (protecting the modified pages again and copying them into its copy of the memory) and
 // keeps an image over part of it tracked. A write the tracking missed would leave the copy stale:
 // once the writers stop, one more sync has to make it equal to guest memory, with every page
-// protected again.
-TEST(GuestMemory, ConcurrentFaultsAndSyncsMissNoWrite) {
-    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
-        GTEST_SKIP() << reason;
-    }
+// protected again. With `through_backing` the copy is CopySparseMemory's, as the buffer cache's:
+// the memory starts as one hole of the memfd, and the writers' first writes to its pages race
+// with the copies that skip the holes (#531).
+void concurrent_faults_and_syncs(bool through_backing) {
     {
         Gpu gpu;
         constexpr u64 pages = 512;  // 2 MiB, 8 words of the region bits
         constexpr u64 words_per_page = tp / sizeof(u64);
         Direct d(pages / pages_per_kernel_page);
+        if (through_backing) {
+            EXPECT_FALSE(has_data(d.offset));  // the copies start on one hole
+        }
         auto* const words = static_cast<u64*>(d.address);
         const std::uintptr_t start = addr(d.address);
         const u64 size = pages * tp;
@@ -627,6 +680,10 @@ TEST(GuestMemory, ConcurrentFaultsAndSyncsMissNoWrite) {
         const auto upload = [&](const std::vector<std::pair<u64, u64>>& ranges) {
             for (const auto& [at, bytes] : ranges) {
                 const u64 first = (at - start) / sizeof(u64);
+                if (through_backing) {
+                    memory().CopySparseMemory(at, reinterpret_cast<u8*>(&copy[first]), bytes);
+                    continue;
+                }
                 for (u64 i = first; i < first + bytes / sizeof(u64); ++i) {
                     copy[i] = std::atomic_ref<u64>(words[i]).load(std::memory_order_relaxed);
                 }
@@ -699,6 +756,20 @@ TEST(GuestMemory, ConcurrentFaultsAndSyncsMissNoWrite) {
         EXPECT_GT(bb::shadps4::claimed_faults() - claimed, min_faults) << sync << " syncs";
         d.unmap();
     }
+}
+
+TEST(GuestMemory, ConcurrentFaultsAndSyncsMissNoWrite) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    concurrent_faults_and_syncs(false);
+}
+
+TEST(GuestMemory, ConcurrentWritesIntoHolesReachTheCopy) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    concurrent_faults_and_syncs(true);
 }
 
 }  // namespace

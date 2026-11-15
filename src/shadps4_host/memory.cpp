@@ -1,19 +1,21 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/memory.cpp, src/core/address_space.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-11: the guest memory video_core reads and writes, on top
+// Changed for bloodborne-linux, 2026-11-15: the guest memory video_core reads and writes, on top
 // of our kernel's vmem and dmem (docs/design/renderer.md, "One backing for every page the GPU can
 // see", "The mapping observer replaces the mirror's"). The backing is dmem's memfd; the page table
 // follows the kernel's mapping observer instead of upstream's own map calls, and SetRasterizer
-// replays the mappings made before it. CopySparseMemory and Protect are upstream's;
-// IsValidMapping, ClampRangeSize and TryWriteBacking keep upstream's rules on the kernel's guest
-// window, region table and the page table. The observer also lifts the write tracking before a
-// system call writes guest memory and, as upstream's sceKernelMprotect, after a guest mprotect.
+// replays the mappings made before it. CopySparseMemory (which skips the memfd's holes, #531)
+// and Protect are upstream's; IsValidMapping, ClampRangeSize and TryWriteBacking keep upstream's
+// rules on the kernel's guest window, region table and the page table. The observer also lifts
+// the write tracking before a system call writes guest memory and, as upstream's
+// sceKernelMprotect, after a guest mprotect.
 // License texts: third_party/shadps4/LICENSES/
 
 #include "core/memory.h"
 
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <bit>
@@ -226,8 +228,78 @@ u64 MemoryManager::ClampRangeSize(VAddr virtual_addr, u64 size) {
     return clamped_size;
 }
 
+namespace {
+
+// Copies of at least this many bytes look for holes in the memfd first (CopyBacking), in steps of
+// this many bytes.
+constexpr u64 HOLE_CHECK_SIZE = 64_KB;
+
+// Copies [offset, offset + size) of the memfd, mapped at `backing`, to `dest`: the holes as zeros,
+// without reading them, and the rest with memcpy.
+//
+// Ours (#531). A hole is memfd memory nobody wrote since it was allocated or released (dmem
+// punches the hole). It reads as zeros, but reading it through the shared mapping costs a page
+// fault that allocates and clears a page, about 2.8 us per 4 KiB: on yharnam-route the game binds
+// 4 MiB vertex buffers it has barely written (2 of 1024 pages resident), and their first sync took
+// 2.9 ms each, up to 25 ms in a frame, against 0.2 ms for a written 4 MiB.
+//
+// lseek's SEEK_DATA finds the next data from `at` (swapped-out pages count as data; mincore would
+// count them as missing) in about 1 us, also across gigabytes of holes. SEEK_HOLE is no use here:
+// it walks the data page by page up to the next hole, however far past the copy that lies (6 ms
+// for 512 MiB of data). So the data is copied in steps of HOLE_CHECK_SIZE, each from the data
+// SEEK_DATA found to the end of its step, holes inside a step read as before. On an lseek error
+// the rest is copied with memcpy, as before.
+//
+// No lock is needed and none is taken: the result is the same as a memcpy at some moment of the
+// copy. A page that turns from hole to data while we copy was written by the guest after the
+// buffer cache protected it again (the caller syncs ranges only after ForEachUploadRange has
+// cleared their CPU-modified state and protected them, and a store that finished before that
+// mprotect had already allocated its page), so the write faulted and marked the page modified
+// again, and the next sync uploads it, exactly as when memcpy reads the page before such a write.
+// A page released while we copy reads as zeros either way. The memfd's file offset that lseek
+// moves is used by nothing else: every other user of the fd maps it or punches holes by offset.
+void CopyBacking(const u8* backing, u64 offset, u8* dest, u64 size) {
+    const int fd = bb::hle::kernel::dmem::fd();
+    if (size < HOLE_CHECK_SIZE || fd < 0) {
+        std::memcpy(dest, backing, size);
+        return;
+    }
+    const u64 end = offset + size;
+    u64 at = offset;
+    while (at < end) {
+        const off_t data = ::lseek(fd, static_cast<off_t>(at), SEEK_DATA);
+        if (data < 0 && errno != ENXIO) {
+            break;
+        }
+        // ENXIO: no data after `at`, the rest is one hole.
+        const u64 data_start = data < 0 ? end : std::min<u64>(static_cast<u64>(data), end);
+        std::memset(dest + (at - offset), 0, data_start - at);
+        at = data_start;
+        if (at == end) {
+            return;
+        }
+        const u64 step_end = std::min<u64>((at / HOLE_CHECK_SIZE + 1) * HOLE_CHECK_SIZE, end);
+        std::memcpy(dest + (at - offset), backing + (at - offset), step_end - at);
+        at = step_end;
+    }
+    std::memcpy(dest + (at - offset), backing + (at - offset), end - at);
+}
+
+}  // namespace
+
 void MemoryManager::CopySparseMemory(VAddr virtual_addr, u8* dest, u64 size) {
     const auto& backing_pages = impl.BackingPages();
+    // Ours: the pages whose backing follows on in the memfd are copied as one run, so that
+    // CopyBacking can skip the holes of a large one. Upstream copies page by page.
+    const u8* run = nullptr;
+    u8* run_dest = dest;
+    u64 run_size = 0;
+    const auto flush_run = [&] {
+        if (run_size != 0) {
+            CopyBacking(run, static_cast<u64>(run - impl.backing_base), run_dest, run_size);
+        }
+        run_size = 0;
+    };
     while (size) {
         const u64 page = virtual_addr >> GUEST_PAGE_BITS;
         const u64 offset_in_page = virtual_addr % GUEST_PAGE_SIZE;
@@ -235,14 +307,22 @@ void MemoryManager::CopySparseMemory(VAddr virtual_addr, u8* dest, u64 size) {
         // Ours: the table ends at the GPU's 40 bits, and so do the pages it backs.
         const auto* entry = IsValidGpuMapping(virtual_addr, 0) ? backing_pages.find(page) : nullptr;
         if (entry && *entry) {
-            std::memcpy(dest, *entry + offset_in_page, copy_size);
+            const u8* source = *entry + offset_in_page;
+            if (run_size == 0 || run + run_size != source) {
+                flush_run();
+                run = source;
+                run_dest = dest;
+            }
+            run_size += copy_size;
         } else {
+            flush_run();
             std::memset(dest, 0, copy_size);
         }
         size -= copy_size;
         virtual_addr += copy_size;
         dest += copy_size;
     }
+    flush_run();
 }
 
 // Upstream writes the backed mappings from the start of the range on, up to the first that has
