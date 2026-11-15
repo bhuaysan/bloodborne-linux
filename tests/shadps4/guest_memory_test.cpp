@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <atomic>
 #include <random>
@@ -235,24 +236,49 @@ bool has_data(std::uint64_t offset) {
     return ::lseek(dmem::fd(), static_cast<off_t>(offset), SEEK_DATA) == static_cast<off_t>(offset);
 }
 
-// A memfd gives each page its own hole only while the host keeps shared memory in small pages.
-// With transparent huge pages for it (shmem_enabled, as on some CI hosts) one write, or a read
-// fault on a hole, takes the whole 2 MiB page, so no hole is left next to it. The copies stay
-// correct then (a step over data copies zeros from memory); only the checks of which parts are
-// still holes don't apply.
-const std::uint64_t huge_page = 2 * 1024 * 1024;
-bool backing_keeps_page_holes() {
-    static const bool keeps = [] {
-        Direct probe(2 * huge_page / page_size, huge_page);
-        static_cast<volatile u8*>(probe.address)[0] = 1;
-        const bool page_holes = !has_data(probe.offset + page_size);
-        probe.unmap();
-        return page_holes;
-    }();
-    if (!keeps) {
-        std::printf("the memfd takes huge pages: the checks of its holes are left out\n");
+// Whether [offset, offset + length) of the memfd has data anywhere.
+bool any_data(std::uint64_t offset, std::uint64_t length) {
+    const off_t data = ::lseek(dmem::fd(), static_cast<off_t>(offset), SEEK_DATA);
+    return data >= 0 && static_cast<std::uint64_t>(data) < offset + length;
+}
+
+// Shared memory in huge pages (a host's shmem_enabled, or a tmpfs mounted huge=) comes in 2 MiB
+// blocks of the memfd: so that a test's memory shares no block with another allocation, it
+// allocates whole blocks.
+constexpr std::uint64_t huge_page = 2 * 1024 * 1024;
+
+// A fresh allocation is one hole. A CI run once found data at the start of one (#531), cause
+// not found (nothing in the process had written the memfd yet); a test that starts on holes
+// punches its blocks then, before it writes anything, so the memory reads zeros either way.
+// Whether [offset, offset + length) is one hole now.
+bool make_hole(std::uint64_t offset, std::uint64_t length) {
+    if (any_data(offset, length)) {
+        std::printf("data in a fresh allocation at %#llx: punched\n",
+                    static_cast<unsigned long long>(offset));
+        if (::fallocate(dmem::fd(), FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+                        static_cast<off_t>(offset), static_cast<off_t>(length)) != 0) {
+            return false;
+        }
     }
-    return keeps;
+    return !any_data(offset, length);
+}
+
+// Whether the memfd kept a page the test never wrote, at each of `unwritten`, as a hole next to
+// the pages it wrote. In huge pages a write, or a read of a hole, takes its whole 2 MiB block,
+// and no hole is left next to it. That is decided per mapping (the mapping's address has to lie
+// at the block's offset modulo 2 MiB), so each test asks about its own memory, after its writes
+// and before its copies: what this checks depends on the host only, never on the copy under
+// test. Without page holes the copies stay correct (a step over data copies zeros from memory)
+// and are still checked; only the checks of which parts are still holes don't apply.
+bool keeps_page_holes(std::initializer_list<std::uint64_t> unwritten) {
+    for (const std::uint64_t offset : unwritten) {
+        if (has_data(offset)) {
+            std::printf("no page hole at %#llx (huge pages): the checks of holes are left out\n",
+                        static_cast<unsigned long long>(offset));
+            return false;
+        }
+    }
+    return true;
 }
 
 // A large copy (#531) reads the memfd's holes, which the guest never wrote, as zeros without
@@ -264,9 +290,10 @@ TEST(GuestMemory, LargeCopiesSkipTheHolesOfTheBacking) {
     void* range = nullptr;
     ASSERT_EQ(reserve_range(&range, 2 * half, 0, 0), 0);
     std::uint64_t offset = 0;
-    // Aligned to the copy's 64 KiB steps, which read the holes in a step with data.
-    ASSERT_EQ(allocate_direct(0, direct_memory_size(), 2 * half, 4 * page_size, 0, &offset), 0);
-    ASSERT_FALSE(has_data(offset));  // a fresh allocation is one hole
+    // One block of huge pages (aligned to the copy's 64 KiB steps too, which read the holes in
+    // a step with data), of which the test uses the first half.
+    ASSERT_EQ(allocate_direct(0, direct_memory_size(), huge_page, huge_page, 0, &offset), 0);
+    ASSERT_TRUE(make_hole(offset, huge_page));
     const BatchEntry swapped[2] = {
         {addr(range), offset + half, half, 3, {}, dmem::batch_map},
         {addr(range) + half, offset, half, 3, {}, dmem::batch_map},
@@ -283,6 +310,8 @@ TEST(GuestMemory, LargeCopiesSkipTheHolesOfTheBacking) {
     write(5 * page_size + 100, 0x33, 3 * page_size);   // several pages
     write(half - 1, 0x44, 2);                          // across the two mappings
     write(2 * half - 1, 0x55, 1);                      // the last byte
+    // Pages of each mapping that were not written.
+    const bool page_holes = keeps_page_holes({offset + half + 2 * page_size, offset + page_size});
     const std::uint64_t from = 1, length = 2 * half - 2;
     std::vector<u8> read(length, 0xee);
     memory().CopySparseMemory(addr(range) + from, read.data(), length);
@@ -290,7 +319,7 @@ TEST(GuestMemory, LargeCopiesSkipTheHolesOfTheBacking) {
     // The steps without a written page are still holes (the backing of the second half comes
     // first in the memfd).
     EXPECT_TRUE(has_data(offset + half));
-    if (backing_keeps_page_holes()) {
+    if (page_holes) {
         EXPECT_FALSE(has_data(offset + half + 12 * page_size));
         EXPECT_FALSE(has_data(offset + half + 20 * page_size));
         EXPECT_FALSE(has_data(offset + 4 * page_size));
@@ -300,7 +329,7 @@ TEST(GuestMemory, LargeCopiesSkipTheHolesOfTheBacking) {
     memory().CopySparseMemory(addr(range) + 4 * page_size, small.data(), small.size());
     EXPECT_TRUE(std::equal(small.begin(), small.end(), expected.begin() + 4 * page_size));
     EXPECT_EQ(sceKernelMunmap(range, 2 * half), 0);
-    EXPECT_EQ(release_direct(offset, 2 * half), 0);
+    EXPECT_EQ(release_direct(offset, huge_page), 0);
 }
 
 // Over a long run of data the large copy's steps grow (fewer lseek calls), and after it they read
@@ -312,9 +341,9 @@ TEST(GuestMemory, LargeCopiesReadBoundedHolesAfterLongData) {
     constexpr std::uint64_t data = 1536 * 1024;  // 1.5 MiB written from the start
     void* range = nullptr;
     std::uint64_t offset = 0;
-    ASSERT_EQ(allocate_direct(0, direct_memory_size(), size, 4 * page_size, 0, &offset), 0);
+    ASSERT_EQ(allocate_direct(0, direct_memory_size(), size, huge_page, 0, &offset), 0);
+    ASSERT_TRUE(make_hole(offset, size));
     ASSERT_EQ(map_direct(&range, size, 3, 0, offset, 0), 0);
-    ASSERT_FALSE(has_data(offset));  // a fresh allocation is one hole
     auto* const guest = static_cast<u8*>(range);
     std::vector<u8> expected(size, 0);
     for (std::uint64_t i = 0; i < data; ++i) {
@@ -323,10 +352,12 @@ TEST(GuestMemory, LargeCopiesReadBoundedHolesAfterLongData) {
     expected[size - 3] = 0x66;
     std::memcpy(guest, expected.data(), data);
     guest[size - 3] = 0x66;
+    // The page after the data and the start of the second block, which holds only the last page.
+    const bool page_holes = keeps_page_holes({offset + data, offset + huge_page});
     std::vector<u8> read(size, 0xee);
     memory().CopySparseMemory(addr(range), read.data(), size);
     EXPECT_TRUE(std::equal(read.begin(), read.end(), expected.begin()));
-    if (backing_keeps_page_holes()) {
+    if (page_holes) {
         EXPECT_FALSE(has_data(offset + data + 1024 * 1024));
         EXPECT_FALSE(has_data(offset + size - 2 * page_size));
     }
@@ -723,19 +754,10 @@ void concurrent_faults_and_syncs(bool through_backing) {
         Gpu gpu;
         constexpr u64 pages = 512;  // 2 MiB, 8 words of the region bits
         constexpr u64 words_per_page = tp / sizeof(u64);
-        // Aligned to a huge page, so that no other allocation's data shares one with it.
+        static_assert(pages * tp == huge_page);  // one block of huge pages
         Direct d(pages / pages_per_kernel_page, huge_page);
         if (through_backing) {
-            // The copies start on one hole. A fresh allocation is one, but a CI run on a host
-            // whose memfd takes huge pages (backing_keeps_page_holes) found data at its start
-            // (#531), for a cause not found; the test punches the hole itself then. Nothing was
-            // written yet: the memory reads zeros either way.
-            if (has_data(d.offset)) {
-                ASSERT_EQ(::fallocate(dmem::fd(), FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
-                                      static_cast<off_t>(d.offset), static_cast<off_t>(d.length)),
-                          0);
-            }
-            ASSERT_FALSE(has_data(d.offset));
+            ASSERT_TRUE(make_hole(d.offset, d.length));  // the copies start on one hole
         }
         auto* const words = static_cast<u64*>(d.address);
         const std::uintptr_t start = addr(d.address);
