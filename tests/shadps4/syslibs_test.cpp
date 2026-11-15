@@ -369,9 +369,29 @@ TEST(SysLibsHost, PadFollowsThePadInputStream) {
                             SDL_HINT_OVERRIDE);
 }
 
-// SIGTERM must still end the process after OpenPadInput, as `timeout` and the rig's stop need.
-// SDL installs its own handlers when it starts, unless the hint is set first, so the child stops
-// SDL (which also forgets the hints) and starts it again through OpenPadInput.
+// SIGTERM stays fatal after OpenPadInput. bb-run already blocks it and takes it in a sigwait
+// thread, so this is defence in depth, as for InitHLELibs. SDL installs its own handlers when it
+// starts, unless the hint is set first. The check needs a process in which SDL has never run, so
+// the test re-executes this binary with only the helper test below (a fork would inherit the SDL
+// state of earlier tests, and SDL_Quit there can hang).
+constexpr const char* pad_term_env = "BB_TEST_PAD_TERM_FIFO";
+
+// Child side. Not a test of its own: it does nothing unless the parent test set the variable.
+TEST(SysLibsHost, PadInputSigtermChildHelper) {
+    const char* fifo = std::getenv(pad_term_env);
+    if (fifo == nullptr) {
+        GTEST_SKIP() << "runs only as the child of PadInputKeepsSigtermFatal";
+    }
+    ::alarm(10);
+    std::string why;
+    if (!Libraries::Pad::OpenPadInput(fifo, why)) {
+        ::_exit(3);
+    }
+    ::raise(SIGTERM);
+    ::usleep(500 * 1000);  // a handler would have turned it into an SDL quit event
+    ::_exit(7);
+}
+
 TEST(SysLibsHost, PadInputKeepsSigtermFatal) {
     const std::filesystem::path fifo =
         std::filesystem::temp_directory_path() / std::format("bb-pad-term-{}", ::getpid());
@@ -379,15 +399,10 @@ TEST(SysLibsHost, PadInputKeepsSigtermFatal) {
     const pid_t child = ::fork();
     ASSERT_GE(child, 0);
     if (child == 0) {
-        ::alarm(10);
-        SDL_Quit();
-        std::string why;
-        if (!Libraries::Pad::OpenPadInput(fifo.string(), why)) {
-            ::_exit(3);
-        }
-        ::raise(SIGTERM);
-        ::usleep(500 * 1000);  // a handler would have turned it into an SDL quit event
-        ::_exit(7);
+        ::setenv(pad_term_env, fifo.c_str(), 1);
+        ::execl("/proc/self/exe", "syslibs_test",
+                "--gtest_filter=SysLibsHost.PadInputSigtermChildHelper", nullptr);
+        ::_exit(4);
     }
     int status = 0;
     ASSERT_EQ(::waitpid(child, &status, 0), child);

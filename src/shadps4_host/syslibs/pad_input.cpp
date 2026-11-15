@@ -246,7 +246,8 @@ bool OpenPadInput(const std::string& path, std::string& why) {
         return false;
     }
     // As InitHLELibs does, and before SDL starts: a later hint would not remove the handlers SDL
-    // installs for SIGINT and SIGTERM, so `timeout` and the rig's stop would not end the run.
+    // installs for SIGINT and SIGTERM. bb-run takes both in a sigwait thread anyway, so this is
+    // defence in depth, not what makes `timeout` and the rig's stop work.
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     // Only the virtual pad counts. The environment's value of the hint, which the rig sets for
     // the reference, must not win.
