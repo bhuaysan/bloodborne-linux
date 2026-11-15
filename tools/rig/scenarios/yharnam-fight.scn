@@ -24,6 +24,9 @@ tap A count=6 gap=3
 mark continue
 sleep 20                # the load
 stable seconds=3 delta=1 timeout=60
+# The check fails the run when the hunter died in the wait (a loading page, mean luma 25 or less in
+# the runs that showed one; the world is 38 to 41 in 28 runs), so such a run gives no metric.
+expect_level min=33 max=45
 shot 00-start           # the picture is the world by now; enemies near the hunter walk up while it
                         # idles, so the route starts at once (no further wait, no play-stand)
 

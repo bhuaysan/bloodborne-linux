@@ -14,6 +14,9 @@ A scenario is a list of steps, one per line, `#` starts a comment. Options are k
   lognow                               the next log wait starts with what the target logs from here
   frames N [timeout=60]                N more presents happened
   nonblack [level=16] [timeout=60]     the picture's mean luma reaches level
+  expect_level [min=0] [max=255] [timeout=60]  the picture's mean luma is within min and max now,
+                                       else the scenario fails (a check of what the picture shows,
+                                       such as the world and not a loading page)
   changed [delta=4] [timeout=60]       the picture differs from the one at the start of the step
   stable [seconds=2] [delta=2] [timeout=60]    the picture stops changing for that long; logs
                                        a "stable" event with how long it has been unchanged
@@ -78,7 +81,7 @@ class Scenario:
         return any(s.op in ("tap", "dpad", "trigger", "stick", "neutral") for s in self.steps)
 
     def uses_frames(self) -> bool:
-        return any(s.op in ("frames", "nonblack", "changed", "stable", "shot") for s in self.steps)
+        return any(s.op in ("frames", "nonblack", "expect_level", "changed", "stable", "shot") for s in self.steps)
 
 
 # op: (positional args, allowed options)
@@ -93,6 +96,7 @@ _SPEC: dict[str, tuple[int, set[str]]] = {
     "lognow": (0, set()),
     "frames": (1, {"timeout"}),
     "nonblack": (0, {"level", "timeout"}),
+    "expect_level": (0, {"min", "max", "timeout"}),
     "changed": (0, {"delta", "timeout"}),
     "stable": (0, {"seconds", "delta", "timeout"}),
     "shot": (1, set()),
@@ -128,7 +132,7 @@ def _check_step(step: Step) -> None:
         re.compile(head, re.MULTILINE)
     if step.op in ("shot", "mark") and not SHOT_NAME.fullmatch(head):
         raise ValueError(f"bad name {head!r}: 1 to 64 of [A-Za-z0-9_-]")
-    for key in ("timeout", "delta", "level", "seconds", "gap"):
+    for key in ("timeout", "delta", "level", "seconds", "gap", "min", "max"):
         if key in step.opts and _finite(step.opts[key], key) < 0:
             raise ValueError(f"negative {key}")
     if "ms" in step.opts and int(step.opts["ms"]) < 0:
@@ -314,6 +318,8 @@ class Interpreter:
                 self._wait_frames(int(head), step)
             case "nonblack":
                 self._wait_nonblack(step)
+            case "expect_level":
+                self._expect_level(step)
             case "changed":
                 self._wait_changed(step)
             case "stable":
@@ -376,6 +382,13 @@ class Interpreter:
         level = step.number("level", 16)
         while mean_level(self._picture(step, deadline)) < level:
             self._tick(step, deadline)
+
+    def _expect_level(self, step: Step) -> None:
+        low, high = step.number("min", 0), step.number("max", 255)
+        level = mean_level(self._picture(step, self._deadline(step)))
+        self.event("level", f"{level:.1f}")
+        if not low <= level <= high:
+            raise StepFailed(f"picture level {level:.1f} outside {low:g} to {high:g}: {step.text()}")
 
     def _wait_changed(self, step: Step) -> None:
         deadline = self._deadline(step)

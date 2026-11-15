@@ -229,6 +229,18 @@ class InterpreterTests(unittest.TestCase):
         run("nonblack level=100\n", target, clock)
         self.assertEqual(clock.ticks, 2)
 
+    def test_expect_level_passes_inside_the_band(self) -> None:
+        clock = FakeClock()
+        target = FakeTarget(clock, pictures=[GREY])
+        run("expect_level min=100 max=150\n", target, clock)
+
+    def test_expect_level_fails_outside_the_band(self) -> None:
+        for low, high in ((0, 100), (150, 255)):
+            clock = FakeClock()
+            target = FakeTarget(clock, pictures=[GREY])
+            with self.assertRaises(scn.StepFailed):
+                run(f"expect_level min={low} max={high}\n", target, clock)
+
     def test_changed_compares_with_the_first_picture(self) -> None:
         clock = FakeClock()
         target = FakeTarget(clock, pictures=[BLACK, BLACK, GREY])

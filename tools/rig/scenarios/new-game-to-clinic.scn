@@ -3,7 +3,7 @@
 # where the log shows one, and the picture elsewhere. The sleeps are menu input pacing only.
 limit time=900
 
-log sceSystemServiceHideSplashScreen timeout=120
+log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=120
 mark logos
 # The logos fade and hold for a few seconds each; only the title stays still this long.
 stable seconds=6 delta=1 timeout=90
@@ -28,7 +28,7 @@ tap A
 mark movie
 
 # The opening is a video. The game unloads its player when it ends.
-log "sceSysmoduleUnloadModule.*0xa5" timeout=180
+log "sceSysmoduleUnloadModule.*0xa5|unload module 0xa5" timeout=180
 nonblack level=20 timeout=60
 stable seconds=2 delta=1 timeout=60
 shot 06-editor
@@ -56,12 +56,12 @@ shot 12-finalise-yes
 tap A
 mark intro
 
-# The game saves twice right after Finish, and a third time as the intro hands over to the clinic.
-log "Unlinked /savedata0/backup0000" timeout=30
-log "Unlinked /savedata0/backup0000" timeout=30
-log "Unlinked /savedata0/backup0000" timeout=420
+# The game saves right after Finish (the reference logs the backup unlinks, bb-run the mounts), and
+# the intro hands over to the clinic about 100 s later, which stands still once it is there.
+log "Unlinked /savedata0/backup0000|mount SPRJ0005 at /savedata0" timeout=60
+sleep 10
 nonblack level=7 timeout=60
-stable seconds=5 delta=1 timeout=90
+stable seconds=8 delta=1 timeout=300
 shot 13-clinic
 mark clinic
 
