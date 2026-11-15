@@ -157,7 +157,7 @@ Each is a decomp issue of its own, checked at 60 against a 30 FPS run:
 - **AI step** (`chr_ai_step`, 0x1e2bc10, 0xaf2 bytes): navigation and Havok AI with task data of 1/30. Needs enemies to check (Central Yharnam).
 - **Target bank** (`target_bank_scan_tick`, 0x12a43b0, and the ring's 30 slots a second at 0x12ab623): rescans twice as often, and the ring covers half the time.
 - **Fades** (`chr_list_fade_step`, 0x180f5e0) and the menu `update(1/30)` calls (0x173456e, 0x15dc1f7, 0x1044943, 0x1f77d4a, 0x227784b, 0x18bc4f7): twice as fast.
-- **Chase camera** (`chase_cam_update`, 0x143ac60, 0x4e6c bytes; #557): the player camera's follow filters work per call, not per second (see the next section). This is the main cause of the camera and hunter offset at 60.
+- **Chase camera** (`chase_cam_update`, 0x143ac60, 0x4e6c bytes): done in #557, see "The chase camera at 60 FPS" below.
 - **`chr_pad_step`** (0x1572900) is not the player's input: its 1/30 goes to 0x1d145b0, which turns a matrix by the pad's axes times π/2 and −π/3 rad/s, a debug free camera behind a mode check. Low priority.
 - **The offset of camera and hunter** of the check runs above: mostly the rig's inputs and the chase camera, see the next section. A small difference in the hunter's own motion after a short side step is not traced yet.
 
@@ -200,7 +200,7 @@ The camera is `chase_cam_update` (0x143ac60), called by `cam_mode_update` (0x143
 | +0x240 | 0.3 (0x143aa5b) | yaw and pitch easing while turning on its own (R3 reset, lock-on; 0x143c30f, 0x143c784, 0x143cea0) | yes |
 | +0x1a8 | 0.3 (0x143a8df) | pitch pull toward +0x150 (0x143cef0) | yes |
 | +0x330 | 0.05 (0x143a7de) | eases the camera parameters (FOV +0x50, +0x160, +0x188, +0x1f0, +0x248) toward the parameter row (0x143ae75 to 0x143af70); debug label "lock camera param interpolation rate" | yes |
-| +0x184 | 0.1 (rodata 0x4925e68, one use) | `+0x184 += (+0x188 − +0x184) · 0.1` (0x143af8c) | yes |
+| +0x184 | 0.1 (rodata 0x4925e68, one use) | `+0x184 += (+0x188 − +0x184) · 0.1` (0x143af8c), but 0x143bc70 sets +0x184 = +0x188 before its only read (0x143d545): no effect | no |
 
 The follow filter is the one that explains the swing: the follow point catches up with the hunter faster at 60, so the camera turns further during a short walk. A per-call factor k matches 30 FPS at 60 as 1 − (1 − k)^½. For a decomp it becomes 1 − (1 − k)^(30·dt).
 
@@ -226,6 +226,37 @@ After the rest, the patched runs still differ by 7.5 to 9. The pictures show why
 Not resolved: the step of the Havok behaviour (animation) graph. `chr_anim_state_update` (0x15a30f0) takes the task step or `chr_anim_step_sync`'s, and the root motion (0x1836d50) uses it. Where `hkbGetTimestep` (0x47d5e84) gets its value is still open, and it is the next candidate for the hunter's motion.
 
 One 60 run (`185636`) crashed in the logo sequence with the `GXRenderThread` segfault at guest 0x263b8e7 (#559).
+
+## The chase camera at 60 FPS (#557)
+
+`chase_cam_update` is wrapped, not decompiled (`src/game/camera/chase_cam.cpp`). Every frame-rate dependent part of it is a field of the camera that it reads per call, so a wrapper can set those fields for the call and put them back afterwards. The 20 KB function stays the game's code. The hook calls the original through a trampoline of its prologue (`BB_WRAP`, `bb::hook::original`). At 30 FPS the wrapper only calls the original.
+
+The scaling is per frame rate, not per `dt`: at 60 every call stands for half a call at 30, also when the game passes a smaller step (slow motion, pauses). With c = frame rate / 30:
+
+| Kind | Fields | For the call |
+|---|---|---|
+| factor k per call | +0x1b8, +0x1c4, +0x1c8, +0x1cc, +0x23c, +0x240, +0x288, +0x330 | 1 − (1 − k)^(1/c) |
+| kept fraction f (pitch pull-back, 0x143cef0) | +0x1a8 | f^(1/c) |
+| turn per call (lock-on stick, added to the angles at 0x143ca30 without dt) | +0x280, +0x284 | / c |
+| factor eased by 1/30 a call (0x143e2b2), or reset by a wall slide | +0x198 (read before the ease), +0x1ac (read after it) | set so that the factor the game uses is the scaled one; afterwards the ease over 1/c of a call, the reset value, or the own value when the call skipped the ease (collision off, 0x143d6d2) |
+| weight that pulls the lag factors toward 1 (0x143e7da) | +0x130, set to 1 by camera input, held for +0x134 s, dropped by dt / +0x1e4 before its use | set so that the dropped value is the scaled one; afterwards 1, the own value or the dropped one |
+
+What stays approximate: a factor that the game changes within a step (the ease, the weight's drop) is sampled twice a step at 60 and once at 30, and the lag factor is multiplied by a ramp the call computes (0x143e7d6). In the unit test of the wrapper the two-calls-at-60 result is within 1/5 of the original's 60 FPS error for these, and exact for the rest.
+
+**Check runs.** Branch build, scenario `fr558s` (frame-locked side walks of 10, 30 and 60 steps, 45 steps of rest each), nearest-run picture difference to the 30 FPS runs (`194619`, `194948`, `224203`; stamps `20261115-…`, UTC):
+
+| Picture | 30 vs 30 | 60, unpatched (`194801`, `195131`) | 60, camera every second call with twice the step (`205343`, `205526`) | 60, wrapper (`225033`, `225215`, `225357`) |
+|---|---|---|---|---|
+| end of the 10-step walk | 1.97 | 7.69 | 3.35 | 3.92 |
+| 45 steps later | 2.94 | 8.99 | 8.96 | 9.04 |
+| end of the 30-step walk | 4.83 | 11.90 | 8.24 | 6.69 |
+| 45 steps later | 5.51 | 9.89 | 8.54 | 8.52 |
+| end of the 60-step walk | 4.22 | 10.26 | 4.92 | 4.10 |
+| 45 steps later | 1.81 | 6.18 | 2.81 | 2.49 |
+
+The camera now does at 60 what it does at 30, as far as these pictures show: the 60 runs land as close to the 30 runs as running the whole camera at 30 updates a second does. The difference that remains after the rest of the 10-step walk (about 9 against 3) is the hunter's own motion, traced in #558. At 30 nothing changes: the wrapper calls only the original, and `rig.py compare` of `main-menu` (branch `224904` against `main` `224812`, `224838`) gives ratio 0.996 and time ratio 1.006.
+
+**The camera turn.** A frame-locked 0.5 s right-stick turn (scenario `fr557t`, the turn part of `fr558f`) agrees between the rates with or without the wrapper: three 30 runs (`224643` and two of `main`) are 2.8 apart at their nearest, the 60 runs 3.1 (unpatched) and 3.0 (wrapper). The 30 runs fall on one of two outcomes, as with the side walks. Against only two 30 runs of the same outcome the 60 runs looked 7 away; take turn checks over at least three runs per rate.
 
 ## Open questions
 
