@@ -1,4 +1,4 @@
-// Function-entry patches that send a game function to its C++ replacement
+// Patches that send a game function, or a few instructions inside one, to C++ or a stub
 // (docs/design/runtime.md, "Hooks").
 #pragma once
 
@@ -22,6 +22,13 @@ struct Replacement {
     // rip-relative operands, no relative jumps or calls). apply copies them into a trampoline
     // that original() returns. Empty for a plain replacement.
     std::span<const std::uint8_t> prologue{};
+    // For a patch inside a function (BB_PATCH): the link address of that function, an FDE start.
+    // link_addr is then an instruction after its entry and `prologue` the bytes from there that
+    // impl takes over: whole instructions, at least patch_size and at most max_patched bytes, all
+    // inside the function. impl is a stub written for that place, entered by a jump with the
+    // registers and stack of the function, that does their work and jumps back into the function
+    // itself. No trampoline. 0 for a patch at an entry.
+    std::uint64_t function = 0;
 };
 
 // The replacements registered with BB_REPLACE, in registration order. Construct on first use,
@@ -61,15 +68,24 @@ public:
 // An entry with a prologue is also refused when the prologue is shorter than patch_size, longer
 // than the function or than max_prologue, or differs from the bytes in memory, and any entry
 // whose patch overlaps the prologue of a live hook (the trampoline jumps back behind it).
+//
+// A patch inside a function (`function` set) is refused instead of the entry checks when
+// `function` is not an FDE start, link_addr is not after it, the patched bytes are fewer than
+// patch_size, more than max_patched or don't all lie inside the function, or differ from the bytes
+// in memory. Its span (the patched bytes) must not overlap another entry's: two patches of the
+// list, or a live hook's patch or prologue.
 void apply(loader::Image& image, std::span<const Replacement> replaced);
 
 // The longest prologue a trampoline takes.
 inline constexpr std::size_t max_prologue = 32;
 
+// The most bytes a patch inside a function takes over.
+inline constexpr std::size_t max_patched = 64;
+
 // The original of the function at `link` in `image`, for a replacement that wraps it: while it
 // is hooked with a prologue, a trampoline that runs the prologue and jumps to the instruction
 // behind it; while it isn't hooked (as in the harness), the function itself. Throws HookError
-// when it is hooked without a prologue. The trampoline lives until the hook is removed, so
+// when it is hooked without a prologue or patched inside a function. The trampoline lives until the hook is removed, so
 // callers ask again instead of keeping the address. Safe from any thread while no apply or
 // remove runs.
 void* original(const loader::Image& image, std::uint64_t link);
@@ -100,5 +116,16 @@ void remove(loader::Image& image, std::span<const Replacement> replaced);
     const ::bb::hook::Registrar BB_CONCAT(bb_replace_, __COUNTER__){                     \
         ::bb::hook::Replacement{(link_addr), reinterpret_cast<void*>(&(function)), #function, \
                                 (prologue)}};                                           \
+    }                                                                                   \
+    static_assert(true)
+
+// Registers `stub` as a patch inside the game function at `function_addr`, starting at the
+// instruction at `link_addr`; `patched` names an array of the bytes it takes over, with static
+// storage duration (see Replacement::function). The stub is code written for that place.
+#define BB_PATCH(function_addr, link_addr, stub, patched)                               \
+    namespace {                                                                         \
+    const ::bb::hook::Registrar BB_CONCAT(bb_replace_, __COUNTER__){                     \
+        ::bb::hook::Replacement{(link_addr), reinterpret_cast<void*>(&(stub)), #stub,     \
+                                (patched), (function_addr)}};                           \
     }                                                                                   \
     static_assert(true)

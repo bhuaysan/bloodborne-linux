@@ -368,6 +368,96 @@ TEST(Hook, RefusesBadPrologues) {
     EXPECT_EQ(image.fn<int()>(0x100)(), 6);  // nothing patched
 }
 
+// A stub for a patch inside `summing` at 0x105, in place of mov ecx, 2; mov edx, 3; add eax, ecx;
+// add eax, edx: the same with 20 and 30, then back to the ret at 0x113. The function returns 51.
+extern "C" {
+std::uint64_t hook_test_stub_back = 0;
+void hook_test_stub();
+}
+asm(R"(
+    .text
+    .globl hook_test_stub
+    .intel_syntax noprefix
+hook_test_stub:
+    mov ecx, 20
+    mov edx, 30
+    add eax, ecx
+    add eax, edx
+    jmp qword ptr [rip + hook_test_stub_back]
+    .att_syntax prefix
+)");
+
+// The 14 bytes at 0x105 that the stub takes over.
+constexpr std::array<std::uint8_t, 14> summing_middle = {
+    0xb9, 2, 0, 0, 0, 0xba, 3, 0, 0, 0, 0x01, 0xc8, 0x01, 0xd0};
+
+Replacement inside_patch(std::uint64_t function, std::uint64_t link,
+                         std::span<const std::uint8_t> patched, const char* name = "stub") {
+    return Replacement{link, reinterpret_cast<void*>(&hook_test_stub), name, patched, function};
+}
+
+TEST(Hook, PatchesInsideAFunction) {
+    Image image = map_elf(build_elf(), test_base);
+    image.finalize_protection();
+    hook_test_stub_back = image.base + 0x113;
+    const Replacement patch[] = {inside_patch(0x100, 0x105, summing_middle)};
+    bb::hook::apply(image, patch);
+    EXPECT_EQ(image.fn<int()>(0x100)(), 51);
+    Patch written = bytes_at(image, 0x105);
+    const std::uint8_t jmp[] = {0xff, 0x25, 0, 0, 0, 0};
+    EXPECT_EQ(std::memcmp(written.data(), jmp, sizeof jmp), 0);
+    EXPECT_EQ(protection(test_base + 0x1000), "r-xp");
+    expect_refusal([&] { bb::hook::original(image, 0x105); }, "no original");
+    bb::hook::remove(image, patch);
+    EXPECT_EQ(std::memcmp(bytes_at(image, 0x105).data(), summing_middle.data(), 14), 0);
+    EXPECT_EQ(image.fn<int()>(0x100)(), 6);
+
+}
+
+TEST(Hook, RefusesBadInsidePatches) {
+    Image image = map_elf(build_elf(), test_base);
+    image.finalize_protection();
+    auto apply = [&](std::initializer_list<Replacement> hooks) {
+        bb::hook::apply(image, {hooks.begin(), hooks.size()});
+    };
+    expect_refusal([&] { apply({inside_patch(0x101, 0x105, summing_middle)}); },
+                   "hook stub at 0x105: the function 0x101 is not an FDE start");
+    expect_refusal([&] { apply({inside_patch(0x100, 0x100, summing_middle)}); },
+                   "the patched bytes don't lie inside the function 0x100 after its entry "
+                   "(24 bytes)");
+    expect_refusal([&] { apply({inside_patch(0x100, 0x10f, summing_middle)}); },
+                   "don't lie inside the function 0x100");
+    expect_refusal([&] { apply({inside_patch(0x100, 0x105, std::span(summing_middle).first(13))}); },
+                   "13 patched bytes, a patch inside a function takes 14 to 64");
+    std::array<std::uint8_t, 65> long_one{};
+    expect_refusal([&] { apply({inside_patch(0x100, 0x105, long_one)}); }, "65 patched bytes");
+    auto changed = summing_middle;
+    changed[6] = 4;
+    expect_refusal([&] { apply({inside_patch(0x100, 0x105, changed)}); },
+                   "the patched bytes differ from the bytes in memory");
+    const Replacement no_stub[] = {{0x105, nullptr, "null", summing_middle, 0x100}};
+    expect_refusal([&] { bb::hook::apply(image, no_stub); }, "the replacement is null");
+
+    // Its span counts for overlaps: in the list, and against live hooks either way round.
+    auto* a = reinterpret_cast<void*>(&replacement_a);
+    expect_refusal([&] { apply({inside_patch(0x100, 0x105, summing_middle), {0x10e, a, "e"}}); },
+                   "hook e at 0x10e: double hook: the patch overlaps another entry of the list");
+    expect_refusal([&] { apply({{0x10e, a, "e"}, inside_patch(0x100, 0x105, summing_middle)}); },
+                   "hook stub at 0x105: double hook: the patch overlaps another entry of the list");
+    apply({inside_patch(0x100, 0x105, summing_middle)});
+    expect_refusal([&] { apply({{0x10e, a, "e"}}); },
+                   "hook e at 0x10e: double hook: the patch overlaps the hook at 0x105");
+    bb::hook::remove(image, std::array{inside_patch(0x100, 0x105, summing_middle)});
+    wrapped_image = &image;
+    apply({{0x100, reinterpret_cast<void*>(&wrapper), "wrapper", summing_prologue}});
+    expect_refusal([&] { apply({inside_patch(0x100, 0x105, summing_middle)}); },
+                   "hook stub at 0x105: double hook: the patch overlaps the hook at 0x100");
+    bb::hook::remove(image, std::array{Replacement{0x100, reinterpret_cast<void*>(&wrapper),
+                                                   "wrapper", summing_prologue}});
+    wrapped_image = nullptr;
+    EXPECT_EQ(image.fn<int()>(0x100)(), 6);  // nothing left patched
+}
+
 TEST(HookGame, PatchesAnEbootFunction) {
     BB_REQUIRE_GAME(game);
     Image image = map_eboot(game);

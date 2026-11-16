@@ -10,7 +10,6 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -80,21 +79,29 @@ std::map<Key, Saved>::iterator live(const loader::Image& image, std::uint64_t li
     return it;
 }
 
+// The bytes of `r` that no other entry may patch: its patch and, with a prologue or as a patch
+// inside a function, the bytes its trampoline or stub jumps back behind.
+std::uint64_t span_of(const Replacement& r) {
+    return std::max(patch_size, r.prologue.size());
+}
+
 // Checks the parts that apply and remove share. A patch it passes lies in a code segment.
 void check(const loader::Image& image, std::span<const Replacement> replaced) {
     // Refuses the first entry that overlaps an earlier one, as a check against every earlier
-    // entry would. If any earlier entry overlaps, the nearest one below or above does.
-    std::set<std::uint64_t> earlier;
+    // entry would. The earlier entries don't overlap each other, so if any of them overlaps, the
+    // nearest one below or above does.
+    std::map<std::uint64_t, std::uint64_t> earlier;  // link address, span
     for (const Replacement& r : replaced) {
         auto above = earlier.lower_bound(r.link_addr);
-        if ((above != earlier.end() && *above - r.link_addr < patch_size) ||
-            (above != earlier.begin() && r.link_addr - *std::prev(above) < patch_size)) {
+        if ((above != earlier.end() && above->first - r.link_addr < span_of(r)) ||
+            (above != earlier.begin() &&
+             r.link_addr - std::prev(above)->first < std::prev(above)->second)) {
             refuse(r, "double hook: the patch overlaps another entry of the list");
         }
         if (!code_segment(image, r.link_addr)) {
             refuse(r, "the patch lies outside the executable segments");
         }
-        earlier.insert(r.link_addr);
+        earlier.emplace(r.link_addr, span_of(r));
     }
 }
 
@@ -149,59 +156,96 @@ void register_replacement(const Replacement& r) {
     registry().push_back(r);
 }
 
+namespace {
+
+// The size of the function at `link` from its FDE, or a refusal of `r` naming why there is none.
+std::uint64_t checked_size(const loader::Image& image, const Replacement& r, std::uint64_t link) {
+    std::optional<std::uint64_t> size;
+    try {
+        size = image.function_size(link);
+    } catch (const loader::LoadError& e) {
+        refuse(r, e.what());
+    }
+    if (!size) {
+        refuse(r, link == r.link_addr ? std::string("not an FDE start")
+                                      : std::format("the function {:#x} is not an FDE start", link));
+    }
+    return *size;
+}
+
+// The checks of a patch inside a function (Replacement::function).
+void check_inside(const loader::Image& image, const Replacement& r) {
+    const std::uint64_t size = checked_size(image, r, r.function);
+    const std::size_t n = r.prologue.size();
+    if (n < patch_size || n > max_patched) {
+        refuse(r, std::format("{} patched bytes, a patch inside a function takes {} to {}", n,
+                              patch_size, max_patched));
+    }
+    if (r.link_addr <= r.function || r.link_addr - r.function > size ||
+        size - (r.link_addr - r.function) < n) {
+        refuse(r, std::format("the patched bytes don't lie inside the function {:#x} after its "
+                              "entry ({} bytes)",
+                              r.function, size));
+    }
+    if (std::memcmp(reinterpret_cast<const void*>(image.base + r.link_addr), r.prologue.data(),
+                    n) != 0) {
+        refuse(r, "the patched bytes differ from the bytes in memory");
+    }
+}
+
+}  // namespace
+
 void apply(loader::Image& image, std::span<const Replacement> replaced) {
     check(image, replaced);
     for (const Replacement& r : replaced) {
         if (!r.impl) {
             refuse(r, "the replacement is null");
         }
-        std::optional<std::uint64_t> size;
-        try {
-            size = image.function_size(r.link_addr);
-        } catch (const loader::LoadError& e) {
-            refuse(r, e.what());
-        }
-        if (!size) {
-            refuse(r, "not an FDE start");
-        }
-        if (*size < patch_size) {
-            refuse(r, std::format("the function is {} bytes, a hook needs {}", *size, patch_size));
-        }
-        if (!r.prologue.empty()) {
-            const std::size_t n = r.prologue.size();
-            if (n < patch_size || n > max_prologue || n > *size) {
-                refuse(r, std::format("a prologue of {} bytes, it needs {} to {} within the "
-                                      "function's {}",
-                                      n, patch_size, max_prologue, *size));
-            }
-            if (std::memcmp(reinterpret_cast<const void*>(image.base + r.link_addr),
-                            r.prologue.data(), n) != 0) {
-                refuse(r, "the prologue differs from the bytes in memory");
-            }
-        }
-        // A live hook covers its patch and, with a prologue, the bytes its trampoline jumps
-        // back behind; this one must not overlap that, nor its own span another hook's patch.
-        const std::uint64_t span = std::max(patch_size, r.prologue.size());
+        // A live hook covers its span; this one must not overlap that, nor its own span another
+        // hook's patch. Checked before the bytes, which another hook's patch would change.
+        const std::uint64_t span = span_of(r);
         const std::uint64_t first =
-            r.link_addr - std::min(r.link_addr, std::uint64_t{max_prologue - 1});
+            r.link_addr - std::min(r.link_addr, std::uint64_t{max_patched - 1});
         for (std::uint64_t at = first; at < r.link_addr + span; ++at) {
             auto it = live(image, at);
             if (it != saved().end() && at + it->second.span > r.link_addr) {
                 refuse(r, std::format("double hook: the patch overlaps the hook at {:#x}", at));
             }
         }
+        if (r.function != 0) {
+            check_inside(image, r);
+        } else {
+            const std::uint64_t size = checked_size(image, r, r.link_addr);
+            if (size < patch_size) {
+                refuse(r, std::format("the function is {} bytes, a hook needs {}", size,
+                                      patch_size));
+            }
+            if (!r.prologue.empty()) {
+                const std::size_t n = r.prologue.size();
+                if (n < patch_size || n > max_prologue || n > size) {
+                    refuse(r, std::format("a prologue of {} bytes, it needs {} to {} within the "
+                                          "function's {}",
+                                          n, patch_size, max_prologue, size));
+                }
+                if (std::memcmp(reinterpret_cast<const void*>(image.base + r.link_addr),
+                                r.prologue.data(), n) != 0) {
+                    refuse(r, "the prologue differs from the bytes in memory");
+                }
+            }
+        }
     }
     // Trampolines first, so a failure there patches nothing.
     std::vector<Trampoline> trampolines;
     for (const Replacement& r : replaced) {
-        trampolines.push_back(r.prologue.empty() ? Trampoline{} : make_trampoline(image, r));
+        trampolines.push_back(r.prologue.empty() || r.function != 0 ? Trampoline{}
+                                                                     : make_trampoline(image, r));
     }
     for (std::size_t i = 0; i < replaced.size(); ++i) {
         const Replacement& r = replaced[i];
         // Recorded first: if the write fails, live() finds no patch and drops the entry.
         Saved& hook = saved()[{image.base, r.link_addr}];
         hook = Saved{read(image, r.link_addr), patch_for(r.impl), std::move(trampolines[i]),
-                     std::max(patch_size, r.prologue.size())};
+                     span_of(r)};
         write(image, r.link_addr, hook.patch);
     }
 }
