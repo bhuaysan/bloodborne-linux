@@ -829,7 +829,7 @@ TEST(GuestMemory, ACpuWriteKeepsWhatTheGpuWroteOnThePage) {
         // create (out of device memory), so the test runs only on a GPU that can, such as with
         // VK_LOADER_DRIVERS_SELECT='*radeon*'.
         try {
-            const NoLeakCheck no_leak_check;
+            [[maybe_unused]] const NoLeakCheck no_leak_check;
             static_cast<void>(gpu.rasterizer.GetBufferCache().ObtainBuffer(
                 addr(base), 64, VideoCore::ObtainBufferFlags::IgnoreStreamBuffer));
         } catch (const std::exception& e) {
@@ -845,7 +845,7 @@ TEST(GuestMemory, ACpuWriteKeepsWhatTheGpuWroteOnThePage) {
             char* const at = base + page * tp;
             std::memset(at, 'o', tp);
             const VAddr start = addr(at);
-            const NoLeakCheck no_leak_check;
+            [[maybe_unused]] const NoLeakCheck no_leak_check;
             static_cast<void>(gpu.rasterizer.GetBufferCache().ObtainBuffer(
                 start, 64, VideoCore::ObtainBufferFlags::IsWritten));
             u32 value;

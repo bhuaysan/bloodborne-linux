@@ -234,7 +234,7 @@ Runs on 2026-11-16 (RADV, `relwithdebinfo`, `--window`, cold caches):
 | `bb-run` of 2026-11-14 (`c3af163`) | 10 | 3 (`20261116-163038`, `-164139`, `-170351`: the whole hunter) |
 | `bb-run` of `main` (`18bdda1`, with and without probes) | 7 | 1 (`20261116-155233`: the weapon) |
 | `c3af163` with the download of the fix as a probe | 8 | none |
-| the fix (`fix/537-respawn-polygon`) | 7 | none (`20261116-175318` and the six after it) |
+| the fix (`fix/537-respawn-polygon`) | 14 | none (`20261116-175318` and the six after it; after the review changes `20261116-183126` and the six after it) |
 
 ## Profiling `bb-run` (#513)
 
