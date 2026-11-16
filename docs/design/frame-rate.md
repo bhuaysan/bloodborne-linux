@@ -59,7 +59,7 @@ Some code does not take the step from the task data but has 1/30 built in. These
 | 0x17f9b71 (`mov [rbp-0x48], 1/30`) | `havok_world_step` 0x17f99d0 | The Havok physics world step: builds the step record {1/30, `[this+0xc8]`, the thread pool's thread count + 1, 0} and runs the collide (0xb5a2e0) and solve (0xb5b100) stages once. A member functor of the Havok manager (built at 0x17f9272), most likely the `HavokWorldUpdate_Pre` task | physics steps 1/30 s per frame: twice as fast (replaced in #553) |
 | 0x63fc3c | `hkp_world_cinfo_init` 0x63fad0 | World creation defaults, 1/30 at +0x70 (a Havok world parameter, `expectedMinPsiDeltaTime` by its place among the defaults); the same value sits in three data blocks at 0x2bda86c, 0x2bdc3d4 and 0x2bdf7e4 | none found: not called from boot to play in Central Yharnam, and not the stepped world (#553) |
 | 0x1572a7d | `chr_pad_step` 0x1572900 | A character's pad (`FD4PadManager`) stepped with its own task data of 1/30, called from 0x1548740 and 0x193ac10, which have the step at hand | pad timers (holds, repeats, input buffer) twice as fast |
-| 0x1e2bcd4 | `chr_ai_step` 0x1e2bc10 | Per-character navigation and Havok AI (`SprjWorldNvmManager`, `SprjHkAiManager`) with task data of 1/30 | AI navigation steps twice as fast |
+| 0x1e2bcd4 | `chr_ai_step` 0x1e2bc10 | The Havok AI world's step (`SprjWorldNvmManager`, `SprjHkAiManager`) with task data of 1/30 | the Havok AI world steps 1/30 s per frame (replaced in #554) |
 | 0x12a4416 (`addss [+0x2c], 1/30`) | `target_bank_scan_tick` 0x12a43b0 | `SprjTargetBankManager`: a timer advanced by 1/30 per call rescans all characters when it reaches an interval; a 100-entry ring indexed at 30 slots a second (`seconds * 30`, 0x12ab623) | rescans twice as often, and the ring covers half the time it is read as covering |
 | 0x180f647 | `chr_list_fade_step` 0x180f5e0 | a fade `+0x1c0 = min(fade + 1/30, 1)` per call over the character list | fades in 0.5 s instead of 1 s |
 | 0x143e2b2 | `chase_cam_update` 0x143ac60 | the player's chase camera eases its follow weight `+0x198 += (+0x19c - +0x198) / 30` per call (first read as a `RendMan` smoothing; see #558 below) | one of the camera's per-call smoothings |
@@ -154,7 +154,7 @@ The two rates differ by about twice the noise of either, and the 60 runs agree w
 Each is a decomp issue of its own, checked at 60 against a 30 FPS run:
 
 - **Havok world step** (`havok_world_step`, 0x17f99d0): done in #553, see "The Havok world step" below. The ragdoll corpses still settle faster at 60 (#567).
-- **AI step** (`chr_ai_step`, 0x1e2bc10, 0xaf2 bytes): navigation and Havok AI with task data of 1/30. Needs enemies to check (Central Yharnam).
+- **AI step** (`chr_ai_step`, 0x1e2bc10): done in #554, see "The AI step" below.
 - **Target bank** (`target_bank_scan_tick`, 0x12a43b0, and the ring's 30 slots a second at 0x12ab623): rescans twice as often, and the ring covers half the time.
 - **Fades** (`chr_list_fade_step`, 0x180f5e0) and the menu `update(1/30)` calls (0x173456e, 0x15dc1f7, 0x1044943, 0x1f77d4a, 0x227784b, 0x18bc4f7): twice as fast.
 - **Chase camera** (`chase_cam_update`, 0x143ac60, 0x4e6c bytes): done in #557, see "The chase camera at 60 FPS" below.
@@ -312,6 +312,28 @@ With the step at 1/60 the world runs at game speed: bodies fall at g at both rat
 The corpses as a whole still settle faster at 60 with the fix: half of their drop after 0.133 s from their first move, against 0.200 s at 30 (0.100 s with 1/30), and they stop moving after 3.7 to 4.1 s against 5.5 to 5.7 s (median over the bodies). The positions show why: the game places each corpse by teleporting its bodies twice after a fixed number of frames (steps 7 and 15 at 30, 6 and 14 at 60), and the collapse after that is faster at 60. That is outside the world step; #567 traces it.
 
 **30 FPS is unchanged.** `rig.py compare` of the picture after the 20 s stand, the branch at 30 (`020950`) against two runs of `main` (`020652`, `020821`): noise floor 0.610, ours 0.414 (ratio 0.68), time ratio 1.002. The branch at 60 in the street (`021118`): 60.00 presents a second, p50 16.67 ms, p99 16.73 ms, no GPU fault. The machine was quiet for these runs (no other test load; CPU load average 1 to 5).
+
+## The AI step (#554)
+
+`chr_ai_step` (0x1e2bc10) runs once a frame from `chr_frame_update` (0x154972c) with the `SprjWorldNvmManager` (0x5540208). Its only use of 1/30 is the task data it builds on its stack (0x1e2bcd1) for one call at its start: `ai_world_step` (0x1dcdad0) on the AI world manager (`SprjHkAiManager` +0x10). That step reads nothing of the task data but `delta_time`, which it passes in `xmm0` to the Havok AI world's step (0x8a0790, a thunk of 0x8a07a0, which takes the manager's +0x78 and +0x80 when +0xf0 is set). The rest of `chr_ai_step` (a loop over the world's +0x2bc8 entries under its third argument; under its fourth, calls with `RendMan` and `WorldChrManDbg` that look like debug drawing) takes no step.
+
+**Wrapped at the call, not decompiled.** `ai_world_step` is wrapped (`src/game/ai/world_step.cpp`, `BB_WRAP`). The hook enters the wrapper with a `jmp`, so its return address is the game's call site: when that is `chr_ai_step`'s call (return address 0x1e2bceb) and the frame rate is not 30, the wrapper hands the original a copy of the task data with `frame_step()`. Every other call keeps its task data: the only other caller is `hkai_test_module_step` (0x19a6860), a step of the test module `ModuleHavokAiTestStep`, which passes on the task data it gets from the task tree. This changes the one value and leaves the 2.8 KB of `chr_ai_step` the game's code. At 30 the wrapper calls the original unchanged.
+
+**Left as it is: the section sweep.** `ai_world_step` hands sections whose bounds changed (flag 4 at +0xc0 of a section object) to the world step in slices of a thirtieth of all sections a call, so one sweep takes 30 calls: 1 s at 30, 0.5 s at 60. That only decides how soon a change is passed on, and at 60 it is sooner.
+
+**Tests.** `tests/game/ai_test.cpp` hooks the Havok AI world's calls in the step (0x8c8360, 0x897390, 0x895bd0 and 0x8a07a0; 0x8c8350 and 0x8a0790 are thunks too short to hook) with fakes that log their arguments and the contents of the step's arrays (they live on its stack, whose address differs with the wrapper's frame). The harness compares the original and the wrapper called directly at 30 and at 60 (both keep the caller's task data), and `chr_ai_step`, run as the game's code up to its call of the step, without and with the registered hook at 30: every byte is the same. At 60, through the hook, the Havok AI world gets 1/60 (bits `0x3c888889`), and without it 1/30.
+
+**Check runs.** Scenario `aiwait` (local): Continue on the save of `yharnam-fight` (the hunter under the arch, a group of living enemies in the street), then stand 30 s while the enemies walk up. A local `bb-run` (not committed) logged per AI world step the Havok AI character (`[agent+0x230]`) of each agent in the manager's list (+0x30): its position at +0x20 and velocity at +0x40. Two runs per variant, at 30, at 60, and at 60 with the old 1/30 (`20261116-024549` to `-025402`, suffix `-bb-run-aiwait`), all finished, no GPU fault, 57 to 58 presents a second at 60 with the log on. Agents matched by their start position, game time from the first AI step:
+
+| | 30 | 60 | 60, step 1/30 |
+|---|---|---|---|
+| agents | 17 | 16 (one that starts at 10 s at 30 does not come) | 16 |
+| when the agents appear | 0 to 0.8, 5.0 to 5.3, 10.1 to 12.9 s | 0 to 0.4, 5.0 to 5.1, 11.1 to 13.2 s | 0 to 0.4, 5.0 to 5.1, 10.9 to 12.7 s |
+| first move after appearing | 0.2 to 2.2 s | 0.2 to 2.2 s | 0.2 to 2.2 s (one 1.5 s) |
+| median walking speed (0.5 s windows) | 0.81 to 1.10 m/s | 0.70 to 1.06 m/s | 0.79 to 1.08 m/s |
+| distance in the first 10 s of motion | 8.6 to 13.6 m | 4.7 to 12.0 m | 6.2 to 12.0 m |
+
+The enemies approach at 60 as at 30: they appear and start in the same game time and walk at the same speed. The old step makes no difference: the 60 runs with and without the fix agree as closely as the runs of either. The game moves its characters itself (their animation), and the Havok AI character's position and velocity are inputs to the step (the velocity's vertical part is −g × the frame's step: −0.327 m/s at 30, −0.163 at 60 in both 60 variants); what the step computes from them did not change the motion in this scene. Five agents (four of the group that appears at 5 s, one of the first) walk 2 to 7 m less in their first 10 s of motion at 60 in all four 60 runs, with or without the fix, so something else that runs per frame holds them; not traced (candidates are the target bank, #555, and the other sites above).
 
 ## Open questions
 

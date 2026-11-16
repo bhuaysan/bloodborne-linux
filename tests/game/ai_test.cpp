@@ -198,8 +198,8 @@ std::tuple<void*, void*, std::uint8_t, std::uint8_t> build_chr_ai_step(Arena& a,
     at<void*>(hk, 0x10) = m;
     bb::game::global<void*>(hk_ai_manager_singleton) = hk;
     void* const nvm = a.alloc(0x2f00);
-    // Neither the per-frame section reset (third argument) nor the debug part after the step
-    // (fourth): the function ends after the step.
+    // Neither the loop over the world's +0x2bc8 entries before the step (third argument) nor the
+    // part after it (fourth): the function ends after the step.
     return {nvm, a.alloc(0x80), std::uint8_t{0}, std::uint8_t{0}};
 }
 
@@ -216,15 +216,15 @@ std::uint32_t world_step_delta() {
     return steps == 1 ? delta : 0;
 }
 
-using ChrAiStep = void(void* nvm, void* context, std::uint8_t reset, std::uint8_t debug);
+using ChrAiStep = void(void* nvm, void* context, std::uint8_t before, std::uint8_t after);
 
-void chr_ai_step_unhooked(void* nvm, void* context, std::uint8_t reset, std::uint8_t debug) {
-    bb::game::fn<ChrAiStep>(chr_ai_step)(nvm, context, reset, debug);
+void chr_ai_step_unhooked(void* nvm, void* context, std::uint8_t before, std::uint8_t after) {
+    bb::game::fn<ChrAiStep>(chr_ai_step)(nvm, context, before, after);
 }
 
-void chr_ai_step_hooked(void* nvm, void* context, std::uint8_t reset, std::uint8_t debug) {
+void chr_ai_step_hooked(void* nvm, void* context, std::uint8_t before, std::uint8_t after) {
     const WrapperHook hook;
-    bb::game::fn<ChrAiStep>(chr_ai_step)(nvm, context, reset, debug);
+    bb::game::fn<ChrAiStep>(chr_ai_step)(nvm, context, before, after);
 }
 
 // A call from anywhere but chr_ai_step, as the AI test module's (0x019a72f9), keeps its task data
@@ -265,8 +265,8 @@ TEST_F(EbootTest, ChrAiStepAt60) {
     const WorldFakes fakes;
     const auto delta = [&](const Case& c, bool hooked) {
         harness().restore();
-        const auto [nvm, context, reset, debug] = build_chr_ai_step(harness().arena(), c);
-        (hooked ? chr_ai_step_hooked : chr_ai_step_unhooked)(nvm, context, reset, debug);
+        const auto [nvm, context, before, after] = build_chr_ai_step(harness().arena(), c);
+        (hooked ? chr_ai_step_hooked : chr_ai_step_unhooked)(nvm, context, before, after);
         return world_step_delta();
     };
     for (const Case& c : cases) {
