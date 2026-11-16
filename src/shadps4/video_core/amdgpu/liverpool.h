@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/amdgpu/liverpool.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-16
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <coroutine>
 #include <exception>
@@ -105,6 +106,12 @@ public:
 
     void BindRasterizer(Vulkan::Rasterizer* rasterizer_) {
         rasterizer = rasterizer_;
+    }
+
+    // The thread that processes the command buffers and runs SendCommand's functions. Upstream's
+    // plain member is atomic here: fault handlers on guest threads read it.
+    [[nodiscard]] std::thread::id GetGpuCommandProcessorThread() const noexcept {
+        return gpu_id.load(std::memory_order_acquire);
     }
 
     template <bool wait_done = false>
@@ -217,6 +224,7 @@ private:
     Vulkan::Rasterizer* rasterizer{};
     Libraries::VideoOut::VideoOutPort* vo_port{};
     std::jthread process_thread{};
+    std::atomic<std::thread::id> gpu_id{};
     std::atomic<u32> num_submits{};
     std::atomic<u32> num_commands{};
     std::atomic<bool> submit_done{};

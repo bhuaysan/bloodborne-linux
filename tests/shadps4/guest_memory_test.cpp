@@ -27,6 +27,9 @@
 #include <vector>
 
 #include <gtest/gtest.h>
+#ifdef __SANITIZE_ADDRESS__
+#include <sanitizer/lsan_interface.h>
+#endif
 #include <imgui.h>
 
 #include "core/libraries/videoout/buffer.h"
@@ -790,6 +793,92 @@ TEST(GuestMemory, AFaultsRunEndsAtGpuWrittenAndImagePages) {
         EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 3);
         EXPECT_TRUE(cpu_dirty());
         EXPECT_EQ(image_at[tp + 4], 'c');
+        d.unmap();
+    }
+}
+
+// The buffer cache never frees the device memory that makes its sparse blocks resident (upstream
+// keeps it to the end), which LeakSanitizer reports. Allocations made while one of these lives are
+// left out of its report.
+struct NoLeakCheck {
+#ifdef __SANITIZE_ADDRESS__
+    NoLeakCheck() {
+        __lsan_disable();
+    }
+    ~NoLeakCheck() {
+        __lsan_enable();
+    }
+    NoLeakCheck(const NoLeakCheck&) = delete;
+    NoLeakCheck& operator=(const NoLeakCheck&) = delete;
+#endif
+};
+
+// What the GPU wrote on a page reaches guest memory before the CPU writes elsewhere on that page,
+// so the upload after the write keeps it (#537: a vertex buffer the GPU wrote lost its vertices
+// that way after a respawn). That holds for a guest write that faults, for a system call that
+// writes into the page and for a guest mprotect of it.
+TEST(GuestMemory, ACpuWriteKeepsWhatTheGpuWroteOnThePage) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        Direct d(1);
+        auto* const base = static_cast<char*>(d.address);
+        // The buffer cache keeps its copy in a sparse buffer of 4 GiB, which lavapipe can't
+        // create (out of device memory); RADV can.
+        try {
+            const NoLeakCheck no_leak_check;
+            static_cast<void>(gpu.rasterizer.GetBufferCache().ObtainBuffer(
+                addr(base), 64, VideoCore::ObtainBufferFlags::IgnoreStreamBuffer));
+        } catch (const std::exception& e) {
+            d.unmap();
+            GTEST_SKIP() << "no sparse buffer of the buffer cache on this device: " << e.what();
+        }
+        // The GPU fills the first 64 bytes of the page at `page` with `fill`, after the guest
+        // filled the page with 'o'. Guest memory keeps the 'o's.
+        const auto gpu_fill = [&](u64 page, char fill) {
+            char* const at = base + page * tp;
+            std::memset(at, 'o', tp);
+            const VAddr start = addr(at);
+            const NoLeakCheck no_leak_check;
+            static_cast<void>(gpu.rasterizer.GetBufferCache().ObtainBuffer(
+                start, 64, VideoCore::ObtainBufferFlags::IsWritten));
+            u32 value;
+            std::memset(&value, fill, sizeof(value));
+            gpu.rasterizer.FillBuffer(start, 64, value, false);
+            gpu.rasterizer.Finish();
+            ASSERT_TRUE(gpu.tracker().IsRegionGpuModified(start, tp));
+            ASSERT_EQ(std::string(at, 64), std::string(64, 'o'));
+        };
+
+        gpu_fill(0, 'G');
+        const std::uint64_t claimed = bb::shadps4::claimed_faults();
+        static_cast<volatile char*>(base)[tp - 1] = 'c';
+        EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 1);
+        EXPECT_EQ(std::string(base, 64), std::string(64, 'G'));
+        EXPECT_EQ(base[tp - 1], 'c');
+        EXPECT_FALSE(gpu.tracker().IsRegionGpuModified(addr(base), tp));
+        EXPECT_TRUE(gpu.tracker().IsRegionCpuModified(addr(base), tp));
+
+        gpu_fill(1, 'H');
+        std::string path =
+            (std::filesystem::temp_directory_path() / "bb-gpu-page-XXXXXX").string();
+        const int host = ::mkstemp(path.data());
+        ASSERT_GE(host, 0);
+        ::unlink(path.c_str());
+        ASSERT_EQ(::write(host, "file data", 9), 9);
+        ASSERT_EQ(::lseek(host, 0, SEEK_SET), 0);
+        const std::int32_t fd = bb::hle::kernel::fd_table().insert(host);
+        char* const page1 = base + tp;
+        EXPECT_EQ(bb::hle::kernel::sceKernelRead(fd, page1 + 0x800, 9), 9);
+        bb::hle::kernel::sceKernelClose(fd);
+        EXPECT_EQ(std::string(page1, 64), std::string(64, 'H'));
+        EXPECT_EQ(std::string(page1 + 0x800, 9), "file data");
+
+        gpu_fill(2, 'I');
+        ASSERT_EQ(bb::hle::kernel::sceKernelMprotect(d.address, d.length, 3), 0);
+        EXPECT_EQ(std::string(base + 2 * tp, 64), std::string(64, 'I'));
         d.unmap();
     }
 }

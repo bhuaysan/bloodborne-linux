@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/buffer_cache.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-14
+// Changed for bloodborne-linux, 2026-11-16
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
+#include <thread>
 #include <magic_enum/magic_enum.hpp>
 #include <xxhash.h>
 
@@ -111,8 +112,30 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
 
 BufferCache::~BufferCache() = default;
 
+// With readbacks off (upstream's default and the reference's setting), upstream marks the range CPU
+// modified and nothing more. The next sync then uploads the whole page from guest memory, also over
+// the bytes the GPU wrote there, which guest memory never got: a vertex buffer the GPU wrote next
+// to data the CPU writes later loses its vertices, and the game draws flat polygons (#537, after
+// a respawn). Upstream's Relaxed mode downloads those bytes first, which this keeps.
 void BufferCache::InvalidateMemory(VAddr device_addr, u64 size) {
+    if (memory_tracker->IsRegionGpuModified(device_addr, size)) {
+        FlushBeforeCpuWrite(device_addr, size);
+    }
     memory_tracker->MarkRegionAsCpuModified(device_addr, size);
+}
+
+void BufferCache::DropMemory(VAddr device_addr, u64 size) {
+    memory_tracker->MarkRegionAsCpuModified(device_addr, size);
+}
+
+void BufferCache::FlushBeforeCpuWrite(VAddr device_addr, u64 size) {
+    const auto flush = [this, device_addr, size] { DownloadWindow(device_addr, size, false); };
+    if (liverpool == nullptr ||
+        std::this_thread::get_id() == liverpool->GetGpuCommandProcessorThread()) {
+        flush();
+    } else {
+        liverpool->SendCommand<true>(flush);
+    }
 }
 
 // How many pages a write fault makes writable at most, the faulting one and those after it. The
@@ -122,6 +145,10 @@ void BufferCache::InvalidateMemory(VAddr device_addr, u64 size) {
 constexpr u64 FAULT_PAGES = 16;
 
 void BufferCache::InvalidateFromFault(VAddr device_addr) {
+    const VAddr page = device_addr & ~(BYTES_PER_PAGE - 1);
+    if (memory_tracker->IsRegionGpuModified(page, BYTES_PER_PAGE)) {
+        FlushBeforeCpuWrite(page, BYTES_PER_PAGE);
+    }
     memory_tracker->MarkCpuModifiedFromFault(device_addr, FAULT_PAGES);
 }
 
@@ -131,6 +158,10 @@ void BufferCache::UnmarkRegionAsGpuModified(VAddr device_addr, u64 size, bool is
 }
 
 void BufferCache::ReadMemory(VAddr device_addr, u64 size) {
+    DownloadWindow(device_addr, size, true);
+}
+
+void BufferCache::DownloadWindow(VAddr device_addr, u64 size, bool async) {
     {
         const u32 first_block = device_addr >> block_shift;
         const u32 last_block = (device_addr + size - 1) >> block_shift;
@@ -144,7 +175,7 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size) {
             std::max<VAddr>(Common::AlignDown(device_addr, WindowSize), arena->cpu_addr);
         const VAddr window_end = std::min<VAddr>(
             std::max<VAddr>(window_start + WindowSize, device_addr + size), arena_end);
-        DownloadMemory(arena, window_start, window_end - window_start, true);
+        DownloadMemory(arena, window_start, window_end - window_start, async);
     }
 }
 

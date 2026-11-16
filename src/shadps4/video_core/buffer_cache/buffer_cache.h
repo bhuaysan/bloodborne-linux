@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/buffer_cache.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-14
+// Changed for bloodborne-linux, 2026-11-16
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -77,12 +77,17 @@ public:
         return stream_buffer;
     }
 
-    /// Invalidates any buffer in the logical page range.
+    /// The CPU writes the range: what the GPU wrote there goes to guest memory first, then the
+    /// range is marked CPU modified (upstream's InvalidateRegion in its Relaxed readback mode).
     void InvalidateMemory(VAddr device_addr, u64 size);
 
-    /// A guest write faulted at the address: marks its page CPU modified, and the pages after it
+    /// A guest write faulted at the address: what the GPU wrote on its page goes to guest memory
+    /// first, as in InvalidateMemory, then the page is marked CPU modified, and the pages after it
     /// that the guest is likely to write next (memory_tracker.h).
     void InvalidateFromFault(VAddr device_addr);
+
+    /// The range is unmapped or its backing released: marked CPU modified, with no download.
+    void DropMemory(VAddr device_addr, u64 size);
 
     /// The CPU and GPU modified state of guest memory, for tests.
     [[nodiscard]] MemoryTracker& GetMemoryTracker() noexcept {
@@ -95,6 +100,17 @@ public:
     /// Flushes any GPU modified buffer in the logical page range back to CPU memory.
     /// Called with the GPU locks held, so the download is queued asynchronously.
     void ReadMemory(VAddr device_addr, u64 size);
+
+private:
+    /// The GPU modified bytes of the pages of the range, in guest memory before this returns. Runs
+    /// on the GPU thread: directly when called there, otherwise through Liverpool's command queue
+    /// while the caller waits.
+    void FlushBeforeCpuWrite(VAddr device_addr, u64 size);
+
+    /// Downloads the GPU modified ranges of a window around the range into guest memory.
+    void DownloadWindow(VAddr device_addr, u64 size, bool async);
+
+public:
 
     /// Flushes GPU modified ranges of the uncovered part of the edge pages of an image.
     void ReadEdgeImagePages(const Image& image);
