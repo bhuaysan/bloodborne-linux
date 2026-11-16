@@ -222,6 +222,20 @@ Measured on 2026-11-14 (RADV, `relwithdebinfo`, `--window`, cold shader cache ev
 
 No segment is flagged: the p99 of `bb-run` is never above the reference's by more than the spread of the runs. Neither target has a stutter in the fight, and the maximum is 50 ms (one late present) on both. The one p95 difference is `play-fight-strong` (`bb-run` 50.0 ms, reference 33.38 ms). In the open street of the route above `bb-run` showed a p95 of 50 ms in every segment and stutters; here only that segment does, so the gap there is not specific to fighting. The fight shows no frame-time gap that #513 could profile; what separates the targets on this route is smaller than the 16.7 ms grid step.
 
+### Death and respawn in Central Yharnam (`yharnam-death.scn`, #537)
+
+`yharnam-death.scn` continues from the `yharnam-enemies` save of the fighting route, walks 4 s toward the enemies and stands until they kill the hunter. YOU DIED, the load (shot `01-idle30` is the loading page with an item text) and the respawn at the lantern follow; shots `02-idle60` to `05-idle120` show the hunter at the lantern from behind, with the gate and the church door ahead. The scenario has no check step of its own: its shots after the respawn are looked at against a reference run of it, the hunter and his weapon whole and no large flat polygon of one colour anywhere. In one run (`20261116-180011`) the hunter died a second time, and its last shots show the street.
+
+Runs on 2026-11-16 (RADV, `relwithdebinfo`, `--window`, cold caches):
+
+| build | runs | flat polygons after the respawn |
+|---|---|---|
+| reference (shadPS4 v0.21.0) | 3 | none; one run (`20261116-163423`) smears the world into streaks after the respawn instead |
+| `bb-run` of 2026-11-14 (`c3af163`) | 10 | 3 (`20261116-163038`, `-164139`, `-170351`: the whole hunter) |
+| `bb-run` of `main` (`18bdda1`, with and without probes) | 7 | 1 (`20261116-155233`: the weapon) |
+| `c3af163` with the download of the fix as a probe | 8 | none |
+| the fix (`fix/537-respawn-polygon`) | 7 | none (`20261116-175318` and the six after it) |
+
 ## Profiling `bb-run` (#513)
 
 Tracy is gone, so a slow frame is found with two tools: `perf` for where the threads spend CPU time, and frame counters for how much each part of the GPU thread's frame took.
