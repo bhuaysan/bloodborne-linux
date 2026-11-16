@@ -18,10 +18,11 @@ struct SteerPoint {
 
 // The game's agent steering, 0x01dbbd00: virtual +0x50 of the AI agent (vtable 0x0534e220, its
 // only reference), called by the path follower (0x01239eb0) with the frame's task data, on the
-// frames that step the agent (every frame or every few, per agent). With the agent's Havok AI character (+0x230) it stores the step
-// (delta_time) at +0x280, sets +0x28c (read and cleared by the AI world step), runs a state machine
-// with a timer at +0x25c (in one state counted down by a literal 1/30 a call), and writes the new
-// direction into a ring of 30 slots (+0x30, write index +0x24c). It reads back the average of the
+// frames that step the agent (every frame or every few, per agent). With the agent's Havok AI
+// character (+0x230) it stores the step (delta_time) at +0x280, sets +0x28c (read and cleared by
+// the AI world step), runs a state machine with a timer at +0x25c (in one state counted down by a
+// literal 1/30 a call), and writes the new direction into a ring of 30 slots (+0x30, write index
+// +0x24c). It reads back the average of the
 // slots from a read index (+0x248) that lags `+0x250 * (1/30) / delta_time` calls behind, stores
 // it at +0x20 and returns the character's position (+0x20) plus 3 times it, w = 3 * w + 1. +0x250
 // counts 30 FPS frames, so at 60 the lag is twice as many calls: from 15 on it reaches the ring's

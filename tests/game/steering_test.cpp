@@ -1,7 +1,7 @@
 // Differential tests of the agent steering wrapper in src/game/ai/: through the registered hook the
-// game's steering (0x01dbbd00) leaves at 30 FPS the same bytes and points as without it, and at 60
-// FPS two frames leave what one frame leaves at 30. Without the wrapper the steering at 60 loses its
-// direction every 30 calls (#570); a test shows that, and that the wrapper keeps it.
+// game's steering (0x01dbbd00) leaves at 30 FPS the same bytes and points as without it, and at
+// 60 FPS two calls leave what one call leaves at 30. Without the wrapper the steering at 60 loses
+// its direction every 30 calls (#570); a test shows that, and that the wrapper keeps it.
 #include "game/ai/steering.hpp"
 
 #include <array>
@@ -73,7 +73,7 @@ T& at(void* object, std::size_t offset) {
     return *reinterpret_cast<T*>(static_cast<std::byte*>(object) + offset);
 }
 
-// ---- an agent walking along a path ----------------------------------------------------------------
+// ---- an agent walking along a path --------------------------------------------------------------
 
 constexpr unsigned max_frames = 128;
 
