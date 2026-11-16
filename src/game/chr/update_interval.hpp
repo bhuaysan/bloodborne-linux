@@ -24,7 +24,8 @@ inline constexpr std::array<std::uint8_t, 20> world_chr_update_prologue = {
     0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55,
     0x41, 0x54, 0x53, 0x48, 0x81, 0xec, 0xc8, 0x00, 0x00, 0x00};
 
-// The due check at 0x01917909, entered with ecx = u > 0, r13d = the index, rdi = WorldChrMan:
+// The due check at 0x01917909, entered with ecx = u > 0, r13d = the index, rdi = WorldChrMan,
+// only by the jne at 0x01917764 (no other jump of the game lands in these bytes):
 //   mov eax, r13d; cdq; idiv ecx; mov esi, edx          (index % u)
 //   mov eax, [rdi+0xa68]; xor edx, edx; div ecx         (frame counter % u)
 //   cmp esi, edx; jne 0x01917a1b                         (not due: stores u to [rbp-0xc8])

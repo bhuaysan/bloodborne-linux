@@ -159,6 +159,7 @@ Each is a decomp issue of its own, checked at 60 against a 30 FPS run:
 - **Fades** (`chr_list_fade_step`, 0x180f5e0) and the menu `update(1/30)` calls (0x173456e, 0x15dc1f7, 0x1044943, 0x1f77d4a, 0x227784b, 0x18bc4f7): twice as fast.
 - **Chase camera** (`chase_cam_update`, 0x143ac60, 0x4e6c bytes): done in #557, see "The chase camera at 60 FPS" below.
 - **AI steering** (`agent_steer`, 0x1dbbd00, its ring of 30 directions and a literal 1/30): done in #570, see "The steering ring" below.
+- **Character update intervals** (`world_chr_update`, 0x19173b0, an interval in frames): done in #573, see "The character update interval" below. Two agents of the `aiwait` scene that start right after the load still differ by 0.3 to 0.6 m in their first 10 s (#573).
 - **`chr_pad_step`** (0x1572900) is not the player's input: its 1/30 goes to 0x1d145b0, which turns a matrix by the pad's axes times π/2 and −π/3 rad/s, a debug free camera behind a mode check. Low priority.
 - **The offset of camera and hunter** of the check runs above: mostly the rig's inputs and the chase camera, see the next section. A small difference in the hunter's own motion after a short side step is not traced yet.
 
@@ -388,9 +389,49 @@ The count is per agent, not per frame: the path follower doesn't step every agen
 | (−229, 54) | 13.5, 13.5 | 13.8 to 13.9 | 11.8 |
 | (−225, 63) | 12.4, 12.4 | 12.8 | 10.1 |
 
-The shortfall is gone: the five enemies and the lone walker walk as far as at 30, at the same median speed (the lone walker 1.08 m/s at both rates, 0.82 on `main` at 60). The three 60 runs agree to 0.1 m. What is left at 60 is small and the same on `main` (#573): most agents walk 0.3 to 1.6 m more in their first 10 s than at 30 (the same agents on `main` at 60 already did, for example (−215, 104) 9.8 against 8.8 m and (−192, 83) 9.8 against 8.7), and one enemy that starts at 10 s at 30 does not come at 60. At 60 the branch runs at 57.8 to 58.1 presents a second with the logs on (p50 16.67 ms, p99 18.8 to 19.5 ms), no GPU fault.
+The shortfall is gone: the five enemies and the lone walker walk as far as at 30, at the same median speed (the lone walker 1.08 m/s at both rates, 0.82 on `main` at 60). The three 60 runs agree to 0.1 m. What is left at 60 is small and the same on `main` (#573, mostly the probe's rounding, see "The character update interval"): most agents walk 0.3 to 1.6 m more in their first 10 s than at 30 (the same agents on `main` at 60 already did, for example (−215, 104) 9.8 against 8.8 m and (−192, 83) 9.8 against 8.7), and one enemy that starts at 10 s at 30 does not come at 60. At 60 the branch runs at 57.8 to 58.1 presents a second with the logs on (p50 16.67 ms, p99 18.8 to 19.5 ms), no GPU fault.
 
 **30 FPS is unchanged.** The branch's agent tracks at 30 equal those of `main` with the same probe (`062701` to `063326`) to 0.7 m, the spread between two runs of the same build for the enemies that arrive at 11 s (the others agree to 0.4 m). `rig.py compare` of the three pictures of the stand, the branch at 30 (`080045`, `080221`) against two runs of `main` (`074921`, `075057`): noise floor 1.244, ours 1.196 and 1.205 (ratio 0.96 and 0.97), time ratio 1.00.
+
+## The character update interval (#573)
+
+**Two of the differences were the measurement.** The #554 probe printed the Havok AI character's floats with four significant digits, so positions resolved to 0.1 m, and the distance walked, summed over steps, depended on the sample rate. With seven digits, 11 of the 17 agents of `aiwait` walk the same distance in their first 10 s at both rates (within 0.1 m). The enemy that "does not come at 60" comes at the same time: its start position is (−215.8, 74.50) at 30 and (−215.8, 74.53) at 60, and the track script, which matched agents by the rounded start position, gave it the key of a neighbour at (−215.5, 75.0). Agents are now matched by the nearest start position.
+
+**The patrol stops.** What was left is real: the two enemies that patrol between two points (starting at (−192, 83) and (−215, 104)) stop at each point for 1.97 s at 30 and for 1.57 s at 60, every cycle. At the point they stop, turn on the spot and walk on. The stop and the turn begin and end at the same game time at both rates. At 30 they walk on 0.3 to 0.5 s after the turn, at 60 just before it ends. Halving `chr_frame_update`, the AI character update (0x128f060), the manipulator update or the AI agent update per object (as in #570) left the stop at 1.57 s. A watchpoint on the Havok AI character's facing found its writer, the agent's virtual +0x40 (0x1dbba90), called from 0x12355c0 on the character threads. The facing changes only every fifth frame, at both rates. At 30 the stop is 1.97 s when the agent's facing is updated every fifth frame and 1.50 s when it is updated every second frame.
+
+**The interval.** `world_chr_update` (0x19173b0) runs once a frame from WorldChrMan's frame update (0x1915320, which counts the frames at WorldChrMan +0xa68). It lists the characters due this frame and runs their updates, most of them as jobs on the `CSChrThread`s. Each character has an update interval in frames at +0xe4, set by the frame update from the character's distance: 0 is every frame, and with u > 0 the character is due when its index in its group modulo u equals the frame counter modulo u (0x1917909), with a step of u frames (`vcvtsi2ss` and `vmulss` at 0x1917923). Its own time is right at any frame rate: the elapsed time reaches it as the step (+0xe0). But the number of updates a game second is 30/u at 30 and 60/u at 60. The patrol stop takes a fixed number of a character's updates (about three more than the turn), so at 60 it was shorter. The interval is also a level of detail that the characters' own code tests against fixed values (−1, 0, 2, 5, 30, and a switch over −1 to 5 at 0x18cd1fa), and that `world_chr_update` keeps at [rbp−0xc8] for its counts, so doubling the field itself would change what the characters do.
+
+**Patched inside the function.** The hook framework can now replace instructions inside a function (`BB_PATCH`, `docs/design/runtime.md`, "Hooks"). The 36 bytes at 0x1917909 jump to a stub (`src/game/chr/update_interval.cpp`) that does what they do with k·u in place of u in the two divisions and the step's factor, where k is the frame rate / 30, and keeps u in ecx and [rbp−0xc8]. At 60 a character with interval u is then due every 2u frames, with 2u steps of 1/60: as often a game second as at 30, with the same step. Characters with interval 0 still update every frame. `world_chr_update` is wrapped (`BB_WRAP`) to set k and the stub's two jump targets before the game's code runs. At 30, k is 1 and the stub does what the game's bytes do.
+
+**Tests.** `tests/game/chr_update_interval_test.cpp` enters the game's code at 0x1917909 from an assembly driver with set registers and frame, and two patches at the instructions behind the check (0x191792d, due; 0x1917a1b, not due) record the registers and the frame slot. For intervals 1, 2, 3, 5 and 30, indexes 0 to 39 and frame counters up to 2³²−1: at 30 the stub leaves exactly what the game's bytes leave; at 60 it leaves what the game's bytes leave for 2u, except that ecx and [rbp−0xc8] stay u. Over 6u frames at 60 every character is due 3 times with 2u steps, where the game's bytes are due 6 times. The wrapper sets k from the frame rate. `tests/hook/hook_test.cpp` covers `BB_PATCH`: the patch, its refusals (the function is not an FDE start, the bytes do not lie inside it, differ from memory, are fewer than 14 or more than 64) and overlaps with other entries and live hooks.
+
+**Check runs.** Scenario `aiwait` (#554, local) on the `yharnam-fight` save, with the #554 probe at seven digits. `relwithdebinfo`, RADV, `--window`, 2026-11-16 (suffix `-bb-run-aiwait`): `main` at 30 (`082853`, `083406`) and 60 (`083029`), the branch at 30 (`095010`; `094659` had the save's other outcome, an enemy attacks) and 60 (`094523`, `094835`, `095146`). CPU load average 2 to 3, no other test load. Distance in the first 10 s of motion (m), agents by start position:
+
+| Agent | 30, `main` | 30, branch | 60, `main` | 60, branch |
+|---|---|---|---|---|
+| (−235.3, 36.6) | 7.7, 7.7 | 7.7 | 7.5 | 7.4 to 7.6 |
+| (−234.0, 38.2) | 9.5, 9.5 | 9.5 | 9.4 | 9.4 to 9.5 |
+| (−232.4, 40.1) | 10.4, 10.5 | 10.5 | 10.5 | 10.5 to 10.6 |
+| (−231.8, 43.3) | 10.1, 9.9 | 10.0 | 11.0 | 10.5 to 10.6 |
+| (−230.9, 45.6) | 8.0, 8.1 | 8.1 | 7.7 | 7.7 to 7.8 |
+| (−230.6, 50.1) | 10.1, 10.2 | 10.2 | 10.1 | 10.1 to 10.2 |
+| (−229.8, 47.5) | 9.6, 9.6 | 9.6 | 9.6 | 9.6 |
+| (−228.9, 54.3) | 11.6, 11.7 | 11.6 | 11.6 | 11.6 to 11.7 |
+| (−224.8, 63.4) | 10.7, 10.7 | 10.7 | 10.7 | 10.7 |
+| (−223.1, 60.1) | 10.0, 10.0 | 10.0 | 9.9 | 9.9 to 10.0 |
+| (−215.8, 74.5) | 8.4, 8.4 | 8.4 | 8.4 | 8.4 |
+| (−215.5, 75.0) | 8.5, 8.5 | 8.4 | 8.4 | 8.6 |
+| (−215.3, 79.1) | 9.5, 8.8 | 8.7 | 8.6 | 8.7 to 8.8 |
+| (−214.8, 104.5), patrol | 8.5, 8.5 | 8.5 | 8.7 | 8.5 |
+| (−213.4, 76.5) | 8.8, 8.9 | 8.9 | 8.8 | 8.9 |
+| (−213.1, 79.7) | 8.5, 8.5 | 8.8 | 8.5 | 8.5 to 8.6 |
+| (−192.0, 82.7), patrol | 8.6, 8.6 | 8.6 | 9.0 | 8.6 |
+
+The patrol stops are 1.98 s at 60 as at 30 (1.97 s), in every cycle of every run; their facing changes every tenth frame, as every fifth at 30. Where an agent is on interval 2 at 30 the stop is 1.57 s, and 1.52 s on the branch at 60 (4 frames). Fifteen of the 17 agents walk within 0.2 m of 30 in their first 10 s.
+
+**Left: two agents after the load.** (−231.8, 43.3) walks 0.4 to 0.6 m further than at 30, and (−230.9, 45.6) 0.3 m less. Both belong to the group that is there when the save loads. At 60 that group appears in the AI world 0.2 to 0.4 s earlier after the load and so starts walking earlier (the agents that appear later start at the same game time). From 5.5 s, (−231.8, 43.3) walks shoulder to shoulder with (−234.0, 38.2), 0.65 m apart. At 30 the pair slows it down and turns it, and that part of its track differs from run to run after 7 to 8 s even at 30 (two runs of `main`), though its 10 s distance stays at 9.9 to 10.1 m (also in two runs with the frame counter of the due check shifted by 1 and 3). Halving `chr_frame_update` together with this fix brings the group's start times back to 30, but (−231.8, 43.3) then walks 11.0 m. Stepping the physics world at 30 (`BB_HKHALF`) or the AI world's section sweep at 1/60 a call changed neither. This stays open in #573.
+
+**30 FPS is unchanged.** With k = 1 the stub is the game's check (the tests above). The branch's agent tracks at 30 differ from `main`'s as much as two runs of `main` differ, except for the pair above after 7 s. `rig.py compare` of the three pictures of the stand, the branch at 30 (`095010`) against two runs of `main` (`082853`, `083406`): noise floor 1.082, ours 1.093 (ratio 1.01), time ratio 1.002. At 60 the branch runs at 57.6 to 58.3 presents a second with the log on (p50 16.67 ms, p99 18.8 to 19.2 ms), as `main` does (`083029`: 58.1, p99 18.9 ms), no GPU fault.
 
 ## Open questions
 
