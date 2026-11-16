@@ -56,8 +56,8 @@ Some code does not take the step from the task data but has 1/30 built in. These
 
 | Site | Function | What | At 60 FPS |
 |---|---|---|---|
-| 0x17f9b71 (`mov [rbp-0x48], 1/30`) | `havok_world_step` 0x17f99d0 | The Havok physics world step: builds the step record {1/30, `[this+0xc8]`, a step counter} and runs the collide (0xb5a2e0) and solve (0xb5b100) stages once. A member functor of the Havok manager (built at 0x17f9272), most likely the `HavokWorldUpdate_Pre` task | physics steps 1/30 s per frame: twice as fast |
-| 0x63fc3c | `hkp_world_cinfo_init` 0x63fad0 | World creation defaults, 1/30 at +0x70 (a Havok world parameter, `expectedMinPsiDeltaTime` by its place among the defaults); the same value sits in three data blocks at 0x2bda86c, 0x2bdc3d4 and 0x2bdf7e4 | a tuning value for the step; set it to the new step with the step |
+| 0x17f9b71 (`mov [rbp-0x48], 1/30`) | `havok_world_step` 0x17f99d0 | The Havok physics world step: builds the step record {1/30, `[this+0xc8]`, the thread pool's thread count + 1, 0} and runs the collide (0xb5a2e0) and solve (0xb5b100) stages once. A member functor of the Havok manager (built at 0x17f9272), most likely the `HavokWorldUpdate_Pre` task | physics steps 1/30 s per frame: twice as fast (replaced in #553) |
+| 0x63fc3c | `hkp_world_cinfo_init` 0x63fad0 | World creation defaults, 1/30 at +0x70 (a Havok world parameter, `expectedMinPsiDeltaTime` by its place among the defaults); the same value sits in three data blocks at 0x2bda86c, 0x2bdc3d4 and 0x2bdf7e4 | none found: not called from boot to play in Central Yharnam, and not the stepped world (#553) |
 | 0x1572a7d | `chr_pad_step` 0x1572900 | A character's pad (`FD4PadManager`) stepped with its own task data of 1/30, called from 0x1548740 and 0x193ac10, which have the step at hand | pad timers (holds, repeats, input buffer) twice as fast |
 | 0x1e2bcd4 | `chr_ai_step` 0x1e2bc10 | Per-character navigation and Havok AI (`SprjWorldNvmManager`, `SprjHkAiManager`) with task data of 1/30 | AI navigation steps twice as fast |
 | 0x12a4416 (`addss [+0x2c], 1/30`) | `target_bank_scan_tick` 0x12a43b0 | `SprjTargetBankManager`: a timer advanced by 1/30 per call rescans all characters when it reaches an interval; a 100-entry ring indexed at 30 slots a second (`seconds * 30`, 0x12ab623) | rescans twice as often, and the ring covers half the time it is read as covering |
@@ -153,7 +153,7 @@ The two rates differ by about twice the noise of either, and the 60 runs agree w
 
 Each is a decomp issue of its own, checked at 60 against a 30 FPS run:
 
-- **Havok world step** (`havok_world_step`, 0x17f99d0): the physics world steps 1/30 s a frame, so at 60 ragdolls, props and anything simulated by the world run twice as fast. The step record's 1/30 (0x17f9b74) feeds the collide (0xb5a2e0) and solve (0xb5b100) stages, so a differential test needs a real Havok world (the full load set), not fakes. With it, `hkp_world_cinfo_init`'s +0x70 (0x63fc3c).
+- **Havok world step** (`havok_world_step`, 0x17f99d0): done in #553, see "The Havok world step" below. The ragdoll corpses still settle faster at 60 (#567).
 - **AI step** (`chr_ai_step`, 0x1e2bc10, 0xaf2 bytes): navigation and Havok AI with task data of 1/30. Needs enemies to check (Central Yharnam).
 - **Target bank** (`target_bank_scan_tick`, 0x12a43b0, and the ring's 30 slots a second at 0x12ab623): rescans twice as often, and the ring covers half the time.
 - **Fades** (`chr_list_fade_step`, 0x180f5e0) and the menu `update(1/30)` calls (0x173456e, 0x15dc1f7, 0x1044943, 0x1f77d4a, 0x227784b, 0x18bc4f7): twice as fast.
@@ -286,6 +286,32 @@ What stays approximate: a factor that the game changes within a step (the ease, 
 The camera now does at 60 what it does at 30, as far as these pictures show: the 60 runs land as close to the 30 runs as running the whole camera at 30 updates a second does. The difference that remains after the rest of the 10-step walk (about 9 against 3) is the hunter's own motion, traced in #558. At 30 nothing changes: the wrapper calls only the original, and `rig.py compare` of `main-menu` (branch `224904` against `main` `224812`, `224838`) gives ratio 0.996 and time ratio 1.006.
 
 **The camera turn.** A frame-locked 0.5 s right-stick turn (scenario `fr557t`, the turn part of `fr558f`) agrees between the rates with or without the wrapper: three 30 runs (`224643` and two of `main`) are 2.8 apart at their nearest, the 60 runs 3.1 (unpatched) and 3.0 (wrapper). The 30 runs fall on one of two outcomes, as with the side walks. Against only two 30 runs of the same outcome the 60 runs looked 7 away; take turn checks over at least three runs per rate.
+
+## The Havok world step (#553)
+
+`havok_world_step` is replaced (`src/game/havok/world.cpp`): the same calls, with `frame_step()` as the step record's delta time. At 30 it is the game's 1/30.
+
+**The world.** The world the step drives is a world of Havok's newer physics, not an `hkpWorld`: the object the stages get (`[[manager+0x28]+8]`) holds a `hknpGroupCollisionFilter` (its type name in the filter's data), and a motion buffer of 4000 entries of 0x80 bytes at +0xe0 (centre of mass at +0, orientation at +0x10, linear velocity at +0x40; entry 0 is the static motion). The step record is 0x18 bytes: delta time, 4 bytes the game never writes, the manager's +0xc8, the thread pool's thread count + 1, and 0. The manager also checks its job queue's critical section (Havok's `lockMutexWithSpinCount` and `leave`, on `pthread_mutex_*`), runs the thread pool on the queue, calls 0x1e42140 and, after the stages, 0x43b0a0 on the queue. The manager's +0x30 holds the step (it calls 0xb50410 on the world's +0xd8 instead), and +0x26c switches it on. Before the step it hands a per-frame counter of the singleton at 0x553b168 out in units of 200 (0x15a5fc0 per item) and calls 0x17fd220 and 0x1806e90; none of it takes a time.
+
+**Not replaced: `hkp_world_cinfo_init`.** Its +0x70 is the `expectedMinPsiDeltaTime` of an `hkpWorldCinfo` (the defaults around it are Havok's: 200 at +0x68, 250 at +0x6c, solver values 0.6, 1, 4, 1 at +0x88 to +0x94). It configures worlds of the older physics, which this step does not drive. A local `bb-run` that logged its calls and wrapped the creator of one such world (0x10588c0) saw neither run from the boot to standing in Central Yharnam, so changing it would change nothing that we can check. The other stepper that calls the same stages (0xa7a250, slot +0x68 of the vtable 0x5297270) is overridden with an empty function in the only class the game builds from it (vtable 0x53a6b00, made at 0x1e155f9).
+
+**Tests.** `tests/game/havok_test.cpp` runs the original and the replacement from the same state through the harness. The issue planned a real world on the full load set. The test hooks the step's callees instead (the two stages, 0x43b0a0, 0x1e42140, 0xb50410, 0x17fd220, 0x1806e90 and 0x15a5fc0) with fakes that record their arguments in the arena, so the harness compares the step record the stages get, the calls and their order, besides every byte the step touches. The stages themselves are Havok's code and stay the game's in `bb-run`. The thread pool is a fake object, and the job queue's mutex is one guest mutex shared by every run. 14 cases cover the step, the spin and the plain lock, the held and switched-off manager, missing objects and the counter's paths. At 60 the record's delta time is 1/60 (bits `0x3c888889`) where the original keeps 1/30. Not covered: the failure path of the mutex calls (printf, perror, `int3`).
+
+**Check runs.** Central Yharnam from the save of the `yharnam-route` runs (`20261115-132906`), scenario `settle` (load, stand 20 s; local, as below), `relwithdebinfo`, RADV, `--window`, 2026-11-16. A local `bb-run` (not committed) logged each moving motion of the world before every step: its centre of mass and velocity. When the street loads, its ragdoll corpses (about 450 bodies) fall and settle without any input. Two runs per variant, at 30, at 60, and at 60 with the step record at 1/30 (as on `main`), runs `015517` to `020238`.
+
+Free fall, the vertical acceleration of the bodies in their first five steps of motion (Δvy per step × frame rate, falling samples, median and quartiles; the share within 0.5 m/s² of g and within 1 m/s² of 2g):
+
+| Variant | Acceleration (m/s²) | at g | at 2g |
+|---|---|---|---|
+| 30 | −9.04 [−9.72, −4.56], −9.10 | 22 % | 1 % |
+| 60 | −9.54 [−11.04, −7.42], −9.55 | 32 % | 1 to 2 % |
+| 60, step 1/30 | −17.95 [−19.44, −9.25], −17.83 | 2 % | 22 % |
+
+With the step at 1/60 the world runs at game speed: bodies fall at g at both rates. With the game's 1/30 they fall at twice g in game time, and the corpses settle exactly twice as fast: matched by position, every body reaches half and 90 % of its drop after 0.50 of the time at 30.
+
+The corpses as a whole still settle faster at 60 with the fix: half of their drop after 0.133 s from their first move, against 0.200 s at 30 (0.100 s with 1/30), and they stop moving after 3.7 to 4.1 s against 5.5 to 5.7 s (median over the bodies). The positions show why: the game places each corpse by teleporting its bodies twice after a fixed number of frames (steps 7 and 15 at 30, 6 and 14 at 60), and the collapse after that is faster at 60. That is outside the world step; #567 traces it.
+
+**30 FPS is unchanged.** `rig.py compare` of the picture after the 20 s stand, the branch at 30 (`020950`) against two runs of `main` (`020652`, `020821`): noise floor 0.610, ours 0.414 (ratio 0.68), time ratio 1.002. The branch at 60 in the street (`021118`): 60.00 presents a second, p50 16.67 ms, p99 16.73 ms, no GPU fault. The machine was quiet for these runs (no other test load; CPU load average 1 to 5).
 
 ## Open questions
 

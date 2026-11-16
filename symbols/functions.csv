@@ -3,7 +3,7 @@ address,name,signature,status,file
 0x0040e9e0,utf16_range_equals,"int utf16_range_equals(void * self, wchar16 * begin, wchar16 * end, char * narrow)",replaced,src/game/text/compare.cpp
 0x0043e190,text_starts_with,"int text_starts_with(char * * cursor, char * prefix)",replaced,src/game/text/compare.cpp
 0x0045d210,hash_char_range,ulonglong hash_char_range(CharRange * range),replaced,src/game/text/hash.cpp
-0x0063fad0,hkp_world_cinfo_init,,named,
+0x0063fad0,hkp_world_cinfo_init,void hkp_world_cinfo_init(void * cinfo),named,
 0x009779d0,hks_hkb_get_timestep,,named,
 0x00fe3980,window_is_foreground,bool window_is_foreground(void * window),named,
 0x0103f9e0,global_task_data,FD4TaskData * global_task_data(void),named,
@@ -20,7 +20,7 @@ address,name,signature,status,file
 0x015a30f0,chr_anim_state_update,,named,
 0x015af4f0,anim_update_all,,named,
 0x015b2910,anim_update_entry,,named,
-0x017f99d0,havok_world_step,,named,
+0x017f99d0,havok_world_step,void havok_world_step(void * self),replaced,src/game/havok/world.cpp
 0x0180f5e0,chr_list_fade_step,,named,
 0x01cb4dd0,anim_slots_update,,named,
 0x01d978e0,graphics_apply_flip_settings,void graphics_apply_flip_settings(void),named,
