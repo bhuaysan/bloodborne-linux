@@ -8,11 +8,14 @@
 #include "game/image.hpp"
 #include "hook/hook.hpp"
 
+extern "C" {
+float bb_frame_step = 1.0f / static_cast<float>(bb::game::default_frame_rate);
+}
+
 namespace bb::game {
 namespace {
 
 unsigned target_fps = default_frame_rate;
-float step = 1.0f / static_cast<float>(default_frame_rate);
 
 }  // namespace
 
@@ -21,7 +24,7 @@ void set_frame_rate(unsigned fps) {
         throw std::invalid_argument(std::format("frame rate {} is not 30 or 60", fps));
     }
     target_fps = fps;
-    step = 1.0f / static_cast<float>(fps);
+    bb_frame_step = 1.0f / static_cast<float>(fps);
 }
 
 unsigned frame_rate() {
@@ -29,7 +32,7 @@ unsigned frame_rate() {
 }
 
 float frame_step() {
-    return step;
+    return bb_frame_step;
 }
 
 // 0x02018d20

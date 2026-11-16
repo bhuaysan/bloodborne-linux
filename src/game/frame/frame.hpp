@@ -93,3 +93,9 @@ void flipper_wait_frame(SprjFlipper* self);
 std::uint8_t main_loop_tick();
 
 }  // namespace bb::game
+
+// frame_step()'s value, for the stubs patched into game code (BB_PATCH), which load it from memory.
+// Written only by set_frame_rate.
+extern "C" {
+extern float bb_frame_step;
+}
