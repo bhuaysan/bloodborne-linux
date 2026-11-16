@@ -11,9 +11,17 @@ address,name,signature,status,file
 0x012a3dd0,target_bank_construct,void target_bank_construct(void * self),named,
 0x012a43b0,target_bank_scan_tick,void target_bank_scan_tick(void * manager),replaced,src/game/ai/target_bank.cpp
 0x014368b0,cam_mode_update,,named,
+0x0122d840,ai_target_speed_ring_update,"void ai_target_speed_ring_update(float dt, void * ring)",named,
+0x01234750,ai_path_update,"void ai_path_update(void * nav, FD4TaskData * task)",named,
+0x012389d0,ai_path_follow,,named,
+0x01239eb0,ai_path_follow_step,,named,
+0x0128f060,ai_chr_update,"void ai_chr_update(void * ai_chr, FD4TaskData * task)",named,
+0x012a85c0,ai_agent_update,"void ai_agent_update(float dt, void * ai)",named,
 0x0143a0e0,chase_cam_construct,,named,
 0x0143ac60,chase_cam_update,"void chase_cam_update(void * cam, void * chr, void * world, float dt)",replaced,src/game/camera/chase_cam.cpp
 0x0150e690,chr_turn_update,,named,
+0x01513c10,chr_ai_control_update,"void chr_ai_control_update(float dt, void * chr)",named,
+0x0151a720,ai_manipulator_update,"void ai_manipulator_update(float dt, void * manipulator, void * chr)",named,
 0x01533940,walk_anim_update,,named,
 0x01548740,chr_frame_update,,named,
 0x01572900,chr_pad_step,,named,
@@ -27,6 +35,9 @@ address,name,signature,status,file
 0x019baa40,navmesh_test_module_step,,named,
 0x01cb4dd0,anim_slots_update,,named,
 0x01d978e0,graphics_apply_flip_settings,void graphics_apply_flip_settings(void),named,
+0x01a0f910,ai_pad_step,"void ai_pad_step(void * pad, FD4TaskData * task)",named,
+0x01dbbd00,agent_steer,"SteerPoint agent_steer(void * agent, FD4TaskData * task)",replaced,src/game/ai/steering.cpp
+0x01dbca40,agent_path_direction,,named,
 0x01dcdad0,ai_world_step,"void ai_world_step(void * manager, FD4TaskData * task)",replaced,src/game/ai/world_step.cpp
 0x01e2bc10,chr_ai_step,"void chr_ai_step(void * nvm_manager, void * context, bool before, bool after)",named,
 0x01e4a6c0,game_main,int game_main(void),named,

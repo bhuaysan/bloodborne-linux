@@ -1,4 +1,5 @@
 // The main loop's tick and the target frame rate (docs/design/frame-rate.md, "The main loop").
+#include <atomic>
 #include <cstdint>
 #include <format>
 #include <stdexcept>
@@ -13,6 +14,7 @@ namespace {
 
 unsigned target_fps = default_frame_rate;
 float step = 1.0f / static_cast<float>(default_frame_rate);
+std::atomic<std::uint64_t> ticks{0};
 
 }  // namespace
 
@@ -30,6 +32,14 @@ unsigned frame_rate() {
 
 float frame_step() {
     return step;
+}
+
+std::uint64_t frame_count() {
+    return ticks.load(std::memory_order_relaxed);
+}
+
+void count_frame() {
+    ticks.fetch_add(1, std::memory_order_relaxed);
 }
 
 // 0x02018d20
@@ -59,6 +69,7 @@ std::uint8_t main_loop_tick() {
     }
     fn<void(SprjFlipper*)>(0x02034770)(flipper);  // flipper_wait_frame
 
+    count_frame();  // ours: the frame's tasks see the new count
     FD4TaskData data{reinterpret_cast<const void*>(image().runtime(0x052efd40)), frame_step()};
     if (global<void*>(0x05540510) == nullptr) {
         singleton_missing(0x0493b288);  // "SprjTask"
