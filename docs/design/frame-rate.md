@@ -61,9 +61,9 @@ Some code does not take the step from the task data but has 1/30 built in. These
 | 0x1572a7d | `chr_pad_step` 0x1572900 | A character's pad (`FD4PadManager`) stepped with its own task data of 1/30, called from 0x1548740 and 0x193ac10, which have the step at hand | pad timers (holds, repeats, input buffer) twice as fast |
 | 0x1e2bcd4 | `chr_ai_step` 0x1e2bc10 | The Havok AI world's step (`SprjWorldNvmManager`, `SprjHkAiManager`) with task data of 1/30 | the Havok AI world steps 1/30 s per frame (replaced in #554) |
 | 0x12a4416 (`addss [+0x2c], 1/30`) | `target_bank_scan_tick` 0x12a43b0 | `SprjTargetBankManager`: a timer advanced by 1/30 per call rescans all characters when it reaches an interval; a 100-entry ring indexed at 30 slots a second (`seconds * 30`, 0x12ab623) | rescans twice as often, and the ring covers half the time it is read as covering |
-| 0x180f647 | `chr_list_fade_step` 0x180f5e0 | a fade `+0x1c0 = min(fade + 1/30, 1)` per call over the character list | fades in 0.5 s instead of 1 s |
+| 0x180f647 | `chr_list_fade_step` 0x180f5e0 | a fade `+0x1c0 = min(fade + 1/30, 1)` per call over the character list (#556) | fades in 0.5 s instead of 1 s |
 | 0x143e2b2 | `chase_cam_update` 0x143ac60 | the player's chase camera eases its follow weight `+0x198 += (+0x19c - +0x198) / 30` per call (first read as a `RendMan` smoothing; see #558 below) | one of the camera's per-call smoothings |
-| 0x173456e, 0x15dc1f7, 0x1044943, 0x1f77d4a, 0x227784b, 0x18bc4f7 | menu item lists (`Ins_change_tab_select`), the equipment icon dialog, and four updates not identified | an `update(1/30)` call with a literal | menu and UI animations twice as fast |
+| 0x173456e, 0x15dc1f7, 0x1044943, 0x1f77d4a, 0x227784b, 0x18bc4f7 | the shop's tab highlight (`Ins_tab_select`), the effect system, and four that run once or not at all (#556) | an `update(1/30)` call with a literal | see "Fades, effects and menus (#556)" |
 
 **Task data with a literal 1/30 that probably needs no change** (not verified that the callees ignore `delta_time`): the event system runs a new event once at creation (`SprjEmkSystem`, 0x12efd00); a menu task (0x1b96b00); teardown (0xf73330); and about 30 small step-machine functions (0x1aa3fc0–0x1aa6080, 0x1ab5390–0x1ac3ef0, 0x1b03210–0x1c12bf0) that enter a state through a virtual call with task data of 1/30, most referencing `FrpgNetMan` (the online flow).
 
@@ -156,7 +156,7 @@ Each is a decomp issue of its own, checked at 60 against a 30 FPS run:
 - **Havok world step** (`havok_world_step`, 0x17f99d0): done in #553, see "The Havok world step" below. The ragdoll corpses still settle faster at 60 (#567).
 - **AI step** (`chr_ai_step`, 0x1e2bc10): done in #554, see "The AI step" below.
 - **Target bank** (`target_bank_scan_tick`, 0x12a43b0, and the ring's 30 slots a second at 0x12ab623): done in #555, see "The target bank" below.
-- **Fades** (`chr_list_fade_step`, 0x180f5e0) and the menu `update(1/30)` calls (0x173456e, 0x15dc1f7, 0x1044943, 0x1f77d4a, 0x227784b, 0x18bc4f7): twice as fast.
+- **Fades, effects and menus** (`chr_list_fade_step`, 0x180f5e0, and the `update(1/30)` calls 0x173456e, 0x15dc1f7, 0x1044943, 0x1f77d4a, 0x227784b, 0x18bc4f7): done in #556, see "Fades, effects and menus" below.
 - **Chase camera** (`chase_cam_update`, 0x143ac60, 0x4e6c bytes): done in #557, see "The chase camera at 60 FPS" below.
 - **AI steering** (`agent_steer`, 0x1dbbd00, its ring of 30 directions and a literal 1/30): done in #570, see "The steering ring" below.
 - **Character update intervals** (`world_chr_update`, 0x19173b0, an interval in frames): done in #573, see "The character update interval" below. Two agents of the `aiwait` scene that start right after the load still differ by 0.3 to 0.6 m in their first 10 s (#573).
@@ -433,6 +433,40 @@ The patrol stops are 1.98 s at 60 as at 30 (1.97 s), in every cycle of every run
 
 **30 FPS is unchanged.** With k = 1 the stub is the game's check (the tests above). The branch's agent tracks at 30 differ from `main`'s as much as two runs of `main` differ, except for the pair above after 7 s. `rig.py compare` of the three pictures of the stand, the branch at 30 (`095010`) against two runs of `main` (`082853`, `083406`): noise floor 1.082, ours 1.093 (ratio 1.01), time ratio 1.002. At 60 the branch runs at 57.6 to 58.3 presents a second with the log on (p50 16.67 ms, p99 18.8 to 19.2 ms), as `main` does (`083029`: 58.1, p99 18.9 ms), no GPU fault.
 
+## Fades, effects and menus (#556)
+
+**What the sites are.** A gdb probe counted the hits of each site per frame in three runs at 30 (`main` build, 2026-11-16): the title and a load into the clinic with the pause menu and the inventory (`fr556p`, `fr556m`, local), and `yharnam-fight`.
+
+| Site | What it is | Hits | Change |
+|---|---|---|---|
+| 0x1f77d4a | `sfx_frame_update` (0x1f77bd0), SprjSfx's frame update from `SprjGraphicsStep::STEP_Update` (0x1d9b340): steps the effect system (SprjSfx +0x70, built at 0x1f77250; virtual +0x40 is 0x22ff340, which takes the step in xmm0) by 1/30, or by 0 once after +0x8c was set | once a frame, everywhere | the step: 1/F |
+| 0x173456e | `shop_tab_refresh` (0x1734510): updates the shop's (`S02`) tab highlight instance by 1/30 through the layout instances' update (virtual +0x88; 0x0cec810 advances an instance's animations and its children by the step) | not in these runs; by the code once a frame while the shop is open, from its frame update 0x1736140, which has already advanced the whole layout by the task's step | the extra update: 1/F |
+| 0x180f647 | `chr_list_fade_step` (0x180f5e0): a fade from 0 to 1 by 1/30 a call, copied to the list's parts of kind 7 | 30 adds a fade, in 53 to 97 frames, for three owners while the save loads | the add: 1/F |
+| 0x18bc4f7, 0x18bc50d | 0x18bc470, a character's first update (0x18e5520, the character's setup, calls it last): 0x18bc980 and the virtual +0x150 with 1/30 | once per character as it is created | none: one step at creation |
+| 0x1044943 | 0x10448b0, a virtual (0x52fe4d0) that sets up an object, updates it once by 1/30 and hands it on | none | none: one step at creation |
+| 0x15dc1f7 | 0x15dc100, a message handler: on message 0x3ef, 0x15dcdb0 with 1/30 | none | none: once per message |
+| 0x227784b, 0x2277874 | 0x2277780, from 0x22c53e0 in the effect system while its +0x2977 is set: 0xebbda0 with 1/30 per list entry | none | none yet: not seen running |
+
+`chr_list_fade_step` runs from a character's physics pose sync (0x1515ec0, through 0x180df90 and 0x1811040), which a second probe at 60 found once a frame for every character, whatever its update interval (#573): 280 calls in 280 frames for each of 30 characters, with intervals 0 to 30. So a call stands for a frame, and the add is 1/F.
+
+**Patched inside the functions.** Each site is a `BB_PATCH` of the few instructions around the literal (`src/game/frame/step_literals.cpp`): the stub does what those bytes do with `bb_frame_step` (1/F, written by `set_frame_rate`) in place of the literal, and jumps back. At 30, `bb_frame_step` is the game's 0x3d088889. The stubs' jump targets are set once by `bb-run` after the image is mapped (`set_step_literal_targets`). The effect patch takes the skip test with it (0x1f77d3b to 0x1f77d52), because the literal's load is the target of no jump but the call behind it is.
+
+**Tests.** `tests/game/step_literals_test.cpp` runs each of the three game functions whole, with fakes for its callees, once with the game's bytes and once with the patch, from the same state: at 30 the harness finds no difference in anything they touch (effects with and without the skip flag; the shop with and without the instance, in both tab modes; the fade at 0, 0.5, 0.98, 0.99, 1, 1.5 and −0.25 with 0, 1 and 4 parts). At 60 the effect system and the highlight get 1/60 (the skip still 0), and the fade reaches 1 in 60 calls where the game's bytes take 30. With 1/60 in place of 1/30 at 30 every comparison fails.
+
+**Check runs.** `relwithdebinfo`, RADV, `--window`, 2026-11-16 (suffix `-bb-run-yharnam-fight`): `main` at 30 (`112920`) and 60 (`113214`), the branch at 60 (`112547`), each with gdb logging the effect system's step (0x22ff340's xmm0) and the fade after each add, from the start of the process. The breakpoints cost frames: 39 to 41 frames a second in the fight at 60.
+
+| | `main`, 30 | `main`, 60 | branch, 60 |
+|---|---|---|---|
+| effect step | 1/30 | 1/30 | 1/60 |
+| effect seconds per game second (frames × 1/F) in the fight | 1.000 | 2.000 | 1.000 |
+| fades: adds to 1 | 30 | 30 | 61 |
+| fades: frames from 0 to 1, three owners | 53, 58, 97 | 51, 58, 87 | 113, 120, 242 |
+| the same in game seconds | 1.8, 1.9, 3.2 | 0.9, 1.0, 1.5 | 1.9, 2.0, 4.0 |
+
+The fades run while the save loads, where frames come irregularly, so their frame counts vary from owner to owner; `main` at 60 takes half the game time of 30, the branch about the same. The shop's highlight was not run in the game: neither save reaches the shop.
+
+**30 FPS is unchanged.** `rig.py compare` of `main-menu`, the branch at 30 (`114025`) against two runs of `main` (`113902`, `113943`): noise floor 0.0255, ours 0.0248 (ratio 0.97), time ratio 0.97. The branch at 60 (`114107`): ratio 1.44, within twice the floor, time ratio 0.92. No other test load; load average about 2.5 (another session's builds).
+
 ## Open questions
 
 - Mode 2's `tearing` = 1: where `graphics +0x104`, 0x513ac84 and the render list's byte at +8 end up (presumably the hsync flip when late).
@@ -440,3 +474,4 @@ The patrol stops are 1.98 s at 60 as at 30 (1.97 s), in every cycle of every run
 - Whether the step-machine functions with task data of 1/30 read `delta_time`.
 - `skip_wait` (+0x273, set by 0x1cf4c70 with `SprjScaleform`) and `request_0x274` (sets +0x4c, +0x4d and 60 at +0x50 of the object at 0x5540e00): what state skips the wait.
 - The remaining uses of 1/30 and 30.0f that the survey did not classify.
+- 0x2277780's step (0x227784b, 0x2277874): what sets the effect system's +0x2977, and whether 0xebbda0 then runs once a frame.
