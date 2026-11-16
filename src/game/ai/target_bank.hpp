@@ -21,8 +21,8 @@ inline constexpr std::array<std::uint8_t, 17> target_bank_scan_tick_prologue = {
     0x55, 0x41, 0x54, 0x53, 0x48, 0x83, 0xec, 0x28};
 
 // Runs `original` on `manager` on every `calls`-th call: when `count` is 0. Then moves `count` on
-// to the next call, modulo `calls` (at least 1). With calls == 1 every call runs `original` and
-// `count` stays 0.
+// to the next call, modulo `calls`. With calls <= 1 every call runs `original`, whatever `count`
+// held, and `count` becomes 0.
 void target_bank_scan_tick_every(TargetBankScanTick* original, unsigned calls, unsigned& count,
                                  void* manager);
 

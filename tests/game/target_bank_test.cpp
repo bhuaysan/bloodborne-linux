@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -254,6 +255,15 @@ TEST(TargetBankTick, RunsOnEveryCallsthCall) {
             }
         }
     }
+}
+
+// A count left over from 60 FPS doesn't skip a call at 30.
+TEST(TargetBankTick, RunsEveryCallAt30WhateverTheCount) {
+    stand_in_calls = 0;
+    unsigned count = 1;
+    bb::game::target_bank_scan_tick_every(&stand_in, 1, count, nullptr);
+    EXPECT_EQ(stand_in_calls, 1);
+    EXPECT_EQ(count, 0u);
 }
 
 TEST(TargetBankTick, IsRegisteredWithItsPrologue) {

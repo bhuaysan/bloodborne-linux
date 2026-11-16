@@ -358,7 +358,7 @@ At 60 the tick ran twice as often per game second: the bank was rebuilt every 2.
 | 60 | 2 | 5.03 s | 30.00, 30.01 | 22.8, 23.0 | 1.52, 1.46 |
 | 60, the old tick on every call | 2 | 2.52 s | 60.00 | 23.0, 23.1 | 0.50, 0.61 |
 
-The bank is rebuilt at the same game times at 30 and at 60 (0, 5.03, 10.07, ... s) and holds the same characters (34 at the start, 29 to 30 after 35 s). The ring moves on at 30 slots a game second again, and its slots fill up as at 30 (with 1/60 s slots they rarely did). The AI books about 5 % more thinks a game second at 60 with or without the fix; that is the think update's own and not this tick. One 60 run (`040102`) lost the menu taps and stood at the title; it is left out.
+The bank is rebuilt at the same game times at 30 and at 60 (0, 5.03, 10.07, ... s) and holds the same characters (34 at the start, 29 to 30 after 35 s). The ring moves on at 30 slots a game second again, and its slots fill up again: full slots are back near the rate at 30, where with 1/60 s slots they rarely were. The rest of the gap to 30 fits the AI booking about 5 % more thinks at 60 (below). The AI books about 5 % more thinks a game second at 60 with or without the fix; that comes from the think update and not from this tick. One 60 run (`040102`) lost the menu taps and stood at the title; it is left out.
 
 **30 FPS is unchanged.** `rig.py compare` of the three pictures of the stand, the branch at 30 (`041254`, `041742`) against two runs of `main` (`041430`, `041606`): noise floor 1.199, ours 1.205 and 1.243 (ratio 1.005 and 1.037), time ratio 1.00.
 

@@ -10,7 +10,7 @@ namespace bb::game {
 
 void target_bank_scan_tick_every(TargetBankScanTick* original, unsigned calls, unsigned& count,
                                  void* manager) {
-    if (count == 0) {
+    if (calls <= 1 || count == 0) {
         original(manager);
     }
     count = calls > 1 ? (count + 1) % calls : 0;
