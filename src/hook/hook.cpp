@@ -35,6 +35,7 @@ struct Saved {
     Bytes original, patch;
     Trampoline trampoline;
     std::size_t span = patch_size;  // the bytes that must stay as they are: patch or prologue
+    bool inside = false;            // a patch inside a function (Replacement::function)
 };
 
 using Key = std::pair<std::uintptr_t, std::uint64_t>;  // image base, link address
@@ -167,8 +168,9 @@ std::uint64_t checked_size(const loader::Image& image, const Replacement& r, std
         refuse(r, e.what());
     }
     if (!size) {
-        refuse(r, link == r.link_addr ? std::string("not an FDE start")
-                                      : std::format("the function {:#x} is not an FDE start", link));
+        refuse(r, link == r.link_addr
+                      ? std::string("not an FDE start")
+                      : std::format("the function {:#x} is not an FDE start", link));
     }
     return *size;
 }
@@ -186,6 +188,9 @@ void check_inside(const loader::Image& image, const Replacement& r) {
         refuse(r, std::format("the patched bytes don't lie inside the function {:#x} after its "
                               "entry ({} bytes)",
                               r.function, size));
+    }
+    if (!image.segment_at(r.link_addr, n, PROT_EXEC)) {
+        refuse(r, "the patched bytes lie outside the executable segments");
     }
     if (std::memcmp(reinterpret_cast<const void*>(image.base + r.link_addr), r.prologue.data(),
                     n) != 0) {
@@ -245,7 +250,7 @@ void apply(loader::Image& image, std::span<const Replacement> replaced) {
         // Recorded first: if the write fails, live() finds no patch and drops the entry.
         Saved& hook = saved()[{image.base, r.link_addr}];
         hook = Saved{read(image, r.link_addr), patch_for(r.impl), std::move(trampolines[i]),
-                     span_of(r)};
+                     span_of(r), r.function != 0};
         write(image, r.link_addr, hook.patch);
     }
 }
@@ -270,7 +275,10 @@ void* original(const loader::Image& image, std::uint64_t link) {
         return reinterpret_cast<void*>(image.base + link);
     }
     if (!it->second.trampoline) {
-        throw HookError(std::format("hook at {:#x}: no prologue, so no original", link));
+        throw HookError(
+            it->second.inside
+                ? std::format("hook at {:#x}: a patch inside a function has no original", link)
+                : std::format("hook at {:#x}: no prologue, so no original", link));
     }
     return it->second.trampoline.get();
 }

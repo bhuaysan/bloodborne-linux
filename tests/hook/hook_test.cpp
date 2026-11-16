@@ -375,7 +375,7 @@ std::uint64_t hook_test_stub_back = 0;
 void hook_test_stub();
 }
 asm(R"(
-    .text
+    .pushsection .text
     .globl hook_test_stub
     .intel_syntax noprefix
 hook_test_stub:
@@ -385,6 +385,7 @@ hook_test_stub:
     add eax, edx
     jmp qword ptr [rip + hook_test_stub_back]
     .att_syntax prefix
+    .popsection
 )");
 
 // The 14 bytes at 0x105 that the stub takes over.
@@ -407,11 +408,11 @@ TEST(Hook, PatchesInsideAFunction) {
     const std::uint8_t jmp[] = {0xff, 0x25, 0, 0, 0, 0};
     EXPECT_EQ(std::memcmp(written.data(), jmp, sizeof jmp), 0);
     EXPECT_EQ(protection(test_base + 0x1000), "r-xp");
-    expect_refusal([&] { bb::hook::original(image, 0x105); }, "no original");
+    expect_refusal([&] { bb::hook::original(image, 0x105); },
+                   "hook at 0x105: a patch inside a function has no original");
     bb::hook::remove(image, patch);
     EXPECT_EQ(std::memcmp(bytes_at(image, 0x105).data(), summing_middle.data(), 14), 0);
     EXPECT_EQ(image.fn<int()>(0x100)(), 6);
-
 }
 
 TEST(Hook, RefusesBadInsidePatches) {
@@ -427,7 +428,8 @@ TEST(Hook, RefusesBadInsidePatches) {
                    "(24 bytes)");
     expect_refusal([&] { apply({inside_patch(0x100, 0x10f, summing_middle)}); },
                    "don't lie inside the function 0x100");
-    expect_refusal([&] { apply({inside_patch(0x100, 0x105, std::span(summing_middle).first(13))}); },
+    expect_refusal(
+        [&] { apply({inside_patch(0x100, 0x105, std::span(summing_middle).first(13))}); },
                    "13 patched bytes, a patch inside a function takes 14 to 64");
     std::array<std::uint8_t, 65> long_one{};
     expect_refusal([&] { apply({inside_patch(0x100, 0x105, long_one)}); }, "65 patched bytes");
@@ -440,10 +442,12 @@ TEST(Hook, RefusesBadInsidePatches) {
 
     // Its span counts for overlaps: in the list, and against live hooks either way round.
     auto* a = reinterpret_cast<void*>(&replacement_a);
-    expect_refusal([&] { apply({inside_patch(0x100, 0x105, summing_middle), {0x10e, a, "e"}}); },
-                   "hook e at 0x10e: double hook: the patch overlaps another entry of the list");
-    expect_refusal([&] { apply({{0x10e, a, "e"}, inside_patch(0x100, 0x105, summing_middle)}); },
-                   "hook stub at 0x105: double hook: the patch overlaps another entry of the list");
+    expect_refusal(
+        [&] { apply({inside_patch(0x100, 0x105, summing_middle), {0x10e, a, "e"}}); },
+        "hook e at 0x10e: double hook: the patch overlaps another entry of the list");
+    expect_refusal(
+        [&] { apply({{0x10e, a, "e"}, inside_patch(0x100, 0x105, summing_middle)}); },
+        "hook stub at 0x105: double hook: the patch overlaps another entry of the list");
     apply({inside_patch(0x100, 0x105, summing_middle)});
     expect_refusal([&] { apply({{0x10e, a, "e"}}); },
                    "hook e at 0x10e: double hook: the patch overlaps the hook at 0x105");

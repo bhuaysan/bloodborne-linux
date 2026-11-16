@@ -36,8 +36,10 @@ struct DueRun {
     std::uint32_t eax, ecx, edx, esi;
     std::uint32_t xmm0;      // its low float's bits
     std::uint32_t slot;      // [rbp-0xc8]
+    std::uint32_t pad;       // so that memcmp compares no padding
 };
-static_assert(offsetof(DueRun, exit) == 24 && offsetof(DueRun, slot) == 48);
+static_assert(offsetof(DueRun, exit) == 24 && offsetof(DueRun, slot) == 48 &&
+              sizeof(DueRun) == 56);
 
 }  // namespace
 
@@ -52,7 +54,7 @@ void chr_due_test_due();
 void chr_due_test_not_due();
 }
 asm(R"(
-    .text
+    .pushsection .text
     .intel_syntax noprefix
     .globl chr_due_test_enter
 chr_due_test_enter:
@@ -99,6 +101,7 @@ chr_due_test_not_due:
     pop rbx
     ret
     .att_syntax prefix
+    .popsection
 )");
 
 namespace {
@@ -154,7 +157,7 @@ protected:
     }
     void TearDown() override {
         captures_.reset();
-        bb::game::set_chr_due_check(1);
+        bb_chr_due_scale = 1;  // no image() here: a skipped test has none
     }
 
     // Runs the check in memory now for a character at `index` with interval `interval` in frame
@@ -260,7 +263,8 @@ void fake_update(float, void*) {
 }
 
 TEST_F(ChrUpdateIntervalTest, TheWrapperSetsTheScaleForTheFrameRate) {
-    const Hooked<2> both(std::array{registered(world_chr_update), registered(bb::game::chr_due_check)});
+    const Hooked<2> both(
+        std::array{registered(world_chr_update), registered(bb::game::chr_due_check)});
     EXPECT_EQ(registered(bb::game::chr_due_check).function, world_chr_update);
     for (unsigned fps : {60u, 30u}) {
         bb::game::set_frame_rate(fps);

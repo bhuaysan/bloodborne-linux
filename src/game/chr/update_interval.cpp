@@ -18,10 +18,12 @@ std::uint64_t bb_chr_due_not_due = 0;
 // Entered by the patch's jump at 0x01917909 with the game's registers and frame, ecx = u > 0.
 // It does what the game's bytes up to 0x0191792c do, with k * u in place of u in the two
 // divisions and the conversion, and keeps u in ecx and [rbp-0xc8]. It changes eax, edx, esi and,
-// when due, xmm0, as the game's bytes do; the code at both continuations writes eax, edx and esi
-// before it reads them. rcx is pushed for the divisions and popped before either jump.
+// when due, xmm0, as the game's bytes do; the code at both continuations writes eax and esi before
+// it reads them, and edx only after a call, at 0x019178ee. rcx is pushed for the divisions and
+// popped before either jump. k is 1 or 2 (set_frame_rate allows 30 and 60) and the game's
+// intervals are at most 30, so k * u does not overflow.
 asm(R"(
-    .text
+    .pushsection .text
     .globl bb_chr_due_check_stub
     .type bb_chr_due_check_stub, @function
     .intel_syntax noprefix
@@ -46,6 +48,7 @@ bb_chr_due_check_stub:
     jmp qword ptr [rip + bb_chr_due_not_due]
     .att_syntax prefix
     .size bb_chr_due_check_stub, . - bb_chr_due_check_stub
+    .popsection
 )");
 
 namespace bb::game {

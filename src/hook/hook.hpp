@@ -85,9 +85,9 @@ inline constexpr std::size_t max_patched = 64;
 // The original of the function at `link` in `image`, for a replacement that wraps it: while it
 // is hooked with a prologue, a trampoline that runs the prologue and jumps to the instruction
 // behind it; while it isn't hooked (as in the harness), the function itself. Throws HookError
-// when it is hooked without a prologue or patched inside a function. The trampoline lives until the hook is removed, so
-// callers ask again instead of keeping the address. Safe from any thread while no apply or
-// remove runs.
+// when it is hooked without a prologue or patched inside a function. The trampoline lives until
+// the hook is removed, so callers ask again instead of keeping the address. Safe from any thread
+// while no apply or remove runs.
 void* original(const loader::Image& image, std::uint64_t link);
 
 // Restores the original bytes of each entry and forgets them. Checks every entry first and
