@@ -263,18 +263,29 @@ TEST_F(EbootTest, ChrAiStepUnchangedAt30) {
 // without it.
 TEST_F(EbootTest, ChrAiStepAt60) {
     const WorldFakes fakes;
+    Log seen{};  // the calls of the last run, with the time step left out
     const auto delta = [&](const Case& c, bool hooked) {
         harness().restore();
         const auto [nvm, context, before, after] = build_chr_ai_step(harness().arena(), c);
         (hooked ? chr_ai_step_hooked : chr_ai_step_unhooked)(nvm, context, before, after);
-        return world_step_delta();
+        const std::uint32_t d = world_step_delta();
+        seen = *log_;
+        for (std::uint32_t i = 0; i < seen.count; ++i) {
+            if (seen.calls[i].what == world_step) {
+                seen.calls[i].args[0] = 0;
+            }
+        }
+        return d;
     };
     for (const Case& c : cases) {
         EXPECT_EQ(delta(c, true), 0x3d088889u) << c.name;
         {
             const FrameRateGuard rate(60);
             EXPECT_EQ(delta(c, false), 0x3d088889u) << c.name;
+            const Log unhooked = seen;
             EXPECT_EQ(delta(c, true), float_bits(1.0f / 60.0f)) << c.name;
+            // Apart from the step, the Havok AI world gets the same calls.
+            EXPECT_EQ(std::memcmp(&unhooked, &seen, sizeof seen), 0) << c.name;
         }
     }
     harness().restore();
