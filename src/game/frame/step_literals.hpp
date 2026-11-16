@@ -32,7 +32,9 @@ inline constexpr std::array<std::uint8_t, 23> sfx_step_patched = {
 // instances' update (0x00cec810 for a plain one, which advances its animations and its children by
 // the step). The shop's frame update (0x01736140) calls it every frame after its own update has
 // advanced the whole layout by the frame's step, so the highlight gets one extra update of 1/30 a
-// frame. At 0x0173456e, with rax = the instance and rcx = its vtable:
+// frame. 0x01732fe0 (after setting +0x1e1) and the message handler 0x01733fa0 (message 0x9c9)
+// call it once on an event; the patch gives those calls the frame's step as well. At 0x0173456e,
+// with rax = the instance and rcx = its vtable:
 //   vmovss xmm0, [0x049270e4]; mov rdi, rax; call [rcx+0x88]
 // No jump of the game lands inside these bytes; the one behind them is at 0x0173457f.
 inline constexpr std::uint64_t shop_tab_refresh = 0x01734510;
