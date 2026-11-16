@@ -155,7 +155,7 @@ Each is a decomp issue of its own, checked at 60 against a 30 FPS run:
 
 - **Havok world step** (`havok_world_step`, 0x17f99d0): done in #553, see "The Havok world step" below. The ragdoll corpses still settle faster at 60 (#567).
 - **AI step** (`chr_ai_step`, 0x1e2bc10): done in #554, see "The AI step" below.
-- **Target bank** (`target_bank_scan_tick`, 0x12a43b0, and the ring's 30 slots a second at 0x12ab623): rescans twice as often, and the ring covers half the time.
+- **Target bank** (`target_bank_scan_tick`, 0x12a43b0, and the ring's 30 slots a second at 0x12ab623): done in #555, see "The target bank" below.
 - **Fades** (`chr_list_fade_step`, 0x180f5e0) and the menu `update(1/30)` calls (0x173456e, 0x15dc1f7, 0x1044943, 0x1f77d4a, 0x227784b, 0x18bc4f7): twice as fast.
 - **Chase camera** (`chase_cam_update`, 0x143ac60, 0x4e6c bytes): done in #557, see "The chase camera at 60 FPS" below.
 - **`chr_pad_step`** (0x1572900) is not the player's input: its 1/30 goes to 0x1d145b0, which turns a matrix by the pad's axes times π/2 and −π/3 rad/s, a debug free camera behind a mode check. Low priority.
@@ -333,9 +333,34 @@ The corpses as a whole still settle faster at 60 with the fix: half of their dro
 | median walking speed (0.5 s windows) | 0.81 to 1.10 m/s | 0.70 to 1.06 m/s | 0.79 to 1.08 m/s |
 | distance in the first 10 s of motion | 8.6 to 13.6 m | 4.7 to 12.0 m | 6.2 to 12.0 m |
 
-The enemies approach at 60 as at 30: they appear and start in the same game time and walk at the same speed. The old step makes no difference: the 60 runs with and without the fix agree as closely as the runs of either. The game moves its characters itself (their animation), and the Havok AI character's position and velocity are inputs to the step (the velocity's vertical part is −g × the frame's step: −0.327 m/s at 30, −0.163 at 60 in both 60 variants); what the step computes from them did not change the motion in this scene. Five agents (four of the group that appears at 5 s, one of the first) walk 2 to 7 m less in their first 10 s of motion at 60 in all four 60 runs, with or without the fix, so something else that runs per frame holds them; not traced (candidates are the target bank, #555, and the other sites above).
+The enemies approach at 60 as at 30: they appear and start in the same game time and walk at the same speed. The old step makes no difference: the 60 runs with and without the fix agree as closely as the runs of either. The game moves its characters itself (their animation), and the Havok AI character's position and velocity are inputs to the step (the velocity's vertical part is −g × the frame's step: −0.327 m/s at 30, −0.163 at 60 in both 60 variants); what the step computes from them did not change the motion in this scene. Five agents (four of the group that appears at 5 s, one of the first) walk 2 to 7 m less in their first 10 s of motion at 60 in all four 60 runs, with or without the fix, so something else that runs per frame holds them; not traced (#570; candidates are the target bank, #555, and the other sites above).
 
 **30 FPS is unchanged.** The save has two outcomes at 30: mostly the enemies pass the hunter by, sometimes one notices and attacks him (picture difference about 21 between the two). In nine runs of `main` (`025542` to `032231`) it attacked once, in nine runs of the branch's code (seven of the branch, two of the probe build) twice; between runs of the same outcome the pictures agree to 0.1 to 0.6. `rig.py compare` of the branch (`031118`) against two runs of `main` with the common outcome (`031254`, `031607`): noise floor 1.108, ours 1.143 (ratio 1.03), time ratio 1.00. At 60 in this scene the branch (`030031`) runs at 57.9 presents a second (p50 16.70 ms, p99 18.80 ms), as `main` does at 60 (`032430`: 57.3, 16.91 ms, 18.96 ms). No run had a GPU fault. The machine was quiet (no other test load, CPU load average 1 to 4).
+
+## The target bank (#555)
+
+`target_bank_scan_tick` (0x12a43b0) is a member functor of a per-frame task (built at 0x1a654b8) on the `SprjTargetBankManager` singleton (0x553b098, built by 0x12a3dd0). It does two things per call, neither with the frame's step:
+
+- **The bank.** A timer (+0x2c) goes up by a literal 1/30 (0x12a4416). When it reaches the interval (+0x28, 5 s; the timer starts at 5, so the first call scans), the tick resets it and rebuilds the bank, a vector of characters at +0x08 to +0x18: every character of `WorldChrMan`'s list (+0x30, +0x38) and of the chr set the singleton at 0x553b148 names (+0x20) whose virtual +0x78 says yes. Between rebuilds the bank only loses characters that are destroyed (0x1a554f0, 0x18bc110). It is read by 0x122b3f0 and 0x12adc50. So a character that appears waits for the next rebuild, up to 5 s, before it is in the bank.
+- **The AI update schedule** (debug label `SprjAiUpdateTimeSchedular`). A ring of 100 byte counters at +0x30 with its index at +0x94: each call clears the slot at the index and moves the index on by one. The AI's think update (0x12ab4c0) books its next think 1.0 to 1.2 s ahead (a random time) in the slot `seconds * 30` past the index (0x12ab623). A slot holds at most +0x98 (3) bookings; when it is full, the booking moves on to the next free slot and the think time grows by 1/30 s per slot skipped. `Disable System` (+0x99) switches the limit off. The think timer itself counts seconds; the ring only spreads the thinks over the frames.
+
+At 60 the tick ran twice as often per game second: the bank was rebuilt every 2.5 s, and each slot of the ring stood for 1/60 s where the bookings count it as 1/30 s.
+
+**Wrapped, not decompiled.** The hook (`src/game/ai/target_bank.cpp`, `BB_WRAP`) runs the game's tick on every (frame rate / 30)-th call: every call at 30, every second call at 60. The timer, the rebuilds and the ring then move on 30 times a game second, as at 30 FPS, bit for bit the same sequence of values. The index stays on one slot for two frames at 60, which is what the bookings' `seconds * 30` assumes. The bank's readers see it rebuilt on the first frame of a pair, at the same game time as at 30. The phase of the pairs is a counter in our code, arbitrary at the start; the tick takes no task data.
+
+**Tests.** `tests/game/target_bank_test.cpp`: the game's tick through the registered hook at 30 leaves every byte as without it (1 and 160 calls), and at 60 twice as many calls through the hook leave what the game's tick leaves in the same number of calls at 30: the timer, the bank and the ring. Fakes stand in for the world's characters (a vtable whose +0x78 reads a byte) and the two singletons; the bank has room for every character, so it never grows. Four cases: the game's own state at creation, a short interval with the ring wrapping from 99 to 0, and no player chr set (-1 and one past the end). Without the wrapper the 60 FPS calls differ (a test checks that the comparison sees it).
+
+**Check runs.** Scenario `aiwait` (#554, local) on the `yharnam-fight` save: Continue, then stand 30 s while the street's enemies walk up. A local `bb-run` (not committed) logged every call of the tick: the slot it clears and its count, the timer, the bank's size and the ring. `relwithdebinfo`, RADV, `--window`, 2026-11-16, runs `20261116-035925` to `-041132` (suffix `-bb-run-aiwait`); CPU load average 2 to 5 from other jobs, no other test load. Game time is calls / frame rate:
+
+| Variant | Runs | Bank rebuilt every | Ring slots a game second | Bookings a game second | Full slots cleared a game second |
+|---|---|---|---|---|---|
+| 30 | 2 | 5.03 s | 30.00 | 21.7 | 0.92, 1.24 |
+| 60 | 2 | 5.03 s | 30.00, 30.01 | 22.8, 23.0 | 1.52, 1.46 |
+| 60, the old tick on every call | 2 | 2.52 s | 60.00 | 23.0, 23.1 | 0.50, 0.61 |
+
+The bank is rebuilt at the same game times at 30 and at 60 (0, 5.03, 10.07, ... s) and holds the same characters (34 at the start, 29 to 30 after 35 s). The ring moves on at 30 slots a game second again, and its slots fill up as at 30 (with 1/60 s slots they rarely did). The AI books about 5 % more thinks a game second at 60 with or without the fix; that is the think update's own and not this tick. One 60 run (`040102`) lost the menu taps and stood at the title; it is left out.
+
+**30 FPS is unchanged.** `rig.py compare` of the three pictures of the stand, the branch at 30 (`041254`, `041742`) against two runs of `main` (`041430`, `041606`): noise floor 1.199, ours 1.205 and 1.243 (ratio 1.005 and 1.037), time ratio 1.00.
 
 ## Open questions
 
