@@ -149,6 +149,11 @@ void BufferCache::InvalidateFromFault(VAddr device_addr) {
 // too, so that a later download in the same window can't write the old bytes over what the range
 // holds next.
 void BufferCache::DropMemory(VAddr device_addr, u64 size) {
+    if (!memory_tracker->IsRegionGpuModified(device_addr, size)) {
+        // Only a GPU write into memory the game unmaps could set a bit after this check.
+        memory_tracker->MarkRegionAsCpuModified(device_addr, size);
+        return;
+    }
     OnGpuThread([this, device_addr, size] { UnmarkRegionAsGpuModified(device_addr, size, true); });
 }
 
@@ -162,10 +167,11 @@ void BufferCache::OnGpuThread(auto&& func) {
 }
 
 // Runs on the GPU thread. A download queued earlier (ReadMemory) has dropped its ranges from
-// gpu_modified_ranges but writes guest memory only once its copy is done, so it is waited for
-// first.
+// gpu_modified_ranges but writes guest memory only once its copy is done, so it is waited for and
+// its write run first (Finish waits, but runs only the operations done before its submit).
 void BufferCache::FlushGpuModified(VAddr device_addr, u64 size) {
     scheduler.Finish();
+    scheduler.PopPendingOperations();
     DownloadWindow(device_addr, size, false);
 }
 
