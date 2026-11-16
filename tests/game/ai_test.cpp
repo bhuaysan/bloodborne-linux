@@ -285,7 +285,9 @@ TEST_F(EbootTest, ChrAiStepAt60) {
             const Log unhooked = seen;
             EXPECT_EQ(delta(c, true), float_bits(1.0f / 60.0f)) << c.name;
             // Apart from the step, the Havok AI world gets the same calls.
-            EXPECT_EQ(std::memcmp(&unhooked, &seen, sizeof seen), 0) << c.name;
+            ASSERT_EQ(unhooked.count, seen.count) << c.name;
+            EXPECT_EQ(std::memcmp(unhooked.calls, seen.calls, sizeof(Call) * seen.count), 0)
+                << c.name;
         }
     }
     harness().restore();
