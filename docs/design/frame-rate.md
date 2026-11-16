@@ -223,7 +223,36 @@ After the rest, the patched runs still differ by 7.5 to 9. The pictures show why
 - `chr_anim_step_sync` (0x15985a0) pulls the character's animation step toward a reference phase with a per-call gain of 0.1 (rodata 0x4926b88, used at 0x1598663; its clamps scale with dt). Switching it off (`jne` at 0x15985b8 → `jmp`) changes nothing at 30 (0.2 to 0.4 against the unpatched 30 runs), so the phase error is zero in a walk. Setting the gain to 1 − 0.9^½ at 60 changes nothing either.
 - The Havok world step (#553) and the AI step (#554): no change (table). The target bank (#555) and the fades and menu updates (#556) are not in the player's path.
 
-Not resolved: the step of the Havok behaviour (animation) graph. `chr_anim_state_update` (0x15a30f0) takes the task step or `chr_anim_step_sync`'s, and the root motion (0x1836d50) uses it. Where `hkbGetTimestep` (0x47d5e84) gets its value is still open, and it is the next candidate for the hunter's motion.
+### The hunter's side step
+
+Measured with the camera wrapper of #557 in place (`main` at 8aa5863), scenario `fr558s`. Picture difference to the nearest 30 run (`233023`, `233355`, `234048`, `000552`, `000735`; the 30 run `233721` has 690×372 pictures and is left out; stamps `20261115-…`/`20261116-…`, UTC). Most 30 runs agree to 0.3; one (`233023`) lands on the other outcome.
+
+| Picture | 30 vs 30 | 60 (`233209`, `233538`, `233905`, `234231`) |
+|---|---|---|
+| end of the 10-step walk | 0.01 to 5.2 | 3.4 to 5.3 |
+| 45 steps later | 0.05 to 8.6 | 7.5 to 9.1 |
+| 45 steps after the 30-step walk | 0.1 to 7.0 | 9.0 to 9.9 |
+
+**Position, not pictures.** A local `bb-run` logs the camera state every call, and through the `chr` argument of `chase_cam_update` the hunter's object: `[chr+0x58]+0x350` is his world position (x, y, z), updated every frame; +0x320 to +0x348 hold his facing. Runs at 60 give the same position track to the last digit, so one run per variant shows a change. The first side step from standing (10 steps at 30, `g30`/`e30` against `g60`/`e60`, x by game time from his first move):
+
+- Up to 200 ms the two rates agree to 0.005 m. He turns to the right in the first frame and speeds up to about 4 m/s.
+- Then comes one frame without motion, after which he walks at about 0.6 m/s at both rates.
+- At 30 that frame comes 33 ms earlier than at 60. At 60 he gets two more fast frames and stops 0.13 m further to the right (0.28 m in the 30-step walk). The two outcomes of the 30 runs differ by the same amount: when the fast phase ends depends on input timing, and at 60 it always ends late.
+- The later steps keep that offset; the back step of the 10-step walk is as long at both rates. The 60-step walk runs into a shelf, which puts the hunter at the same place at both rates.
+
+So the remaining 30-vs-60 difference is when the step's fast phase ends, not a speed or a filter. Ruled out at 60 by runs (positions or pictures; stamps `20261116-…`):
+
+| Variant at 60 | Runs | Result |
+|---|---|---|
+| `chr_frame_update` (0x1548740) every second call per character with twice the step | `234610`, `234935`, `235300` | pictures as unpatched |
+| the animation update over all characters (0x15af4f0, and the per-entry 0x15b2910) the same way | `000043`, `000226`, `000409` | pictures as unpatched |
+| both together | `004621` | the fast phase ends 1/60 s earlier, still 1/60 s later than at 30 |
+| Havok world step at 1/60 (0x17f9b74, #553) | `001240`, `001422`, `001604` | pictures as unpatched |
+| AI step at 1/60 (0x1e2bcd7, #554) | `004825` | position track as unpatched |
+
+`hkbGetTimestep` (string 0x47d5e84) is a Havok Script function registered at 0x976a4d; its body (0x9779d0) returns a float of the script's context (+0x30). It reads a step, it doesn't set one. The function 0x1939bb0, which calls the camera and `chr_frame_update`, runs only while the game loads.
+
+Not resolved: what ends the fast phase. Candidates are the hunter's behaviour scripts (Havok Script, run outside the updates above) and a timer on the stick input. The next step is a run that catches the write that starts the slow phase.
 
 One 60 run (`185636`) crashed in the logo sequence with the `GXRenderThread` segfault at guest 0x263b8e7 (#559).
 
