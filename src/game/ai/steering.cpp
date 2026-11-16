@@ -1,10 +1,12 @@
 // The AI agents' steering at the target frame rate (docs/design/frame-rate.md, "The steering
-// ring (#570)"): a wrapper that runs the game's steering 30 times a game second, whatever the frame
-// rate, and hands the agent its last direction in between.
+// ring (#570)"): a wrapper that runs the game's steering on every (frame rate / 30)-th call of each
+// agent, as often a game second as at 30 FPS, and hands the agent its last direction in between.
 #include "game/ai/steering.hpp"
 
 #include <cstddef>
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
 
 #include "game/image.hpp"
 #include "hook/hook.hpp"
@@ -35,21 +37,33 @@ SteerPoint steer_point(const float position[3], const float direction[4]) {
     return out;
 }
 
+// The agents' counts. The game steps each agent on one thread at a time, but different agents on
+// several (the CSChrThreads), so the table has a lock. Agents the game destroys stay in it until it
+// holds `max_agents`; then it starts over, which costs each agent at most one extra run of the
+// game's steering.
+std::mutex counts_lock;
+std::unordered_map<const void*, unsigned> counts;
+constexpr std::size_t max_agents = 4096;
+
 }  // namespace
 
-SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, std::uint64_t frame,
-                             void* agent, const FD4TaskData* task) {
+SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, unsigned& count, void* agent,
+                             const FD4TaskData* task) {
     if (calls <= 1) {
+        count = 0;
         return original(agent, task);
-    }
-    if (frame % calls == 0) {
-        // calls * the frame's step: 2 * 1/60 is the game's 1/30 bit for bit.
-        const FD4TaskData step{task->vtable, task->delta_time * static_cast<float>(calls)};
-        return original(agent, &step);
     }
     void* const character = load<void*>(agent, 0x230);
     if (character == nullptr) {
-        return original(agent, task);  // no ring, no state: a constant
+        count = 0;  // no ring, no state: a constant; the first call with a character runs
+        return original(agent, task);
+    }
+    const bool runs = count == 0;
+    count = (count + 1) % calls;
+    if (runs) {
+        // calls * the frame's step: 2 * 1/60 is the game's 1/30 bit for bit.
+        const FD4TaskData step{task->vtable, task->delta_time * static_cast<float>(calls)};
+        return original(agent, &step);
     }
     // The writes the game's steering does on every call with a character (0x01dbbd38, 0x01dbbe10).
     store<std::uint8_t>(agent, 0x28c, 1);
@@ -65,8 +79,32 @@ SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, std::uint64_t
 
 // 0x01dbbd00
 SteerPoint agent_steer(void* agent, const FD4TaskData* task) {
-    return agent_steer_every(reinterpret_cast<AgentSteer*>(hook::original(image(), 0x01dbbd00)),
-                             frame_rate() / default_frame_rate, frame_count(), agent, task);
+    auto* const original = reinterpret_cast<AgentSteer*>(hook::original(image(), 0x01dbbd00));
+    const unsigned calls = frame_rate() / default_frame_rate;
+    if (calls <= 1) {
+        return original(agent, task);
+    }
+    unsigned count = 0;
+    {
+        const std::lock_guard lock(counts_lock);
+        if (const auto it = counts.find(agent); it != counts.end()) {
+            count = it->second;
+        }
+    }
+    const SteerPoint point = agent_steer_every(original, calls, count, agent, task);
+    {
+        const std::lock_guard lock(counts_lock);
+        if (counts.size() >= max_agents && !counts.contains(agent)) {
+            counts.clear();
+        }
+        counts[agent] = count;
+    }
+    return point;
+}
+
+void forget_agent_steer_counts() {
+    const std::lock_guard lock(counts_lock);
+    counts.clear();
 }
 
 }  // namespace bb::game

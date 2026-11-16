@@ -40,15 +40,23 @@ public:
                 hook_[0] = r;
             }
         }
-        EXPECT_EQ(hook_[0].impl, reinterpret_cast<void*>(&bb::game::agent_steer));
-        bb::hook::apply(bb::game::image(), hook_);
+        applied_ = hook_[0].impl == reinterpret_cast<void*>(&bb::game::agent_steer);
+        EXPECT_TRUE(applied_) << "the wrapper of 0x01dbbd00 isn't registered";
+        if (applied_) {
+            bb::hook::apply(bb::game::image(), hook_);
+        }
     }
-    ~WrapperHook() { bb::hook::remove(bb::game::image(), hook_); }
+    ~WrapperHook() {
+        if (applied_) {
+            bb::hook::remove(bb::game::image(), hook_);
+        }
+    }
     WrapperHook(const WrapperHook&) = delete;
     WrapperHook& operator=(const WrapperHook&) = delete;
 
 private:
     std::array<bb::hook::Replacement, 1> hook_{};
+    bool applied_ = false;
 };
 
 // Sets the frame rate for one test and puts back the default, 30, also when the test fails early.
@@ -141,13 +149,6 @@ SteerPoint steer(Scene* s, const FD4TaskData& task) {
     return bb::game::fn<bb::game::AgentSteer>(agent_steer)(s->agent, &task);
 }
 
-// Lines up the frame count on a multiple of the frame rate's calls, as the drivers start there.
-void align_frames() {
-    while (bb::game::frame_count() % (bb::game::frame_rate() / 30) != 0) {
-        bb::game::count_frame();
-    }
-}
-
 using Frames = void(Scene* s, unsigned frames);
 
 // `frames` frames at 30 without the hook.
@@ -165,12 +166,11 @@ void frames_hooked(Scene* s, unsigned frames) {
     const WrapperHook hook;
     const unsigned calls = bb::game::frame_rate() / 30;
     const FD4TaskData task = task_data(bb::game::frame_step());
-    align_frames();
+    bb::game::forget_agent_steer_counts();
     for (unsigned k = 0; k < frames; ++k) {
         walk(s, static_cast<float>(k) / 30.0f);
         for (unsigned i = 0; i < calls; ++i) {
             (i == 0 ? s->first : s->second)[k] = as_floats(steer(s, task));
-            bb::game::count_frame();
         }
         if (calls == 1) {
             s->second[k] = s->first[k];
@@ -204,7 +204,7 @@ TEST_F(EbootTest, AgentSteerAt60MatchesTheSteeringAt30) {
 
 // How often the steering returned the agent's own position (w = 1, no direction): `calls` calls
 // at `fps` with that frame step, the agent walking at 1 m/s.
-int lost_directions(Scene* s, unsigned fps, unsigned calls, bool hooked) {
+int lost_directions(Scene* s, unsigned fps, unsigned calls) {
     const FD4TaskData task = task_data(1.0f / static_cast<float>(fps));
     int lost = 0;
     for (unsigned i = 0; i < calls; ++i) {
@@ -213,9 +213,6 @@ int lost_directions(Scene* s, unsigned fps, unsigned calls, bool hooked) {
         const auto* const position = &at<float>(s->character, 0x20);
         if (p[0] == position[0] && p[1] == position[1] && p[2] == position[2] && p[3] == 1.0f) {
             ++lost;
-        }
-        if (hooked) {
-            bb::game::count_frame();
         }
     }
     return lost;
@@ -227,12 +224,12 @@ TEST_F(EbootTest, AgentSteerKeepsItsDirectionAt60) {
     const Case& c = cases[1];  // lag 20
     {
         harness().restore();
-        const int lost = lost_directions(std::get<0>(build(harness().arena(), c, 0)), 30, 120, false);
+        const int lost = lost_directions(std::get<0>(build(harness().arena(), c, 0)), 30, 120);
         EXPECT_EQ(lost, 0);
     }
     {
         harness().restore();
-        const int lost = lost_directions(std::get<0>(build(harness().arena(), c, 0)), 60, 240, false);
+        const int lost = lost_directions(std::get<0>(build(harness().arena(), c, 0)), 60, 240);
         EXPECT_GE(lost, 6) << "the game's steering at 60 without the wrapper";
     }
     {
@@ -240,8 +237,8 @@ TEST_F(EbootTest, AgentSteerKeepsItsDirectionAt60) {
         harness().restore();
         Scene* const s = std::get<0>(build(harness().arena(), c, 0));
         const WrapperHook hook;
-        align_frames();
-        EXPECT_EQ(lost_directions(s, 60, 240, true), 0);
+        bb::game::forget_agent_steer_counts();
+        EXPECT_EQ(lost_directions(s, 60, 240), 0);
     }
     harness().restore();
 }
@@ -263,43 +260,84 @@ SteerPoint stand_in(void*, const FD4TaskData* task) {
     return {1, 2};
 }
 
-TEST(AgentSteer, RunsTheGamesSteeringOnEveryCallsthFrame) {
-    // An agent without a Havok AI character: every skipped frame calls the game's steering too.
-    alignas(16) std::array<std::byte, 0x300> agent{};
-    const FD4TaskData task{nullptr, 1.0f / 60.0f};
-    for (const unsigned calls : {1u, 2u}) {
-        std::string pattern;
-        for (std::uint64_t frame = 5; frame < 9; ++frame) {
-            stand_in_calls = 0;
-            bb::game::agent_steer_every(&stand_in, calls, frame, agent.data(), &task);
-            pattern += stand_in_step == task.delta_time * static_cast<float>(calls) ? 'x' : '.';
-        }
-        EXPECT_EQ(pattern, calls == 1 ? "xxxx" : ".x.x") << calls;
-    }
-}
-
-TEST(AgentSteer, SkippedFramesSteerFromTheStoredDirection) {
+// An agent with a Havok AI character, a direction and the object the steering copies into.
+struct Agent {
     alignas(16) std::array<std::byte, 0x300> agent{};
     alignas(16) std::array<std::byte, 0xc0> character{};
     alignas(16) std::array<std::byte, 0x80> nav{};
     alignas(16) std::array<std::byte, 0x20> holder{};
-    at<void*>(agent.data(), 0x230) = character.data();
-    at<void*>(agent.data(), 0x238) = nav.data();
-    at<void*>(nav.data(), 0x58) = holder.data();
-    at<std::array<float, 4>>(character.data(), 0x20) = {1.0f, 2.0f, 3.0f, 1.0f};
-    at<float>(character.data(), 0x64) = 0.5f;
-    at<std::array<float, 4>>(agent.data(), 0x20) = {0.6f, 0.0f, -0.8f, 0.0f};
+    Agent() {
+        at<void*>(agent.data(), 0x230) = character.data();
+        at<void*>(agent.data(), 0x238) = nav.data();
+        at<void*>(nav.data(), 0x58) = holder.data();
+        at<std::array<float, 4>>(character.data(), 0x20) = {1.0f, 2.0f, 3.0f, 1.0f};
+        at<float>(character.data(), 0x64) = 0.5f;
+        at<std::array<float, 4>>(agent.data(), 0x20) = {0.6f, 0.0f, -0.8f, 0.0f};
+    }
+};
+
+// 'x' for a call that ran the stand-in with the step times `calls`, '.' for one that didn't.
+std::string pattern(unsigned calls, unsigned& count, void* agent, int n) {
+    const FD4TaskData task{nullptr, 1.0f / 60.0f};
+    std::string p;
+    for (int i = 0; i < n; ++i) {
+        stand_in_calls = 0;
+        stand_in_step = 0.0f;
+        bb::game::agent_steer_every(&stand_in, calls, count, agent, &task);
+        const bool ran = stand_in_calls == 1;
+        const bool step = stand_in_step == task.delta_time * static_cast<float>(calls);
+        p += ran && step ? 'x' : (ran ? '?' : '.');
+    }
+    return p;
+}
+
+TEST(AgentSteer, RunsTheGamesSteeringOnEveryCallsthCallOfTheAgent) {
+    Agent a;
+    unsigned count = 0;
+    EXPECT_EQ(pattern(1, count, a.agent.data(), 4), "xxxx");
+    EXPECT_EQ(count, 0u);
+    EXPECT_EQ(pattern(2, count, a.agent.data(), 5), "x.x.x");
+    EXPECT_EQ(count, 1u);
+    // At 30 a count left from 60 doesn't skip a call, and it is reset.
+    EXPECT_EQ(pattern(1, count, a.agent.data(), 2), "xx");
+    EXPECT_EQ(count, 0u);
+}
+
+TEST(AgentSteer, AnAgentWithoutCharacterRunsTheGamesSteeringOnEveryCall) {
+    Agent a;
+    at<void*>(a.agent.data(), 0x230) = nullptr;
+    unsigned count = 1;
+    // The game's steering with the caller's step (a constant without a character).
+    const FD4TaskData task{nullptr, 1.0f / 60.0f};
+    for (int i = 0; i < 3; ++i) {
+        stand_in_calls = 0;
+        bb::game::agent_steer_every(&stand_in, 2, count, a.agent.data(), &task);
+        EXPECT_EQ(stand_in_calls, 1);
+        EXPECT_EQ(stand_in_step, task.delta_time);
+        EXPECT_EQ(count, 0u);
+    }
+    // With a character the first call runs.
+    at<void*>(a.agent.data(), 0x230) = a.character.data();
+    EXPECT_EQ(pattern(2, count, a.agent.data(), 3), "x.x");
+}
+
+TEST(AgentSteer, SkippedCallsSteerFromTheStoredDirection) {
+    Agent a;
     const FD4TaskData task{nullptr, 1.0f / 60.0f};
     stand_in_calls = 0;
-    const SteerPoint p = bb::game::agent_steer_every(&stand_in, 2, 3, agent.data(), &task);
+    unsigned count = 1;
+    const SteerPoint p = bb::game::agent_steer_every(&stand_in, 2, count, a.agent.data(), &task);
     EXPECT_EQ(stand_in_calls, 0);
+    EXPECT_EQ(count, 0u);
+    void* const agent_data = a.agent.data();
+    void* const holder_data = a.holder.data();
     const std::array<float, 4> f = as_floats(p);
     EXPECT_EQ(f[0], 0.6f * 3.0f + 1.0f);
     EXPECT_EQ(f[1], 2.0f);
     EXPECT_EQ(f[2], -0.8f * 3.0f + 3.0f);
     EXPECT_EQ(f[3], 1.0f);
-    EXPECT_EQ(at<std::uint8_t>(agent.data(), 0x28c), 1);
-    EXPECT_EQ(at<float>(holder.data(), 0x1c), 0.5f);
+    EXPECT_EQ(at<std::uint8_t>(agent_data, 0x28c), 1);
+    EXPECT_EQ(at<float>(holder_data, 0x1c), 0.5f);
 }
 
 }  // namespace

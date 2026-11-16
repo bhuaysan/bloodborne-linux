@@ -21,11 +21,6 @@ unsigned frame_rate();
 // 30 it is the game's own constant 0x3d088889.
 float frame_step();
 
-// The main loop's ticks so far: main_loop_tick counts each tick (count_frame) before it runs the
-// frame's tasks, so every task of one frame, on any thread, reads the same value.
-std::uint64_t frame_count();
-void count_frame();
-
 // Called at the start of every frame pacer call, on the game's main thread (bb-run's main-loop
 // probe). Returns the observer it replaces; nullptr removes it.
 using FrameObserver = void (*)();

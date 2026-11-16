@@ -17,8 +17,8 @@ struct SteerPoint {
 };
 
 // The game's agent steering, 0x01dbbd00: virtual +0x50 of the AI agent (vtable 0x0534e220, its
-// only reference), called by the path follower (0x01239eb0) once or twice a frame per agent with
-// the frame's task data. With the agent's Havok AI character (+0x230) it stores the step
+// only reference), called by the path follower (0x01239eb0) with the frame's task data, on the
+// frames that step the agent (every frame or every few, per agent). With the agent's Havok AI character (+0x230) it stores the step
 // (delta_time) at +0x280, sets +0x28c (read and cleared by the AI world step), runs a state machine
 // with a timer at +0x25c (in one state counted down by a literal 1/30 a call), and writes the new
 // direction into a ring of 30 slots (+0x30, write index +0x24c). It reads back the average of the
@@ -34,18 +34,24 @@ inline constexpr std::array<std::uint8_t, 20> agent_steer_prologue = {
     0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55,
     0x41, 0x54, 0x53, 0x48, 0x81, 0xec, 0xb8, 0x00, 0x00, 0x00};
 
-// Runs `original` as the game does at 30 FPS when the frame rate is `calls` times 30: on frames
-// whose `frame` count is a multiple of `calls`, with the task data's step times `calls`. On the
-// other frames an agent with a Havok AI character keeps its ring, state and step: it gets the two
-// writes the game's steering does on every call (+0x28c = 1 and the character's +0x64 copied to
-// +0x1c of the object at [[agent+0x238]+0x58]) and the point the game returns, from the character's
-// position now and the direction stored at +0x20. An agent without one gets `original` as is. With
-// calls <= 1 every call is `original` with the caller's task data.
-SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, std::uint64_t frame,
-                             void* agent, const FD4TaskData* task);
+// Runs `original` as the game does at 30 FPS when the frame rate is `calls` times 30, counting the
+// agent's own calls in `count` (the path follower doesn't step every agent every frame): when
+// `count` is 0, with the task data's step times `calls`. On the agent's other calls, if it has a
+// Havok AI character, its ring, state and step stay as they are: it gets two of the writes the
+// game's steering does on every call (+0x28c = 1 and the character's +0x64 copied to +0x1c of the
+// object at [[agent+0x238]+0x58]) and the point the game returns, from the character's position
+// now and the direction stored at +0x20. The third, clearing the requests at +0x289 and +0x28a,
+// is left to the next call that runs `original`, which acts on them. An agent without a character
+// gets `original` as is and `count` 0, so its first call with one runs `original`. Then moves
+// `count` on, modulo `calls`. With calls <= 1 every call is `original` with the caller's task data.
+SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, unsigned& count, void* agent,
+                             const FD4TaskData* task);
 
-// 0x01dbbd00, wrapped: agent_steer_every with frame_rate() / 30 calls and frame_count(). At 30 FPS
-// it is the original.
+// 0x01dbbd00, wrapped: agent_steer_every with frame_rate() / 30 calls and a count per agent, kept
+// in a table by the agent's address; an agent not in it starts at 0. At 30 FPS it is the original.
 SteerPoint agent_steer(void* agent, const FD4TaskData* task);
+
+// Forgets every agent's count (for tests, whose agents reuse addresses).
+void forget_agent_steer_counts();
 
 }  // namespace bb::game
