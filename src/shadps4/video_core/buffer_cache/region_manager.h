@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/region_manager.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-14
+// Changed for bloodborne-linux, 2026-11-16
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -83,7 +83,7 @@ public:
         }
     }
 
-    template <StateOp cpu_op, StateOp gpu_op>
+    template <StateOp cpu_op, StateOp gpu_op, bool locked = true>
     void ChangeRegionState(u64 offset, u64 size) {
         auto bounds = GetBounds(offset, size);
         if (!HasEffect<cpu_op, gpu_op>(bounds)) {
@@ -92,7 +92,9 @@ public:
         bool update_watchers{};
         RegionBits write_prot;
         Bounds watcher_bounds = MIN_BOUNDS;
-        mutex.lock();
+        if constexpr (locked) {
+            mutex.lock();
+        }
         IterateWords(bounds, [&](u64 index, u64 mask) {
             update_watchers |= UpdateProtection<cpu_op>(write_prot, watcher_bounds, index, mask);
         });
@@ -102,6 +104,16 @@ public:
         }
         IterateWords(bounds,
                      [&](u64 index, u64 mask) { UpdateState<cpu_op, gpu_op>(index, mask); });
+        if constexpr (locked) {
+            mutex.unlock();
+        }
+    }
+
+    void Lock() noexcept {
+        mutex.lock();
+    }
+
+    void Unlock() noexcept {
         mutex.unlock();
     }
 
@@ -114,13 +126,18 @@ public:
     // that the guest then does not write only costs its upload. Locks as ChangeRegionState: this
     // mutex, then the page manager's page locks in ascending order, so the bits and the page
     // protection change together and no other fault or sync sees one without the other.
-    void MarkCpuModifiedFromFault(u64 offset, u64 max_pages) {
+    // Returns false and marks nothing when the GPU wrote the faulting page and `gpu_written` is
+    // false: what it wrote has to reach guest memory first (BufferCache::InvalidateFromFault).
+    bool MarkCpuModifiedFromFault(u64 offset, u64 max_pages, bool gpu_written) {
         const u64 page = offset / BYTES_PER_PAGE;
         std::scoped_lock lock{mutex};
         if (cpu.GetPage(page)) {
             // Not watched by the buffer cache: the fault is the texture cache's, or another
             // thread's fault on this page came first.
-            return;
+            return true;
+        }
+        if (!gpu_written && gpu.GetPage(page)) {
+            return false;
         }
         u64 candidates = 1;
         while (candidates < max_pages && page + candidates < NUM_REGION_PAGES &&
@@ -132,6 +149,7 @@ public:
                      [&](u64 index, u64 mask) {
                          UpdateState<StateOp::Set, StateOp::None>(index, mask);
                      });
+        return true;
     }
 
     template <Type type, StateOp cpu_op, StateOp gpu_op, bool locked = true>

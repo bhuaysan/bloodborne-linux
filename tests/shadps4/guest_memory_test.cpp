@@ -826,12 +826,16 @@ TEST(GuestMemory, ACpuWriteKeepsWhatTheGpuWroteOnThePage) {
         Direct d(1);
         auto* const base = static_cast<char*>(d.address);
         // The buffer cache keeps its copy in a sparse buffer of 4 GiB, which lavapipe can't
-        // create (out of device memory); RADV can.
+        // create (out of device memory), so the test runs only on a GPU that can, such as with
+        // VK_LOADER_DRIVERS_SELECT='*radeon*'.
         try {
             const NoLeakCheck no_leak_check;
             static_cast<void>(gpu.rasterizer.GetBufferCache().ObtainBuffer(
                 addr(base), 64, VideoCore::ObtainBufferFlags::IgnoreStreamBuffer));
         } catch (const std::exception& e) {
+            if (std::string(e.what()).find("ErrorOutOfDeviceMemory") == std::string::npos) {
+                throw;
+            }
             d.unmap();
             GTEST_SKIP() << "no sparse buffer of the buffer cache on this device: " << e.what();
         }
@@ -879,7 +883,12 @@ TEST(GuestMemory, ACpuWriteKeepsWhatTheGpuWroteOnThePage) {
         gpu_fill(2, 'I');
         ASSERT_EQ(bb::hle::kernel::sceKernelMprotect(d.address, d.length, 3), 0);
         EXPECT_EQ(std::string(base + 2 * tp, 64), std::string(64, 'I'));
+
+        // An unmap downloads nothing but drops the GPU state of the range, so that no later
+        // download writes the old bytes over what is mapped there next.
+        gpu_fill(3, 'J');
         d.unmap();
+        EXPECT_FALSE(gpu.tracker().IsRegionGpuModified(addr(base), d.length));
     }
 }
 

@@ -86,7 +86,8 @@ public:
     /// that the guest is likely to write next (memory_tracker.h).
     void InvalidateFromFault(VAddr device_addr);
 
-    /// The range is unmapped or its backing released: marked CPU modified, with no download.
+    /// The range is unmapped or its backing released: marked CPU modified and no longer GPU
+    /// modified, with no download.
     void DropMemory(VAddr device_addr, u64 size);
 
     /// The CPU and GPU modified state of guest memory, for tests.
@@ -102,10 +103,12 @@ public:
     void ReadMemory(VAddr device_addr, u64 size);
 
 private:
-    /// The GPU modified bytes of the pages of the range, in guest memory before this returns. Runs
-    /// on the GPU thread: directly when called there, otherwise through Liverpool's command queue
-    /// while the caller waits.
-    void FlushBeforeCpuWrite(VAddr device_addr, u64 size);
+    /// Runs `func` on the GPU thread: directly when called there, otherwise through Liverpool's
+    /// command queue while the caller waits.
+    void OnGpuThread(auto&& func);
+
+    /// On the GPU thread: the GPU modified bytes around the range in guest memory.
+    void FlushGpuModified(VAddr device_addr, u64 size);
 
     /// Downloads the GPU modified ranges of a window around the range into guest memory.
     void DownloadWindow(VAddr device_addr, u64 size, bool async);

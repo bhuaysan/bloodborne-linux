@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/memory_tracker.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-14
+// Changed for bloodborne-linux, 2026-11-16
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -65,10 +65,33 @@ public:
     }
 
     /// A guest write faulted at the address: marks its page CPU modified, and up to
-    /// `max_pages` - 1 following pages with it (RegionManager::MarkCpuModifiedFromFault)
-    void MarkCpuModifiedFromFault(VAddr cpu_addr, u64 max_pages) noexcept {
+    /// `max_pages` - 1 following pages with it (RegionManager::MarkCpuModifiedFromFault). False
+    /// when the GPU wrote the page and `gpu_written` is false: nothing is marked then.
+    bool MarkCpuModifiedFromFault(VAddr cpu_addr, u64 max_pages, bool gpu_written) noexcept {
         if (auto* region = top_tier[cpu_addr >> HIGHER_PAGE_BITS]; region) {
-            region->MarkCpuModifiedFromFault(cpu_addr & HIGHER_PAGE_MASK, max_pages);
+            return region->MarkCpuModifiedFromFault(cpu_addr & HIGHER_PAGE_MASK, max_pages,
+                                                    gpu_written);
+        }
+        return true;
+    }
+
+    /// Marks the parts of the region the GPU did not modify CPU modified, each checked and marked
+    /// under its region's lock, and calls `on_flush` once when the GPU modified any part
+    /// (upstream's Relaxed readback mode; on_flush downloads and marks the rest)
+    void InvalidateRegion(VAddr cpu_addr, u64 size, auto&& on_flush) noexcept {
+        bool should_flush = false;
+        IteratePages(cpu_addr, size, [&should_flush](RegionManager* manager, u64 offset, u64 size) {
+            manager->Lock();
+            const bool modified = manager->template IsRegionModified<Type::GPU>(offset, size);
+            if (!modified) {
+                manager->template ChangeRegionState<StateOp::Set, StateOp::None, false>(offset,
+                                                                                        size);
+            }
+            should_flush |= modified;
+            manager->Unlock();
+        });
+        if (should_flush) {
+            on_flush();
         }
     }
 

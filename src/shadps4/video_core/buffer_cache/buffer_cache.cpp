@@ -116,26 +116,16 @@ BufferCache::~BufferCache() = default;
 // modified and nothing more. The next sync then uploads the whole page from guest memory, also over
 // the bytes the GPU wrote there, which guest memory never got: a vertex buffer the GPU wrote next
 // to data the CPU writes later loses its vertices, and the game draws flat polygons (#537, after
-// a respawn). Upstream's Relaxed mode downloads those bytes first, which this keeps.
+// a respawn). Upstream's Relaxed mode downloads those bytes first, which this keeps: the parts the
+// GPU did not modify are marked at once, the rest on the GPU thread right after the download, so
+// no GPU write comes between the two.
 void BufferCache::InvalidateMemory(VAddr device_addr, u64 size) {
-    if (memory_tracker->IsRegionGpuModified(device_addr, size)) {
-        FlushBeforeCpuWrite(device_addr, size);
-    }
-    memory_tracker->MarkRegionAsCpuModified(device_addr, size);
-}
-
-void BufferCache::DropMemory(VAddr device_addr, u64 size) {
-    memory_tracker->MarkRegionAsCpuModified(device_addr, size);
-}
-
-void BufferCache::FlushBeforeCpuWrite(VAddr device_addr, u64 size) {
-    const auto flush = [this, device_addr, size] { DownloadWindow(device_addr, size, false); };
-    if (liverpool == nullptr ||
-        std::this_thread::get_id() == liverpool->GetGpuCommandProcessorThread()) {
-        flush();
-    } else {
-        liverpool->SendCommand<true>(flush);
-    }
+    memory_tracker->InvalidateRegion(device_addr, size, [this, device_addr, size] {
+        OnGpuThread([this, device_addr, size] {
+            FlushGpuModified(device_addr, size);
+            memory_tracker->MarkRegionAsCpuModified(device_addr, size);
+        });
+    });
 }
 
 // How many pages a write fault makes writable at most, the faulting one and those after it. The
@@ -144,12 +134,39 @@ void BufferCache::FlushBeforeCpuWrite(VAddr device_addr, u64 size) {
 // and not written per fault.
 constexpr u64 FAULT_PAGES = 16;
 
+// As InvalidateMemory: a page the GPU wrote is downloaded and then marked on the GPU thread.
 void BufferCache::InvalidateFromFault(VAddr device_addr) {
-    const VAddr page = device_addr & ~(BYTES_PER_PAGE - 1);
-    if (memory_tracker->IsRegionGpuModified(page, BYTES_PER_PAGE)) {
-        FlushBeforeCpuWrite(page, BYTES_PER_PAGE);
+    if (memory_tracker->MarkCpuModifiedFromFault(device_addr, FAULT_PAGES, false)) {
+        return;
     }
-    memory_tracker->MarkCpuModifiedFromFault(device_addr, FAULT_PAGES);
+    OnGpuThread([this, device_addr] {
+        FlushGpuModified(device_addr & ~(BYTES_PER_PAGE - 1), BYTES_PER_PAGE);
+        memory_tracker->MarkCpuModifiedFromFault(device_addr, FAULT_PAGES, true);
+    });
+}
+
+// Ours: nothing reads the range's old contents again, so nothing is downloaded. Its GPU state goes
+// too, so that a later download in the same window can't write the old bytes over what the range
+// holds next.
+void BufferCache::DropMemory(VAddr device_addr, u64 size) {
+    OnGpuThread([this, device_addr, size] { UnmarkRegionAsGpuModified(device_addr, size, true); });
+}
+
+void BufferCache::OnGpuThread(auto&& func) {
+    if (liverpool == nullptr ||
+        std::this_thread::get_id() == liverpool->GetGpuCommandProcessorThread()) {
+        func();
+    } else {
+        liverpool->SendCommand<true>(func);
+    }
+}
+
+// Runs on the GPU thread. A download queued earlier (ReadMemory) has dropped its ranges from
+// gpu_modified_ranges but writes guest memory only once its copy is done, so it is waited for
+// first.
+void BufferCache::FlushGpuModified(VAddr device_addr, u64 size) {
+    scheduler.Finish();
+    DownloadWindow(device_addr, size, false);
 }
 
 void BufferCache::UnmarkRegionAsGpuModified(VAddr device_addr, u64 size, bool is_write) {

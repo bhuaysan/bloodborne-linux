@@ -55,7 +55,8 @@ void on_fault(int sig, siginfo_t* info, void* context) {
 void install_fault_handler() {
     static std::once_flag once;
     std::call_once(once, [] {
-        // Created here, not on the first fault: the handler must not allocate.
+        // Created here, not on the first fault. The handler itself allocates and waits only
+        // for a write to a page the GPU wrote (docs/design/renderer.md, "What the GPU wrote").
         dispatch = Core::Signals::Instance();
         struct sigaction action{};
         action.sa_sigaction = on_fault;
