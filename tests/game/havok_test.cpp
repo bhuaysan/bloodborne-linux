@@ -55,6 +55,14 @@ struct Log {
 };
 Log* log_ = nullptr;
 
+// What a fake changes in the manager while the step runs, to pin down when the step reads its
+// fields: the original reads +0x30 once before 0x17fd220, the job queue (+0x68) after the thread
+// pool's +0x48 and +0x28 again after the counter's items.
+enum class Mutation { none, held_by_before, queue_by_threads, holder_by_item };
+Mutation mutation_ = Mutation::none;
+std::byte* manager_ = nullptr;
+void* other_ = nullptr;  // the queue or holder a mutation puts in
+
 void record(What what, std::uint64_t a = 0, std::uint64_t b = 0, std::uint64_t c = 0,
             std::uint64_t d = 0, std::uint64_t e = 0, std::uint64_t f = 0) {
     ASSERT_LT(log_->count, std::size(log_->calls));
@@ -67,12 +75,18 @@ std::uint64_t u(const void* p) {
 
 void fake_before(void* p) {
     record(before_call, u(p));
+    if (mutation_ == Mutation::held_by_before) {
+        manager_[0x30] = static_cast<std::byte>(1);
+    }
 }
 void fake_after_counter(void* p) {
     record(after_counter, u(p));
 }
 void fake_counter_item(void* p, std::int32_t n) {
     record(counter_item, u(p), static_cast<std::uint32_t>(n));
+    if (mutation_ == Mutation::holder_by_item) {
+        std::memcpy(manager_ + 0x28, &other_, sizeof other_);
+    }
 }
 void fake_held(void* p) {
     record(held_call, u(p));
@@ -97,6 +111,9 @@ void fake_finish(void* queue) {
 }
 std::int32_t fake_pool_threads(void* pool) {
     record(pool_threads, u(pool));
+    if (mutation_ == Mutation::queue_by_threads) {
+        std::memcpy(manager_ + 0x68, &other_, sizeof other_);
+    }
     return 3;
 }
 void fake_pool_process(void* pool, void* queue, std::uint32_t type) {
@@ -172,6 +189,7 @@ struct Case {
     std::int32_t count = 0;     // its +0x30
     std::int32_t last = 0;      // its +0x38
     std::uint8_t queue_flag = 0;
+    Mutation mutation = Mutation::none;
 };
 
 const Case cases[] = {
@@ -189,11 +207,17 @@ const Case cases[] = {
     {.name = "counter 450, unchanged", .counter = true, .count = 450, .last = 2},
     {.name = "counter -450", .counter = true, .count = -450},
     {.name = "counter 450, held", .held = 1, .counter = true, .count = 450},
+    {.name = "held set by the call before", .mutation = Mutation::held_by_before},
+    {.name = "queue swapped by the thread count", .mutation = Mutation::queue_by_threads},
+    {.name = "world swapped by the counter's items", .counter = true, .count = 450,
+     .mutation = Mutation::holder_by_item},
 };
 
 std::tuple<void*> build_manager(Arena& a, const Case& c) {
     log_ = a.zeroed<Log>();
     auto* m = static_cast<std::byte*>(a.alloc(0x280));
+    manager_ = m;
+    mutation_ = c.mutation;
     at<std::uint8_t>(m, 0x30) = c.held;
     at<std::uint8_t>(m, 0x26c) = c.stepping;
     at<void*>(m, 0x20) = a.alloc(0x40);
@@ -211,6 +235,16 @@ std::tuple<void*> build_manager(Arena& a, const Case& c) {
     at<std::int32_t>(queue, 0x90) = c.spins;
     at<std::uint8_t>(queue, 0xc9) = c.queue_flag;
     at<void*>(m, 0x68) = queue;
+    if (c.mutation == Mutation::queue_by_threads) {
+        auto* other = static_cast<std::byte*>(a.alloc(0x100));
+        at<std::uint64_t>(other, 0x88) = shared_mutex();
+        at<std::int32_t>(other, 0x90) = c.spins;
+        other_ = other;
+    } else if (c.mutation == Mutation::holder_by_item) {
+        void* holder = a.alloc(0x40);
+        at<void*>(holder, 8) = a.alloc(0x100);
+        other_ = holder;
+    }
     if (c.pool) {
         auto** vtable = a.zeroed<void*>(16);
         vtable[0x30 / 8] = reinterpret_cast<void*>(&fake_pool_process);

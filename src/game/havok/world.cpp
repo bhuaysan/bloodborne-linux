@@ -49,7 +49,7 @@ void havok_pthread_failed(std::uint64_t file, int line, std::uint64_t function,
 void enter_critical_section(void* section) {
     static MutexCall* const trylock = posix("K-jXhbt2gn4");
     static MutexCall* const lock = posix("7H0iTOciTLo");
-    for (std::int32_t spins = at<std::int32_t>(section, 8); spins != 0; --spins) {
+    for (std::uint32_t spins = at<std::uint32_t>(section, 8); spins != 0; --spins) {
         if (trylock(section) == 0) {
             return;
         }
@@ -128,7 +128,7 @@ void havok_world_step(void* self) {
         }
         return;
     }
-    void* const pool = at<void*>(self, 0x70);  // hkJobThreadPool
+    void* const pool = at<void*>(self, 0x70);  // TODO(name): Havok's job thread pool, by its use
     if (at<std::uint8_t>(self, 0x26c) == 0 || pool == nullptr || at<void*>(self, 0x28) == nullptr) {
         return;
     }
@@ -136,7 +136,7 @@ void havok_world_step(void* self) {
     HavokStepInfo info{};
     info.delta_time = frame_step();  // the game: 1/30 (0x017f9b71)
     info.manager_c8 = at<std::uint64_t>(self, 0xc8);
-    info.threads = vcall<std::int32_t>(pool, 0x48) + 1;
+    info.threads = static_cast<std::int32_t>(vcall<std::uint32_t>(pool, 0x48) + 1u);
     info.zero = 0;
 
     // Marks the job queue (+0x68) under its lock.

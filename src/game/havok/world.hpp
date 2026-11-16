@@ -10,9 +10,10 @@ namespace bb::game {
 // The step record havok_world_step hands to the world's collide stage (0x00b5a2e0).
 struct HavokStepInfo {
     float delta_time;          // seconds; the game's 1/30
-    std::uint32_t unset;       // never written by the game (stack garbage)
+    std::uint32_t padding;     // the game leaves it unwritten (stack garbage); 0 here
     std::uint64_t manager_c8;  // the manager's +0xc8. TODO(name)
-    std::int32_t threads;      // the thread pool's thread count + 1 (the calling thread)
+    std::int32_t threads;      // the thread pool's slot +0x48 + 1. TODO(name): read as its thread
+                               // count plus the calling thread
     std::int32_t zero;
 };
 static_assert(sizeof(HavokStepInfo) == 0x18 && offsetof(HavokStepInfo, manager_c8) == 8 &&
