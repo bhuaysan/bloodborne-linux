@@ -328,3 +328,18 @@ Five runs with both changes (`20261115-041211`, `-042138` with the sync log on t
 Since both changes touch every copy into a buffer and every staging ring, `r5-acceptance` (`20261115-053045`, p95 33.49 ms, p99 35.53 ms) and `r5-soak` (`20261115-054113`, from that run's save, p95 33.48 ms, p99 33.52 ms, 9 stutters, peak memory 3.3 GB) ran on the branch's `relwithdebinfo` `bb-run` (with the growing `lseek` steps), both with `end,scenario finished` and no kernel GPU fault. The p95 of `play-walk` stays at 35.4 ms, as on main after #528. The reference has the same stall: its `play-walk` present max is 100.15 ms (median of five runs, `20261114-223122` and the four after it in the table above).
 
 The issue's check (at most 5 ms of `sync` in every `play-walk` frame and a present max of 50 ms or less) is not reached, so #531 is not done: the upload frame copies about 85 MiB in a frame of twice the usual draws. Cutting it further needs one of: syncing only the part of a vertex buffer the draw reads (a non-indexed draw gives its vertex range; an indexed one needs its index range), letting the GPU copy from guest memory imported into Vulkan (`VK_EXT_external_memory_host`) instead of the CPU copying into staging, or splitting the copy over threads.
+
+#### Syncing only the vertices a draw fetches: not kept (2026-11-17)
+
+Tried on main at `7152033`: for a direct draw, the vertex binding bound the V# ranges whole but copied only the bytes the draw fetches (the vertex range of a non-indexed draw; for an indexed draw the lowest and highest index, read from guest memory; the instance range for per-instance bindings), and only when the range held CPU-modified pages. A temporary switch turned it off in the same binary. Runs (warm `--cache-home`, `--log profile=debug`, all `end,scenario finished`, no kernel GPU fault): narrowed `20261117-000436` (the cold run that filled the cache), `-000943` and `-001947` (with temporary counters on top), full sync `20261117-001423`; suffix `-bb-run-yharnam-route`.
+
+| `play-walk` | full sync | narrowed |
+|---|---|---|
+| largest `sync` of a frame | 16.3 ms (15.8 to 17.2 in the #541 runs above) | 11.7, 12.3 ms (37.3 in `-001947`, in a frame of 1697 draws) |
+| median `commands` of a frame | 23.3 ms (23.9 to 24.4 in the #541 runs) | 30.8 to 31.2 ms |
+| median `vertex` of a frame | 2.4 ms (2.5 to 2.6) | 9.3 ms |
+| longest GPU-thread frame | 69.8 ms | 78.8 to 96.7 ms |
+
+So the upload frame does read most of what it syncs (the narrowed copy saves about 4 ms of 16), and every other frame pays about 7 ms: in a median frame 1136 draws find CPU-modified pages somewhere in their V# ranges (about 5 MiB each, and the game writes into them every frame), so each one scans its indices, 10.8 million per frame in 6.5 ms. A full sync clears the range at the first draw; a narrowed one leaves the pages no draw fetches modified, so the next draws scan again, and written data no draw reads stays modified for good. A cheaper scan (reading the guest memory in place, vectorized) would still cost around 1 ms in every frame for 4 ms in one.
+
+The upload frame (`20261117-001423`: 2134 draws, `commands` 57.0 ms) also spends 4.1 ms making sparse blocks resident, 8.9 ms in `protect` and 9.7 ms in `texture` (5.0 ms of first image uploads): new content streams in. Even with no `sync` at all its GPU-thread frame would stay around 54 ms, so the 50 ms present max needs more than the vertex sync. The reference has the same stall (present max 100.15 ms, median of five runs).
