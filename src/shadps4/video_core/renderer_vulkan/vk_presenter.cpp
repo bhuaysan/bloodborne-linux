@@ -566,15 +566,24 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 }
 
 // Gives back a frame that PrepareFrame or PrepareBlankFrame returned and that is never presented
-// (video out skips a flip that a newer one replaces, #608). It goes back to the free queue as the
-// frame of a skipped Present does ("Skipping frame!"): its present fence was not reset, so it
-// is still signaled, and the draw work that fills the frame is on the draw scheduler's queue,
-// ahead of whatever the next user of the frame records there. It does not become the last
-// submitted frame, which PrepareLastFrame would show again.
+// (video out skips a flip that a newer one replaces, #608). Runs on the present thread, which owns
+// present_scheduler. A frame in the free queue has to have a present fence that covers all the
+// work on its image: GetRenderFrame waits on it before it reuses or recreates the frame (a resize
+// destroys the image). The draw work that PrepareFrame flushed is not covered by the fence of the
+// frame's last Present, so this does what Present's submit does without its blit: it resets the
+// fence and submits an empty batch that waits for the frame's ready tick and signals the fence.
+// The frame does not become the last submitted frame, which PrepareLastFrame would show again.
 void Presenter::ReleaseFrame(Frame* frame) {
     if (frame == nullptr) {
         return;
     }
+    const auto reset_result = instance.GetDevice().resetFences(frame->present_done);
+    ASSERT_MSG(reset_result == vk::Result::eSuccess,
+               "Unexpected error resetting present done fence: {}", vk::to_string(reset_result));
+    SubmitInfo info{};
+    info.AddWait(frame->ready_semaphore, frame->ready_tick);
+    info.AddSignal(frame->present_done);
+    present_scheduler.Flush(info);
     std::scoped_lock fl{free_mutex};
     free_queue.push(frame);
     free_cv.notify_one();
