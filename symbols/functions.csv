@@ -78,6 +78,6 @@ address,name,signature,status,file
 0x026addc0,gpu_range_suballoc,"ulonglong gpu_range_suballoc(void * buckets, void * * context, ulonglong size)",named,
 0x026d5dd0,present_flip,"int present_flip(void * self, uint present_interval)",named,
 0x026d6e50,submit_and_flip,"int submit_and_flip(void * self, void * frame, int vsync)",named,
-0x029262f0,param_blend_int,"bool param_blend_int(void * self, int id, float t, const int * current, int * out)",replaced,src/game/gfx/param_blend.cpp
+0x029262f0,param_blend_int,"bool param_blend_int(const void * self, int id, float t, const int * current, int * out)",replaced,src/game/gfx/param_blend.cpp
 0x02ba1850,size_class_alloc,"void * size_class_alloc(void * allocator, ulonglong size, ulonglong alignment)",named,
 0x02ba1b80,size_class_alloc_locked,"void * size_class_alloc_locked(void * allocator, ulonglong size, ulonglong alignment)",named,
