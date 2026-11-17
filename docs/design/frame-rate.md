@@ -153,7 +153,8 @@ The two rates differ by about twice the noise of either, and the 60 runs agree w
 
 Each is a decomp issue of its own, checked at 60 against a 30 FPS run:
 
-- **Havok world step** (`havok_world_step`, 0x17f99d0): done in #553, see "The Havok world step" below. The ragdoll corpses still settle faster at 60 (#567).
+- **Havok world step** (`havok_world_step`, 0x17f99d0): done in #553, see "The Havok world step" below.
+- **Ragdolls** (`chr_physics_pose_sync`, 0x1515ec0, a literal 1/30 for the ragdoll updates): done in #567, see "The ragdolls" below. The corpses come to rest about 0.3 m from where they do at 30, from the physics step itself.
 - **AI step** (`chr_ai_step`, 0x1e2bc10): done in #554, see "The AI step" below.
 - **Target bank** (`target_bank_scan_tick`, 0x12a43b0, and the ring's 30 slots a second at 0x12ab623): done in #555, see "The target bank" below.
 - **Fades, effects and menus** (`chr_list_fade_step`, 0x180f5e0, and the `update(1/30)` calls 0x173456e, 0x15dc1f7, 0x1044943, 0x1f77d4a, 0x227784b, 0x18bc4f7): done in #556, see "Fades, effects and menus" below.
@@ -311,7 +312,7 @@ Free fall, the vertical acceleration of the bodies in their first five steps of 
 
 With the step at 1/60 the world runs at game speed: bodies fall at g at both rates. With the game's 1/30 they fall at twice g in game time, and the corpses settle exactly twice as fast: matched by position, every body reaches half and 90 % of its drop after 0.50 of the time at 30.
 
-The corpses as a whole still settle faster at 60 with the fix: half of their drop after 0.133 s from their first move, against 0.200 s at 30 (0.100 s with 1/30), and they stop moving after 3.7 to 4.1 s against 5.5 to 5.7 s (median over the bodies). The positions show why: the game places each corpse by teleporting its bodies twice after a fixed number of frames (steps 7 and 15 at 30, 6 and 14 at 60), and the collapse after that is faster at 60. That is outside the world step; #567 traces it.
+The corpses as a whole still settle faster at 60 with the fix: half of their drop after 0.133 s from their first move, against 0.200 s at 30 (0.100 s with 1/30), and they stop moving after 3.7 to 4.1 s against 5.5 to 5.7 s (median over the bodies). The positions show why: the game places each corpse by teleporting its bodies twice after a fixed number of frames (steps 7 and 15 at 30, 6 and 14 at 60), and the collapse after that is faster at 60. That is outside the world step; see "The ragdolls (#567)".
 
 **30 FPS is unchanged.** `rig.py compare` of the picture after the 20 s stand, the branch at 30 (`020950`) against two runs of `main` (`020652`, `020821`): noise floor 0.610, ours 0.414 (ratio 0.68), time ratio 1.002. The branch at 60 in the street (`021118`): 60.00 presents a second, p50 16.67 ms, p99 16.73 ms, no GPU fault. The machine was quiet for these runs (no other test load; CPU load average 1 to 5).
 
@@ -466,6 +467,49 @@ The patrol stops are 1.98 s at 60 as at 30 (1.97 s), in every cycle of every run
 The fades run while the save loads, where frames come irregularly, so their frame counts vary from owner to owner; `main` at 60 takes half the game time of 30, the branch about the same. The shop's highlight was not run in the game: neither save reaches the shop.
 
 **30 FPS is unchanged.** `rig.py compare` of `main-menu`, the branch at 30 (`114025`) against two runs of `main` (`113902`, `113943`): noise floor 0.0255, ours 0.0248 (ratio 0.97), time ratio 0.97. The branch at 60 (`114107`): ratio 1.44, within twice the floor, time ratio 0.92. No other test load; load average about 2.5 (another session's builds).
+
+## The ragdolls (#567)
+
+**The corpses.** The ragdoll corpses of Central Yharnam are characters whose physics module (chr+0x58) owns a ragdoll object (module +0x20, vtable 0x538d440, built at 0x180c2b0). A watchpoint on a corpse body's centre of mass found the placement: `ragdoll_change_state` (0x1810000), called by the ragdoll update when the requested state (+0xc4) differs from the current one (+0xc0), sets the bodies to the character's pose (state 0, keyframed) and then lets them go (state 2, ragdoll). A probe at 0x1810000 saw every corpse go from −1 to 0 to 2 within a few frames, the corpses one or a few a frame from step 1138 to 1183 of the load at 30; their bodies fall freely while their state is −1. The frame counts of the placement come from that order, one corpse after the other while the street loads, and no timer: at 60 they take half the game time. That happens before the picture of the street settles and is left as it is.
+
+**The step.** `chr_physics_pose_sync` (0x1515ec0) runs once a frame for every character (#556) and hands the ragdoll, the character's transform and a pose buffer to one of three updates, each with a literal 1/30 s (0x4926364) as the step:
+
+| Update | When | What the step does |
+|---|---|---|
+| `ragdoll_update` (0x180df90) | interval 0, character active | a timer of a radial impulse (+0xf0) counts it down; the bodies of state 0 are keyframed with velocity = distance / step (0xb68a40, hknp's hard keyframe) |
+| `ragdoll_update_spaced` (0x1811040) | interval u > 0 | adds it to an accumulator (+0xd0) and drives the ragdoll once the accumulator passes 0.99 · u/30 s (its second argument, u · 1/30), with the accumulated time as the keyframe's time |
+| `ragdoll_update_idle` (0x1811650) | not active | after 1.03 s of accumulated steps, sets every body's velocity to 0 once |
+
+With 1/30 at 60, keyframed bodies got twice the velocity they need for a 1/60 step, the spaced update drove the ragdoll twice per character update, and the idle one stopped the bodies after 0.52 s.
+
+**Changed.** `chr_physics_pose_sync` is replaced (`src/game/chr/ragdoll.cpp`): the same calls with `frame_step()` as the step. The spacing u · 1/30 stays: since #573 a character with interval u updates every u 30 FPS frames at any rate. Two per-frame impulses inside `ragdoll_update` would then add up to more at 60, so they are patched (`BB_PATCH`) with a factor `bb_step_ratio` = 30 / F (exactly 1 at 30, 0.5 at 60, set by `set_frame_rate`):
+
+- **The timed radial impulse** (0x180e0af): while the timer runs, every frame each body gets an impulse away from a centre (+0xe0), its strength between +0xfc and +0x100 by distance. With the step at 1/60 the timer lasts the same game time but twice the frames; the patch scales both strengths. Nothing in the check runs started it, and its setter was not found (no store to +0xf0 in the ragdoll's code but the constructor's zero).
+- **The anti-penetration pull of the root body** (0x180f15e), behind the debug switch "Enable Penetrate" (0x51282d0, on): every frame it adds (target − position) · 30 to the root's velocity. As a spring that is 900/s² at 30; once a frame at 60 the literal makes it twice as stiff. The patch makes the factor 30 · 30/F. The corpses of the check never took this branch (the same result with it at 15 as at 30).
+
+The other branch of the anti-penetration block sets a body's velocity along a direction to 5 m/s (0x180f2d3, an impulse of (5 − v·d) · mass): a velocity, not an increment, so it stays. State 1 drives the bodies through a controller (+0x90, its virtual +0x28) with control data that 0x1810000 fills with the defaults of Havok's keyframe hierarchy util (hierarchy gain 0.17, velocity gain 0.6, position gain 0.05, ...), gains applied per call. The corpses never enter state 1 (the probe saw only −1, 0 and 2), so it is not changed; whether other characters use it at 60 is open.
+
+**Tests.** `tests/game/ragdoll_test.cpp`. The pose sync against the game's function through the harness, with the four callees faked (they record the step, the second float, the pointers and the flag), in 22 cases: the three paths, the lock object's choice and its one-time init, the active test's branches, the flag at +0x2f4 (also NaN), and fakes that change the module during the init to pin down which fields are read again. At 60 the replacement passes 1/60 to all three and keeps u/30 and the 30.0 and 900.0. The two patches are entered at their place from an assembly driver and captured at the instruction behind them: at 30 the stubs leave the same registers and frame slots as the game's bytes; at 60 they halve the strengths and the pull.
+
+**Check runs.** Scenario `settle` of #553 (Central Yharnam from the `yharnam-route` save, stand 20 s; local), `relwithdebinfo`, RADV, `--window`, with the #553 motion log at five decimals (local probe build: `main` + log, and the branch + log), 2026-11-17 (stamps `20261117-…`, UTC, suffix `-bb-run-settle`): `main` + log at 30 (`020252`) and at 60 (`020423`, `021702`, `024806`), the branch + log at 30 (`024212`) and at 60 (`024341`, `024510`, `024638`). Bodies are matched to the 30 FPS run by their first logged position (within 5 cm: 605 of 652 at 60). Runs of one build at one rate are the noise: they put a body within 0.005 m of where it is in the other runs (median over the bodies; p90 0.1 m at 30 and 0.2 to 0.3 m at 60, the few bodies whose collapse branches).
+
+Per body, from its first move, the time to half and to 90 % of its drop and to its last move, median of (60 − 30) over about 440 bodies with a drop over 5 cm:
+
+| Variant at 60 | half drop | 90 % | stop |
+|---|---|---|---|
+| `main` (3 runs) | −0.033 s | −0.033 to −0.050 s | −0.94 to −1.23 s |
+| branch (3 runs) | −0.017 s | 0.000 s | +0.05 to +0.47 s |
+
+Distance of a body from where the same body is at 30, median over the 605 bodies, at a game time after its first move:
+
+| Variant at 60 | 0.5 s | 1 s | 2 s | 4 s | end (about 20 s) |
+|---|---|---|---|---|---|
+| `main` (3 runs) | 0.13 to 0.14 m | 0.27 to 0.28 m | 0.29 to 0.33 m | 0.31 to 0.36 m | 0.31 to 0.35 m |
+| branch (3 runs) | 0.11 m | 0.18 m | 0.25 to 0.26 m | 0.28 to 0.30 m | 0.31 to 0.34 m |
+
+In the median the corpses now drop and stop at 60 when they do at 30, within a 30 FPS step for the drop. Where they come to rest still differs by about 0.3 m (median) from 30, as much as on `main`: the collapse is chaotic, and the physics world itself steps 1/60. Runs with the world stepped by 1/30 every second frame (`BB_HKHALF`, local) and the pose sync's literal at 1/60 (bytes at 0x4926364, which also halves the spacing; `023007`, `023135`) gave the bodies the same median peak speed after their placement as at 30 (2.11 and 2.06 m/s against 2.10, `main` at 60: 3.41), so what is left comes from Havok's solver and deactivation at the smaller step, not from game code.
+
+**30 FPS is unchanged.** At 30 the branch puts every body where `main` does (median 0.000 m, p90 0.02 m, within the noise above). `rig.py compare` of the picture after the stand, the branch at 30 (`025114`, plain build) against two runs of `main` (`024945`, `025243`): noise floor 0.276, ours 0.238 (ratio 0.86), time ratio 1.012. The branch at 60 in the street (`025412`): 60.0 presents a second in the stand, p50 16.67 ms, p99 16.84 ms, no GPU fault. Builds kept the CPU load average at 3 to 4; no other game or test ran meanwhile.
 
 ## Open questions
 

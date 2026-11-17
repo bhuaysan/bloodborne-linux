@@ -22,6 +22,8 @@ address,name,signature,status,file
 0x0143ac60,chase_cam_update,"void chase_cam_update(void * cam, void * chr, void * world, float dt)",replaced,src/game/camera/chase_cam.cpp
 0x0150e690,chr_turn_update,,named,
 0x01513c10,chr_ai_control_update,"void chr_ai_control_update(float dt, void * chr)",named,
+0x01515cc0,chr_physics_module_frame,,named,
+0x01515ec0,chr_physics_pose_sync,"void chr_physics_pose_sync(void * module, void * transform)",replaced,src/game/chr/ragdoll.cpp
 0x0151a720,ai_manipulator_update,"void ai_manipulator_update(float dt, void * manipulator, void * chr)",named,
 0x01533940,walk_anim_update,,named,
 0x01548740,chr_frame_update,,named,
@@ -32,7 +34,11 @@ address,name,signature,status,file
 0x015b2910,anim_update_entry,,named,
 0x01734510,shop_tab_refresh,void shop_tab_refresh(void * shop),replaced,src/game/frame/step_literals.cpp
 0x017f99d0,havok_world_step,void havok_world_step(void * self),replaced,src/game/havok/world.cpp
+0x0180df90,ragdoll_update,,replaced,src/game/chr/ragdoll.cpp
 0x0180f5e0,chr_list_fade_step,,replaced,src/game/frame/step_literals.cpp
+0x01810000,ragdoll_change_state,,named,
+0x01811040,ragdoll_update_spaced,,named,
+0x01811650,ragdoll_update_idle,,named,
 0x01915320,world_chr_frame_update,"void world_chr_frame_update(float step, void * world, void * task)",named,
 0x019173b0,world_chr_update,"void world_chr_update(float step, void * world)",replaced,src/game/chr/update_interval.cpp
 0x019a6860,hkai_test_module_step,,named,
