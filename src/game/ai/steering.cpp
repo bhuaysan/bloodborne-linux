@@ -47,7 +47,7 @@ std::mutex counts_lock;
 std::unordered_map<const void*, unsigned> counts;
 constexpr std::size_t max_agents = 4096;
 
-// The update interval (chr+0xe4) of the character whose control update (0x01513c10) runs on this
+// The update interval (character+0xe4) of the character whose control update (0x01513c10) runs on this
 // thread, while it runs. The game steps an agent on the thread that updates its character.
 thread_local ChrUpdateNote noted_update;
 
@@ -55,22 +55,29 @@ thread_local ChrUpdateNote noted_update;
 
 ChrUpdateNote noted_chr_update() { return noted_update; }
 
-void chr_ai_control_update_noting(ChrAiControlUpdate* original, float dt, void* chr) {
+void chr_ai_control_update_noting(ChrAiControlUpdate* original, float dt, void* control) {
+    // The function's second argument is the character's control object; the character is the
+    // pointer at +8. Without one nothing new is noted (the outer note stays): kept simple.
+    void* const chr = load<void*>(control, 8);
+    if (chr == nullptr) {
+        original(dt, control);
+        return;
+    }
     const ChrUpdateNote outer = noted_update;
     noted_update = {true, load<std::int32_t>(chr, 0xe4)};
-    original(dt, chr);
+    original(dt, control);
     noted_update = outer;  // the nested call's character is done: back to the one that called it
 }
 
 // 0x01513c10
-void chr_ai_control_update(float dt, void* chr) {
+void chr_ai_control_update(float dt, void* control) {
     auto* const original =
         reinterpret_cast<ChrAiControlUpdate*>(hook::original(image(), 0x01513c10));
     if (frame_rate() == default_frame_rate) {
-        original(dt, chr);  // nothing halves at 30: the note would not be read
+        original(dt, control);  // nothing halves at 30: the note would not be read
         return;
     }
-    chr_ai_control_update_noting(original, dt, chr);
+    chr_ai_control_update_noting(original, dt, control);
 }
 
 SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, unsigned& count, void* agent,

@@ -36,10 +36,11 @@ inline constexpr std::array<std::uint8_t, 20> agent_steer_prologue = {
     0x41, 0x54, 0x53, 0x48, 0x81, 0xec, 0xb8, 0x00, 0x00, 0x00};
 
 // The character AI control update, 0x01513c10: chr vtable +0xd0 (0x018bdb20) calls it (the only
-// direct caller, 0x018bded1) with the frame's step in xmm0 and the character in rdi. Through the
+// direct caller, 0x018bded1) with the frame's step in xmm0 and the character's control object in rdi (the character is the
+// pointer at control+8). Through the
 // AI manipulator, AI character and path updates it reaches `agent_steer` (0x01239ef8). The
-// character's update interval is the int32 at chr+0xe4 (#573).
-using ChrAiControlUpdate = void(float dt, void* chr);
+// character's update interval is the int32 at character+0xe4 (#573).
+using ChrAiControlUpdate = void(float dt, void* control);
 
 // Its first 20 bytes: push rbp; mov rbp, rsp; push r15 to rbx; sub rsp, 0xa8.
 inline constexpr std::array<std::uint8_t, 20> chr_ai_control_update_prologue = {
@@ -52,12 +53,12 @@ struct ChrUpdateNote {
     std::int32_t interval = 0;
 };
 
-// Runs `original` with the character's update interval noted for this thread, and puts the
+// Runs `original` with the update interval of the control object's character noted for this thread, and puts the
 // previous note back after it (updates may nest).
-void chr_ai_control_update_noting(ChrAiControlUpdate* original, float dt, void* chr);
+void chr_ai_control_update_noting(ChrAiControlUpdate* original, float dt, void* control);
 
 // 0x01513c10, wrapped: at 30 FPS the original, else chr_ai_control_update_noting.
-void chr_ai_control_update(float dt, void* chr);
+void chr_ai_control_update(float dt, void* control);
 
 // The note of this thread.
 ChrUpdateNote noted_chr_update();

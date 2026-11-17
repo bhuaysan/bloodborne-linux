@@ -99,7 +99,8 @@ struct Scene {
     void* character;
     void* path_point;
     float turn;
-    alignas(16) std::array<std::byte, 0x100> update_chr;  // a character for the control update
+    alignas(16) std::array<std::byte, 0x100> update_chr;      // a character for the control update
+    alignas(16) std::array<std::byte, 0x100> update_control;  // its control object: +8 = character
     std::array<std::array<float, 4>, max_frames> first;
     std::array<std::array<float, 4>, max_frames> second;
 };
@@ -194,6 +195,7 @@ template <bool hooked, std::int32_t interval>
 void frames_with_interval(Scene* s, unsigned frames) {
     const FD4TaskData task = task_data(static_cast<float>(interval) / 30.0f);
     at<std::int32_t>(s->update_chr.data(), 0xe4) = interval;
+    at<void*>(s->update_control.data(), 8) = s->update_chr.data();
     update_scene = s;
     update_task = &task;
     std::optional<WrapperHook> hook;
@@ -204,7 +206,7 @@ void frames_with_interval(Scene* s, unsigned frames) {
     for (unsigned k = 0; k < frames; ++k) {
         walk(s, static_cast<float>(k * interval) / 30.0f);
         if (hooked) {
-            bb::game::chr_ai_control_update_noting(&steer_in_update, 0.0f, s->update_chr.data());
+            bb::game::chr_ai_control_update_noting(&steer_in_update, 0.0f, s->update_control.data());
         } else {
             update_point = steer(s, task);
         }
@@ -244,12 +246,13 @@ TEST_F(EbootTest, AgentSteerOutsideAnIntervalStillHalvesAt60) {
     steer(s, task);  // skipped
     EXPECT_EQ(at<float>(s->agent, 0x280), 7.0f);
     at<std::int32_t>(s->update_chr.data(), 0xe4) = 0;
+    at<void*>(s->update_control.data(), 8) = s->update_chr.data();
     update_scene = s;
     update_task = &task;
-    bb::game::chr_ai_control_update_noting(&steer_in_update, 0.0f, s->update_chr.data());  // runs
+    bb::game::chr_ai_control_update_noting(&steer_in_update, 0.0f, s->update_control.data());  // runs
     EXPECT_EQ(at<float>(s->agent, 0x280), 2.0f * (1.0f / 60.0f));
     at<float>(s->agent, 0x280) = 7.0f;
-    bb::game::chr_ai_control_update_noting(&steer_in_update, 0.0f, s->update_chr.data());
+    bb::game::chr_ai_control_update_noting(&steer_in_update, 0.0f, s->update_control.data());
     EXPECT_EQ(at<float>(s->agent, 0x280), 7.0f);  // skipped
     harness().restore();
 }
@@ -446,31 +449,39 @@ float noted_dt = 0.0f;
 void* noted_chr = nullptr;
 bb::game::ChrUpdateNote inside_note;
 bb::game::ChrUpdateNote nested_note;
-std::array<std::byte, 0x100> chr_a{}, chr_b{};
+std::array<std::byte, 0x100> chr_a{}, chr_b{}, control_a{}, control_b{};
 void inner_update(float dt, void* chr) {
     noted_dt = dt;
     noted_chr = chr;
     inside_note = bb::game::noted_chr_update();
 }
 void outer_update(float dt, void* chr) {
-    bb::game::chr_ai_control_update_noting(&inner_update, dt * 2.0f, chr_b.data());
+    bb::game::chr_ai_control_update_noting(&inner_update, dt * 2.0f, control_b.data());
     nested_note = bb::game::noted_chr_update();
     (void)chr;
 }
 
+TEST(ChrAiControlUpdate, ANullCharacterNotesNothingNew) {
+    std::array<std::byte, 0x100> control{};
+    bb::game::chr_ai_control_update_noting(&inner_update, 1.0f, control.data());
+    EXPECT_FALSE(inside_note.noted);
+}
+
 TEST(ChrAiControlUpdate, NotesTheCharactersIntervalForTheCallAndPassesTheArguments) {
+    at<void*>(control_a.data(), 8) = chr_a.data();
+    at<void*>(control_b.data(), 8) = chr_b.data();
     at<std::int32_t>(chr_a.data(), 0xe4) = 3;
     at<std::int32_t>(chr_b.data(), 0xe4) = 0;
     EXPECT_FALSE(bb::game::noted_chr_update().noted);
-    bb::game::chr_ai_control_update_noting(&inner_update, 0.25f, chr_a.data());
+    bb::game::chr_ai_control_update_noting(&inner_update, 0.25f, control_a.data());
     EXPECT_EQ(noted_dt, 0.25f);
-    EXPECT_EQ(noted_chr, chr_a.data());
+    EXPECT_EQ(noted_chr, control_a.data());
     EXPECT_TRUE(inside_note.noted);
     EXPECT_EQ(inside_note.interval, 3);
     EXPECT_FALSE(bb::game::noted_chr_update().noted);
-    bb::game::chr_ai_control_update_noting(&outer_update, 0.5f, chr_a.data());
+    bb::game::chr_ai_control_update_noting(&outer_update, 0.5f, control_a.data());
     EXPECT_EQ(noted_dt, 1.0f);
-    EXPECT_EQ(noted_chr, chr_b.data());
+    EXPECT_EQ(noted_chr, control_b.data());
     EXPECT_EQ(inside_note.interval, 0);  // the nested character's own
     EXPECT_TRUE(nested_note.noted);
     EXPECT_EQ(nested_note.interval, 3);  // the outer one again afterwards
