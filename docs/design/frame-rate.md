@@ -583,6 +583,18 @@ In the check runs of #509 and #514, 1 to 5 % of the present intervals in `play-s
 
 **Cost.** A frame that was queued behind a stall is never shown. The player loses it only when a backlog exists; at most one frame per vblank was shown before and is shown now.
 
+The backlog was also a buffer of one frame, and it is gone. The game's flips reach the queue 5 to 14 ms before their vblank, and that phase wanders by tenths of a millisecond per frame while the pacer keeps its period. When a flip slips past the vblank, the grid follows it, which gives one interval of about 18.7 ms. With the backlog the flip of the frame before was shown at that vblank.
+
+**Check runs (#608).** `clinic-fight` on the real GPU, six runs at 60 and two at 30 with the change against six and two without, logged with the #605 probe. All numbers are from the `play-*` segments, about 13,700 frames at 60.
+
+- Queue wait of a shown flip at 60: 8.5 to 11.5 ms at p50 and at most 16.6 ms, against 32.85 and 33.07 ms. At 30 it stays 9 to 10 ms.
+- The game sees 0 or 1 flips pending at 60 where it saw 1 or 2, and still queues 60.00 flips per second.
+- Skipped flips: 15 to 24 per run. 9 to 12 of them fall into the stall at 28 s, the rest follow single stalls, one flip at a time.
+- Present intervals over 17.5 ms at 60: 5 to 78 per run against 0 to 2. Nearly all are grid follows of the kind above (49 of 53 looked at had every main loop frame on time); 2 to 7 per run are longer than 1.5 frames. At 30 the count stays within the spread of the runs without the change (16 and 39 against 43 and 48), and `main-menu` compares equal.
+- No GPU fault, no validation error that the runs without the change don't have, peak RSS unchanged. Handing a frame back takes about 1 µs.
+
+Two of the runs with the change had a phase of 20 to 60 s in which half the main loop frames took 20 to 57 ms. A probe with per-thread CPU times showed the same phases without the change, on a machine that other programs kept busy: the GPU thread reaches 88 to 97 % of a core, the render thread waits in its submit and the main loop waits for the render thread. Outside such a phase the GPU thread needs 47 to 75 % of a core at 60. So the change does not create these phases. Whether it makes them more likely, the runs do not show: 2 of 9 with it against 0 of 9 without, on a machine that was not quiet throughout. Not measured: the time from input to picture, and why the GPU thread's time rises.
+
 ## Open questions
 
 - Ints that `param_blend_int` eases upward only rise while (target − current) · t ≥ 1, so they stop short of a higher target by fewer than 2/t: up to 15 at 30 and 30 at 60. Such a parameter can settle at a different value at 60 than at 30 (for example 0 → 20 settles at 6 at 30 and stays 0 at 60). Not seen to matter yet (#598).
