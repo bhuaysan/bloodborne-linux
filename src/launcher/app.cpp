@@ -378,9 +378,10 @@ private:
         if (!page_) {
             return;
         }
+        popup_open_ = false;
         page_->on_close(context());
         page_.reset();
-        focus_first_ = true;
+        refocus_ = true;  // the next frame puts the focus on the first button
     }
 
     Context context() const {
@@ -460,7 +461,7 @@ private:
         case Action::quit: running_ = false; break;
         case Action::none: break;
         }
-        if (page_) {
+        if (page_ && a != Action::none) {  // a page just opened; its popups must keep the focus
             focus_first_ = true;
         }
     }
@@ -512,6 +513,10 @@ private:
         }
         ImGui::NewFrame();
         const Context ctx = context();
+        if (refocus_) {
+            focus_first_ = true;
+            refocus_ = false;
+        }
         MainView v = view();
         if (v.state != last_state_) {  // the first button is another one now
             last_state_ = v.state;
@@ -530,7 +535,11 @@ private:
         Action action = Action::none;
         if (page_) {
             draw_page(ctx, v);
-            if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
+            // Back closes an open choice list first, and the page only on the next press.
+            const bool popup_was_open = popup_open_;
+            popup_open_ = ImGui::IsPopupOpen(ImGuiID(0), ImGuiPopupFlags_AnyPopupId);
+            if (!popup_was_open && !popup_open_ &&
+                (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight))) {
                 close_page();
             }
         } else {
@@ -564,6 +573,8 @@ private:
     MainState last_state_ = MainState::ready;
     bool running_ = true;
     bool focus_first_ = true;
+    bool refocus_ = false;  // a page was closed in the last frame
+    bool popup_open_ = false;  // a choice list of the page was open in the last frame
     fs::path config_path_;
     fs::path play_config_;  // set by a script's config step
     fs::path game_dir_;

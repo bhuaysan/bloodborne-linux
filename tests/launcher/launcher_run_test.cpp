@@ -74,7 +74,7 @@ std::string slurp(const fs::path& file) {
 // Runs a copy of bb-launcher next to a fake bb-run that records its arguments and directory and
 // exits with `exit_code`. The script drops the dump, presses Play and takes a shot afterwards.
 std::string play_with_fake_bb_run(const Dir& dir, const fs::path& game, int exit_code,
-                                  bb::test::Result& result) {
+                                  bb::test::Result& result, const std::string& before_play = "") {
     const fs::path bin = dir.path() / "bin";
     fs::create_directories(bin);
     fs::copy_file(BB_LAUNCHER_PATH, bin / "bb-launcher");
@@ -83,8 +83,8 @@ std::string play_with_fake_bb_run(const Dir& dir, const fs::path& game, int exit
         quote((dir.path() / "record.txt").string()), exit_code);
     fs::permissions(bin / "bb-run", fs::perms::owner_all);
     std::ofstream(dir.path() / "script.txt") << std::format(
-        "wait 3\ndrop {}\nwait 3\npress accept\nwaitgame 20\nwait 3\nshot {}\nquit\n",
-        game.string(), (dir.path() / "shot.png").string());
+        "wait 3\ndrop {}\nwait 3\n{}press accept\nwaitgame 20\nwait 3\nshot {}\nquit\n",
+        game.string(), before_play, (dir.path() / "shot.png").string());
     const std::string d = dir.path().string();
     result = bb::test::run(std::format(
         "cd {} && env -u BB_GAME_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
@@ -110,6 +110,17 @@ TEST(LauncherRunGame, PlayStartsBbRunWithOnlyTheConfig) {
     EXPECT_EQ(rec, std::format("cwd={} args=--config {}\n", (good.path() / "bin").string(), config));
     EXPECT_NE(rec_bad.find("args=--config "), std::string::npos);
     EXPECT_NE(slurp(good.path() / "shot.png"), slurp(bad.path() / "shot.png"));
+}
+
+// Back from a page puts the focus on the first button again, so A starts the game.
+TEST(LauncherRunGame, PlayWorksAfterAPageWasOpenedAndClosed) {
+    BB_REQUIRE_GAME(game);
+    const Dir dir;
+    bb::test::Result r;
+    const std::string rec = play_with_fake_bb_run(
+        dir, game, 0, r, "press down\nwait 2\npress accept\nwait 3\npress back\nwait 3\n");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(rec.find("args=--config "), std::string::npos) << r.output;
 }
 
 // The dump: the folder goes into the config file, only in the XDG config directory.
@@ -158,6 +169,23 @@ TEST(LauncherRunGame, TheSearchTakesTheDumpUnderHome) {
     const fs::path config = dir.path() / "config/bloodborne-linux/config.toml";
     ASSERT_TRUE(fs::exists(config));
     EXPECT_NE(slurp(config).find(fs::canonical(folder).string()), std::string::npos);
+}
+
+// The Picture and sound page with the pad alone: fullscreen, 60 frames and extra sharp are chosen
+// with the d-pad and A, and Back writes them to the config file.
+TEST(LauncherRun, ThePicturePageSavesItsChoicesOnBack) {
+    const Dir dir;
+    std::string script = "wait 3\npress down\nwait 2\npress accept\nwait 3\n";
+    for (const char* step : {"accept", "down", "accept",              // window -> fullscreen
+                             "down", "accept", "down", "accept",      // 30 -> 60
+                             "down", "accept", "down", "down", "accept"}) {  // normal -> extra sharp
+        script += std::format("press {}\nwait 2\n", step);
+    }
+    script += std::format("shot {}\npress back\nwait 3\nquit\n", (dir.path() / "shot.png").string());
+    const auto r = run_script(dir, script);
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(slurp(dir.path() / "config/bloodborne-linux/config.toml"),
+              "fullscreen = true\nfsr = true\nrcas_attenuation = 0\nframe_rate = 60\n");
 }
 
 TEST(LauncherRun, ABadScriptEndsWithAMessage) {

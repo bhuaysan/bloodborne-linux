@@ -7,7 +7,7 @@ namespace bb::launcher {
 bool bevel_button(const char* label, ImVec2 size, bool accent, bool focus_now) {
     ImGui::PushID(label);
     const ImVec2 pos = ImGui::GetCursorScreenPos();
-    const bool pressed = ImGui::InvisibleButton("##b", size);
+    const bool pressed = ImGui::InvisibleButton("##b", size, ImGuiButtonFlags_EnableNav);
     if (focus_now) {  // gamepad navigation starts from this button
         ImGui::SetFocusID(ImGui::GetItemID(), ImGui::GetCurrentWindow());
         ImGui::GetCurrentContext()->NavCursorVisible = true;  // A works at once, without a D-pad press
