@@ -291,6 +291,15 @@ TEST_F(RagdollTest, PoseSyncMatchesAt30) {
     harness().restore();
 }
 
+TEST_F(RagdollTest, PoseSyncIsRegistered) {
+    const Replacement r = registered(bb::game::chr_physics_pose_sync_link);
+    EXPECT_EQ(r.impl, reinterpret_cast<void*>(&bb::game::chr_physics_pose_sync));
+    EXPECT_TRUE(r.prologue.empty());  // a plain replacement
+    EXPECT_EQ(r.function, 0u);
+    EXPECT_EQ(registered(bb::game::ragdoll_impulse_load).function, bb::game::ragdoll_update);
+    EXPECT_EQ(registered(bb::game::ragdoll_root_pull).function, bb::game::ragdoll_update);
+}
+
 TEST_F(RagdollTest, PoseSyncPassesTheFrameStepAt60) {
     const CalleeFakes fakes;
     const FrameRateGuard rate(60);
@@ -311,7 +320,9 @@ TEST_F(RagdollTest, PoseSyncPassesTheFrameStepAt60) {
     EXPECT_EQ(every->args[0], step60);
     EXPECT_EQ(every->args[1], bits(30.0f));
     run(cases[0], false);
-    EXPECT_EQ(only_call(update)->args[0], 0x3d088889u);  // the game: 1/30 at any rate
+    const Call* game_every = only_call(update);
+    ASSERT_NE(game_every, nullptr);
+    EXPECT_EQ(game_every->args[0], 0x3d088889u);  // the game: 1/30 at any rate
 
     run(cases[7], true);  // every 3 frames: the spacing stays 3 30 FPS frames
     const Call* three = only_call(spaced);
@@ -319,8 +330,10 @@ TEST_F(RagdollTest, PoseSyncPassesTheFrameStepAt60) {
     EXPECT_EQ(three->args[0], step60);
     EXPECT_EQ(three->args[1], bits(3.0f * (1.0f / 30.0f)));
     run(cases[7], false);
-    EXPECT_EQ(only_call(spaced)->args[0], 0x3d088889u);
-    EXPECT_EQ(only_call(spaced)->args[1], bits(3.0f * (1.0f / 30.0f)));
+    const Call* game_three = only_call(spaced);
+    ASSERT_NE(game_three, nullptr);
+    EXPECT_EQ(game_three->args[0], 0x3d088889u);
+    EXPECT_EQ(game_three->args[1], bits(3.0f * (1.0f / 30.0f)));
 
     run(cases[11], true);  // idle (negative interval)
     const Call* rest = only_call(idle);
