@@ -88,6 +88,15 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(extra.argv[-6:], ["--frame-rate", "60", "--window-size", "2560x1440",
                                            "--fsr", "--fullscreen"])
 
+    def test_layer_path_keeps_other_layers_findable(self) -> None:
+        plain = rig.layer_path(Path("/rig/layer"), {"XDG_DATA_HOME": "/d"}).split(":")
+        self.assertEqual(plain[0], "/rig/layer")
+        self.assertEqual(plain[1:], [*rig.SYSTEM_LAYER_DIRS, "/d/vulkan/explicit_layer.d"])
+        given = rig.layer_path(Path("/rig/layer"), {"VK_LAYER_PATH": "/a:/b",
+                                                    "VK_ADD_LAYER_PATH": "/c",
+                                                    "XDG_DATA_HOME": "/d"}).split(":")
+        self.assertEqual(given[:4], ["/rig/layer", "/a", "/b", "/c"])
+
     def test_reference_refuses_bb_run_options(self) -> None:
         for options in ({"frame_rate": 60}, {"frame_rate": 30}, {"log": "profile=debug"},
                         {"perf": True}, {"bb_run_args": "--fsr"}):

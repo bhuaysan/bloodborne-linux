@@ -36,6 +36,7 @@ import tempfile
 import threading
 import time
 import zipfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -448,6 +449,24 @@ def open_stream_pad(path: Path) -> vpad.StreamPad:
     return vpad.StreamPad(open(os.open(path, os.O_RDWR), "wb", buffering=0))
 
 
+# Where the Vulkan loader looks for explicit layers when VK_LAYER_PATH is unset.
+SYSTEM_LAYER_DIRS = ["/etc/vulkan/explicit_layer.d", "/usr/local/share/vulkan/explicit_layer.d",
+                     "/usr/share/vulkan/explicit_layer.d"]
+
+
+def layer_path(layer: Path, environ: Mapping[str, str]) -> str:
+    """VK_LAYER_PATH for a run: the rig's layer first, then the caller's VK_LAYER_PATH and
+    VK_ADD_LAYER_PATH and the system's layer directories. VK_LAYER_PATH replaces the loader's own
+    search, so without the rest a layer that bb-run asks for itself (the validation layer of
+    --validation) would not be found."""
+    parts = [str(layer)]
+    for name in ("VK_LAYER_PATH", "VK_ADD_LAYER_PATH"):
+        parts += [p for p in environ.get(name, "").split(":") if p]
+    data_home = environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    parts += [*SYSTEM_LAYER_DIRS, str(Path(data_home) / "vulkan" / "explicit_layer.d")]
+    return ":".join(parts)
+
+
 def check_target_options(args: argparse.Namespace) -> None:
     """Refuses the options that only bb-run takes on a reference run, instead of dropping them."""
     if args.target == "reference" and (getattr(args, "log", None) or getattr(args, "perf", False)
@@ -501,7 +520,7 @@ def run_target(args: argparse.Namespace) -> int:
         # SDL's disk driver plays to a file in real time instead of to a device (tools/rig/audio.py).
         env |= {"SDL_AUDIO_DRIVER": "disk", "SDL_AUDIO_DISK_OUTPUT_FILE": str(audio_file)}
     if not args.no_layer:
-        env |= {"VK_LAYER_PATH": str(layer), "VK_INSTANCE_LAYERS": LAYER_NAME}
+        env |= {"VK_LAYER_PATH": layer_path(layer, os.environ), "VK_INSTANCE_LAYERS": LAYER_NAME}
     unit = f"bb-rig-{stamp}"
     command = wrap_command(program.argv, game_dir, unit, seconds, memory)
     pad: vpad.Pad | None = None
