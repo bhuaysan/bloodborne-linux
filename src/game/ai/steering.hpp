@@ -36,10 +36,10 @@ inline constexpr std::array<std::uint8_t, 20> agent_steer_prologue = {
     0x41, 0x54, 0x53, 0x48, 0x81, 0xec, 0xb8, 0x00, 0x00, 0x00};
 
 // The character AI control update, 0x01513c10: chr vtable +0xd0 (0x018bdb20) calls it (the only
-// direct caller, 0x018bded1) with the frame's step in xmm0 and the character's control object in rdi (the character is the
-// pointer at control+8). Through the
-// AI manipulator, AI character and path updates it reaches `agent_steer` (0x01239ef8). The
-// character's update interval is the int32 at character+0xe4 (#573).
+// direct caller, 0x018bded1) with the frame's step in xmm0 and the character's control object in
+// rdi (the character is the pointer at control+8). Through the AI manipulator, AI character and
+// path updates it reaches `agent_steer` (0x01239ef8). The character's update interval is the
+// int32 at character+0xe4 (#573).
 using ChrAiControlUpdate = void(float dt, void* control);
 
 // Its first 20 bytes: push rbp; mov rbp, rsp; push r15 to rbx; sub rsp, 0xa8.
@@ -53,8 +53,8 @@ struct ChrUpdateNote {
     std::int32_t interval = 0;
 };
 
-// Runs `original` with the update interval of the control object's character noted for this thread, and puts the
-// previous note back after it (updates may nest).
+// Runs `original` with the update interval of the control object's character noted for this
+// thread, and puts the previous note back after it (updates may nest).
 void chr_ai_control_update_noting(ChrAiControlUpdate* original, float dt, void* control);
 
 // 0x01513c10, wrapped: at 30 FPS the original, else chr_ai_control_update_noting.
@@ -63,8 +63,15 @@ void chr_ai_control_update(float dt, void* control);
 // The note of this thread.
 ChrUpdateNote noted_chr_update();
 
+// What the wrapper keeps per agent: the count of its calls, and whether the last call that ran
+// the original on an agent with a character passed a step of exactly 0.0f.
+struct SteerState {
+    unsigned count = 0;
+    bool ran_zero_step = false;
+};
+
 // Runs `original` as the game does at 30 FPS when the frame rate is `calls` times 30, counting the
-// agent's own calls in `count` (the path follower doesn't step every agent every frame): when
+// agent's own calls in `state.count` (the path follower doesn't step every agent every frame): when
 // `count` is 0, with the task data's step times `calls`. On the agent's other calls, if it has a
 // Havok AI character, its ring, state and step stay as they are: it gets two of the writes the
 // game's steering does on every call (+0x28c = 1 and the character's +0x64 copied to +0x1c of the
@@ -72,12 +79,14 @@ ChrUpdateNote noted_chr_update();
 // now and the direction stored at +0x20. The third, clearing the requests at +0x289 and +0x28a,
 // is left to the next call that runs `original`, which acts on them. An agent whose stored step
 // (+0x280) is still 0.0f, the constructor's value, runs `original` on this call whatever `count`
-// says, and `count` goes on from there. An agent without a character gets `original` as is and
-// `count` 0, so its first call with one runs `original`. Then moves `count` on, modulo `calls`.
+// says, and `count` goes on from there, unless `ran_zero_step`: a run with a step of exactly 0
+// (full hit-stop) stores 0.0f too and is no sign of a new agent, so then the count rules. An
+// agent without a character gets `original` as is and a fresh state, so its first call with one
+// runs `original`. Then moves `count` on, modulo `calls`.
 // With calls <= 1, or `halve` false (the call comes from the update of a character with an update
 // interval above 0, which is stepped at 30 FPS's rate by itself, #603), every call is `original`
 // with the caller's task data and `count` is 0.
-SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, unsigned& count, void* agent,
+SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, SteerState& state, void* agent,
                              const FD4TaskData* task, bool halve = true);
 
 // 0x01dbbd00, wrapped: agent_steer_every with frame_rate() / 30 calls and a count per agent, kept

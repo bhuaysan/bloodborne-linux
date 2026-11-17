@@ -24,7 +24,7 @@ address,name,signature,status,file
 0x01513c10,chr_ai_control_update,"void chr_ai_control_update(float dt, void * control)",replaced,src/game/ai/steering.cpp
 0x01515cc0,chr_physics_module_frame,,named,
 0x01515ec0,chr_physics_pose_sync,"void chr_physics_pose_sync(void * module, void * transform)",replaced,src/game/chr/ragdoll.cpp
-0x0151a720,ai_manipulator_update,"void ai_manipulator_update(float dt, void * manipulator, void * chr)",named,
+0x0151a720,ai_manipulator_update,"void ai_manipulator_update(float dt, void * manipulator, void * control)",named,
 0x01533940,walk_anim_update,,named,
 0x01548740,chr_frame_update,,named,
 0x01572900,chr_pad_step,,named,

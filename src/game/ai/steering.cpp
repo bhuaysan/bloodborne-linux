@@ -39,16 +39,16 @@ SteerPoint steer_point(const float position[3], const float direction[4]) {
     return out;
 }
 
-// The agents' counts. The game steps each agent on one thread at a time, but different agents on
-// several (the CSChrThreads), so the table has a lock. Agents the game destroys stay in it until it
-// holds `max_agents`; then it starts over, which costs each agent at most one extra run of the
-// game's steering.
+// The agents' states (count, last step). The game steps each agent on one thread at a time, but
+// different agents on several (the CSChrThreads), so the table has a lock. Agents the game
+// destroys stay in it until it holds `max_agents`; then it starts over, which costs each agent at
+// most one extra run of the game's steering.
 std::mutex counts_lock;
-std::unordered_map<const void*, unsigned> counts;
+std::unordered_map<const void*, SteerState> counts;
 constexpr std::size_t max_agents = 4096;
 
-// The update interval (character+0xe4) of the character whose control update (0x01513c10) runs on this
-// thread, while it runs. The game steps an agent on the thread that updates its character.
+// The update interval (character+0xe4) of the character whose control update (0x01513c10) runs
+// on this thread, while it runs. The game steps an agent on the thread that updates its character.
 thread_local ChrUpdateNote noted_update;
 
 }  // namespace
@@ -80,27 +80,31 @@ void chr_ai_control_update(float dt, void* control) {
     chr_ai_control_update_noting(original, dt, control);
 }
 
-SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, unsigned& count, void* agent,
+SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, SteerState& state, void* agent,
                              const FD4TaskData* task, bool halve) {
+    void* const character = load<void*>(agent, 0x230);
     if (calls <= 1 || !halve) {
-        count = 0;
+        state = {0, character != nullptr && task->delta_time == 0.0f};
         return original(agent, task);
     }
-    void* const character = load<void*>(agent, 0x230);
     if (character == nullptr) {
-        count = 0;  // no ring, no state: a constant; the first call with a character runs
+        state = {};  // no ring, no state: a constant; the first call with a character runs
         return original(agent, task);
     }
     // The game's steering has not run on the agent yet when its stored step is still the
     // constructor's 0.0f (0x01dbaf4b; the steering writes it at 0x01dbbd45): the count may come
     // from a destroyed agent at the same address, so it runs now and the count goes on from there.
-    // A step of exactly 0 in full hit-stop (0x01a38430) looks the same and just runs it once more.
-    const bool fresh = load<float>(agent, 0x280) == 0.0f;
-    const bool runs = count == 0 || fresh;
-    count = (runs ? 1 : count + 1) % calls;
+    // But a run with a step of exactly 0 (all of a full hit-stop, 0x01a38430) stores 0.0f too, so
+    // the state remembers whether the last run through here passed 0: then 0.0f is not fresh and
+    // the count rules. An agent at a reused address whose predecessor last ran with step 0 just
+    // follows the inherited count.
+    const bool fresh = load<float>(agent, 0x280) == 0.0f && !state.ran_zero_step;
+    const bool runs = state.count == 0 || fresh;
+    state.count = (runs ? 1 : state.count + 1) % calls;
     if (runs) {
         // calls * the frame's step: 2 * 1/60 is the game's 1/30 bit for bit.
         const FD4TaskData step{task->vtable, task->delta_time * static_cast<float>(calls)};
+        state.ran_zero_step = step.delta_time == 0.0f;
         return original(agent, &step);
     }
     // The writes the game's steering does on every call with a character (0x01dbbd38, 0x01dbbe10).
@@ -126,20 +130,20 @@ SteerPoint agent_steer(void* agent, const FD4TaskData* task) {
     // above 0 means the character's update already runs at the rate of 30 FPS with its step.
     const ChrUpdateNote note = noted_update;
     const bool halve = !note.noted || note.interval <= 0;
-    unsigned count = 0;
+    SteerState state;
     {
         const std::lock_guard lock(counts_lock);
         if (const auto it = counts.find(agent); it != counts.end()) {
-            count = it->second;
+            state = it->second;
         }
     }
-    const SteerPoint point = agent_steer_every(original, calls, count, agent, task, halve);
+    const SteerPoint point = agent_steer_every(original, calls, state, agent, task, halve);
     {
         const std::lock_guard lock(counts_lock);
         if (counts.size() >= max_agents && !counts.contains(agent)) {
             counts.clear();
         }
-        counts[agent] = count;
+        counts[agent] = state;
     }
     return point;
 }
