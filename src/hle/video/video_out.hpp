@@ -104,6 +104,9 @@ public:
     virtual Vulkan::Frame* prepare_blank_frame(bool present_thread) = 0;
     virtual Vulkan::Frame* prepare_last_frame() = 0;
     virtual void present(Vulkan::Frame* frame, bool is_reusing_frame, bool is_game_frame) = 0;
+    // Gives back a frame from prepare_frame or prepare_blank_frame that is not presented: its flip
+    // was replaced by a newer one queued at the same vblank. `frame` may be null.
+    virtual void release_frame(Vulkan::Frame* frame) = 0;
     // ImGui::Core::MustKeepDrawing.
     virtual bool must_keep_drawing() = 0;
 };

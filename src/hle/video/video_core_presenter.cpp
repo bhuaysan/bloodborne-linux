@@ -89,6 +89,12 @@ void VideoCorePresenter::present(Vulkan::Frame* frame, bool is_reusing_frame,
     }
 }
 
+void VideoCorePresenter::release_frame(Vulkan::Frame* frame) {
+    if (presenter_) {
+        presenter_->ReleaseFrame(frame);
+    }
+}
+
 bool VideoCorePresenter::must_keep_drawing() {
     return presenter_ && ImGui::Core::MustKeepDrawing();
 }

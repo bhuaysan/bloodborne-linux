@@ -50,6 +50,7 @@ public:
     Vulkan::Frame* prepare_blank_frame(bool present_thread) override;
     Vulkan::Frame* prepare_last_frame() override;
     void present(Vulkan::Frame* frame, bool is_reusing_frame, bool is_game_frame) override;
+    void release_frame(Vulkan::Frame* frame) override;
     bool must_keep_drawing() override;
 
     void submit_gfx(std::span<const std::uint32_t> dcb,

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_presenter.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12; 2026-11-17: FSR and RCAS from RendererOptions
+// Changed for bloodborne-linux, 2026-11-12; 2026-11-17: FSR and RCAS from RendererOptions; ReleaseFrame
 // License texts: third_party/shadps4/LICENSES/
 
 #include "core/display_state.h"
@@ -563,6 +563,21 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     }
 
     free_frame();
+}
+
+// Gives back a frame that PrepareFrame or PrepareBlankFrame returned and that is never presented
+// (video out skips a flip that a newer one replaces, #608). It goes back to the free queue as the
+// frame of a skipped Present does ("Skipping frame!"): its present fence was not reset, so it
+// is still signaled, and the draw work that fills the frame is on the draw scheduler's queue,
+// ahead of whatever the next user of the frame records there. It does not become the last
+// submitted frame, which PrepareLastFrame would show again.
+void Presenter::ReleaseFrame(Frame* frame) {
+    if (frame == nullptr) {
+        return;
+    }
+    std::scoped_lock fl{free_mutex};
+    free_queue.push(frame);
+    free_cv.notify_one();
 }
 
 Frame* Presenter::GetRenderFrame() {

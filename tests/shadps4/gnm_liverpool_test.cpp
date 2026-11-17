@@ -116,6 +116,7 @@ TEST(GnmLiverpool, HasNoFramesWithoutAWindow) {
     EXPECT_EQ(presenter.prepare_last_frame(), nullptr);
     EXPECT_FALSE(presenter.must_keep_drawing());
     presenter.present(nullptr, false, true);
+    presenter.release_frame(nullptr);
     EXPECT_EQ(liverpool().game_frames(), 0u);
 }
 

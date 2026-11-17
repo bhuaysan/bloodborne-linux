@@ -321,6 +321,7 @@ struct FakePresenter final : FlipPresenter {
         count_at_present = flip_count(main_port_handle);
         ++game_presents;
     }
+    void release_frame(Vulkan::Frame*) override {}
     bool must_keep_drawing() override { return false; }
 
     static Vulkan::Frame* game_frame() { return reinterpret_cast<Vulkan::Frame*>(0x1000); }
