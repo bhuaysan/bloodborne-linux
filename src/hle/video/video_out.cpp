@@ -90,7 +90,7 @@ public:
         return main_port_handle;
     }
 
-    // Queued flips stay queued: the present thread presents them, which gives their frames back to
+    // Queued flips stay queued: the present thread presents or releases them, which gives their frames back to
     // the presenter, and drops them by their generation.
     void close() {
         const std::scoped_lock lock{port_.port_mutex};
@@ -280,9 +280,12 @@ private:
 
     // The newest request queued when the first one is there, waiting for one until `deadline` when
     // there is none yet. The older requests of that moment go to `skipped`, oldest first: a
-    // vblank shows one frame, and the newest is the one the game wants on screen. Only requests
-    // with a presenter are skipped; without one nothing is shown, so flips keep completing one
-    // per vblank, which is the pace the game gets from them. A request that arrives later,
+    // vblank shows one frame, and the newest is the one the game wants on screen. Requests are
+    // skipped only when their presenter shows frames (FlipPresenter::shows_frames): without a
+    // presenter, or with one that has no window (bb-run --headless), nothing is shown, so flips
+    // keep completing one per vblank, the pace the game gets from them. The presenter decides,
+    // not each request's frame, so that one request without a frame can't change the rule for the
+    // rest of a backlog; with a window every request has a frame. A request that arrives later,
     // also within the grace after a vblank that found an older one, waits for the next vblank.
     std::optional<Request> receive_request(Clock::time_point deadline,
                                            std::vector<Request>& skipped) {
@@ -291,7 +294,8 @@ private:
         if (requests_.empty()) {
             return std::nullopt;
         }
-        while (requests_.size() > 1 && requests_.front().presenter != nullptr) {
+        while (requests_.size() > 1 && requests_.front().presenter != nullptr &&
+               requests_.front().presenter->shows_frames()) {
             skipped.push_back(requests_.front());
             requests_.pop_front();
         }

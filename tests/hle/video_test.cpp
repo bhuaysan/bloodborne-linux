@@ -292,7 +292,7 @@ struct FakePresenter final : FlipPresenter {
         const std::scoped_lock lock{mutex};
         prepared.push_back(address);
         prepared_width = group.attrib.width;
-        return game_frame(prepared.size() - 1);
+        return shows ? game_frame(prepared.size() - 1) : nullptr;
     }
     Vulkan::Frame* prepare_blank_frame(bool present_thread) override {
         if (!present_thread) {
@@ -307,7 +307,7 @@ struct FakePresenter final : FlipPresenter {
             ++blank_presents;
             return;
         }
-        EXPECT_TRUE(is_game_frame_pointer(frame));
+        EXPECT_TRUE(frame == nullptr ? !shows : is_game_frame_pointer(frame));
         EXPECT_FALSE(reusing);
         EXPECT_TRUE(is_game_frame);
         present_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -337,6 +337,7 @@ struct FakePresenter final : FlipPresenter {
             on_release();
         }
     }
+    bool shows_frames() const override { return shows; }
     bool must_keep_drawing() override { return false; }
 
     // Every prepared game frame is another pointer, in 0x1000..0x1fff.
@@ -367,6 +368,7 @@ struct FakePresenter final : FlipPresenter {
     std::atomic<bool> defer{false};
     std::vector<std::function<void()>> deferred;
     std::atomic<int> gpu_blank_frames{0};
+    std::atomic<bool> shows{true};  // false: no window, as bb-run --headless; frames are null
     std::atomic<bool> hold{false};
     std::atomic<bool> in_present{false};
 };
@@ -581,8 +583,7 @@ TEST(HleVideo, FlipArrivingAfterTheVblankTookTheQueueIsNotSkipped) {
     start_video_out(nullptr);
 }
 
-// A blank flip (index -1) is a flip like the others: queued behind a newer one it is skipped, and
-// a newer blank one is the one shown.
+// A blank flip (index -1) is a flip like the others: queued behind a newer one it is skipped.
 TEST(HleVideo, BlankFlipInABacklogIsSkippedLikeAnyOther) {
     static FakePresenter fake;
     start_video_out(&fake);
@@ -605,6 +606,103 @@ TEST(HleVideo, BlankFlipInABacklogIsSkippedLikeAnyOther) {
         EXPECT_EQ(fake.blank_presents, 0);
         EXPECT_EQ(flip_status(port.handle).current_buffer, 1);
     }
+    start_video_out(nullptr);
+}
+
+// A presenter without a window (bb-run --headless) shows nothing and its frames are null: a
+// backlog is not skipped, the flips complete one per vblank.
+TEST(HleVideo, NothingIsSkippedWhenThePresenterShowsNothing) {
+    static FakePresenter fake;
+    fake.shows = false;
+    start_video_out(&fake);
+    {
+        const Port port;
+        fake.hold = true;
+        EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 0, 1, 100), 0);
+        const auto until = std::chrono::steady_clock::now() + 5s;
+        while (!fake.in_present && std::chrono::steady_clock::now() < until) {
+            std::this_thread::sleep_for(1ms);
+        }
+        ASSERT_TRUE(fake.in_present);
+        EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 1, 1, 101), 0);
+        EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 0, 1, 102), 0);
+        fake.hold = false;
+        ASSERT_TRUE(wait_for_count(port.handle, 2));
+        // The last flip needs another vblank: it is not completed with the second.
+        EXPECT_EQ(flip_count(port.handle), 2u);
+        ASSERT_TRUE(wait_for_count(port.handle, 3));
+        EXPECT_EQ(fake.game_presents, 3);
+        const std::scoped_lock lock{fake.mutex};
+        EXPECT_TRUE(fake.released.empty());
+    }
+    start_video_out(nullptr);
+}
+
+// A flip of a GPU flip packet is skipped like the others and still counts out of gc_queue_num.
+TEST(HleVideo, SkippedEopFlipLeavesTheGcQueue) {
+    static FakePresenter fake;
+    start_video_out(&fake);
+    {
+        const Port port;
+        std::uintptr_t labels = 0;
+        ASSERT_EQ(get_buffer_label_address(port.handle, &labels), 16);
+        fake.hold = true;
+        EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 0, 1, 100), 0);
+        const auto until = std::chrono::steady_clock::now() + 5s;
+        while (!fake.in_present && std::chrono::steady_clock::now() < until) {
+            std::this_thread::sleep_for(1ms);
+        }
+        ASSERT_TRUE(fake.in_present);
+        EXPECT_EQ(submit_eop_flip(port.handle, 1, 101), 0);
+        reinterpret_cast<std::uint64_t*>(labels)[1] = 1;  // what the packet writes first
+        Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip);
+        EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 0, 1, 102), 0);
+        const FlipStatus queued = flip_status(port.handle);
+        EXPECT_EQ(queued.flip_pending_num, 3);
+        EXPECT_EQ(queued.gc_queue_num, 1);
+        fake.hold = false;
+        ASSERT_TRUE(wait_for_count(port.handle, 3));
+        const FlipStatus status = flip_status(port.handle);
+        EXPECT_EQ(status.flip_pending_num, 0);
+        EXPECT_EQ(status.gc_queue_num, 0);
+        EXPECT_EQ(fake.game_presents, 2);
+        const std::scoped_lock lock{fake.mutex};
+        EXPECT_EQ(fake.released, (std::vector<Vulkan::Frame*>{FakePresenter::game_frame(1)}));
+    }
+    start_video_out(nullptr);
+}
+
+// The port closes between the flips of a backlog and their vblank: the newest is still presented
+// and the older one's frame is still given back, and neither counts for the reopened port.
+TEST(HleVideo, BacklogAcrossACloseStillGivesBackTheFrames) {
+    static FakePresenter fake;
+    start_video_out(&fake);
+    fake.hold = true;
+    {
+        const Port port;
+        EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 0, 1, 100), 0);
+        const auto until = std::chrono::steady_clock::now() + 5s;
+        while (!fake.in_present && std::chrono::steady_clock::now() < until) {
+            std::this_thread::sleep_for(1ms);
+        }
+        ASSERT_TRUE(fake.in_present);
+        EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 1, 1, 101), 0);
+        EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 0, 1, 102), 0);
+    }  // closed with a backlog of two
+    const Port port;
+    fake.hold = false;
+    const auto until = std::chrono::steady_clock::now() + 5s;
+    while (fake.game_presents < 2 && std::chrono::steady_clock::now() < until) {
+        std::this_thread::sleep_for(1ms);
+    }
+    EXPECT_EQ(fake.game_presents, 2);
+    {
+        const std::scoped_lock lock{fake.mutex};
+        EXPECT_EQ(fake.released, (std::vector<Vulkan::Frame*>{FakePresenter::game_frame(1)}));
+    }
+    const FlipStatus status = flip_status(port.handle);
+    EXPECT_EQ(status.count, 0u);
+    EXPECT_EQ(status.flip_pending_num, 0);
     start_video_out(nullptr);
 }
 

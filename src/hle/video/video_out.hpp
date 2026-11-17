@@ -12,7 +12,8 @@
 // The older ones complete without being shown (docs/design/frame-rate.md, #608). A completed flip
 // updates the flip status, triggers the flip event and clears the flip label of the buffer shown
 // before. With a FlipPresenter the flip's frame is prepared on the GPU thread and presented on the
-// present thread; without one (--headless) flips complete without presenting, one per vblank.
+// present thread; without one, or with a presenter that shows nothing (bb-run --headless has no
+// window), flips complete without presenting, one per vblank, and none is skipped.
 #pragma once
 
 #include <chrono>
@@ -106,8 +107,12 @@ public:
     virtual Vulkan::Frame* prepare_last_frame() = 0;
     virtual void present(Vulkan::Frame* frame, bool is_reusing_frame, bool is_game_frame) = 0;
     // Gives back a frame from prepare_frame or prepare_blank_frame that is not presented: its flip
-    // was replaced by a newer one queued at the same vblank. `frame` may be null.
+    // was replaced by a newer one queued at the same vblank. `frame` may be null. Called on the
+    // present thread.
     virtual void release_frame(Vulkan::Frame* frame) = 0;
+    // Whether presenting shows anything: false without a window (bb-run --headless), where the
+    // frames are null. Flips of a backlog are skipped only when it is true.
+    virtual bool shows_frames() const = 0;
     // ImGui::Core::MustKeepDrawing.
     virtual bool must_keep_drawing() = 0;
 };
