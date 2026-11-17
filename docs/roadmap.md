@@ -35,7 +35,7 @@ Each step is a GitHub milestone, and tasks are tracked as issues.
 
 R8 runs in four parts, each a GitHub milestone. R8.1 (shader and pipeline cache) and R8.2 (frame times) don't need the playthrough and start alongside R7. R8.3 (frame rate) and R8.4 (resolution) start with research and need the areas R7 opens, since their checks include combat and outdoor scenes. Render hooks get issues only when R8.2 measures a bottleneck that the renderer can't fix.
 
-R9 needs the `bb-run` options of R8.4 (#510) and can start once they are merged. The launcher is our own SDL3 and Dear ImGui window, both already imported, and starts `bb-run` as a separate process. Installing from PKG files would need Sony's PKG and PFS keys, which `docs/source-policy.md` rules out, so the player brings the game as a folder (maintainer decision, 2026-11-16).
+R9 needs the `bb-run` options of R8.4 (#510) and can start once they are merged. The launcher is our own SDL3 and Dear ImGui window, both already imported, and starts `bb-run` as a separate process. Its layout and behaviour are in `docs/design/launcher.md`. Installing from PKG files would need Sony's PKG and PFS keys, which `docs/source-policy.md` rules out, so the player brings the game as a folder (maintainer decision, 2026-11-16).
 
 `src/gpu` was removed in R4 (#435), with the memory mirror, `bb-gcn` and the options of the old path (maintainer decision, 2026-11-09).
 
