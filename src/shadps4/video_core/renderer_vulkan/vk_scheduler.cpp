@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_scheduler.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-17
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/assert.h"
@@ -126,9 +126,24 @@ void Scheduler::Wait(u64 tick) {
 }
 
 void Scheduler::PopPendingOperations() {
+    // Every draw and dispatch calls this. The semaphore query is an ioctl, so it is made only when
+    // the first operation was submitted and the last known GPU tick doesn't free it yet, and at
+    // most once per call (#589). Operations still run in the order they were deferred.
     std::unique_lock lk(pending_ops_mutex);
-    work_semaphore.Refresh();
-    while (!pending_ops.empty() && work_semaphore.IsFree(pending_ops.front().gpu_tick)) {
+    bool refreshed = false;
+    while (!pending_ops.empty()) {
+        const u64 tick = pending_ops.front().gpu_tick;
+        if (!work_semaphore.IsFree(tick)) {
+            // A tick at or past CurrentTick() has not been submitted, so the GPU can't be there.
+            if (refreshed || tick >= work_semaphore.CurrentTick()) {
+                break;
+            }
+            work_semaphore.Refresh();
+            refreshed = true;
+            if (!work_semaphore.IsFree(tick)) {
+                break;
+            }
+        }
         pending_ops.front().callback();
         pending_ops.pop();
     }

@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 #include <imgui.h>
@@ -31,6 +32,7 @@
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_semaphore.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 
 namespace {
@@ -174,6 +176,71 @@ TEST(VideoCore, StagingRingKeepsItsFirstBlocks) {
             pool.TickFrame();
         }
         EXPECT_EQ(pool.RingBlocks(type), 12u);
+    }
+    liverpool.reset();
+}
+
+// Deferred operations run in order once the GPU passed their tick, and the scheduler queries the
+// work semaphore only when the first operation waits for a submitted tick (#589). A submission
+// gated on a host-signalled semaphore keeps the last known GPU tick behind until the test opens
+// the gate and waits on the device itself, so a skipped query shows as a stale known tick.
+TEST(VideoCore, PendingOperationsPollOnlyWhenOneWaits) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    Core::MemoryManager memory;
+    auto liverpool = std::make_unique<AmdGpu::Liverpool>(memory);
+    Frontend::WindowSDL window;
+    Vulkan::Instance instance{window, -1};
+    start_imgui(instance);
+    {
+        const vk::Device device = instance.GetDevice();
+        Vulkan::Scheduler scheduler{instance};
+        Vulkan::Semaphore& work = *scheduler.GetWorkSemaphore();
+        Vulkan::Semaphore gate{instance};
+        std::vector<int> ran;
+        // Submits the current tick behind the gate, opens it and waits for the tick through the
+        // device, not through the scheduler, which would refresh the known tick.
+        const auto submit_gated = [&] {
+            const u64 tick = scheduler.CurrentTick();
+            Vulkan::SubmitInfo info{};
+            info.AddWait(gate.Handle(), tick);
+            scheduler.Flush(info);
+            EXPECT_LT(work.KnownGpuTick(), tick);
+            const vk::SemaphoreSignalInfo signal{.semaphore = gate.Handle(), .value = tick};
+            EXPECT_EQ(device.signalSemaphore(signal), vk::Result::eSuccess);
+            const vk::Semaphore handle = work.Handle();
+            const vk::SemaphoreWaitInfo wait{
+                .semaphoreCount = 1, .pSemaphores = &handle, .pValues = &tick};
+            EXPECT_EQ(device.waitSemaphores(wait, UINT64_MAX), vk::Result::eSuccess);
+            return tick;
+        };
+
+        // Nothing pending: no query, the known tick stays behind the device.
+        const u64 first = submit_gated();
+        scheduler.PopPendingOperations();
+        EXPECT_LT(work.KnownGpuTick(), first);
+
+        // Only an operation of the unsubmitted tick: no query either, and it doesn't run.
+        scheduler.DeferOperation([&] { ran.push_back(1); });
+        scheduler.PopPendingOperations();
+        EXPECT_LT(work.KnownGpuTick(), first);
+        EXPECT_TRUE(ran.empty());
+
+        // Its tick submitted and complete: one query frees it; the later one waits.
+        const u64 second = submit_gated();
+        scheduler.DeferOperation([&] { ran.push_back(2); });
+        scheduler.PopPendingOperations();
+        EXPECT_GE(work.KnownGpuTick(), second);
+        EXPECT_EQ(ran, (std::vector<int>{1}));
+
+        // Two operations freed by one query run in the order they were deferred.
+        scheduler.DeferOperation([&] { ran.push_back(3); });
+        const u64 third = submit_gated();
+        EXPECT_LT(work.KnownGpuTick(), third);
+        scheduler.PopPendingOperations();
+        EXPECT_EQ(ran, (std::vector<int>{1, 2, 3}));
+        scheduler.Finish();
     }
     liverpool.reset();
 }
