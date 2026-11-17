@@ -21,7 +21,7 @@ address,name,signature,status,file
 0x0143a0e0,chase_cam_construct,,named,
 0x0143ac60,chase_cam_update,"void chase_cam_update(void * cam, void * chr, void * world, float dt)",replaced,src/game/camera/chase_cam.cpp
 0x0150e690,chr_turn_update,,named,
-0x01513c10,chr_ai_control_update,"void chr_ai_control_update(float dt, void * chr)",named,
+0x01513c10,chr_ai_control_update,"void chr_ai_control_update(float dt, void * chr)",replaced,src/game/ai/steering.cpp
 0x01515cc0,chr_physics_module_frame,,named,
 0x01515ec0,chr_physics_pose_sync,"void chr_physics_pose_sync(void * module, void * transform)",replaced,src/game/chr/ragdoll.cpp
 0x0151a720,ai_manipulator_update,"void ai_manipulator_update(float dt, void * manipulator, void * chr)",named,

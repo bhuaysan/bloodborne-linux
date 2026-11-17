@@ -1,6 +1,8 @@
 // The AI agents' steering at the target frame rate (docs/design/frame-rate.md, "The steering
 // ring (#570)"): a wrapper that runs the game's steering on every (frame rate / 30)-th call of each
 // agent, as often a game second as at 30 FPS, and hands the agent its last direction in between.
+// Only the agents of characters without an update interval need it (#603): the others are already
+// stepped as often as at 30 FPS by the character's own update (#573).
 #include "game/ai/steering.hpp"
 
 #include <cstddef>
@@ -45,11 +47,35 @@ std::mutex counts_lock;
 std::unordered_map<const void*, unsigned> counts;
 constexpr std::size_t max_agents = 4096;
 
+// The update interval (chr+0xe4) of the character whose control update (0x01513c10) runs on this
+// thread, while it runs. The game steps an agent on the thread that updates its character.
+thread_local ChrUpdateNote noted_update;
+
 }  // namespace
 
+ChrUpdateNote noted_chr_update() { return noted_update; }
+
+void chr_ai_control_update_noting(ChrAiControlUpdate* original, float dt, void* chr) {
+    const ChrUpdateNote outer = noted_update;
+    noted_update = {true, load<std::int32_t>(chr, 0xe4)};
+    original(dt, chr);
+    noted_update = outer;  // the nested call's character is done: back to the one that called it
+}
+
+// 0x01513c10
+void chr_ai_control_update(float dt, void* chr) {
+    auto* const original =
+        reinterpret_cast<ChrAiControlUpdate*>(hook::original(image(), 0x01513c10));
+    if (frame_rate() == default_frame_rate) {
+        original(dt, chr);  // nothing halves at 30: the note would not be read
+        return;
+    }
+    chr_ai_control_update_noting(original, dt, chr);
+}
+
 SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, unsigned& count, void* agent,
-                             const FD4TaskData* task) {
-    if (calls <= 1) {
+                             const FD4TaskData* task, bool halve) {
+    if (calls <= 1 || !halve) {
         count = 0;
         return original(agent, task);
     }
@@ -58,8 +84,13 @@ SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, unsigned& cou
         count = 0;  // no ring, no state: a constant; the first call with a character runs
         return original(agent, task);
     }
-    const bool runs = count == 0;
-    count = (count + 1) % calls;
+    // The game's steering has not run on the agent yet when its stored step is still the
+    // constructor's 0.0f (0x01dbaf4b; the steering writes it at 0x01dbbd45): the count may come
+    // from a destroyed agent at the same address, so it runs now and the count goes on from there.
+    // A step of exactly 0 in full hit-stop (0x01a38430) looks the same and just runs it once more.
+    const bool fresh = load<float>(agent, 0x280) == 0.0f;
+    const bool runs = count == 0 || fresh;
+    count = (runs ? 1 : count + 1) % calls;
     if (runs) {
         // calls * the frame's step: 2 * 1/60 is the game's 1/30 bit for bit.
         const FD4TaskData step{task->vtable, task->delta_time * static_cast<float>(calls)};
@@ -84,6 +115,10 @@ SteerPoint agent_steer(void* agent, const FD4TaskData* task) {
     if (calls <= 1) {
         return original(agent, task);
     }
+    // Outside a character update, or for a character without an interval, halve; an interval
+    // above 0 means the character's update already runs at the rate of 30 FPS with its step.
+    const ChrUpdateNote note = noted_update;
+    const bool halve = !note.noted || note.interval <= 0;
     unsigned count = 0;
     {
         const std::lock_guard lock(counts_lock);
@@ -91,7 +126,7 @@ SteerPoint agent_steer(void* agent, const FD4TaskData* task) {
             count = it->second;
         }
     }
-    const SteerPoint point = agent_steer_every(original, calls, count, agent, task);
+    const SteerPoint point = agent_steer_every(original, calls, count, agent, task, halve);
     {
         const std::lock_guard lock(counts_lock);
         if (counts.size() >= max_agents && !counts.contains(agent)) {
@@ -110,3 +145,4 @@ void forget_agent_steer_counts() {
 }  // namespace bb::game
 
 BB_WRAP(0x01dbbd00, bb::game::agent_steer, bb::game::agent_steer_prologue);
+BB_WRAP(0x01513c10, bb::game::chr_ai_control_update, bb::game::chr_ai_control_update_prologue);

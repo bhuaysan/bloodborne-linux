@@ -35,6 +35,33 @@ inline constexpr std::array<std::uint8_t, 20> agent_steer_prologue = {
     0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55,
     0x41, 0x54, 0x53, 0x48, 0x81, 0xec, 0xb8, 0x00, 0x00, 0x00};
 
+// The character AI control update, 0x01513c10: chr vtable +0xd0 (0x018bdb20) calls it (the only
+// direct caller, 0x018bded1) with the frame's step in xmm0 and the character in rdi. Through the
+// AI manipulator, AI character and path updates it reaches `agent_steer` (0x01239ef8). The
+// character's update interval is the int32 at chr+0xe4 (#573).
+using ChrAiControlUpdate = void(float dt, void* chr);
+
+// Its first 20 bytes: push rbp; mov rbp, rsp; push r15 to rbx; sub rsp, 0xa8.
+inline constexpr std::array<std::uint8_t, 20> chr_ai_control_update_prologue = {
+    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55,
+    0x41, 0x54, 0x53, 0x48, 0x81, 0xec, 0xa8, 0x00, 0x00, 0x00};
+
+// The update interval of the character whose control update runs on this thread.
+struct ChrUpdateNote {
+    bool noted = false;  // false: no such update runs, the call comes from elsewhere
+    std::int32_t interval = 0;
+};
+
+// Runs `original` with the character's update interval noted for this thread, and puts the
+// previous note back after it (updates may nest).
+void chr_ai_control_update_noting(ChrAiControlUpdate* original, float dt, void* chr);
+
+// 0x01513c10, wrapped: at 30 FPS the original, else chr_ai_control_update_noting.
+void chr_ai_control_update(float dt, void* chr);
+
+// The note of this thread.
+ChrUpdateNote noted_chr_update();
+
 // Runs `original` as the game does at 30 FPS when the frame rate is `calls` times 30, counting the
 // agent's own calls in `count` (the path follower doesn't step every agent every frame): when
 // `count` is 0, with the task data's step times `calls`. On the agent's other calls, if it has a
@@ -42,14 +69,19 @@ inline constexpr std::array<std::uint8_t, 20> agent_steer_prologue = {
 // game's steering does on every call (+0x28c = 1 and the character's +0x64 copied to +0x1c of the
 // object at [[agent+0x238]+0x58]) and the point the game returns, from the character's position
 // now and the direction stored at +0x20. The third, clearing the requests at +0x289 and +0x28a,
-// is left to the next call that runs `original`, which acts on them. An agent without a character
-// gets `original` as is and `count` 0, so its first call with one runs `original`. Then moves
-// `count` on, modulo `calls`. With calls <= 1 every call is `original` with the caller's task data.
+// is left to the next call that runs `original`, which acts on them. An agent whose stored step
+// (+0x280) is still 0.0f, the constructor's value, runs `original` on this call whatever `count`
+// says, and `count` goes on from there. An agent without a character gets `original` as is and
+// `count` 0, so its first call with one runs `original`. Then moves `count` on, modulo `calls`.
+// With calls <= 1, or `halve` false (the call comes from the update of a character with an update
+// interval above 0, which is stepped at 30 FPS's rate by itself, #603), every call is `original`
+// with the caller's task data and `count` is 0.
 SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, unsigned& count, void* agent,
-                             const FD4TaskData* task);
+                             const FD4TaskData* task, bool halve = true);
 
 // 0x01dbbd00, wrapped: agent_steer_every with frame_rate() / 30 calls and a count per agent, kept
-// in a table by the agent's address; an agent not in it starts at 0. At 30 FPS it is the original.
+// in a table by the agent's address; an agent not in it starts at 0. `halve` is false inside the
+// control update of a character with an update interval above 0. At 30 FPS it is the original.
 SteerPoint agent_steer(void* agent, const FD4TaskData* task);
 
 // Forgets every agent's count (for tests, whose agents reuse addresses).
