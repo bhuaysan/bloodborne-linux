@@ -29,7 +29,7 @@ A small window with a fixed size, the game's title picture at the top, a one-lin
 - **Window title:** the game's title from `sce_sys/param.sfo`, read at run time, plus "(bloodborne-linux)".
 - **Buttons:** bevelled, drawn with `ImDrawList` (light top and left edges, dark bottom and right edges). This is the one decorative element. Everything else is flat.
 - **Font:** the system's sans-serif font, found with fontconfig at run time, with ImGui's built-in font as the fallback. We don't copy a font into the repository: the OFL fonts in shadPS4's tree are not on the license allow-list (`docs/source-policy.md`).
-- **Language:** English and German, chosen from the system locale, with English as the fallback. All text lives in one table per language, so each page adds its strings in both languages in the same change.
+- **Language:** English and German, chosen from the system locale, with English as the fallback. The main screen and the words every page shares live in one table per language (`src/launcher/text.cpp`). Each page keeps its own English and German strings in its own `page_*.cpp`, so pages added in parallel don't edit a shared table. The `Page` interface (draw, on_close) is documented in `src/launcher/page.hpp`. The scripted test input (`BB_LAUNCHER_SCRIPT`) comes with the window and is documented here when it lands.
 
 ## States of the main screen
 

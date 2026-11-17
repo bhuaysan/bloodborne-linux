@@ -36,7 +36,9 @@ TEST(LauncherLogic, CropsAroundTheCentre) {
     EXPECT_EQ(wide.x, 0);
     EXPECT_EQ(wide.y, 108);
     const CropRect tall = crop_around_centre(100, 400, 100, 100);
-    EXPECT_EQ((CropRect{0, 150, 100, 100}.y), tall.y);
+    EXPECT_EQ(tall.x, 0);
+    EXPECT_EQ(tall.y, 150);
+    EXPECT_EQ(tall.w, 100);
     EXPECT_EQ(tall.h, 100);
     const CropRect same = crop_around_centre(480, 216, 480, 216);
     EXPECT_EQ(same.w, 480);
@@ -119,8 +121,22 @@ TEST(LauncherScript, RefusesBadLinesWithTheirNumber) {
 TEST(LauncherText, GermanHasEveryStringAndMessage) {
     const Strings& de = strings(Lang::de);
     const Strings& en = strings(Lang::en);
-    EXPECT_STRNE(de.play, en.play);
-    EXPECT_STRNE(de.drop_hint, en.drop_hint);
+    const char* const Strings::*fields[] = {
+        &Strings::play,           &Strings::set_up,        &Strings::picture_sound,
+        &Strings::saves,          &Strings::help,          &Strings::quit,
+        &Strings::back,           &Strings::status_no_game, &Strings::status_version,
+        &Strings::status_controller, &Strings::status_no_controller, &Strings::status_no_gpu,
+        &Strings::status_last_run_failed, &Strings::drop_hint, &Strings::set_up_first,
+        &Strings::dialog_title};
+    for (const auto field : fields) {
+        ASSERT_NE(de.*field, nullptr);
+        ASSERT_NE(en.*field, nullptr);
+        EXPECT_STRNE(de.*field, "");
+        // The version label is the same word in both languages.
+        if (field != &Strings::status_version) {
+            EXPECT_STRNE(de.*field, en.*field) << en.*field;
+        }
+    }
     bb::common::FolderResult r;
     for (const auto kind : {bb::common::FolderCheck::not_a_folder, bb::common::FolderCheck::no_eboot,
                             bb::common::FolderCheck::no_param_sfo, bb::common::FolderCheck::bad_param_sfo,

@@ -476,8 +476,12 @@ int main(int argc, char** argv) {
                 std::cerr << "bb-run: " << r.message() << '\n';
                 return 1;
             }
+            std::string ignored;
             for (const std::string& arg : bb::tools::setup_ignored_arguments(args)) {
-                std::cerr << "bb-run: --setup ignores " << arg << '\n';
+                ignored += (ignored.empty() ? "" : " ") + arg;
+            }
+            if (!ignored.empty()) {
+                std::cerr << "bb-run: --setup ignores the rest of the command line: " << ignored << '\n';
             }
             std::cout << r.folder.message << "\nGame folder " << fs::canonical(*setup).string()
                       << " written to " << config_file->string() << '\n';

@@ -491,7 +491,7 @@ TEST(BbRunGame, SetupWritesTheDumpFolderToTheConfigFile) {
     const TempDir dir;
     const Result r = run_bb_run(dir, "--setup " + quote(game.string()) + " --fsr");
     EXPECT_EQ(r.status, 0) << r.output;
-    EXPECT_NE(r.output.find("--setup ignores --fsr"), std::string::npos) << r.output;
+    EXPECT_NE(r.output.find("--setup ignores the rest of the command line: --fsr"), std::string::npos) << r.output;
     const std::filesystem::path config = dir.path() / "config/bloodborne-linux/config.toml";
     ASSERT_TRUE(std::filesystem::exists(config));
     EXPECT_EQ(bb::common::read_config(config).config.game_dir, std::filesystem::canonical(game));

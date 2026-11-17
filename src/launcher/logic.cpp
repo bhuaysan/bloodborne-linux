@@ -12,9 +12,9 @@ namespace bb::launcher {
 Lang choose_language(std::string_view locale) {
     // "de:en" lists languages by preference; the first one counts.
     locale = locale.substr(0, locale.find(':'));
-    return locale.starts_with("de") && (locale.size() == 2 || !std::isalpha(static_cast<unsigned char>(locale[2])))
-               ? Lang::de
-               : Lang::en;
+    const bool german = locale.starts_with("de") &&
+                        (locale.size() == 2 || !std::isalpha(static_cast<unsigned char>(locale[2])));
+    return german ? Lang::de : Lang::en;
 }
 
 Lang language_from_environment() {
