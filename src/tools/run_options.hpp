@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 #include <string_view>
 
 #include "common/config.hpp"
@@ -120,6 +121,10 @@ std::optional<std::filesystem::path> config_option(std::span<const std::string_v
 // The value of the last `name` (an option that takes a path) in `args`; same errors.
 std::optional<std::filesystem::path> path_option(std::span<const std::string_view> args,
                                                  std::string_view name);
+
+// The arguments of a --setup command line that it does not use: everything except --setup and
+// --config with their values. bb-run warns about them instead of dropping them silently.
+std::vector<std::string> setup_ignored_arguments(std::span<const std::string_view> args);
 
 // The eboot's entry reads argc from +0 of its first argument and takes argv at +8 (link address
 // 0xa4..0xb4), then calls main(argc, argv, nullptr).

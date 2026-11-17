@@ -100,6 +100,18 @@ std::optional<std::filesystem::path> config_option(std::span<const std::string_v
     return path_option(args, "--config");
 }
 
+std::vector<std::string> setup_ignored_arguments(std::span<const std::string_view> args) {
+    std::vector<std::string> ignored;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--setup" || args[i] == "--config") {
+            ++i;  // its value
+        } else {
+            ignored.emplace_back(args[i]);
+        }
+    }
+    return ignored;
+}
+
 RunOptions parse_run_options(std::span<const std::string_view> args) {
     return parse_run_options(args, RunOptions{});
 }

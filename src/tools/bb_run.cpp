@@ -476,6 +476,9 @@ int main(int argc, char** argv) {
                 std::cerr << "bb-run: " << r.message() << '\n';
                 return 1;
             }
+            for (const std::string& arg : bb::tools::setup_ignored_arguments(args)) {
+                std::cerr << "bb-run: --setup ignores " << arg << '\n';
+            }
             std::cout << r.folder.message << "\nGame folder " << fs::canonical(*setup).string()
                       << " written to " << config_file->string() << '\n';
             return 0;
@@ -485,7 +488,8 @@ int main(int argc, char** argv) {
             config_file = bb::common::default_config_path();
         }
         bb::tools::RunOptions base;
-        if (config_file && (explicit_config || fs::exists(*config_file))) {
+        std::error_code exists_error;  // an unreadable directory counts as no file
+        if (config_file && (explicit_config || fs::exists(*config_file, exists_error))) {
             const bb::common::ParsedConfig parsed = bb::common::read_config(*config_file);
             base = bb::tools::options_from_config(parsed.config);
             config_unknown_keys = parsed.unknown_keys;
@@ -493,6 +497,13 @@ int main(int argc, char** argv) {
         }
         options = bb::tools::parse_run_options(args, base);
     } catch (const bb::common::ConfigError& e) {
+        // --help works with a broken config file.
+        const std::vector<std::string_view> args(argv + 1, argv + argc);
+        if (std::ranges::find(args, "--help") != args.end() ||
+            std::ranges::find(args, "-h") != args.end()) {
+            std::cout << bb::tools::run_usage;
+            return 0;
+        }
         std::cerr << "bb-run: " << e.what() << '\n';
         return 2;
     } catch (const std::invalid_argument& e) {

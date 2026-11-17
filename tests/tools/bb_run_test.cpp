@@ -373,6 +373,13 @@ Result run_bb_run(const TempDir& dir, const std::string& args, const std::string
                                      quote(BB_RUN_PATH), args));
 }
 
+TEST(RunOptions, SetupIgnoredArguments) {
+    const std::vector<std::string_view> args{"--setup", "/d", "--fsr", "--config", "/c",
+                                             "--profile", "x"};
+    EXPECT_EQ(bb::tools::setup_ignored_arguments(args),
+              (std::vector<std::string>{"--fsr", "--profile", "x"}));
+}
+
 TEST(BbRun, PrintsTheUsage) {
     const TempDir dir;
     const Result help = run_bb_run(dir, "--help");
@@ -434,6 +441,40 @@ TEST(BbRun, TheConfigFilesGameDirIsUsed) {
     EXPECT_NE(r.output.find("nogame"), std::string::npos) << r.output;
 }
 
+// BB_GAME_DIR is only the fallback: the config file's game_dir wins over it.
+TEST(BbRun, TheConfigFilesGameDirWinsOverTheEnvironment) {
+    const TempDir dir;
+    const std::string file =
+        write_config_file(dir, "game_dir = \"" + (dir.path() / "fromconfig").string() + "\"\n");
+    const Result r = run_bb_run(dir, "--config " + quote(file),
+                                "BB_GAME_DIR=" + quote((dir.path() / "fromenv").string()));
+    EXPECT_NE(r.output.find("fromconfig"), std::string::npos) << r.output;
+    EXPECT_EQ(r.output.find("fromenv"), std::string::npos) << r.output;
+}
+
+// A broken default config file doesn't stop --help.
+TEST(BbRun, HelpWorksWithABrokenConfigFile) {
+    const TempDir dir;
+    std::filesystem::create_directories(dir.path() / "config/bloodborne-linux");
+    std::ofstream(dir.path() / "config/bloodborne-linux/config.toml") << "fsr = maybe\n";
+    const Result r = run_bb_run(dir, "--help");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(r.output, bb::tools::run_usage);
+}
+
+// An unreadable config directory is no config file, not an uncaught exception.
+TEST(BbRun, AnUnreadableConfigDirectoryIsNoConfigFile) {
+    const TempDir dir;
+    std::filesystem::create_directories(dir.path() / "config/bloodborne-linux");
+    std::filesystem::permissions(dir.path() / "config/bloodborne-linux",
+                                 std::filesystem::perms::none);
+    const Result r = run_bb_run(dir, "");
+    std::filesystem::permissions(dir.path() / "config/bloodborne-linux",
+                                 std::filesystem::perms::owner_all);
+    EXPECT_EQ(r.status, 2) << r.output;
+    EXPECT_NE(r.output.find("set BB_GAME_DIR"), std::string::npos) << r.output;
+}
+
 TEST(BbRun, SetupRefusesAFolderWithoutEboot) {
     const TempDir dir;
     std::filesystem::create_directories(dir.path() / "folder");
@@ -448,8 +489,9 @@ TEST(BbRun, SetupRefusesAFolderWithoutEboot) {
 TEST(BbRunGame, SetupWritesTheDumpFolderToTheConfigFile) {
     BB_REQUIRE_GAME(game);
     const TempDir dir;
-    const Result r = run_bb_run(dir, "--setup " + quote(game.string()));
+    const Result r = run_bb_run(dir, "--setup " + quote(game.string()) + " --fsr");
     EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(r.output.find("--setup ignores --fsr"), std::string::npos) << r.output;
     const std::filesystem::path config = dir.path() / "config/bloodborne-linux/config.toml";
     ASSERT_TRUE(std::filesystem::exists(config));
     EXPECT_EQ(bb::common::read_config(config).config.game_dir, std::filesystem::canonical(game));
