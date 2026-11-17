@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <format>
@@ -53,7 +54,11 @@ struct DialogMailbox {
 };
 
 void on_folder_chosen(void* userdata, const char* const* list, int) {
-    auto& box = *static_cast<DialogMailbox*>(userdata);
+    // The mailbox is shared with the App, so a late callback after the window closed is harmless.
+    // SDL calls back exactly once, which frees the reference.
+    const std::unique_ptr<std::shared_ptr<DialogMailbox>> holder(
+        static_cast<std::shared_ptr<DialogMailbox>*>(userdata));
+    DialogMailbox& box = **holder;
     const std::lock_guard lock(box.mutex);
     box.open = false;
     if (list != nullptr && list[0] != nullptr) {
@@ -209,11 +214,17 @@ private:
     }
 
     void open_folder_dialog() {
-        const std::lock_guard lock(dialog_.mutex);
-        if (!dialog_.open) {
-            dialog_.open = true;
-            SDL_ShowOpenFolderDialog(on_folder_chosen, &dialog_, window_, nullptr, false);
+        {
+            // SDL may call back from this thread, so the lock is released before the call.
+            const std::lock_guard lock(dialog_->mutex);
+            if (dialog_->open) {
+                return;
+            }
+            dialog_->open = true;
         }
+        // The callback gets its own reference; SDL calls back once.
+        auto* ref = new std::shared_ptr<DialogMailbox>(dialog_);
+        SDL_ShowOpenFolderDialog(on_folder_chosen, ref, window_, nullptr, false);
     }
 
     // ---- the game ---------------------------------------------------------------------------
@@ -245,7 +256,9 @@ private:
         const auto start = std::chrono::steady_clock::now();
         int status = 0;
         bool terminated = false;
-        while (waitpid(pid, &status, WNOHANG) == 0) {
+        pid_t waited = 0;
+        while ((waited = waitpid(pid, &status, WNOHANG)) == 0 ||
+               (waited < 0 && errno == EINTR)) {
             SDL_Event e;
             while (SDL_PollEvent(&e)) {  // the window is hidden; drop what arrives
             }
@@ -256,7 +269,8 @@ private:
             }
             SDL_Delay(100);
         }
-        last_run_failed_ = !(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        // Any result other than the child's own exit with status 0 is a failed run.
+        last_run_failed_ = waited != pid || !(WIFEXITED(status) && WEXITSTATUS(status) == 0);
         SDL_ShowWindow(window_);
         SDL_RaiseWindow(window_);
         focus_first_ = true;
@@ -293,6 +307,9 @@ private:
     }
 
     void close_page() {
+        if (!page_) {
+            return;
+        }
         page_->on_close(context());
         page_.reset();
         focus_first_ = true;
@@ -400,10 +417,10 @@ private:
             }
         }
         {
-            const std::lock_guard lock(dialog_.mutex);
-            if (dialog_.folder) {
-                const std::string folder = *dialog_.folder;
-                dialog_.folder.reset();
+            const std::lock_guard lock(dialog_->mutex);
+            if (dialog_->folder) {
+                const std::string folder = *dialog_->folder;
+                dialog_->folder.reset();
                 set_up_folder(folder);
             }
         }
@@ -479,7 +496,7 @@ private:
     bool last_run_failed_ = false;
     std::string notice_;  // the last problem, shown in the status line
     std::unique_ptr<Page> page_;
-    DialogMailbox dialog_;
+    std::shared_ptr<DialogMailbox> dialog_ = std::make_shared<DialogMailbox>();
     std::vector<ScriptStep> script_;
     std::size_t step_ = 0;
     int wait_left_ = 0;
