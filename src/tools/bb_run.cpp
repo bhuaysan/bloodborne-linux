@@ -39,6 +39,7 @@
 #include "common/log.hpp"
 #include "common/runtime_dirs.hpp"
 #include "common/signal_stack.hpp"
+#include "game/chr/ragdoll.hpp"
 #include "game/frame/frame.hpp"
 #include "game/frame/step_literals.hpp"
 #include "game/image.hpp"
@@ -414,6 +415,7 @@ int start(const bb::tools::RunOptions& options) {
     });
     bb::game::set_image(game->eboot);
     bb::game::set_step_literal_targets();
+    bb::game::set_ragdoll_patch_targets();
     bb::hle::kernel::check_eboot_tls();
 
     bb::hle::kernel::path_map().mount_game(*game_dir);

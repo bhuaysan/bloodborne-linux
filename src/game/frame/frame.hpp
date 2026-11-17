@@ -96,6 +96,9 @@ std::uint8_t main_loop_tick();
 
 // frame_step()'s value, for the stubs patched into game code (BB_PATCH), which load it from memory.
 // Written only by set_frame_rate.
+// bb_step_ratio is 30 / frame_rate(), exactly 1 at 30 and 0.5 at 60: the share of a 30 FPS frame
+// that a frame stands for.
 extern "C" {
 extern float bb_frame_step;
+extern float bb_step_ratio;
 }

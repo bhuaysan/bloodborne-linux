@@ -10,6 +10,7 @@
 
 extern "C" {
 float bb_frame_step = 1.0f / static_cast<float>(bb::game::default_frame_rate);
+float bb_step_ratio = 1.0f;
 }
 
 namespace bb::game {
@@ -25,6 +26,7 @@ void set_frame_rate(unsigned fps) {
     }
     target_fps = fps;
     bb_frame_step = 1.0f / static_cast<float>(fps);
+    bb_step_ratio = static_cast<float>(default_frame_rate) / static_cast<float>(fps);
 }
 
 unsigned frame_rate() {
