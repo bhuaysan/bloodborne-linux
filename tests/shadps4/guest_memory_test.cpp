@@ -856,6 +856,10 @@ TEST(GuestMemory, FindImageStampsItsImageOnceATickMovesOn) {
             VideoCore::TextureCache::ImageDesc desc{group, addr(d.address)};
             return textures.FindImage(desc);
         };
+        // The collector frees images last touched at or before gc_tick - min(16, gc_tick) once
+        // the device's memory use passes its trigger, which depends on what else holds the GPU.
+        // At GC tick 0 that is every image; at tick 1, before the image exists, it is none (#600).
+        textures.RunGarbageCollector();
         const VideoCore::ImageId image = find();
         EXPECT_EQ(find(), image);
         EXPECT_EQ(textures.GetImage(image).tick_accessed_last, gpu.scheduler.CurrentTick());
