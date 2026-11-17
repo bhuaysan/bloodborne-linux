@@ -1,6 +1,7 @@
 // Differential tests of the agent steering wrapper in src/game/ai/: through the registered hook the
 // game's steering (0x01dbbd00) leaves at 30 FPS the same bytes and points as without it, and at
-// 60 FPS two calls leave what one call leaves at 30. Without the wrapper the steering at 60 loses
+// 60 FPS two calls leave what one call leaves at 30, except for the agents of characters with an
+// update interval, whose calls it passes on unchanged (#603). Without the wrapper the steering at 60 loses
 // its direction every 30 calls (#570); a test shows that, and that the wrapper keeps it.
 #include "game/ai/steering.hpp"
 
@@ -8,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <tuple>
 
@@ -97,6 +99,7 @@ struct Scene {
     void* character;
     void* path_point;
     float turn;
+    alignas(16) std::array<std::byte, 0x100> update_chr;  // a character for the control update
     std::array<std::array<float, 4>, max_frames> first;
     std::array<std::array<float, 4>, max_frames> second;
 };
@@ -178,6 +181,103 @@ void frames_hooked(Scene* s, unsigned frames) {
     }
 }
 
+// The game's steering called from inside the control update of a character with update interval
+// `interval`: the stand-in for 0x01513c10 below calls it with the step of that interval.
+Scene* update_scene = nullptr;
+const FD4TaskData* update_task = nullptr;
+SteerPoint update_point{};
+void steer_in_update(float, void*) { update_point = steer(update_scene, *update_task); }
+
+// `frames` calls with the step of an update interval of `interval` frames of 1/30 s, the agent
+// walking on at 1 m/s a call. Through the hook, inside the control update of the character.
+template <bool hooked, std::int32_t interval>
+void frames_with_interval(Scene* s, unsigned frames) {
+    const FD4TaskData task = task_data(static_cast<float>(interval) / 30.0f);
+    at<std::int32_t>(s->update_chr.data(), 0xe4) = interval;
+    update_scene = s;
+    update_task = &task;
+    std::optional<WrapperHook> hook;
+    if (hooked) {
+        hook.emplace();
+        bb::game::forget_agent_steer_counts();
+    }
+    for (unsigned k = 0; k < frames; ++k) {
+        walk(s, static_cast<float>(k * interval) / 30.0f);
+        if (hooked) {
+            bb::game::chr_ai_control_update_noting(&steer_in_update, 0.0f, s->update_chr.data());
+        } else {
+            update_point = steer(s, task);
+        }
+        s->first[k] = s->second[k] = as_floats(update_point);
+    }
+}
+
+// At 60 with an update interval above 0 every call through the hook is the game's call with the
+// caller's task data: the same bytes and points as the calls without the hook.
+TEST_F(EbootTest, AgentSteerOfACharacterWithAnIntervalIsTheGamesAt60) {
+    const FrameRateGuard rate(60);
+    for (const Case& c : cases) {
+        const Result r2 = harness().compare_functions<Frames>(
+            &frames_with_interval<false, 2>, &frames_with_interval<true, 2>,
+            [&](Arena& a) { return build(a, c, 60); });
+        EXPECT_TRUE(r2) << c.name << ", interval 2: " << r2.report();
+        const Result r5 = harness().compare_functions<Frames>(
+            &frames_with_interval<false, 5>, &frames_with_interval<true, 5>,
+            [&](Arena& a) { return build(a, c, 60); });
+        EXPECT_TRUE(r5) << c.name << ", interval 5: " << r5.report();
+    }
+    harness().restore();
+}
+
+// Outside a control update, and in one of a character with interval 0, the hook still halves
+// (the stored step is the doubled one on the first call, so it differs from the game's call).
+TEST_F(EbootTest, AgentSteerOutsideAnIntervalStillHalvesAt60) {
+    const FrameRateGuard rate(60);
+    harness().restore();
+    Scene* const s = std::get<0>(build(harness().arena(), cases[1], 0));
+    const WrapperHook hook;
+    bb::game::forget_agent_steer_counts();
+    const FD4TaskData task = task_data(1.0f / 60.0f);
+    steer(s, task);  // runs: the stored step is 2/60
+    EXPECT_EQ(at<float>(s->agent, 0x280), 2.0f * (1.0f / 60.0f));
+    at<float>(s->agent, 0x280) = 7.0f;
+    steer(s, task);  // skipped
+    EXPECT_EQ(at<float>(s->agent, 0x280), 7.0f);
+    at<std::int32_t>(s->update_chr.data(), 0xe4) = 0;
+    update_scene = s;
+    update_task = &task;
+    bb::game::chr_ai_control_update_noting(&steer_in_update, 0.0f, s->update_chr.data());  // runs
+    EXPECT_EQ(at<float>(s->agent, 0x280), 2.0f * (1.0f / 60.0f));
+    at<float>(s->agent, 0x280) = 7.0f;
+    bb::game::chr_ai_control_update_noting(&steer_in_update, 0.0f, s->update_chr.data());
+    EXPECT_EQ(at<float>(s->agent, 0x280), 7.0f);  // skipped
+    harness().restore();
+}
+
+// A new agent at the address of a destroyed one inherits its count: the first call would be
+// skipped, and returns a direction the game's steering never computed. It runs instead.
+TEST_F(EbootTest, AFreshAgentRunsTheGamesSteeringDespiteAStaleCount) {
+    const FrameRateGuard rate(60);
+    harness().restore();
+    Scene* s = std::get<0>(build(harness().arena(), cases[1], 0));
+    const WrapperHook hook;
+    bb::game::forget_agent_steer_counts();
+    const FD4TaskData task = task_data(1.0f / 60.0f);
+    steer(s, task);  // the table's count for this address is now 1: the next call skips
+    harness().restore();
+    Scene* const again = std::get<0>(build(harness().arena(), cases[1], 0));
+    ASSERT_EQ(again, s);
+    EXPECT_EQ(at<float>(again->agent, 0x280), 0.0f);
+    steer(again, task);
+    EXPECT_EQ(at<float>(again->agent, 0x280), 2.0f * (1.0f / 60.0f)) << "the steering ran";
+    at<float>(again->agent, 0x280) = 7.0f;
+    steer(again, task);  // the count went on from the run: this one skips
+    EXPECT_EQ(at<float>(again->agent, 0x280), 7.0f);
+    steer(again, task);
+    EXPECT_EQ(at<float>(again->agent, 0x280), 2.0f * (1.0f / 60.0f));
+    harness().restore();
+}
+
 constexpr unsigned frames_at_30 = 120;  // 4 s: the ring goes round four times
 
 // At 30 the hooked steering is the game's, byte for byte, and returns the same points.
@@ -243,6 +343,13 @@ TEST_F(EbootTest, AgentSteerKeepsItsDirectionAt60) {
     harness().restore();
 }
 
+TEST_F(EbootTest, ChrAiControlUpdatePrologueIsTheEboots) {
+    const auto& prologue = bb::game::chr_ai_control_update_prologue;
+    EXPECT_EQ(std::memcmp(reinterpret_cast<const void*>(bb::game::image().runtime(0x1513c10)),
+                          prologue.data(), prologue.size()),
+              0);
+}
+
 TEST_F(EbootTest, AgentSteerPrologueIsTheEboots) {
     const auto& prologue = bb::game::agent_steer_prologue;
     EXPECT_EQ(std::memcmp(reinterpret_cast<const void*>(bb::game::image().runtime(agent_steer)),
@@ -273,6 +380,7 @@ struct Agent {
         at<std::array<float, 4>>(character.data(), 0x20) = {1.0f, 2.0f, 3.0f, 1.0f};
         at<float>(character.data(), 0x64) = 0.5f;
         at<std::array<float, 4>>(agent.data(), 0x20) = {0.6f, 0.0f, -0.8f, 0.0f};
+        at<float>(agent.data(), 0x280) = 1.0f / 30.0f;  // the steering has run on it (not fresh)
     }
 };
 
@@ -301,6 +409,72 @@ TEST(AgentSteer, RunsTheGamesSteeringOnEveryCallsthCallOfTheAgent) {
     // At 30 a count left from 60 doesn't skip a call, and it is reset.
     EXPECT_EQ(pattern(1, count, a.agent.data(), 2), "xx");
     EXPECT_EQ(count, 0u);
+}
+
+// With `halve` false every call runs the original with the caller's step, and the count is 0.
+TEST(AgentSteer, WithoutHalvingEveryCallIsTheCallers) {
+    Agent a;
+    unsigned count = 1;
+    const FD4TaskData task{nullptr, 5.0f / 30.0f};
+    for (int i = 0; i < 4; ++i) {
+        stand_in_calls = 0;
+        stand_in_step = 0.0f;
+        const SteerPoint p =
+            bb::game::agent_steer_every(&stand_in, 2, count, a.agent.data(), &task, false);
+        EXPECT_EQ(stand_in_calls, 1);
+        EXPECT_EQ(stand_in_step, task.delta_time);
+        EXPECT_EQ(count, 0u);
+        EXPECT_EQ(p.low, 1u);
+    }
+    // Back to halving: the first call runs, the next is skipped.
+    EXPECT_EQ(pattern(2, count, a.agent.data(), 3), "x.x");
+}
+
+// A fresh agent (stored step 0.0f) runs whatever its count says, and the count goes on from there.
+TEST(AgentSteer, AFreshAgentRunsAndTheCountGoesOnFromThere) {
+    Agent a;
+    at<float>(a.agent.data(), 0x280) = 0.0f;
+    unsigned count = 1;  // would skip
+    EXPECT_EQ(pattern(2, count, a.agent.data(), 1), "x");
+    EXPECT_EQ(count, 1u);
+    at<float>(a.agent.data(), 0x280) = 1.0f / 30.0f;  // the game's steering wrote its step
+    EXPECT_EQ(pattern(2, count, a.agent.data(), 2), ".x");
+}
+
+// The control update's note: set for the call, nested ones restore the outer, nothing noted after.
+float noted_dt = 0.0f;
+void* noted_chr = nullptr;
+bb::game::ChrUpdateNote inside_note;
+bb::game::ChrUpdateNote nested_note;
+std::array<std::byte, 0x100> chr_a{}, chr_b{};
+void inner_update(float dt, void* chr) {
+    noted_dt = dt;
+    noted_chr = chr;
+    inside_note = bb::game::noted_chr_update();
+}
+void outer_update(float dt, void* chr) {
+    bb::game::chr_ai_control_update_noting(&inner_update, dt * 2.0f, chr_b.data());
+    nested_note = bb::game::noted_chr_update();
+    (void)chr;
+}
+
+TEST(ChrAiControlUpdate, NotesTheCharactersIntervalForTheCallAndPassesTheArguments) {
+    at<std::int32_t>(chr_a.data(), 0xe4) = 3;
+    at<std::int32_t>(chr_b.data(), 0xe4) = 0;
+    EXPECT_FALSE(bb::game::noted_chr_update().noted);
+    bb::game::chr_ai_control_update_noting(&inner_update, 0.25f, chr_a.data());
+    EXPECT_EQ(noted_dt, 0.25f);
+    EXPECT_EQ(noted_chr, chr_a.data());
+    EXPECT_TRUE(inside_note.noted);
+    EXPECT_EQ(inside_note.interval, 3);
+    EXPECT_FALSE(bb::game::noted_chr_update().noted);
+    bb::game::chr_ai_control_update_noting(&outer_update, 0.5f, chr_a.data());
+    EXPECT_EQ(noted_dt, 1.0f);
+    EXPECT_EQ(noted_chr, chr_b.data());
+    EXPECT_EQ(inside_note.interval, 0);  // the nested character's own
+    EXPECT_TRUE(nested_note.noted);
+    EXPECT_EQ(nested_note.interval, 3);  // the outer one again afterwards
+    EXPECT_FALSE(bb::game::noted_chr_update().noted);
 }
 
 TEST(AgentSteer, AnAgentWithoutCharacterRunsTheGamesSteeringOnEveryCall) {
