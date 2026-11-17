@@ -797,6 +797,46 @@ TEST(GuestMemory, AFaultsRunEndsAtGpuWrittenAndImagePages) {
     }
 }
 
+// FindImage remembers a perfect match per request (#590). A repeated request returns the same
+// image; once that image leaves the cache, the next request walks the page table again and gets a
+// registered image, never the freed one. A request that differs only in `exact_fmt` is its own.
+TEST(GuestMemory, FindImageForgetsAFreedImage) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        Direct d(1);
+        Libraries::VideoOut::BufferAttributeGroup group{};
+        group.is_occupied = true;
+        group.attrib.pixel_format = Libraries::VideoOut::PixelFormat::A8R8G8B8Srgb;
+        group.attrib.tiling_mode = Libraries::VideoOut::TilingMode::Linear;
+        group.attrib.width = group.attrib.height = group.attrib.pitch_in_pixel = 64;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        const auto find = [&](bool exact_fmt = false) {
+            VideoCore::TextureCache::ImageDesc desc{group, addr(d.address)};
+            return textures.FindImage(desc, exact_fmt);
+        };
+        const auto registered = [&](VideoCore::ImageId id) {
+            return True(textures.GetImage(id).flags & VideoCore::ImageFlagBits::Registered);
+        };
+        const VideoCore::ImageId first = find();
+        ASSERT_TRUE(registered(first));
+        EXPECT_EQ(find(), first);
+        EXPECT_EQ(find(true), first);
+        EXPECT_EQ(find(), first);
+
+        // Frees the image; its slot stays allocated until the scheduler's deferred deletion.
+        textures.UnmapMemory(addr(d.address), d.length);
+        const VideoCore::ImageId second = find();
+        EXPECT_NE(second, first);
+        EXPECT_TRUE(registered(second));
+        EXPECT_EQ(find(true), second);
+        EXPECT_EQ(find(), second);
+        d.unmap();
+    }
+}
+
 // The buffer cache never frees the device memory that makes its sparse blocks resident (upstream
 // keeps it to the end), which LeakSanitizer reports. Allocations made while one of these lives are
 // left out of its report.

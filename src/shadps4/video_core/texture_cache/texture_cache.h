@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/texture_cache/texture_cache.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-17
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
 
+#include <array>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -399,6 +400,30 @@ private:
     void GarbageCollectImages();
     void GarbageCollectSamplers();
 
+    /// The fields of a request that FindImage's perfect match and its resource check read.
+    struct FindImageKey {
+        VAddr guest_address{};
+        u32 guest_size{};
+        Extent3D size{};
+        vk::Format pixel_format{};
+        AmdGpu::ImageType type{};
+        SubresourceExtent resources{};
+        bool exact_fmt{};
+
+        bool operator==(const FindImageKey&) const = default;
+    };
+
+    /// A perfect match FindImage returned, valid while no image registered or left since.
+    struct FindImageEntry {
+        FindImageKey key{};
+        ImageId image_id{};
+        u64 generation{};
+    };
+
+    static constexpr size_t FIND_IMAGE_CACHE_BITS = 9;
+
+    static size_t FindImageCacheIndex(const FindImageKey& key) noexcept;
+
 private:
     const Vulkan::Instance& instance;
     Vulkan::Scheduler& scheduler;
@@ -426,6 +451,11 @@ private:
     Common::LRUCache<Image> image_lru_cache;
     Common::LRUCache<Sampler> sampler_lru_cache;
     absl::flat_hash_map<VAddr, MetaDataInfo> surface_metas;
+    // Which images FindImage's page walk finds changes only when an image registers or leaves,
+    // so each of those starts a new generation and the remembered matches of older ones are
+    // stale (#590). Generation 0 marks an empty entry.
+    u64 image_generation = 1;
+    std::array<FindImageEntry, size_t{1} << FIND_IMAGE_CACHE_BITS> find_image_cache{};
 };
 DECLARE_ENUM_FLAG_OPERATORS(TextureCache::DownloadMemoryFlags)
 

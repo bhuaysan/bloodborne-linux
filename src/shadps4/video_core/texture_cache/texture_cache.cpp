@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/texture_cache/texture_cache.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-17
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -566,10 +566,41 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     return new_image_id;
 }
 
+size_t TextureCache::FindImageCacheIndex(const FindImageKey& key) noexcept {
+    u64 h = key.guest_address ^ (u64{key.guest_size} << 40);
+    h ^= (u64{key.size.width} << 16 | key.size.height) * 0x9E3779B97F4A7C15ULL;
+    h ^= (u64(key.pixel_format) << 8 | u64(key.type) << 4 | u64{key.exact_fmt}) *
+         0xC2B2AE3D27D4EB4FULL;
+    h ^= (u64{key.size.depth} << 32 | u64{key.resources.levels} << 16 | key.resources.layers);
+    h *= 0xFF51AFD7ED558CCDULL;
+    return h >> (64 - FIND_IMAGE_CACHE_BITS);
+}
+
 ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     const auto& info = desc.info;
 
     ASSERT(info.guest_address != 0);
+
+    // Most draws find the same targets and textures as the draws before them. While no image
+    // registered or left, the page walk below finds the same images in the same order, and the
+    // fields of `key` decide its perfect match and resource check, so the remembered result holds.
+    const FindImageKey key{
+        .guest_address = info.guest_address,
+        .guest_size = info.guest_size,
+        .size = info.size,
+        .pixel_format = info.pixel_format,
+        .type = info.type,
+        .resources = info.resources,
+        .exact_fmt = exact_fmt,
+    };
+    FindImageEntry& cached = find_image_cache[FindImageCacheIndex(key)];
+    if (cached.generation == image_generation && cached.key == key) {
+        Image& image = slot_images[cached.image_id];
+        image.tick_accessed_last = scheduler.CurrentTick();
+        TouchImage(image);
+        return cached.image_id;
+    }
+    const u64 generation_before = image_generation;
 
     SmallVector<ImageId, 8> image_ids;
     ForEachImageInRegion(info.guest_address, info.guest_size,
@@ -598,6 +629,8 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
         }
         image_id = cache_id;
     }
+
+    const ImageId perfect_match_id = image_id;
 
     // Try to resolve overlaps (if any)
     int view_mip{-1};
@@ -639,6 +672,12 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     Image& image = slot_images[image_id];
     image.tick_accessed_last = scheduler.CurrentTick();
     TouchImage(image);
+
+    // Only a perfect match that registered and freed nothing is remembered: the overlap
+    // resolution depends on the binding type and changes the view range of `desc`.
+    if (image_id == perfect_match_id && image_generation == generation_before) {
+        cached = FindImageEntry{.key = key, .image_id = image_id, .generation = image_generation};
+    }
 
     // If the image requested is a subresource of the image from cache record its location.
     if (view_mip > 0) {
@@ -912,6 +951,7 @@ void TextureCache::RegisterImage(ImageId image_id) {
     ASSERT_MSG(False(image.flags & ImageFlagBits::Registered),
                "Trying to register an already registered image");
     image.flags |= ImageFlagBits::Registered;
+    ++image_generation;
     image.memory_usage_counter = &total_used_memory;
     total_used_memory += Common::AlignUp(image.SizeBytes(), 1024);
     image_lru_cache.Insert(image, gc_tick);
@@ -931,6 +971,7 @@ void TextureCache::UnregisterImage(ImageId image_id) {
     ASSERT_MSG(True(image.flags & ImageFlagBits::Registered),
                "Trying to unregister an already unregistered image");
     image.flags &= ~ImageFlagBits::Registered;
+    ++image_generation;
     image.memory_usage_counter = nullptr;
     image_lru_cache.Free(image);
     total_used_memory -= Common::AlignUp(image.SizeBytes(), 1024);
