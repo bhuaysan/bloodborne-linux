@@ -1,0 +1,496 @@
+#include "launcher/app.hpp"
+
+#include <fcntl.h>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <format>
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <stdexcept>
+#include <string>
+
+#include <SDL3/SDL.h>
+#include <backends/imgui_impl_sdl3.h>
+#include <backends/imgui_impl_sdlrenderer3.h>
+#include <imgui.h>
+
+#include "common/config.hpp"
+#include "common/file.hpp"
+#include "common/game_folder.hpp"
+#include "launcher/fonts.hpp"
+#include "launcher/gpu_probe.hpp"
+#include "launcher/header_image.hpp"
+#include "launcher/logic.hpp"
+#include "launcher/main_screen.hpp"
+#include "launcher/page.hpp"
+#include "launcher/text.hpp"
+#include "launcher/widgets.hpp"
+
+extern char** environ;
+
+namespace bb::launcher {
+
+namespace {
+
+namespace fs = std::filesystem;
+
+constexpr int window_width = 480;
+constexpr int window_height = 600;
+
+// The result of the folder dialog, which SDL reports from another thread.
+struct DialogMailbox {
+    std::mutex mutex;
+    std::optional<std::string> folder;
+    bool open = false;
+};
+
+void on_folder_chosen(void* userdata, const char* const* list, int) {
+    auto& box = *static_cast<DialogMailbox*>(userdata);
+    const std::lock_guard lock(box.mutex);
+    box.open = false;
+    if (list != nullptr && list[0] != nullptr) {
+        box.folder = list[0];
+    }
+}
+
+fs::path own_directory() {
+    std::error_code ec;
+    const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
+    return ec ? fs::path(".") : exe.parent_path();
+}
+
+ImGuiKey gamepad_key(PadButton b) {
+    switch (b) {
+    case PadButton::accept: return ImGuiKey_GamepadFaceDown;
+    case PadButton::back: return ImGuiKey_GamepadFaceRight;
+    case PadButton::up: return ImGuiKey_GamepadDpadUp;
+    case PadButton::down: return ImGuiKey_GamepadDpadDown;
+    case PadButton::left: return ImGuiKey_GamepadDpadLeft;
+    default: return ImGuiKey_GamepadDpadRight;
+    }
+}
+
+class App {
+public:
+    App() {
+        lang_ = language_from_environment();
+        if (const char* path = std::getenv("BB_LAUNCHER_SCRIPT"); path != nullptr && *path) {
+            const auto bytes = common::read_file(path);
+            script_ = parse_script(std::string_view(reinterpret_cast<const char*>(bytes.data()),
+                                                    bytes.size()));
+        }
+    }
+
+    int run() {
+        init_window();
+        load_config();
+        gpu_ok_ = vulkan_gpu_usable();
+        while (running_) {
+            frame();
+        }
+        shutdown();
+        return 0;
+    }
+
+private:
+    // ---- setup ------------------------------------------------------------------------------
+    void init_window() {
+        if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+            throw std::runtime_error(std::format("SDL: {}", SDL_GetError()));
+        }
+        window_ = SDL_CreateWindow("bloodborne-linux", window_width, window_height,
+                                   SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        if (window_ == nullptr) {
+            throw std::runtime_error(std::format("window: {}", SDL_GetError()));
+        }
+        // The design's 480 x 600 logical pixels, scaled with the display's content scale.
+        float content = SDL_GetWindowDisplayScale(window_);
+        const float density = SDL_GetWindowPixelDensity(window_);
+        content = content > 0 ? std::min(content, 4.0f) : 1.0f;
+        scale_ = content / (density > 0 ? density : 1.0f);
+        SDL_SetWindowSize(window_, static_cast<int>(window_width * scale_),
+                          static_cast<int>(window_height * scale_));
+        SDL_SetWindowResizable(window_, false);
+        renderer_ = SDL_CreateRenderer(window_, nullptr);
+        if (renderer_ == nullptr) {
+            throw std::runtime_error(std::format("renderer: {}", SDL_GetError()));
+        }
+        SDL_SetRenderVSync(renderer_, 1);
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
+        io.IniFilename = nullptr;  // nothing is written outside the XDG directories
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
+        ImGui::StyleColorsDark();
+        ImGuiStyle& style = ImGui::GetStyle();
+        style.WindowPadding = ImVec2(0, 0);
+        style.WindowBorderSize = 0;
+        style.Colors[ImGuiCol_WindowBg] = ImVec4(0.09f, 0.09f, 0.11f, 1);
+        ImGui_ImplSDL3_InitForSDLRenderer(window_, renderer_);
+        ImGui_ImplSDLRenderer3_Init(renderer_);
+        load_fonts(16.0f * scale_);
+    }
+
+    void shutdown() {
+        ImGui_ImplSDLRenderer3_Shutdown();
+        ImGui_ImplSDL3_Shutdown();
+        ImGui::DestroyContext();
+        if (header_ != nullptr) {
+            SDL_DestroyTexture(header_);
+        }
+        SDL_DestroyRenderer(renderer_);
+        SDL_DestroyWindow(window_);
+        SDL_Quit();
+    }
+
+    void load_config() {
+        if (const auto path = common::default_config_path()) {
+            config_path_ = *path;
+        } else {
+            notice_ = "No place for the config file: set HOME or XDG_CONFIG_HOME.";
+            return;
+        }
+        std::error_code ec;
+        if (!fs::exists(config_path_, ec)) {
+            return;
+        }
+        try {
+            const common::ParsedConfig parsed = common::read_config(config_path_);
+            if (parsed.config.game_dir) {
+                tried_folder_ = true;
+                accept_check(common::check_game_folder(*parsed.config.game_dir),
+                             *parsed.config.game_dir);
+            }
+        } catch (const common::ConfigError& e) {
+            notice_ = e.what();
+        }
+    }
+
+    // ---- the game folder ----------------------------------------------------------------------
+    // Takes the result of a check of `folder`: a passing folder becomes the game, a failing one
+    // becomes the message of the status line.
+    void accept_check(const common::FolderResult& r, const fs::path& folder) {
+        if (r.ok()) {
+            std::error_code ec;
+            game_dir_ = fs::canonical(folder, ec);
+            title_ = r.title;
+            version_ = r.app_version;
+            game_ready_ = true;
+            notice_.clear();
+            last_run_failed_ = false;
+            if (header_ != nullptr) {
+                SDL_DestroyTexture(header_);
+            }
+            header_ = load_header_texture(renderer_, game_dir_ / "sce_sys" / "pic1.png",
+                                          header_width, header_height);
+            SDL_SetWindowTitle(window_, std::format("{} (bloodborne-linux)",
+                                                    title_.empty() ? "Bloodborne" : title_).c_str());
+        } else {
+            notice_ = check_message(lang_, r);
+        }
+    }
+
+    void set_up_folder(const fs::path& folder) {
+        tried_folder_ = true;
+        const common::SetupResult r = common::setup_game_folder(folder, config_path_);
+        if (r.folder.ok() && !r.config_written) {
+            notice_ = r.config_error;
+            return;
+        }
+        accept_check(r.folder, folder);
+    }
+
+    void open_folder_dialog() {
+        const std::lock_guard lock(dialog_.mutex);
+        if (!dialog_.open) {
+            dialog_.open = true;
+            SDL_ShowOpenFolderDialog(on_folder_chosen, &dialog_, window_, nullptr, false);
+        }
+    }
+
+    // ---- the game ---------------------------------------------------------------------------
+    void play() {
+        notice_.clear();
+        const fs::path dir = own_directory();
+        const auto args = bb_run_arguments(dir / "bb-run", play_config_.empty() ? config_path_
+                                                                                : play_config_);
+        std::vector<char*> argv;
+        for (const std::string& a : args) {
+            argv.push_back(const_cast<char*>(a.c_str()));
+        }
+        argv.push_back(nullptr);
+        posix_spawn_file_actions_t actions;
+        posix_spawn_file_actions_init(&actions);
+        posix_spawn_file_actions_addchdir_np(&actions, dir.c_str());
+        pid_t pid = 0;
+        const int rc = posix_spawn(&pid, argv[0], &actions, nullptr, argv.data(), environ);
+        posix_spawn_file_actions_destroy(&actions);
+        if (rc != 0) {
+            last_run_failed_ = true;
+            return;
+        }
+        SDL_HideWindow(window_);
+        int limit = 0;  // seconds, from a script's waitgame step
+        if (step_ < script_.size() && script_[step_].kind == StepKind::waitgame) {
+            limit = std::max(1, script_[step_++].number);
+        }
+        const auto start = std::chrono::steady_clock::now();
+        int status = 0;
+        bool terminated = false;
+        while (waitpid(pid, &status, WNOHANG) == 0) {
+            SDL_Event e;
+            while (SDL_PollEvent(&e)) {  // the window is hidden; drop what arrives
+            }
+            if (limit > 0 && !terminated &&
+                std::chrono::steady_clock::now() - start > std::chrono::seconds(limit)) {
+                kill(pid, SIGTERM);
+                terminated = true;
+            }
+            SDL_Delay(100);
+        }
+        last_run_failed_ = !(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        SDL_ShowWindow(window_);
+        SDL_RaiseWindow(window_);
+        focus_first_ = true;
+    }
+
+    // ---- one frame --------------------------------------------------------------------------
+    void run_script() {
+        ImGuiIO& io = ImGui::GetIO();
+        if (release_key_ != ImGuiKey_None) {
+            io.AddKeyEvent(release_key_, false);
+            release_key_ = ImGuiKey_None;
+        }
+        if (wait_left_ > 0) {
+            --wait_left_;
+            return;
+        }
+        if (step_ >= script_.size()) {
+            return;
+        }
+        const ScriptStep step = script_[step_++];
+        wait_left_ = 2;  // the frame shows the step's effect before the next step
+        switch (step.kind) {
+        case StepKind::wait: wait_left_ = step.number; break;
+        case StepKind::drop: set_up_folder(step.text); break;
+        case StepKind::press:
+            release_key_ = gamepad_key(step.button);
+            io.AddKeyEvent(release_key_, true);
+            break;
+        case StepKind::shot: shot_path_ = step.text; break;
+        case StepKind::config: play_config_ = step.text; break;
+        case StepKind::waitgame: break;  // only counts while the game runs
+        case StepKind::quit: running_ = false; break;
+        }
+    }
+
+    void close_page() {
+        page_->on_close(context());
+        page_.reset();
+        focus_first_ = true;
+    }
+
+    Context context() const {
+        Context ctx;
+        ctx.lang = lang_;
+        ctx.scale = scale_;
+        ctx.text = &strings(lang_);
+        ctx.config_path = config_path_;
+        ctx.game_ready = game_ready_;
+        ctx.game_dir = game_dir_;
+        return ctx;
+    }
+
+    MainView view() const {
+        const Strings& t = strings(lang_);
+        StateInput in;
+        in.have_folder = game_ready_ || tried_folder_;
+        in.folder_ok = game_ready_;
+        in.gpu_ok = gpu_ok_;
+        in.controller = SDL_HasGamepad() || !script_.empty();
+        in.last_run_failed = last_run_failed_;
+        MainView v;
+        v.state = select_state(in);
+        v.header = shows_picture(v.state) ? header_ : nullptr;
+        v.focus_first = focus_first_;
+        switch (v.state) {
+        case MainState::no_folder:
+            v.status = notice_.empty() ? t.status_no_game : notice_;
+            v.status_kind = notice_.empty() ? StatusKind::warning : StatusKind::error;
+            break;
+        case MainState::check_failed:
+            v.status = notice_;
+            v.status_kind = StatusKind::error;
+            break;
+        case MainState::no_gpu:
+            v.status = t.status_no_gpu;
+            v.status_kind = StatusKind::error;
+            break;
+        case MainState::last_run_failed:
+            v.status = t.status_last_run_failed;
+            v.status_kind = StatusKind::error;
+            break;
+        case MainState::no_controller:
+            v.status = t.status_no_controller;
+            v.status_kind = StatusKind::warning;
+            break;
+        case MainState::ready:
+            v.status = std::format("{} {} \xc2\xb7 {}", t.status_version, display_version(version_),
+                                   t.status_controller);
+            v.status_kind = StatusKind::ok;
+            break;
+        }
+        if (!notice_.empty() && game_ready_) {  // a refused folder while a good one is set
+            v.status = notice_;
+            v.status_kind = StatusKind::warning;
+        }
+        return v;
+    }
+
+    void act(Action a) {
+        switch (a) {
+        case Action::set_up: open_folder_dialog(); break;
+        case Action::play: play(); break;
+        case Action::picture: page_ = make_picture_page(); break;
+        case Action::help: page_ = make_help_page(); break;
+        case Action::saves:
+            if (game_ready_) {
+                page_ = make_saves_page();
+            } else {
+                notice_ = strings(lang_).set_up_first;
+            }
+            break;
+        case Action::quit: running_ = false; break;
+        case Action::none: break;
+        }
+        if (page_) {
+            focus_first_ = true;
+        }
+    }
+
+    void draw_page(const Context& ctx, const MainView& v) {
+        const float s = ctx.scale;
+        const float below = draw_top(ctx, v);
+        ImGui::SetCursorPos(ImVec2(24 * s, below + 8 * s));
+        ImGui::TextUnformatted(page_->title(ctx));
+        ImGui::SetCursorPosX(24 * s);
+        page_->draw(ctx, (window_height - 24 - 48) * s - ImGui::GetCursorPosY());
+        ImGui::SetCursorPos(ImVec2(24 * s, (window_height - 24 - 48) * s));
+        if (bevel_button(ctx.text->back, ImVec2(432 * s, 48 * s))) {
+            close_page();
+        }
+    }
+
+    void frame() {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            ImGui_ImplSDL3_ProcessEvent(&e);
+            if (e.type == SDL_EVENT_QUIT || e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+                running_ = false;
+            } else if (e.type == SDL_EVENT_DROP_FILE && e.drop.data != nullptr) {
+                set_up_folder(e.drop.data);
+            }
+        }
+        {
+            const std::lock_guard lock(dialog_.mutex);
+            if (dialog_.folder) {
+                const std::string folder = *dialog_.folder;
+                dialog_.folder.reset();
+                set_up_folder(folder);
+            }
+        }
+        ImGui_ImplSDLRenderer3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        if (!script_.empty()) {
+            // Without a real controller ImGui would ignore the scripted gamepad keys.
+            ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_HasGamepad;
+            run_script();
+        }
+        ImGui::NewFrame();
+        const Context ctx = context();
+        MainView v = view();
+        if (v.state != last_state_) {  // the first button is another one now
+            last_state_ = v.state;
+            focus_first_ = true;
+            v.focus_first = true;
+        }
+        const ImGuiIO& io = ImGui::GetIO();
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(io.DisplaySize);
+        if (focus_first_) {
+            ImGui::SetNextWindowFocus();  // gamepad navigation needs a focused window
+        }
+        ImGui::Begin("launcher", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+        Action action = Action::none;
+        if (page_) {
+            draw_page(ctx, v);
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
+                close_page();
+            }
+        } else {
+            action = draw_main_screen(ctx, v);
+        }
+        ImGui::End();
+        focus_first_ = false;
+        ImGui::Render();
+        SDL_SetRenderDrawColor(renderer_, 23, 23, 28, 255);
+        SDL_RenderClear(renderer_);
+        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer_);
+        if (!shot_path_.empty()) {
+            if (SDL_Surface* s = SDL_RenderReadPixels(renderer_, nullptr)) {
+                SDL_SavePNG(s, shot_path_.c_str());
+                SDL_DestroySurface(s);
+            }
+            shot_path_.clear();
+        }
+        SDL_RenderPresent(renderer_);
+        act(action);
+        if (!script_.empty()) {
+            SDL_Delay(8);
+        }
+    }
+
+    Lang lang_ = Lang::en;
+    float scale_ = 1.0f;
+    SDL_Window* window_ = nullptr;
+    SDL_Renderer* renderer_ = nullptr;
+    SDL_Texture* header_ = nullptr;
+    MainState last_state_ = MainState::ready;
+    bool running_ = true;
+    bool focus_first_ = true;
+    fs::path config_path_;
+    fs::path play_config_;  // set by a script's config step
+    fs::path game_dir_;
+    std::string title_;
+    std::string version_;
+    bool game_ready_ = false;
+    bool tried_folder_ = false;  // a folder was set or chosen, whatever its check said
+    bool gpu_ok_ = true;
+    bool last_run_failed_ = false;
+    std::string notice_;  // the last problem, shown in the status line
+    std::unique_ptr<Page> page_;
+    DialogMailbox dialog_;
+    std::vector<ScriptStep> script_;
+    std::size_t step_ = 0;
+    int wait_left_ = 0;
+    ImGuiKey release_key_ = ImGuiKey_None;
+    std::string shot_path_;
+};
+
+}  // namespace
+
+int run_launcher() {
+    return App().run();
+}
+
+}  // namespace bb::launcher

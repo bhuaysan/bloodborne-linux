@@ -37,3 +37,6 @@ target_include_directories(bblauncherui SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/thi
 set_source_files_properties(stb_impl.cpp PROPERTIES COMPILE_OPTIONS -w)
 target_link_libraries(bblauncherui PUBLIC bblauncherlogic bb_launcher_imgui
     PRIVATE PkgConfig::BB_FONTCONFIG Vulkan::Headers ${CMAKE_DL_LIBS} bb_warnings)
+
+add_executable(bb-launcher main.cpp app.cpp)
+target_link_libraries(bb-launcher PRIVATE bblauncherui bb_warnings)
