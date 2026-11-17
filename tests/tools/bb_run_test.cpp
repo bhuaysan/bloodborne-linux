@@ -129,6 +129,53 @@ TEST(RunOptions, ParsesTheFrameRate) {
     }
 }
 
+TEST(RunOptions, ParsesTheWindowOptions) {
+    const RunOptions d = parse({});
+    EXPECT_EQ(d.window_width, 1280U);
+    EXPECT_EQ(d.window_height, 720U);
+    EXPECT_FALSE(d.fullscreen);
+    const RunOptions o = parse({"--window-size", "2560x1440", "--fullscreen"});
+    EXPECT_EQ(o.window_width, 2560U);
+    EXPECT_EQ(o.window_height, 1440U);
+    EXPECT_TRUE(o.fullscreen);
+    const RunOptions edge = parse({"--window-size", "640x360", "--window-size", "16384x16384"});
+    EXPECT_EQ(edge.window_width, 16384U);
+    EXPECT_EQ(edge.window_height, 16384U);
+    EXPECT_EQ(parse({"--window-size", "640x360"}).window_height, 360U);
+    EXPECT_EQ(parse_error({"--window-size"}), "--window-size needs a value");
+    for (std::string_view size : {"639x360", "640x359", "16385x720", "1280x16385", "1280", "x720",
+                                  "1280x", "1280X720", "1280x720x1", "+1280x720", " 1280x720",
+                                  "1280.0x720", "-1x720", ""}) {
+        EXPECT_EQ(parse_error({"--window-size", size}),
+                  std::format("--window-size: \"{}\" is not WIDTHxHEIGHT from 640x360 to "
+                              "16384x16384",
+                              size));
+    }
+}
+
+TEST(RunOptions, ParsesFsrAndRcas) {
+    const RunOptions d = parse({});
+    EXPECT_FALSE(d.fsr);
+    EXPECT_TRUE(d.rcas);
+    EXPECT_FLOAT_EQ(d.rcas_attenuation, 0.25f);
+    const RunOptions fsr = parse({"--fsr"});
+    EXPECT_TRUE(fsr.fsr);
+    EXPECT_TRUE(fsr.rcas);
+    EXPECT_FLOAT_EQ(fsr.rcas_attenuation, 0.25f);
+    EXPECT_FALSE(parse({"--fsr", "--no-rcas"}).rcas);
+    EXPECT_FLOAT_EQ(parse({"--rcas-attenuation", "1.5", "--fsr"}).rcas_attenuation, 1.5f);
+    EXPECT_FLOAT_EQ(parse({"--fsr", "--rcas-attenuation", "0"}).rcas_attenuation, 0.0f);
+    EXPECT_FLOAT_EQ(parse({"--fsr", "--rcas-attenuation", "2"}).rcas_attenuation, 2.0f);
+    EXPECT_EQ(parse_error({"--no-rcas"}), "--no-rcas and --rcas-attenuation need --fsr");
+    EXPECT_EQ(parse_error({"--rcas-attenuation", "1"}),
+              "--no-rcas and --rcas-attenuation need --fsr");
+    EXPECT_EQ(parse_error({"--fsr", "--rcas-attenuation"}), "--rcas-attenuation needs a value");
+    for (std::string_view stops : {"-0.1", "2.01", "nan", "inf", "1,5", "0.5s", "", " 1"}) {
+        EXPECT_EQ(parse_error({"--fsr", "--rcas-attenuation", stops}),
+                  std::format("--rcas-attenuation: \"{}\" is not a number from 0 to 2", stops));
+    }
+}
+
 TEST(RunOptions, RefusesBadArguments) {
     EXPECT_EQ(parse_error({"--frobnicate"}), "unknown argument \"--frobnicate\"");
     EXPECT_EQ(parse_error({"eboot.bin"}), "unknown argument \"eboot.bin\"");

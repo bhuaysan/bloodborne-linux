@@ -20,6 +20,8 @@ inline constexpr std::string_view run_usage =
     "              [--validation] [--validation-sync] [--validation-gpu]\n"
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
     "              [--sync-pipelines] [--pad-input PATH] [--frame-rate 30|60]\n"
+    "              [--window-size WIDTHxHEIGHT] [--fullscreen] [--fsr] [--no-rcas]\n"
+    "              [--rcas-attenuation STOPS]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
@@ -48,7 +50,16 @@ inline constexpr std::string_view run_usage =
     "                       through a gamepad that exists only in this process (docs/test-rig.md);\n"
     "                       needs a window; other controllers are then ignored\n"
     "  --frame-rate FPS     the game's target frame rate, 30 (the game's own, default) or 60; the\n"
-    "                       simulation steps 1/FPS seconds a frame (docs/design/frame-rate.md)\n";
+    "                       simulation steps 1/FPS seconds a frame (docs/design/frame-rate.md)\n"
+    "  --window-size WxH    the window's size, from 640x360 to 16384x16384 (default 1280x720)\n"
+    "  --fullscreen         a borderless window covering its display, at the display's size\n"
+    "  --fsr                upscale the game's frame with AMD FSR 1 when the window is larger\n"
+    "                       than the frame (the game renders 1920x1080); without it the frame is\n"
+    "                       scaled bilinearly\n"
+    "  --no-rcas            with --fsr: no RCAS sharpening after the upscale\n"
+    "  --rcas-attenuation STOPS\n"
+    "                       with --fsr: RCAS sharpness, 0 (sharpest) to 2 stops of attenuation\n"
+    "                       (default 0.25)\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
@@ -73,14 +84,22 @@ struct RunOptions {
     bool async_pipelines = true;  // false with --sync-pipelines
     std::optional<std::filesystem::path> pad_input;  // --pad-input
     unsigned frame_rate = 30;  // --frame-rate: 30 or 60
+    unsigned window_width = 1280;  // --window-size
+    unsigned window_height = 720;
+    bool fullscreen = false;  // --fullscreen
+    bool fsr = false;  // --fsr
+    bool rcas = true;  // false with --no-rcas, only with --fsr
+    float rcas_attenuation = 0.25f;  // --rcas-attenuation, only with --fsr
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 
 // Parses the arguments after argv[0]. Throws std::invalid_argument, naming the argument, for an
 // unknown option, a missing value, a profile name that valid_profile_name refuses, a timeout that
 // isn't a whole number from 1 to 86400, a log spec that LogFilter::parse refuses, a --present-mode
-// that is none of fifo, mailbox and immediate, a --frame-rate other than 30 and 60, and
-// --validation-sync or --validation-gpu without --validation.
+// that is none of fifo, mailbox and immediate, a --frame-rate other than 30 and 60, a
+// --window-size that isn't WIDTHxHEIGHT in range, an --rcas-attenuation that isn't a number from 0
+// to 2, --validation-sync or --validation-gpu without --validation, and --no-rcas or
+// --rcas-attenuation without --fsr.
 RunOptions parse_run_options(std::span<const std::string_view> args);
 
 // The eboot's entry reads argc from +0 of its first argument and takes argv at +8 (link address

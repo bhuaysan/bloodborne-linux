@@ -25,10 +25,47 @@ unsigned parse_timeout(std::string_view value) {
     return seconds;
 }
 
+constexpr unsigned min_window_width = 640;  // the window's minimum size (sdl_window.cpp)
+constexpr unsigned min_window_height = 360;
+constexpr unsigned max_window_side = 16384;
+constexpr float max_rcas_attenuation = 2.0f;
+
+// One side of --window-size.
+bool parse_side(std::string_view text, unsigned min, unsigned& side) {
+    const char* end = text.data() + text.size();
+    const auto [ptr, ec] = std::from_chars(text.data(), end, side);
+    return ec == std::errc{} && ptr == end && side >= min && side <= max_window_side;
+}
+
+void parse_window_size(std::string_view value, RunOptions& options) {
+    const std::size_t x = value.find('x');
+    if (x == std::string_view::npos ||
+        !parse_side(value.substr(0, x), min_window_width, options.window_width) ||
+        !parse_side(value.substr(x + 1), min_window_height, options.window_height)) {
+        throw std::invalid_argument(std::format(
+            "--window-size: \"{}\" is not WIDTHxHEIGHT from {}x{} to {}x{}", value,
+            min_window_width, min_window_height, max_window_side, max_window_side));
+    }
+}
+
+float parse_rcas_attenuation(std::string_view value) {
+    float stops = 0;
+    const char* end = value.data() + value.size();
+    const auto [ptr, ec] = std::from_chars(value.data(), end, stops);
+    // The negated test also refuses NaN.
+    if (ec != std::errc{} || ptr != end || !(stops >= 0.0f && stops <= max_rcas_attenuation)) {
+        throw std::invalid_argument(std::format(
+            "--rcas-attenuation: \"{}\" is not a number from 0 to {}", value,
+            max_rcas_attenuation));
+    }
+    return stops;
+}
+
 }  // namespace
 
 RunOptions parse_run_options(std::span<const std::string_view> args) {
     RunOptions options;
+    bool rcas_given = false;  // --no-rcas or --rcas-attenuation
     for (std::size_t i = 0; i < args.size(); ++i) {
         const std::string_view arg = args[i];
         // The value of an option that takes one.
@@ -86,6 +123,18 @@ RunOptions parse_run_options(std::span<const std::string_view> args) {
                     std::format("--frame-rate: \"{}\" is not 30 or 60", fps));
             }
             options.frame_rate = fps == "30" ? 30 : 60;
+        } else if (arg == "--window-size") {
+            parse_window_size(value(), options);
+        } else if (arg == "--fullscreen") {
+            options.fullscreen = true;
+        } else if (arg == "--fsr") {
+            options.fsr = true;
+        } else if (arg == "--no-rcas") {
+            options.rcas = false;
+            rcas_given = true;
+        } else if (arg == "--rcas-attenuation") {
+            options.rcas_attenuation = parse_rcas_attenuation(value());
+            rcas_given = true;
         } else if (arg == "--present-mode") {
             const std::string_view mode = value();
             if (mode == "fifo") {
@@ -104,6 +153,10 @@ RunOptions parse_run_options(std::span<const std::string_view> args) {
     }
     if ((options.validation_sync || options.validation_gpu) && !options.validation) {
         throw std::invalid_argument("--validation-sync and --validation-gpu need --validation");
+    }
+    if (rcas_given && !options.fsr) {
+        // RCAS sharpens FSR's output and doesn't run without it.
+        throw std::invalid_argument("--no-rcas and --rcas-attenuation need --fsr");
     }
     return options;
 }

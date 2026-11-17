@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_presenter.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-12; 2026-11-17: FSR and RCAS from RendererOptions
 // License texts: third_party/shadps4/LICENSES/
 
 #include "core/display_state.h"
@@ -26,11 +26,6 @@
 #include "common/frame_profile.hpp"
 
 namespace Vulkan {
-
-// FSR is off and RCAS on, as shadPS4's defaults have them; nothing switches them.
-constexpr bool fsr_enabled = false;
-constexpr bool rcas_enabled = true;
-constexpr float rcas_attenuation = 0.25f;
 
 static vk::Rect2D FitImage(s32 frame_width, s32 frame_height, s32 swapchain_width,
                            s32 swapchain_height) {
@@ -98,9 +93,9 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
         free_queue.push(&frame);
     }
 
-    fsr_settings.enable = fsr_enabled;
-    fsr_settings.use_rcas = rcas_enabled;
-    fsr_settings.rcas_attenuation = rcas_attenuation;
+    fsr_settings.enable = options.fsr;
+    fsr_settings.use_rcas = options.rcas;
+    fsr_settings.rcas_attenuation = options.rcas_attenuation;
 
     fsr_pass.Create(device, instance.GetAllocator(), num_images);
     pp_pass.Create(device, swapchain.GetSurfaceFormat().format);

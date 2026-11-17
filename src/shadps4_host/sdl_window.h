@@ -37,9 +37,10 @@ public:
     // surface. Its size is 0 x 0.
     WindowSDL() = default;
     // Initialises SDL's video and opens a resizable Vulkan window of `width` x `height` on X11 or
-    // Wayland. Nothing when SDL can't; `why` then gives SDL's error.
+    // Wayland; `fullscreen` makes it a borderless window covering its display, at the display's
+    // size. Nothing when SDL can't; `why` then gives SDL's error.
     static std::unique_ptr<WindowSDL> Open(std::string_view title, s32 width, s32 height,
-                                           std::string& why);
+                                           bool fullscreen, std::string& why);
     ~WindowSDL();
     WindowSDL(const WindowSDL&) = delete;
     WindowSDL& operator=(const WindowSDL&) = delete;

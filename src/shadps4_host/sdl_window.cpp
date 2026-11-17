@@ -4,7 +4,7 @@
 // Changed for bloodborne-linux, 2026-11-11: the window creation and the native handles of the
 // WindowSDL constructor and OnResize; X11 and Wayland only. Open and PumpEvents are ours: no
 // input (the gamepad events go to a handler, syslibs/pad_input.cpp), camera, audio, fullscreen
-// or hotkeys.
+// switching or hotkeys.
 // License texts: third_party/shadps4/LICENSES/
 
 #include "sdl_window.h"
@@ -25,7 +25,7 @@ void WindowSDL::SetGamepadEventHandler(EventHandler handler) {
 }
 
 std::unique_ptr<WindowSDL> WindowSDL::Open(std::string_view title, s32 width_, s32 height_,
-                                           std::string& why) {
+                                           bool fullscreen, std::string& why) {
     // SDL would otherwise turn SIGINT and SIGTERM into SDL_EVENT_QUIT, so Ctrl-C would not end the
     // run.
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
@@ -44,6 +44,8 @@ std::unique_ptr<WindowSDL> WindowSDL::Open(std::string_view title, s32 width_, s
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetNumberProperty(props, "flags", SDL_WINDOW_VULKAN);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
+    // With no fullscreen mode set, SDL's fullscreen is the borderless desktop kind.
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, fullscreen);
     SDL_Window* const sdl_window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
     if (sdl_window == nullptr) {

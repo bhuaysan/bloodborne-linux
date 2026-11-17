@@ -1,4 +1,5 @@
-// What bb-run hands the renderer (bb-run --device, --validation*, --present-mode).
+// What bb-run hands the renderer (bb-run --device, --validation*, --present-mode, --fsr and
+// RCAS).
 
 #pragma once
 
@@ -26,6 +27,12 @@ struct RendererOptions {
     s32 gpu_id = -1; // Index of the Vulkan device, -1 for the instance's own choice.
     ValidationOptions validation;
     PresentMode present_mode = PresentMode::Mailbox;
+    // FSR 1 upscales the game's frame when the window is larger (bb-run --fsr); RCAS then
+    // sharpens the result by `rcas_attenuation` stops below its maximum (--no-rcas,
+    // --rcas-attenuation). Off, on and 0.25, as shadPS4's defaults have them.
+    bool fsr = false;
+    bool rcas = true;
+    float rcas_attenuation = 0.25f;
 };
 
 } // namespace Vulkan

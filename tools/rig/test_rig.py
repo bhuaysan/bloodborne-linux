@@ -78,15 +78,25 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn("--frame-rate", plain.argv)
         self.assertEqual(sixty.argv[-2:], ["--frame-rate", "60"])
 
+    def test_bb_run_extra_args_are_split_and_appended(self) -> None:
+        with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
+            plain = rig.bb_run_program(Path("/run"), Path("/g"), "debug", True, Path("/w"))
+            extra = rig.bb_run_program(Path("/run"), Path("/g"), "debug", True, Path("/w"),
+                                       frame_rate=60,
+                                       extra_args="--window-size 2560x1440 --fsr  --fullscreen")
+        self.assertEqual(extra.argv[:len(plain.argv)], plain.argv)
+        self.assertEqual(extra.argv[-6:], ["--frame-rate", "60", "--window-size", "2560x1440",
+                                           "--fsr", "--fullscreen"])
+
     def test_reference_refuses_bb_run_options(self) -> None:
         for options in ({"frame_rate": 60}, {"frame_rate": 30}, {"log": "profile=debug"},
-                        {"perf": True}):
+                        {"perf": True}, {"bb_run_args": "--fsr"}):
             args = rig.argparse.Namespace(target="reference", **options)
             with self.assertRaises(SystemExit, msg=str(options)):
                 rig.check_target_options(args)
             rig.check_target_options(rig.argparse.Namespace(target="bb-run", **options))
         rig.check_target_options(rig.argparse.Namespace(target="reference", frame_rate=None,
-                                                        log=None, perf=False))
+                                                        log=None, perf=False, bb_run_args=None))
 
     def test_bb_run_under_perf_record(self) -> None:
         with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):

@@ -27,6 +27,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import resource
 import shutil
 import subprocess
@@ -218,7 +219,8 @@ def copy_user_for_bb_run(user_from: Path, dest: Path) -> None:
 def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_root: Path,
                    cache_home: Path | None = None, binary: Path | None = None,
                    log: str | None = None, perf: bool = False,
-                   pad_input: Path | None = None, frame_rate: int | None = None) -> Program:
+                   pad_input: Path | None = None, frame_rate: int | None = None,
+                   extra_args: str | None = None) -> Program:
     # bb-run refuses runtime directories inside the source checkout, so its XDG roots are outside
     # analysis/. They are per run, so runs never share or inherit save data.
     env = {f"XDG_{kind}_HOME": str(work_root / kind.lower())
@@ -241,6 +243,9 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
     if log:
         # A log filter, e.g. profile=debug for the frame counters (docs/test-rig.md, "Profiling").
         argv += ["--log", log]
+    if extra_args:
+        # More bb-run options, as one shell-quoted string (--bb-run-args="--fsr --fullscreen").
+        argv += shlex.split(extra_args)
     if perf:
         # User-space samples of bb-run's own threads (perf_event_paranoid=2 allows no more, and then
         # only --user-callchains opens the event), with
@@ -446,8 +451,10 @@ def open_stream_pad(path: Path) -> vpad.StreamPad:
 def check_target_options(args: argparse.Namespace) -> None:
     """Refuses the options that only bb-run takes on a reference run, instead of dropping them."""
     if args.target == "reference" and (getattr(args, "log", None) or getattr(args, "perf", False)
-                                       or getattr(args, "frame_rate", None)):
-        raise SystemExit("--log, --perf and --frame-rate only apply to the bb-run target")
+                                       or getattr(args, "frame_rate", None)
+                                       or getattr(args, "bb_run_args", None)):
+        raise SystemExit("--log, --perf, --frame-rate and --bb-run-args only apply to the bb-run "
+                         "target")
 
 
 def run_target(args: argparse.Namespace) -> int:
@@ -483,7 +490,8 @@ def run_target(args: argparse.Namespace) -> int:
                                  getattr(args, "bb_run", None), getattr(args, "log", None),
                                  getattr(args, "perf", False),
                                  run / "pad" if scenario.uses_pad() else None,
-                                 getattr(args, "frame_rate", None))
+                                 getattr(args, "frame_rate", None),
+                                 getattr(args, "bb_run_args", None))
         if args.user_from:
             copy_user_for_bb_run(args.user_from, bb_run_profile_data(work_root))
 
@@ -663,6 +671,8 @@ def main(argv: list[str] | None = None) -> int:
                      help="record the sound with SDL's disk driver and report its level")
     run.add_argument("--log", help="bb-run: log filter, e.g. profile=debug for the frame counters")
     run.add_argument("--frame-rate", type=int, choices=[30, 60], help="bb-run: target frame rate")
+    run.add_argument("--bb-run-args",
+                     help='bb-run: more options, shell-quoted (--bb-run-args="--fsr --fullscreen")')
     run.add_argument("--perf", action="store_true",
                      help="bb-run: sample it with perf record into the run's perf.data")
     run.add_argument("--no-layer", action="store_true",
