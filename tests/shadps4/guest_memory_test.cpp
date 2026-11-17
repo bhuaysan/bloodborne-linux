@@ -837,6 +837,44 @@ TEST(GuestMemory, FindImageForgetsAFreedImage) {
     }
 }
 
+// A remembered match skips stamping and touching its image again within one scheduler tick and
+// GC tick, and does both once either tick moves on, as a full FindImage would.
+TEST(GuestMemory, FindImageStampsItsImageOnceATickMovesOn) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        Direct d(1);
+        Libraries::VideoOut::BufferAttributeGroup group{};
+        group.is_occupied = true;
+        group.attrib.pixel_format = Libraries::VideoOut::PixelFormat::A8R8G8B8Srgb;
+        group.attrib.tiling_mode = Libraries::VideoOut::TilingMode::Linear;
+        group.attrib.width = group.attrib.height = group.attrib.pitch_in_pixel = 64;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        const auto find = [&] {
+            VideoCore::TextureCache::ImageDesc desc{group, addr(d.address)};
+            return textures.FindImage(desc);
+        };
+        const VideoCore::ImageId image = find();
+        EXPECT_EQ(find(), image);
+        EXPECT_EQ(textures.GetImage(image).tick_accessed_last, gpu.scheduler.CurrentTick());
+
+        const u64 before = gpu.scheduler.CurrentTick();
+        gpu.scheduler.Flush();
+        ASSERT_GT(gpu.scheduler.CurrentTick(), before);
+        EXPECT_EQ(find(), image);
+        EXPECT_EQ(textures.GetImage(image).tick_accessed_last, gpu.scheduler.CurrentTick());
+
+        // A new GC tick alone: the touch has to reach the image again.
+        textures.RunGarbageCollector();
+        textures.GetImage(image).tick_accessed_last = 0;  // shows whether the next hit stamps
+        EXPECT_EQ(find(), image);
+        EXPECT_EQ(textures.GetImage(image).tick_accessed_last, gpu.scheduler.CurrentTick());
+        d.unmap();
+    }
+}
+
 // The buffer cache never frees the device memory that makes its sparse blocks resident (upstream
 // keeps it to the end), which LeakSanitizer reports. Allocations made while one of these lives are
 // left out of its report.
