@@ -595,9 +595,16 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     };
     FindImageEntry& cached = find_image_cache[FindImageCacheIndex(key)];
     if (cached.generation == image_generation && cached.key == key) {
-        Image& image = slot_images[cached.image_id];
-        image.tick_accessed_last = scheduler.CurrentTick();
-        TouchImage(image);
+        // The stamp only ever takes the current tick and the LRU touch is a no-op once the
+        // image's node has the current GC tick; neither changes again until the ticks move on.
+        const u64 tick = scheduler.CurrentTick();
+        if (cached.touched_tick != tick || cached.touched_gc_tick != gc_tick) {
+            Image& image = slot_images[cached.image_id];
+            image.tick_accessed_last = tick;
+            TouchImage(image);
+            cached.touched_tick = tick;
+            cached.touched_gc_tick = gc_tick;
+        }
         return cached.image_id;
     }
     const u64 generation_before = image_generation;
@@ -676,7 +683,11 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     // Only a perfect match that registered and freed nothing is remembered: the overlap
     // resolution depends on the binding type and changes the view range of `desc`.
     if (image_id == perfect_match_id && image_generation == generation_before) {
-        cached = FindImageEntry{.key = key, .image_id = image_id, .generation = image_generation};
+        cached = FindImageEntry{.key = key,
+                                .image_id = image_id,
+                                .generation = image_generation,
+                                .touched_tick = image.tick_accessed_last,
+                                .touched_gc_tick = gc_tick};
     }
 
     // If the image requested is a subresource of the image from cache record its location.

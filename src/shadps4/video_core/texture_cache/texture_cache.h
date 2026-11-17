@@ -413,14 +413,19 @@ private:
         bool operator==(const FindImageKey&) const = default;
     };
 
-    /// A perfect match FindImage returned, valid while no image registered or left since.
+    /// A perfect match FindImage returned, valid while no image registered or left since, and
+    /// the scheduler tick and GC tick at which this entry last stamped and touched the image.
     struct FindImageEntry {
         FindImageKey key{};
         ImageId image_id{};
         u64 generation{};
+        u64 touched_tick{};
+        u64 touched_gc_tick{};
     };
 
-    static constexpr size_t FIND_IMAGE_CACHE_BITS = 9;
+    // 4096 entries: with 512, one in ten lookups of a `yharnam-route` frame (about 17 000 a
+    // frame) missed on a slot another request had taken.
+    static constexpr size_t FIND_IMAGE_CACHE_BITS = 12;
 
     static size_t FindImageCacheIndex(const FindImageKey& key) noexcept;
 
