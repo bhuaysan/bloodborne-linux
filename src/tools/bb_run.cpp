@@ -35,6 +35,7 @@
 #include <thread>
 #include <vector>
 
+#include "common/config.hpp"
 #include "common/env.hpp"
 #include "common/log.hpp"
 #include "common/runtime_dirs.hpp"
@@ -358,6 +359,10 @@ void log_presented() {
     end_run(bb::tools::timeout_status);
 }
 
+// The config file that was read and its keys that no setting has, logged once the log is set up.
+std::optional<fs::path> config_used;
+std::vector<std::string> config_unknown_keys;
+
 // Everything up to the start of the game's main thread. Returns the exit status of a run that
 // ends before it; throws for errors that end it with status 1.
 int start(const bb::tools::RunOptions& options) {
@@ -372,7 +377,7 @@ int start(const bb::tools::RunOptions& options) {
         game_dir = bb::common::game_dir("local.env");
     }
     if (!game_dir) {
-        std::cerr << "bb-run: set BB_GAME_DIR (environment or ./local.env) or pass --game-dir\n";
+        std::cerr << "bb-run: set game_dir in the config file, set BB_GAME_DIR (environment or ./local.env) or pass --game-dir\n";
         return 2;
     }
     game_dir = fs::absolute(*game_dir);
@@ -384,6 +389,13 @@ int start(const bb::tools::RunOptions& options) {
     }
     bb::common::log(LogLevel::info, channel, "game {}, profile {}", game_dir->string(),
                     options.profile);
+    if (config_used) {
+        bb::common::log(LogLevel::info, channel, "config file {}", config_used->string());
+        for (const std::string& key : config_unknown_keys) {
+            bb::common::log(LogLevel::warn, channel, "config file: unknown key \"{}\" ignored",
+                            key);
+        }
+    }
 
 #ifdef BB_HAVE_VIDEO_CORE
     // video_core's guest memory follows the kernel's mappings from the first one on. Its write
@@ -447,7 +459,23 @@ int main(int argc, char** argv) {
     bb::tools::RunOptions options;
     try {
         const std::vector<std::string_view> args(argv + 1, argv + argc);
-        options = bb::tools::parse_run_options(args);
+        // The config file first: the command line wins over it.
+        std::optional<fs::path> config_file = bb::tools::config_option(args);
+        const bool explicit_config = config_file.has_value();
+        if (!config_file) {
+            config_file = bb::common::default_config_path();
+        }
+        bb::tools::RunOptions base;
+        if (config_file && (explicit_config || fs::exists(*config_file))) {
+            const bb::common::ParsedConfig parsed = bb::common::read_config(*config_file);
+            base = bb::tools::options_from_config(parsed.config);
+            config_unknown_keys = parsed.unknown_keys;
+            config_used = config_file;
+        }
+        options = bb::tools::parse_run_options(args, base);
+    } catch (const bb::common::ConfigError& e) {
+        std::cerr << "bb-run: " << e.what() << '\n';
+        return 2;
     } catch (const std::invalid_argument& e) {
         std::cerr << "bb-run: " << e.what() << '\n' << bb::tools::run_usage;
         return 2;

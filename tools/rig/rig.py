@@ -221,7 +221,7 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
                    cache_home: Path | None = None, binary: Path | None = None,
                    log: str | None = None, perf: bool = False,
                    pad_input: Path | None = None, frame_rate: int | None = None,
-                   extra_args: str | None = None) -> Program:
+                   extra_args: str | None = None, config: Path | None = None) -> Program:
     # bb-run refuses runtime directories inside the source checkout, so its XDG roots are outside
     # analysis/. They are per run, so runs never share or inherit save data.
     env = {f"XDG_{kind}_HOME": str(work_root / kind.lower())
@@ -231,8 +231,12 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
         env["XDG_CACHE_HOME"] = str(cache_home)
     # As for the reference: the pad's events count while the window has no focus.
     env["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = "1"
-    argv = [str(binary or find_bb_run(preset)), "--game-dir", str(game_dir), "--profile", "rig",
-            "--no-log-file"]
+    if config:
+        # Every setting comes from the config file: no game folder, no profile.
+        argv = [str(binary or find_bb_run(preset)), "--config", str(config), "--no-log-file"]
+    else:
+        argv = [str(binary or find_bb_run(preset)), "--game-dir", str(game_dir), "--profile", "rig",
+                "--no-log-file"]
     if pad_input:
         # The scenario's pad states arrive on this FIFO, with no device on the machine.
         argv += ["--pad-input", str(pad_input)]
@@ -517,9 +521,10 @@ def check_target_options(args: argparse.Namespace) -> None:
     """Refuses the options that only bb-run takes on a reference run, instead of dropping them."""
     if args.target == "reference" and (getattr(args, "log", None) or getattr(args, "perf", False)
                                        or getattr(args, "frame_rate", None)
-                                       or getattr(args, "bb_run_args", None)):
-        raise SystemExit("--log, --perf, --frame-rate and --bb-run-args only apply to the bb-run "
-                         "target")
+                                       or getattr(args, "bb_run_args", None)
+                                       or getattr(args, "bb_run_config", None)):
+        raise SystemExit("--log, --perf, --frame-rate, --bb-run-args and --bb-run-config only "
+                         "apply to the bb-run target")
 
 
 def run_target(args: argparse.Namespace) -> int:
@@ -556,11 +561,14 @@ def run_target(args: argparse.Namespace) -> int:
                                  getattr(args, "perf", False),
                                  run / "pad" if scenario.uses_pad() else None,
                                  getattr(args, "frame_rate", None),
-                                 getattr(args, "bb_run_args", None))
+                                 getattr(args, "bb_run_args", None),
+                                 getattr(args, "bb_run_config", None))
         if args.user_from:
             copy_user_for_bb_run(args.user_from, bb_run_profile_data(work_root))
 
     env = {**os.environ, **program.env, "BB_RIG_DIR": str(run)}
+    if getattr(args, "bb_run_config", None):
+        env.pop("BB_GAME_DIR", None)  # the config file has to be the only source of the game folder
     audio_file = run / "audio.raw"
     if args.audio:
         # SDL's disk driver plays to a file in real time instead of to a device (tools/rig/audio.py).
@@ -740,6 +748,9 @@ def main(argv: list[str] | None = None) -> int:
                      help="record the sound with SDL's disk driver and report its level")
     run.add_argument("--log", help="bb-run: log filter, e.g. profile=debug for the frame counters")
     run.add_argument("--frame-rate", type=int, choices=[30, 60], help="bb-run: target frame rate")
+    run.add_argument("--bb-run-config", type=Path,
+                     help="bb-run: take every setting from this config file (--config), with no "
+                          "--game-dir and no --profile; BB_GAME_DIR is removed from the environment")
     run.add_argument("--bb-run-args",
                      help='bb-run: more options, shell-quoted (--bb-run-args="--fsr --fullscreen")')
     run.add_argument("--perf", action="store_true",

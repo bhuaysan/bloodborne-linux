@@ -62,6 +62,14 @@ class CommandTests(unittest.TestCase):
             windowed = rig.bb_run_program(Path("/run"), Path("/g"), "debug", True, Path("/w"))
         self.assertNotIn("--headless", windowed.argv)
 
+    def test_bb_run_config_replaces_game_dir_and_profile(self) -> None:
+        with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
+            program = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"),
+                                         config=Path("/c.toml"))
+        self.assertEqual(program.argv[:3], ["/b/bb-run", "--config", "/c.toml"])
+        self.assertNotIn("--game-dir", program.argv)
+        self.assertNotIn("--profile", program.argv)
+
     def test_bb_run_log_filter_is_passed_on(self) -> None:
         with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
             plain = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"))
@@ -99,7 +107,7 @@ class CommandTests(unittest.TestCase):
 
     def test_reference_refuses_bb_run_options(self) -> None:
         for options in ({"frame_rate": 60}, {"frame_rate": 30}, {"log": "profile=debug"},
-                        {"perf": True}, {"bb_run_args": "--fsr"}):
+                        {"perf": True}, {"bb_run_args": "--fsr"}, {"bb_run_config": "/c.toml"}):
             args = rig.argparse.Namespace(target="reference", **options)
             with self.assertRaises(SystemExit, msg=str(options)):
                 rig.check_target_options(args)

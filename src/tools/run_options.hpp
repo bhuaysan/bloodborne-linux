@@ -10,12 +10,13 @@
 #include <string>
 #include <string_view>
 
+#include "common/config.hpp"
 #include "common/runtime_dirs.hpp"
 
 namespace bb::tools {
 
 inline constexpr std::string_view run_usage =
-    "usage: bb-run [--game-dir DIR] [--profile NAME] [--timeout SECONDS] [--stop-at-main-loop]\n"
+    "usage: bb-run [--config FILE] [--game-dir DIR] [--profile NAME] [--timeout SECONDS] [--stop-at-main-loop]\n"
     "              [--log SPEC] [--no-log-file] [--headless] [--device NAME]\n"
     "              [--validation] [--validation-sync] [--validation-gpu]\n"
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
@@ -90,6 +91,7 @@ struct RunOptions {
     bool fsr = false;  // --fsr
     bool rcas = true;  // false with --no-rcas, only with --fsr
     float rcas_attenuation = 0.25f;  // --rcas-attenuation, only with --fsr
+    std::optional<std::filesystem::path> config_path;  // --config
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 
@@ -101,6 +103,18 @@ struct RunOptions {
 // to 2, --validation-sync or --validation-gpu without --validation, and --no-rcas or
 // --rcas-attenuation without --fsr.
 RunOptions parse_run_options(std::span<const std::string_view> args);
+
+// The same, starting from `base` (the options that the config file gave) instead of the defaults:
+// the arguments win over it. --no-rcas and --rcas-attenuation need fsr to be on, from the base or
+// from --fsr.
+RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions base);
+
+// The defaults with the settings of `config` applied.
+RunOptions options_from_config(const common::Config& config);
+
+// The value of the last --config in `args`, so that the file can be read before the rest is parsed.
+// Throws std::invalid_argument when --config has no value.
+std::optional<std::filesystem::path> config_option(std::span<const std::string_view> args);
 
 // The eboot's entry reads argc from +0 of its first argument and takes argv at +8 (link address
 // 0xa4..0xb4), then calls main(argc, argv, nullptr).

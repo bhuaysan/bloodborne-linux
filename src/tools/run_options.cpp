@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <system_error>
 
+#include "common/config.hpp"
 #include "common/log.hpp"
 #include "common/runtime_dirs.hpp"
 
@@ -25,10 +26,10 @@ unsigned parse_timeout(std::string_view value) {
     return seconds;
 }
 
-constexpr unsigned min_window_width = 640;  // the window's minimum size (sdl_window.cpp)
-constexpr unsigned min_window_height = 360;
-constexpr unsigned max_window_side = 16384;
-constexpr float max_rcas_attenuation = 2.0f;
+using common::max_rcas_attenuation;
+using common::max_window_side;
+using common::min_window_height;
+using common::min_window_width;
 
 // One side of --window-size.
 bool parse_side(std::string_view text, unsigned min, unsigned& side) {
@@ -63,8 +64,42 @@ float parse_rcas_attenuation(std::string_view value) {
 
 }  // namespace
 
-RunOptions parse_run_options(std::span<const std::string_view> args) {
+RunOptions options_from_config(const common::Config& config) {
     RunOptions options;
+    options.game_dir = config.game_dir;
+    if (config.profile) {
+        options.profile = *config.profile;
+    }
+    if (config.window_size) {
+        options.window_width = config.window_size->first;
+        options.window_height = config.window_size->second;
+    }
+    options.fullscreen = config.fullscreen.value_or(options.fullscreen);
+    options.fsr = config.fsr.value_or(options.fsr);
+    options.rcas = config.rcas.value_or(options.rcas);
+    options.rcas_attenuation = config.rcas_attenuation.value_or(options.rcas_attenuation);
+    options.frame_rate = config.frame_rate.value_or(options.frame_rate);
+    return options;
+}
+
+std::optional<std::filesystem::path> config_option(std::span<const std::string_view> args) {
+    std::optional<std::filesystem::path> path;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--config") {
+            if (i + 1 >= args.size()) {
+                throw std::invalid_argument("--config needs a value");
+            }
+            path = std::filesystem::path(args[++i]);
+        }
+    }
+    return path;
+}
+
+RunOptions parse_run_options(std::span<const std::string_view> args) {
+    return parse_run_options(args, RunOptions{});
+}
+
+RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions options) {
     bool rcas_given = false;  // --no-rcas or --rcas-attenuation
     for (std::size_t i = 0; i < args.size(); ++i) {
         const std::string_view arg = args[i];
@@ -77,6 +112,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args) {
         };
         if (arg == "-h" || arg == "--help") {
             options.help = true;
+        } else if (arg == "--config") {
+            options.config_path = std::filesystem::path(value());
         } else if (arg == "--game-dir") {
             options.game_dir = std::filesystem::path(value());
         } else if (arg == "--profile") {

@@ -255,6 +255,77 @@ TEST(MainLoopProbe, ReportsExactlyOnceAcrossThreads) {
     EXPECT_GE(probe.calls(), bb::tools::main_loop_calls);
 }
 
+// ---- the config file ----------------------------------------------------------------------------
+
+using bb::common::Config;
+
+RunOptions with_config(const Config& config, std::vector<std::string_view> args) {
+    return parse_run_options(args, bb::tools::options_from_config(config));
+}
+
+TEST(RunOptionsConfig, AppliesEverySetting) {
+    Config c;
+    c.game_dir = std::filesystem::path("/g");
+    c.profile = "cfg";
+    c.window_size = std::pair{2560u, 1440u};
+    c.fullscreen = true;
+    c.fsr = true;
+    c.rcas = false;
+    c.rcas_attenuation = 0.5f;
+    c.frame_rate = 60;
+    const RunOptions o = with_config(c, {});
+    EXPECT_EQ(o.game_dir, std::filesystem::path("/g"));
+    EXPECT_EQ(o.profile, "cfg");
+    EXPECT_EQ(o.window_width, 2560u);
+    EXPECT_EQ(o.window_height, 1440u);
+    EXPECT_TRUE(o.fullscreen);
+    EXPECT_TRUE(o.fsr);
+    EXPECT_FALSE(o.rcas);
+    EXPECT_EQ(o.rcas_attenuation, 0.5f);
+    EXPECT_EQ(o.frame_rate, 60u);
+}
+
+TEST(RunOptionsConfig, EmptyConfigKeepsTheDefaults) {
+    const RunOptions o = with_config(Config{}, {});
+    const RunOptions d = parse({});
+    EXPECT_FALSE(o.game_dir);
+    EXPECT_EQ(o.profile, d.profile);
+    EXPECT_EQ(o.window_width, d.window_width);
+    EXPECT_EQ(o.frame_rate, d.frame_rate);
+    EXPECT_EQ(o.fsr, d.fsr);
+}
+
+TEST(RunOptionsConfig, CommandLineWinsOverTheFile) {
+    Config c;
+    c.game_dir = std::filesystem::path("/file");
+    c.profile = "cfg";
+    c.window_size = std::pair{2560u, 1440u};
+    c.fsr = true;
+    c.frame_rate = 60;
+    const RunOptions o = with_config(
+        c, {"--game-dir", "/cli", "--profile", "cli", "--window-size", "800x600", "--frame-rate",
+            "30", "--no-rcas"});
+    EXPECT_EQ(o.game_dir, std::filesystem::path("/cli"));
+    EXPECT_EQ(o.profile, "cli");
+    EXPECT_EQ(o.window_width, 800u);
+    EXPECT_EQ(o.frame_rate, 30u);
+    EXPECT_TRUE(o.fsr);  // from the file, so --no-rcas is allowed
+    EXPECT_FALSE(o.rcas);
+}
+
+TEST(RunOptionsConfig, RcasStillNeedsFsr) {
+    EXPECT_THROW(with_config(Config{}, {"--no-rcas"}), std::invalid_argument);
+}
+
+TEST(RunOptionsConfig, FindsTheConfigOption) {
+    const std::vector<std::string_view> none{"--fsr"};
+    EXPECT_FALSE(bb::tools::config_option(none));
+    const std::vector<std::string_view> some{"--config", "/a", "--fsr", "--config", "/b"};
+    EXPECT_EQ(bb::tools::config_option(some), std::filesystem::path("/b"));
+    const std::vector<std::string_view> missing{"--config"};
+    EXPECT_THROW(bb::tools::config_option(missing), std::invalid_argument);
+}
+
 // ---- the binary ---------------------------------------------------------------------------------
 
 using bb::test::quote;
@@ -311,6 +382,48 @@ TEST(BbRun, NeedsAGameDirectory) {
     EXPECT_EQ(r.status, 2);
     EXPECT_NE(r.output.find("set BB_GAME_DIR"), std::string::npos) << r.output;
     EXPECT_FALSE(std::filesystem::exists(dir.path() / "state")) << "no log file before the game";
+}
+
+std::string write_config_file(const TempDir& dir, const std::string& text) {
+    const std::filesystem::path file = dir.path() / "test.toml";
+    std::ofstream(file) << text;
+    return file.string();
+}
+
+TEST(BbRun, ABadConfigValueEndsTheRunWithAMessage) {
+    const TempDir dir;
+    const std::string file = write_config_file(dir, "frame_rate = 45\n");
+    const Result r = run_bb_run(dir, "--game-dir /nonexistent --config " + quote(file));
+    EXPECT_EQ(r.status, 2);
+    EXPECT_NE(r.output.find("test.toml:1: frame_rate: \"45\" is not 30 or 60"), std::string::npos)
+        << r.output;
+}
+
+TEST(BbRun, AMissingExplicitConfigIsAnError) {
+    const TempDir dir;
+    const Result r = run_bb_run(dir, "--config " + quote((dir.path() / "none.toml").string()));
+    EXPECT_EQ(r.status, 2);
+    EXPECT_NE(r.output.find("cannot read the config file"), std::string::npos) << r.output;
+}
+
+// The default file is read when it exists, and its bad values end the run too.
+TEST(BbRun, ReadsTheDefaultConfigFile) {
+    const TempDir dir;
+    std::filesystem::create_directories(dir.path() / "config/bloodborne-linux");
+    std::ofstream(dir.path() / "config/bloodborne-linux/config.toml") << "fsr = maybe\n";
+    const Result r = run_bb_run(dir, "");
+    EXPECT_EQ(r.status, 2);
+    EXPECT_NE(r.output.find("fsr: \"maybe\" is not true or false"), std::string::npos) << r.output;
+}
+
+TEST(BbRun, TheConfigFilesGameDirIsUsed) {
+    const TempDir dir;
+    const std::string file =
+        write_config_file(dir, "game_dir = \"" + (dir.path() / "nogame").string() + "\"\n");
+    const Result r = run_bb_run(dir, "--config " + quote(file));
+    // Past the "no game directory" status 2: the loader tried the folder from the file.
+    EXPECT_EQ(r.output.find("set game_dir"), std::string::npos) << r.output;
+    EXPECT_NE(r.output.find("nogame"), std::string::npos) << r.output;
 }
 
 // --stop-at-main-loop is accepted, and still needs the game.
