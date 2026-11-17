@@ -19,13 +19,13 @@ namespace bb::game {
 // +0x10 swapped from 0 to 1 by the first caller, then 0x01d3c500), and hands the ragdoll, the
 // transform and the lock object's +0x38 to one of three ragdoll updates:
 //  - the character updates every frame (interval chr+0xe4 == 0) and is active:
-//    ragdoll_update (0x0180df90) with the step, 30.0 (not read) and the flag "+0x3b0 +0x68 +0x2f4
-//    below 1", after setting the ragdoll's +0x150 to the character's +0x3b0 +0x68 +0x1e0 raised
-//    by +0x354 in y and its +0x160 to 1;
+//    ragdoll_update (0x0180df90) with the step, 30.0 (not read: it clears xmm1 first) and the flag
+//    "+0x3b0 +0x68 +0x2f4 below 1", after setting the ragdoll's +0x150 to the character's +0x3b0
+//    +0x68 +0x1e0 raised by +0x354 in y and its +0x160 to 1;
 //  - it updates every u > 0 frames: ragdoll_update_spaced (0x01811040) with the step, u / 30 s and
 //    the flag "bit 2 of chr+0x1e1 clear";
 //  - otherwise (not active, or a negative interval): ragdoll_update_idle (0x01811650) with the
-//    step and 900.0.
+//    step and 900.0 (not read: it overwrites xmm1 at 0x0181171d).
 // Active: the character's +0x18 has bit 0 of +0x20 clear, bit 1 clear or its +0x30 set with bit 0
 // of +0x18, and +0x10 == 4. TODO(name): what +0x18 and its state 4 are.
 // The game passes a literal 1/30 as the step; this passes frame_step(). u / 30 s stays: since #573
@@ -48,7 +48,8 @@ inline constexpr std::uint64_t ragdoll_lock_init = 0x01d3c500;  // TODO(name)
 // time. The patch scales both strengths by bb_step_ratio where the update loads them:
 //   vmovss xmm2, [r12+0xfc]; vmovss [rbp-0x188], xmm2
 //   vmovss xmm3, [r12+0x100]; vmovss [rbp-0x1d0], xmm3
-// No jump lands inside these bytes; the one behind them is at 0x0180e0d3.
+// No jump of the game lands inside these bytes; the stub jumps back to the instruction behind
+// them, at 0x0180e0d3.
 inline constexpr std::uint64_t ragdoll_impulse_load = 0x0180e0af;
 inline constexpr std::uint64_t ragdoll_impulse_continue = 0x0180e0d3;
 inline constexpr std::array<std::uint8_t, 36> ragdoll_impulse_patched = {
@@ -62,7 +63,8 @@ inline constexpr std::array<std::uint8_t, 36> ragdoll_impulse_patched = {
 // at 30 FPS; once a frame at 60 it would be twice as stiff. The patch makes the factor
 // 30 * bb_step_ratio (15 at 60):
 //   vmulss xmm1, xmm1, [0x049275e8] (30.0); vpshufd xmm1, xmm1, 0; vmulps xmm0, xmm0, xmm1
-// No jump lands inside these bytes; the one behind them is at 0x0180f16f.
+// No jump of the game lands inside these bytes; the stub jumps back to the instruction behind
+// them, at 0x0180f16f.
 inline constexpr std::uint64_t ragdoll_root_pull = 0x0180f15e;
 inline constexpr std::uint64_t ragdoll_root_pull_continue = 0x0180f16f;
 inline constexpr std::array<std::uint8_t, 17> ragdoll_root_pull_patched = {

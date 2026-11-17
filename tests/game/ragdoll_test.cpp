@@ -104,17 +104,17 @@ void record(What what, std::uint64_t a = 0, std::uint64_t b = 0, std::uint64_t c
     log_->calls[log_->count++] = {what, {a, b, c, d, e, f}};
 }
 
-void fake_update(float step, float unused, void* ragdoll, void* transform, void* pose,
+void fake_update(float step, float not_read, void* ragdoll, void* transform, void* pose,
                  std::uint32_t flag) {
-    record(update, bits(step), bits(unused), u(ragdoll), u(transform), u(pose), flag);
+    record(update, bits(step), bits(not_read), u(ragdoll), u(transform), u(pose), flag);
 }
 void fake_spaced(float step, float spacing, void* ragdoll, void* transform, void* pose,
                  std::uint32_t flag) {
     record(spaced, bits(step), bits(spacing), u(ragdoll), u(transform), u(pose), flag);
 }
 // The game's sync leaves rcx unset for this one, so the fake takes no fourth integer.
-void fake_idle(float step, float unused, void* ragdoll, void* transform, void* pose) {
-    record(idle, bits(step), bits(unused), u(ragdoll), u(transform), u(pose));
+void fake_idle(float step, float not_read, void* ragdoll, void* transform, void* pose) {
+    record(idle, bits(step), bits(not_read), u(ragdoll), u(transform), u(pose));
 }
 void fake_lock_init(void* lock) {
     record(lock_init, u(lock));
@@ -181,6 +181,7 @@ const Case cases[] = {
     {.name = "every 3 frames", .interval = 3},
     {.name = "every 30 frames, flag 4", .interval = 30, .chr_flags = 4},
     {.name = "every 2 frames, flags 0x7fb", .interval = 2, .chr_flags = 0x7fb},
+    {.name = "every 2 frames, flags 0xfffffffb", .interval = 2, .chr_flags = 0xfffffffb},
     {.name = "negative interval", .interval = -1},
     {.name = "state 3", .state = 3},
     {.name = "state flag 1", .state_flags = 1},
@@ -239,7 +240,7 @@ std::tuple<void*, void*> build_module(Arena& a, const Case& c) {
     }
     at<void*>(chr, 0x18) = state;
     at<std::int32_t>(chr, 0xe4) = c.interval;
-    at<std::uint32_t>(chr, 0x1e1) = c.chr_flags;
+    std::memcpy(chr + 0x1e1, &c.chr_flags, sizeof c.chr_flags);  // unaligned
     auto* module = static_cast<std::byte*>(a.alloc(0x100));
     at<void*>(module, 0x08) = chr;
     at<void*>(module, 0x10) = fallback;
@@ -321,7 +322,7 @@ TEST_F(RagdollTest, PoseSyncPassesTheFrameStepAt60) {
     EXPECT_EQ(only_call(spaced)->args[0], 0x3d088889u);
     EXPECT_EQ(only_call(spaced)->args[1], bits(3.0f * (1.0f / 30.0f)));
 
-    run(cases[10], true);  // idle
+    run(cases[11], true);  // idle (negative interval)
     const Call* rest = only_call(idle);
     ASSERT_NE(rest, nullptr);
     EXPECT_EQ(rest->args[0], step60);

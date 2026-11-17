@@ -4,6 +4,7 @@
 
 #include <immintrin.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 
@@ -19,8 +20,11 @@ std::uint64_t bb_ragdoll_root_pull_continue = 0;
 
 // Each stub does what the patched bytes do, with the factor bb_step_ratio (1 at 30 FPS, 0.5 at 60)
 // applied, and changes the same registers: the impulse stub xmm2, xmm3 and the two frame slots;
-// the pull stub xmm0 and xmm1. At 30 they multiply by 1, which leaves every finite value, infinity
-// and zero as it is (a signalling NaN would come out quiet).
+// the pull stub xmm0 and xmm1. At 30 they multiply by 1, which leaves every normal value, infinity
+// and zero as it is. Not exactly: a signalling NaN comes out quiet, and with the game's flush to
+// zero (MXCSR.FTZ, set at 0x4503f0) a denormal strength comes out as 0 where the game's load
+// keeps it, a difference of at most 1.2e-38 in an impulse. The pull's 30 * x is flushed by the
+// game's own multiply already.
 asm(R"(
     .pushsection .text
     .intel_syntax noprefix
@@ -64,9 +68,9 @@ constexpr float game_step = 1.0f / 30.0f;
 constexpr float update_thirty = 30.0f;
 constexpr float idle_nine_hundred = 900.0f;
 
-using RagdollUpdate = void(float step, float unused, void* ragdoll, void* transform, void* pose,
-                           std::uint32_t flag);
-using RagdollIdle = void(float step, float unused, void* ragdoll, void* transform, void* pose);
+using RagdollUpdate = void(float step, float spacing_or_unused, void* ragdoll, void* transform,
+                           void* pose, std::uint32_t flag);
+using RagdollIdle = void(float step, float not_read, void* ragdoll, void* transform, void* pose);
 
 }  // namespace
 
@@ -119,12 +123,13 @@ void chr_physics_pose_sync(void* module, void* transform) {
     }
     if (interval > 0) {
         const float spacing = static_cast<float>(interval) * game_step;  // u 30 FPS frames
-        const std::uint32_t flag = (at<std::uint32_t>(chr, 0x1e1) & 4) == 0 ? 1 : 0;
+        const std::uint32_t flag = (at<std::uint8_t>(chr, 0x1e1) & 4) == 0 ? 1 : 0;
         fn<RagdollUpdate>(ragdoll_update_spaced)(step, spacing, at<void*>(module, 0x20), transform,
                                                  pose, flag);
         return;
     }
-    // Interval 0: the ragdoll's +0x150 is the character's +0x1e0 with y raised by +0x354.
+    // Interval 0: the ragdoll's +0x150 is the character's +0x3b0 +0x68 +0x1e0 with y raised by
+    // that object's +0x354.
     void* const ragdoll = at<void*>(module, 0x20);
     void* const body = at<void*>(at<void*>(chr, 0x3b0), 0x68);   // TODO(name)
     const __m128 up = _mm_loadu_ps(&global<float>(0x048f5660));  // {0, 1, 0, 0}
@@ -133,7 +138,8 @@ void chr_physics_pose_sync(void* module, void* transform) {
     _mm_storeu_ps(&at<float>(ragdoll, 0x150), raised);
     at<std::uint8_t>(ragdoll, 0x160) = 1;
     void* const body_now = at<void*>(at<void*>(at<void*>(module, 0x08), 0x3b0), 0x68);
-    const std::uint32_t below_one = 1.0f > at<float>(body_now, 0x2f4) ? 1 : 0;
+    // A quiet compare, as the game's vucomiss: false for NaN, and no invalid flag.
+    const std::uint32_t below_one = std::isgreater(1.0f, at<float>(body_now, 0x2f4)) ? 1 : 0;
     fn<RagdollUpdate>(ragdoll_update)(step, update_thirty, at<void*>(module, 0x20), transform, pose,
                                       below_one);
 }
