@@ -90,8 +90,8 @@ public:
         return main_port_handle;
     }
 
-    // Queued flips stay queued: the present thread presents or releases them, which gives their frames back to
-    // the presenter, and drops them by their generation.
+    // Queued flips stay queued: the present thread presents or releases them, which gives their
+    // frames back to the presenter, and drops them by their generation.
     void close() {
         const std::scoped_lock lock{port_.port_mutex};
         ++port_.generation;

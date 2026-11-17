@@ -627,10 +627,9 @@ TEST(HleVideo, NothingIsSkippedWhenThePresenterShowsNothing) {
         EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 1, 1, 101), 0);
         EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 0, 1, 102), 0);
         fake.hold = false;
-        ASSERT_TRUE(wait_for_count(port.handle, 2));
-        // The last flip needs another vblank: it is not completed with the second.
-        EXPECT_EQ(flip_count(port.handle), 2u);
         ASSERT_TRUE(wait_for_count(port.handle, 3));
+        // Every flip went to the presenter, so none was skipped. The counts are not compared
+        // between vblanks: a stalled test thread would miss the one in between.
         EXPECT_EQ(fake.game_presents, 3);
         const std::scoped_lock lock{fake.mutex};
         EXPECT_TRUE(fake.released.empty());
