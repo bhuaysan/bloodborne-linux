@@ -21,6 +21,7 @@
 
 #include <gtest/gtest.h>
 
+#include "common/config.hpp"
 #include "support/game.hpp"
 #include "support/process.hpp"
 #include "tools/main_loop_probe.hpp"
@@ -313,6 +314,13 @@ TEST(RunOptionsConfig, CommandLineWinsOverTheFile) {
     EXPECT_FALSE(o.rcas);
 }
 
+TEST(RunOptionsConfig, ParsesSetup) {
+    EXPECT_EQ(parse({"--setup", "/dump"}).setup_dir, std::filesystem::path("/dump"));
+    const std::vector<std::string_view> args{"--setup", "/a", "--setup", "/b"};
+    EXPECT_EQ(bb::tools::path_option(args, "--setup"), std::filesystem::path("/b"));
+    EXPECT_THROW(parse({"--setup"}), std::invalid_argument);
+}
+
 TEST(RunOptionsConfig, RcasStillNeedsFsr) {
     EXPECT_THROW(with_config(Config{}, {"--no-rcas"}), std::invalid_argument);
 }
@@ -424,6 +432,30 @@ TEST(BbRun, TheConfigFilesGameDirIsUsed) {
     // Past the "no game directory" status 2: the loader tried the folder from the file.
     EXPECT_EQ(r.output.find("set game_dir"), std::string::npos) << r.output;
     EXPECT_NE(r.output.find("nogame"), std::string::npos) << r.output;
+}
+
+TEST(BbRun, SetupRefusesAFolderWithoutEboot) {
+    const TempDir dir;
+    std::filesystem::create_directories(dir.path() / "folder");
+    const Result r = run_bb_run(dir, "--setup " + quote((dir.path() / "folder").string()));
+    EXPECT_EQ(r.status, 1);
+    EXPECT_NE(r.output.find("This folder has no eboot.bin."), std::string::npos) << r.output;
+    EXPECT_FALSE(std::filesystem::exists(dir.path() / "config/bloodborne-linux/config.toml"));
+}
+
+// On the real dump: the folder is written to the config file, and bb-run then finds the game
+// from it alone. The dump's parent folder is refused.
+TEST(BbRunGame, SetupWritesTheDumpFolderToTheConfigFile) {
+    BB_REQUIRE_GAME(game);
+    const TempDir dir;
+    const Result r = run_bb_run(dir, "--setup " + quote(game.string()));
+    EXPECT_EQ(r.status, 0) << r.output;
+    const std::filesystem::path config = dir.path() / "config/bloodborne-linux/config.toml";
+    ASSERT_TRUE(std::filesystem::exists(config));
+    EXPECT_EQ(bb::common::read_config(config).config.game_dir, std::filesystem::canonical(game));
+    const Result parent = run_bb_run(dir, "--setup " + quote(game.parent_path().string()));
+    EXPECT_EQ(parent.status, 1);
+    EXPECT_NE(parent.output.find("no eboot.bin"), std::string::npos) << parent.output;
 }
 
 // --stop-at-main-loop is accepted, and still needs the game.

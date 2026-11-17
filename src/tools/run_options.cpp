@@ -82,17 +82,22 @@ RunOptions options_from_config(const common::Config& config) {
     return options;
 }
 
-std::optional<std::filesystem::path> config_option(std::span<const std::string_view> args) {
+std::optional<std::filesystem::path> path_option(std::span<const std::string_view> args,
+                                                 std::string_view name) {
     std::optional<std::filesystem::path> path;
     for (std::size_t i = 0; i < args.size(); ++i) {
-        if (args[i] == "--config") {
+        if (args[i] == name) {
             if (i + 1 >= args.size()) {
-                throw std::invalid_argument("--config needs a value");
+                throw std::invalid_argument(std::format("{} needs a value", name));
             }
             path = std::filesystem::path(args[++i]);
         }
     }
     return path;
+}
+
+std::optional<std::filesystem::path> config_option(std::span<const std::string_view> args) {
+    return path_option(args, "--config");
 }
 
 RunOptions parse_run_options(std::span<const std::string_view> args) {
@@ -114,6 +119,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             options.help = true;
         } else if (arg == "--config") {
             options.config_path = std::filesystem::path(value());
+        } else if (arg == "--setup") {
+            options.setup_dir = std::filesystem::path(value());
         } else if (arg == "--game-dir") {
             options.game_dir = std::filesystem::path(value());
         } else if (arg == "--profile") {

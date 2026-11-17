@@ -37,6 +37,7 @@
 
 #include "common/config.hpp"
 #include "common/env.hpp"
+#include "common/game_folder.hpp"
 #include "common/log.hpp"
 #include "common/runtime_dirs.hpp"
 #include "common/signal_stack.hpp"
@@ -461,6 +462,24 @@ int main(int argc, char** argv) {
         const std::vector<std::string_view> args(argv + 1, argv + argc);
         // The config file first: the command line wins over it.
         std::optional<fs::path> config_file = bb::tools::config_option(args);
+        if (const auto setup = bb::tools::path_option(args, "--setup")) {
+            // Checks the folder and writes the config file; it reads no settings from it.
+            if (!config_file) {
+                config_file = bb::common::default_config_path();
+            }
+            if (!config_file) {
+                std::cerr << "bb-run: no config file location: set HOME or XDG_CONFIG_HOME\n";
+                return 1;
+            }
+            const bb::common::SetupResult r = bb::common::setup_game_folder(*setup, *config_file);
+            if (!r.ok()) {
+                std::cerr << "bb-run: " << r.message() << '\n';
+                return 1;
+            }
+            std::cout << r.folder.message << "\nGame folder " << fs::canonical(*setup).string()
+                      << " written to " << config_file->string() << '\n';
+            return 0;
+        }
         const bool explicit_config = config_file.has_value();
         if (!config_file) {
             config_file = bb::common::default_config_path();
