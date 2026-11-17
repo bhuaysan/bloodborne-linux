@@ -162,12 +162,12 @@ Each is a decomp issue of its own, checked at 60 against a 30 FPS run:
 - **AI steering** (`agent_steer`, 0x1dbbd00, its ring of 30 directions and a literal 1/30): done in #570, see "The steering ring" below.
 - **Character update intervals** (`world_chr_update`, 0x19173b0, an interval in frames): done in #573, see "The character update interval" below. Two agents of the `aiwait` scene that start right after the load still differ by 0.3 to 0.6 m in their first 10 s (#573).
 - **`chr_pad_step`** (0x1572900) is not the player's input: its 1/30 goes to 0x1d145b0, which turns a matrix by the pad's axes times π/2 and −π/3 rad/s, a debug free camera behind a mode check. Low priority.
-- **The offset of camera and hunter** of the check runs above: mostly the rig's inputs and the chase camera, see the next section. A small difference in the hunter's own motion after a short side step is not traced yet.
+- **The offset of camera and hunter** of the check runs above: the rig's inputs, the chase camera and the game's input latency in frames, see the next section. The latency is shorter at 60 and stays that way.
 
 
 ## Camera and hunter at 60 FPS (#558)
 
-The 30-vs-60 picture difference of #514's runs has two causes: the way the rig's scenario times its inputs, and the chase camera's per-call smoothing. None of the known 1/30 sites (#553 to #556) is involved. A small difference in the hunter's own motion remains.
+The 30-vs-60 picture difference of #514's runs has two causes: the way the rig's scenario times its inputs, and the chase camera's per-call smoothing. None of the known 1/30 sites (#553 to #556) is involved. What remains in the hunter's own motion is the game's input latency, two frames at either rate, so 33 ms shorter at 60 ("The input latency" below). It is kept.
 
 ### The inputs: seconds, not steps
 
@@ -255,7 +255,29 @@ So the remaining 30-vs-60 difference is when the step's fast phase ends, not a s
 
 `hkbGetTimestep` (string 0x47d5e84) is a Havok Script function registered at 0x976a4d; its body (0x9779d0) returns a float of the script's context (+0x30). It reads a step, it doesn't set one. The function 0x1939bb0, which calls the camera and `chr_frame_update`, runs only while the game loads.
 
-Not resolved: what ends the fast phase. Candidates are the hunter's behaviour scripts (Havok Script, run outside the updates above) and a timer on the stick input. The next step is a run that catches the write that starts the slow phase.
+What ends the fast phase is the stick's release: see the next section.
+
+### The input latency
+
+A local `bb-run` also logs, in the same row as the hunter's position, the left stick as the game last read it and the number of pad reads. The game reads the pad once a frame, one sample at a time (the current state), so the log shows on which frame the game sees a press and a release. Scenario `fr558s` on `main` at d80a2df, six runs at 30 and four at 60 (`20261117-0323…` to `-0346…`, UTC), CPU load average 2 to 4, no other game runs.
+
+**The holds.** The rig's `frames N` hold covers N game reads give or take one: the first 10-step hold reached the game as 9 reads in all six 30 runs, the second as 9 or 10, the 30-step holds as 29.5 to 31 steps of 1/30 s at both rates. So two runs of the same scenario hold the stick for different game times, which is the bimodal noise of the earlier tables. Distances below are compared at the same number of reads.
+
+**The latency.** From the frame that reads the press, the hunter turns and starts to move two frames later at both rates: 67 ms at 30, 33 to 50 ms at 60 (the first motion is small, so one frame either way). From there the start ramp has the same shape in game time, the steady speed is 4.0 m/s at both rates, and the release stops the fast phase on the frame that reads it, at both rates (that is the "frame without motion"). So at 60 the hunter moves for about 1/30 s longer on the same hold: distance from the start, at the release and 45 steps (30) later:
+
+| Hold seen by the game | 30 FPS | 60 FPS |
+|---|---|---|
+| 9 steps of 1/30 s | 0.291 to 0.292, 0.394 to 0.400 (6 runs) | 0.423, 0.520 (1 run) |
+| 10 steps | 0.415, 0.517 (4 runs) | 0.545 to 0.556, 0.643 to 0.664 (4 runs) |
+| 30 steps | 2.237 to 2.342, 2.343 to 2.449 (5 runs) | 2.572, 2.680 (2 runs) |
+
+At 60 every hold ends 0.13 m further than at 30 for the same game time, and 0.23 to 0.34 m further after the 30-step walk, which has a second transition (from the start step into the run, 0.6 s in) that again takes effect a frame later at 30. The 60-step walks end against the shelf at both rates. At 30, two runs whose holds differ by one read differ by the same 0.12 m, so the 30-vs-60 difference is one 30 FPS frame of input timing, not a speed or a drift: between the transitions both rates move at the same speed.
+
+**The check.** With the probe showing the stick's press to the game two reads late at 60 (`BB_PADLAG=2`, run `033619`; the rig held 20 reads, the release is unchanged), the press reaches the hunter four frames after it was read, 67 ms as at 30, and the first 10-step side step ends where the 30 runs with a 10-read hold end: 0.423 m at the release and 0.532 m after the rest, against 0.415 and 0.517 (unpatched 60: 0.556 and 0.664). The remaining 0.008 to 0.015 m is less than one 60 FPS frame of motion (0.067 m at 4 m/s).
+
+**Kept.** The latency is the game's own: it counts frames, and a frame is shorter at 60. Adding two reads of delay at 60 would make the positions match 30 but give the player 33 ms more input lag, the opposite of what 60 FPS is for. No site is patched and no decomp issue follows from it. The camera follows the hunter, so the offset shows in the pictures (7.5 to 9.9 against the nearest 30 run in "The hunter's side step" above). It comes from the transitions, so it does not grow with the length of a walk.
+
+**Not traced:** in one of 24 starts at 60 (and in two of the runs with the delayed press), never in 36 at 30, the start ramp after a rest skips about two frames of its latency and the hunter ends 0.2 m further. All of these started from the rest after an earlier step, so the hunter's state at the press may differ. Low priority.
 
 One 60 run (`185636`) crashed in the logo sequence with the `GXRenderThread` segfault at guest 0x263b8e7 (#559).
 
