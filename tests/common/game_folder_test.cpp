@@ -72,7 +72,7 @@ protected:
                    const std::string& eboot = fake_eboot) {
         write(game_ / "eboot.bin", eboot);
         write(game_ / "sce_sys/param.sfo",
-              make_sfo({{"APP_VER", version}, {"TITLE_ID", title}, {"VERSION", "01.00"}}));
+              make_sfo({{"APP_VER", version}, {"TITLE", "Test Title"}, {"TITLE_ID", title}, {"VERSION", "01.00"}}));
     }
     FolderCheck kind() { return bb::common::check_game_folder(game_, fake_hash()).kind; }
     std::string message() { return bb::common::check_game_folder(game_, fake_hash()).message; }
@@ -90,6 +90,7 @@ TEST_F(GameFolderTest, AcceptsACompleteFolder) {
     const auto r = bb::common::check_game_folder(game_, fake_hash());
     EXPECT_TRUE(r.ok()) << r.message;
     EXPECT_EQ(r.title_id, "CUSA03173");
+    EXPECT_EQ(r.title, "Test Title");
     EXPECT_EQ(r.app_version, "01.09");
 }
 

@@ -177,6 +177,7 @@ FolderResult check_game_folder(const fs::path& folder, std::string_view eboot_sh
     FolderResult info;
     info.title_id = *title_id;
     info.app_version = *app_version;
+    info.title = find("TITLE").value_or("");
     const auto failed = [&](FolderCheck kind, std::string message) {
         info.kind = kind;
         info.message = std::move(message);

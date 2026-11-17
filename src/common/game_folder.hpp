@@ -29,6 +29,7 @@ struct FolderResult {
     std::string message;      // plain words for the player: what is wrong, or "ok" text
     std::string title_id;     // from param.sfo, when it could be read
     std::string app_version;  // APP_VER from param.sfo, e.g. "01.09"
+    std::string title;        // TITLE from param.sfo, empty when it has none
 
     bool ok() const { return kind == FolderCheck::ok; }
 };
