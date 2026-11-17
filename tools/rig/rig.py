@@ -8,7 +8,8 @@
   rig.py compare REF_RUN REF_RUN OUR_RUN     our menu captures and time against two reference runs
 
 Output of each run goes to analysis/rig/runs/<stamp>-<target>-<scenario>/: target.log, events.csv,
-frames.csv, memory.csv, shots/*.png, kernel.log, summary.json. Exit status 0 means the scenario
+frames.csv, memory.csv, threads.csv, shots/*.png, kernel.log, summary.json. Exit status 0 means
+the scenario
 finished (or a run without one reached its time limit) with no kernel GPU fault and an unchanged
 game directory. The run fails on an out-of-memory kill, an unreadable kernel log, a target that
 exits before the scenario ends, a shot step without its picture, and no frame presented at all
@@ -252,7 +253,7 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
         # only --user-callchains opens the event), with
         # frame pointers (the relwithdebinfo preset keeps them). tools/rig/perfmap.py names the
         # guest's functions afterwards.
-        argv = ["perf", "record", "-o", str(run / "perf.data"), "-F", "499", "-e", "cpu-clock:u",
+        argv = ["perf", "record", "-o", str(run / "perf.data"), "-k", "mono", "-F", "499", "-e", "cpu-clock:u",
                 "--call-graph", "fp", "--user-callchains", "--", *argv]
     return Program(argv, env, run)
 
@@ -401,6 +402,48 @@ class MemorySampler(threading.Thread):
                 out.write(f"{time.monotonic_ns()},{current},{self.peak},{program}\n")
 
 
+def read_thread_times(pids: list[str], proc: Path = Path("/proc")) -> list[tuple[int, str, int, int]]:
+    """(tid, name, utime, stime) of every thread of the processes, times in clock ticks."""
+    result = []
+    for pid in pids:
+        try:
+            tids = [p.name for p in (proc / pid / "task").iterdir()]
+        except OSError:
+            continue  # the process has exited
+        for tid in tids:
+            try:
+                stat = (proc / pid / "task" / tid / "stat").read_text()
+            except OSError:
+                continue
+            # The name is inside parentheses and may hold spaces and parentheses itself.
+            name = stat[stat.index("(") + 1:stat.rindex(")")].replace(",", ";")
+            fields = stat[stat.rindex(")") + 2:].split()
+            result.append((int(tid), name, int(fields[11]), int(fields[12])))
+    return result
+
+
+class ThreadSampler(MemorySampler):
+    """Samples the CPU time of every thread of the target's cgroup once a second into threads.csv
+    (tools/rig/thread_cpu.py reads it): what each thread costs, without perf or counters."""
+
+    def run(self) -> None:
+        with self.path.open("w", buffering=1) as out:
+            out.write("mono_ns,tid,name,utime,stime\n")
+            cgroup = None
+            while not self.stopping.wait(1.0):
+                cgroup = cgroup or self._cgroup()
+                if cgroup is None:
+                    continue
+                try:
+                    pids = (cgroup / "cgroup.procs").read_text().split()
+                except OSError:
+                    cgroup = None
+                    continue
+                now = time.monotonic_ns()
+                for tid, name, utime, stime in read_thread_times(pids):
+                    out.write(f"{now},{tid},{name},{utime},{stime}\n")
+
+
 def stop_target(unit: str, process: subprocess.Popen) -> None:
     subprocess.run(["systemctl", "--user", "stop", f"{unit}.scope"], capture_output=True)
     try:
@@ -537,6 +580,8 @@ def run_target(args: argparse.Namespace) -> int:
                                    preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
     memory_sampler = MemorySampler(unit, run / "memory.csv")
     memory_sampler.start()
+    thread_sampler = ThreadSampler(unit, run / "threads.csv")
+    thread_sampler.start()
     target = RunningTarget(run, process, pad)
     failure = None
     interpreter = scn.Interpreter(target, events)
@@ -567,7 +612,9 @@ def run_target(args: argparse.Namespace) -> int:
         if pad:
             pad.close()
         memory_sampler.stopping.set()
+        thread_sampler.stopping.set()
         memory_sampler.join(timeout=3)
+        thread_sampler.join(timeout=3)
 
     shot_names = [step.args[0] for step in interpreter.executed if step.op == "shot"]
     status = process.returncode
