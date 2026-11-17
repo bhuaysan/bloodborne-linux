@@ -13,7 +13,8 @@
 // it adds no latency to the flip; the later grid can show a later frame a little later than the
 // old one would have (up to the grace and the margin, once per move). A flip is still taken
 // only at every (flip rate + 1)-th vblank and, unless the present thread woke more than the
-// grace late, a period or more after the last.
+// grace late, a period or more after the last. When a vblank finds several flips queued it shows
+// the newest, and the grid follows that one (video_out.cpp, #608).
 #pragma once
 
 #include <algorithm>

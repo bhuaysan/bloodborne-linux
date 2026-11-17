@@ -573,6 +573,16 @@ In the check runs of #509 and #514, 1 to 5 % of the present intervals in `play-s
 
 **What follows.** The grid and its margin need no change for 60. Two things are left. At 60 a flip is shown two vblanks, 33 ms, after it is queued, where at 30 it waits 6 to 10 ms: latency that the game at 60 could do without (#606). And the pacer's `late` flag is always 0 in modes 2 and 4, so it does not mark late frames; the frame's work against its slot does.
 
+## The flip backlog at 60 FPS (#606, #608)
+
+**Measured.** At 60 a flip waits in video out's queue for two vblanks: its queue wait is 32.83 to 32.86 ms at p50 and 33.05 ms at p99, where at 30 it is 6.6 to 8.2 ms (#606). The backlog builds at about 28 s in the title sequence, in the rig's `logos` phase: main loop frames of 386, 143 and 87 ms leave stretches of vblanks without a flip, and then the GPU thread queues three flips within 7 ms. The game sets flip rate 0, so the present thread takes one flip per 60 Hz vblank, and at 60 the game supplies one flip per vblank. A depth of 2 therefore never drains (305 s to the end of the run), and after a later stall the game refills it. At 30 the same burst drains within five vblanks, because the game supplies a flip only every second vblank. The game never has more than 2 flips pending.
+
+**Decision.** A vblank that finds more than one flip queued shows the newest and completes the older ones without presenting them. "Queued" means in the queue at the moment the present thread receives a request. A flip that arrives later, also within the grace after the vblank, waits for the next vblank. A skipped flip completes exactly as a shown one does for the game, in queue order and before the newest: flip status, flip events and the label of the buffer shown before. Only the presentation is left out, and its frame goes back to the presenter's free queue (the path of a frame that a failed swapchain acquire drops). The vblank grid follows the newest flip, the one that is shown. Every older flip was queued before it, so a late older flip means a late newest one. Without a presenter (`--headless`) nothing is shown, so flips keep completing one per vblank, the pace the game gets from them. With one flip queued, or none, nothing changes.
+
+**Reason.** The two flips of a backlog are the game's last two frames. Showing the older one only adds a vblank of latency to a frame that the next one replaces, and it keeps the queue at 2 for good. Dropping the older one brings the wait of a flip at 60 below one vblank period and keeps its place in the sequence for the game, which counts completed flips.
+
+**Cost.** A frame that was queued behind a stall is never shown. The player loses it only when a backlog exists; at most one frame per vblank was shown before and is shown now.
+
 ## Open questions
 
 - Ints that `param_blend_int` eases upward only rise while (target − current) · t ≥ 1, so they stop short of a higher target by fewer than 2/t: up to 15 at 30 and 30 at 60. Such a parameter can settle at a different value at 60 than at 30 (for example 0 → 20 settles at 6 at 30 and stays 0 at 60). Not seen to matter yet (#598).

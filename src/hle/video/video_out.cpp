@@ -278,18 +278,29 @@ private:
         request_cv_.notify_one();
     }
 
-    // The oldest request, waiting for one until `deadline` when there is none yet.
-    std::optional<Request> receive_request(Clock::time_point deadline) {
+    // The newest request queued when the first one is there, waiting for one until `deadline` when
+    // there is none yet. The older requests of that moment go to `skipped`, oldest first: a
+    // vblank shows one frame, and the newest is the one the game wants on screen. Only requests
+    // with a presenter are skipped; without one nothing is shown, so flips keep completing one
+    // per vblank, which is the pace the game gets from them. A request that arrives later,
+    // also within the grace after a vblank that found an older one, waits for the next vblank.
+    std::optional<Request> receive_request(Clock::time_point deadline,
+                                           std::vector<Request>& skipped) {
         std::unique_lock lock{mutex_};
         request_cv_.wait_until(lock, deadline, [this] { return !requests_.empty(); });
         if (requests_.empty()) {
             return std::nullopt;
+        }
+        while (requests_.size() > 1 && requests_.front().presenter != nullptr) {
+            skipped.push_back(requests_.front());
+            requests_.pop_front();
         }
         const Request request = requests_.front();
         requests_.pop_front();
         return request;
     }
 
+    // Presents the flip's frame, then completes the flip.
     void flip(const Request& req) {
         if (common::frame_profile::enabled()) {
             // A request queued just after a vblank waits a whole flip period for the next one.
@@ -301,7 +312,20 @@ private:
         if (req.presenter != nullptr) {
             req.presenter->present(req.frame, false, true);
         }
+        complete_flip(req);
+    }
 
+    // A flip that a newer one replaced at its vblank: its frame goes back to the presenter without
+    // being shown, and it completes as a shown flip does, so the guest sees every flip it
+    // submitted, in order, and the pending count falls by each.
+    void skip_flip(const Request& req) {
+        req.presenter->release_frame(req.frame);
+        complete_flip(req);
+    }
+
+    // What a completed flip does for the guest: the flip status, the flip events and the label
+    // of the buffer shown before.
+    void complete_flip(const Request& req) {
         Port* const port = &port_;
         std::vector<Registration> events;
         std::uint64_t count = 0;
@@ -358,11 +382,19 @@ private:
         for (;;) {
             const VblankGrid::Vblank vblank = grid.pass(Clock::now());
             std::optional<Request> request;
+            std::vector<Request> skipped;
             if (vblank.count % (port_.flip_rate + 1) == 0) {
-                request = receive_request(grid.grace_end(vblank));
+                request = receive_request(grid.grace_end(vblank), skipped);
+                // The shown flip is the newest, and the grid follows it: the older ones were
+                // queued before it, so a late older flip means a late newest one, and the
+                // newest is the frame whose lateness the grid is meant to absorb.
                 if (request && request->queued > vblank.time) {
                     grid.follow(vblank, Clock::now());
                 }
+            }
+            // The skipped flips complete before the shown one, in their queue order.
+            for (const Request& older : skipped) {
+                skip_flip(older);
             }
             if (request) {
                 flip(*request);

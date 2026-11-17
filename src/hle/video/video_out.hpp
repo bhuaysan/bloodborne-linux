@@ -8,10 +8,11 @@
 // License texts: third_party/shadps4/LICENSES/
 //
 // Video out's driver (docs/design/renderer.md, "GNM and VideoOut glue is adapted"): one port, a
-// flip queue and a present thread that takes at most one flip per vblank. A completed flip
+// flip queue and a present thread that shows at most one flip per vblank: the newest one queued.
+// The older ones complete without being shown (docs/design/frame-rate.md, #608). A completed flip
 // updates the flip status, triggers the flip event and clears the flip label of the buffer shown
 // before. With a FlipPresenter the flip's frame is prepared on the GPU thread and presented on the
-// present thread; without one (--headless) flips complete without presenting.
+// present thread; without one (--headless) flips complete without presenting, one per vblank.
 #pragma once
 
 #include <chrono>
