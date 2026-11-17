@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <SDL3/SDL.h>
@@ -112,6 +113,20 @@ TEST_F(Sdl, HeaderImageIsCroppedAroundTheCentre) {
     SDL_GetTextureSize(t, &w, &h);
     EXPECT_EQ(w, 40.0f);
     EXPECT_EQ(h, 20.0f);  // a 2:1 crop of 40 x 30
+    // The pixels encode x in red and y in green: the crop starts at (0, 5).
+    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
+    SDL_RenderClear(renderer_);
+    const SDL_FRect dst{0, 0, 40, 20};
+    SDL_RenderTexture(renderer_, t, nullptr, &dst);
+    const SDL_Rect rect{0, 0, 40, 20};
+    SDL_Surface* read = SDL_RenderReadPixels(renderer_, &rect);
+    ASSERT_NE(read, nullptr);
+    Uint8 r = 0, g = 0, b = 0, a = 0;
+    SDL_ReadSurfacePixel(read, 0, 0, &r, &g, &b, &a);
+    EXPECT_EQ(std::make_tuple(r, g, b), std::make_tuple(0, 5, 7));
+    SDL_ReadSurfacePixel(read, 39, 19, &r, &g, &b, &a);
+    EXPECT_EQ(std::make_tuple(r, g, b), std::make_tuple(39, 24, 7));
+    SDL_DestroySurface(read);
     SDL_DestroyTexture(t);
 }
 
@@ -162,7 +177,91 @@ TEST(LauncherUi, DrawsTheMainScreenForEveryStateWithoutPressing) {
 
 TEST(LauncherUi, FontsLoad) {
     ImGui::CreateContext();
-    (void)load_fonts(16.0f);
+    (void)load_fonts(16.0f);  // the system font or the built-in fallback, whichever exists here
+    EXPECT_GT(ImGui::GetIO().Fonts->Fonts.Size, 0);
+    ImGui::DestroyContext();
+}
+
+// Draws one frame of the main screen and returns what it reports.
+struct Frame {
+    float below = 0;
+    Action action = Action::none;
+};
+
+Frame frame(const Context& ctx, const MainView& view, bool top_only = false) {
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::Begin("w");
+    Frame f;
+    if (top_only) {
+        f.below = draw_top(ctx, view);
+    } else {
+        f.action = draw_main_screen(ctx, view);
+    }
+    ImGui::End();
+    ImGui::Render();
+    return f;
+}
+
+TEST(LauncherUi, LongStatusPushesTheButtonsDown) {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = ImVec2(480, 600);
+    io.Fonts->AddFontDefault();
+    unsigned char* pixels = nullptr;
+    int fw = 0;
+    int fh = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &fw, &fh);
+    Context ctx;
+    ctx.text = &strings(Lang::en);
+    MainView view;
+    view.status = "short";
+    const float short_y = frame(ctx, view, true).below;
+    EXPECT_EQ(short_y, (header_height + 40) * ctx.scale);
+    view.status = std::string(400, 'x') + " " + std::string(400, 'y');  // wraps to several lines
+    const float long_y = frame(ctx, view, true).below;
+    EXPECT_GT(long_y, short_y);
+    // The block ends below the text: at least three lines of it.
+    EXPECT_GE(long_y, header_height + 10 + 3 * ImGui::GetTextLineHeight());
+    ImGui::DestroyContext();
+}
+
+TEST(LauncherUi, EnterPressesTheFirstButtonOfEachState) {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = ImVec2(480, 600);
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.Fonts->AddFontDefault();
+    unsigned char* pixels = nullptr;
+    int fw = 0;
+    int fh = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &fw, &fh);
+    Context ctx;
+    ctx.text = &strings(Lang::en);
+    for (MainState s : {MainState::no_folder, MainState::check_failed, MainState::ready,
+                        MainState::no_controller, MainState::no_gpu, MainState::last_run_failed}) {
+        MainView view;
+        view.state = s;
+        view.status = "status";
+        view.focus_first = true;
+        frame(ctx, view);
+        view.focus_first = false;
+        frame(ctx, view);
+        io.AddKeyEvent(ImGuiKey_Enter, true);
+        Action got = frame(ctx, view).action;
+        io.AddKeyEvent(ImGuiKey_Enter, false);
+        if (got == Action::none) {
+            got = frame(ctx, view).action;
+        }
+        EXPECT_EQ(got, first_button(s)) << static_cast<int>(s);
+        frame(ctx, view);
+    }
     ImGui::DestroyContext();
 }
 

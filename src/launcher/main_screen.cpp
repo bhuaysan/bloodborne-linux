@@ -55,7 +55,10 @@ float draw_top(const Context& ctx, const MainView& view) {
     ImGui::SetCursorPosY(header_height * ctx.scale + 10 * ctx.scale);
     ImGui::SetCursorPosX(margin * ctx.scale);
     status_line(view.status, view.status_kind, ctx.scale);
-    return (header_height + status_height) * ctx.scale;
+    // The status text wraps: the area grows with it so the buttons never overlap.
+    const float fixed = (header_height + status_height) * ctx.scale;
+    const float wrapped = ImGui::GetCursorPosY() + 8 * ctx.scale;
+    return wrapped > fixed ? wrapped : fixed;
 }
 
 Action draw_main_screen(const Context& ctx, const MainView& view) {
