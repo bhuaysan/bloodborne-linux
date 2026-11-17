@@ -1,0 +1,25 @@
+# Out of Iosefka's Clinic (#598): continue from a save that stands at the clinic's door to the
+# graveyard, open the door and walk out for 25 s. Start it with --user-from a user/ directory of a
+# run that stopped there (bb-run's profile layout savedata/SPRJ0005 works too). At 60 FPS before
+# #598 the game aborted on a YEBIS assertion half a second after the door.
+limit time=400
+log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
+sleep 1
+tap A
+stable seconds=6 delta=1 timeout=120
+dpad D
+tap A
+tap A count=6 gap=3
+sleep 20
+stable seconds=3 delta=1 timeout=60
+sleep 10
+stable seconds=3 delta=1 timeout=60
+shot 00-door
+tap A
+sleep 4
+shot 01-opened
+stick LY -32767
+sleep 25
+neutral
+shot 02-outside
+sleep 5

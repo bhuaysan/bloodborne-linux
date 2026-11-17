@@ -3,6 +3,7 @@
 # ("Static registration").
 add_library(bbgame OBJECT image.cpp ai/target_bank.cpp ai/steering.cpp ai/world_step.cpp camera/chase_cam.cpp
                           chr/ragdoll.cpp chr/update_interval.cpp
-                          frame/flipper.cpp frame/main_loop.cpp frame/step_literals.cpp havok/world.cpp
+                          frame/flipper.cpp frame/main_loop.cpp frame/step_literals.cpp gfx/param_blend.cpp
+                          havok/world.cpp
                           text/compare.cpp text/hash.cpp)
 target_link_libraries(bbgame PUBLIC bbhook $<COMPILE_ONLY:bbhle> PRIVATE bb_warnings)

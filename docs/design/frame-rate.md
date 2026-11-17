@@ -537,6 +537,16 @@ The cause of that residue is not isolated. Runs with the world stepped by 1/30 e
 
 **30 FPS is unchanged.** At 30 the branch puts every body where `main` does (median 0.000 m, p90 0.02 m, within the noise above). `rig.py compare` of the picture after the stand, the branch at 30 (`025114`, plain build) against two runs of `main` (`024945`, `025243`): noise floor 0.276, ours 0.238 (ratio 0.86), time ratio 1.012. The branch at 60 in the street (`025412`): 60.0 presents a second in the stand, p50 16.67 ms, p99 16.84 ms, no GPU fault. Builds kept the CPU load average at 3 to 4; no other game or test ran meanwhile.
 
+## The parameter blend (#598)
+
+**Fault.** At 60 FPS the game aborted a step after the hunter left Iosefka's Clinic: YEBIS asserted `nBaseSamples >= 3` in `GPUTexUtil_GetRecursiveSampleParameters` (0xbbc3e0), called from its camera motion blur (`GetMotionBlur_CameraRotationPerspectiveParameters`, 0xc32740, call at 0xc33f37). At 30 the same save walks out.
+
+**Cause.** YEBIS takes the motion blur's base sample count every frame from the game (0x21d7f71 → 0xbb38f0 → 0xbd3b90, YEBIS context +0x9f4, then +0x2168c of its texture utility through 0xc20770). The game builds it from two motion blur parameter rows blended by 0xe82290, whose ints come from the target row. The rows themselves are eased every frame on the main thread by `param_blend_int` (0x29262f0, through a vtable, from the graphics step at 0x221b8e2): `trunc(entry * t + current * (1 - t))` in single precision, with t = 2 · step. Outside the clinic both values are 3. At 30, t = 1/15 and the sum stays 3. At 60, t = 1/30 and 3 · t + 3 · (1 − t) rounds to 2.9999998, which truncates to 2: the row flips between 2 and 3 from frame to frame, and the first frame that blurs with 2 aborts. gdb runs at the call: `override 3 current 3 t 0.0333333351 result 2` at 60, only exact results at 30.
+
+**Change.** `param_blend_int` is replaced. At 30 it is the game's function bit for bit (differential test over ids, t including NaN and ±inf, and extreme values). At any other rate an entry equal to the current value gives the current value. Unequal values blend as the game does at both rates: for non-negative values the truncation only lowers a value towards a lower target or holds it below a higher one.
+
+**Check run.** `clinic-door` (a copy of a save at the clinic's door: open it, walk out for 25 s): unpatched 60 FPS aborts in 2 runs of 2, patched 60 FPS walks out in 2 of 2, patched 30 FPS in 1 of 1.
+
 ## Open questions
 
 - Mode 2's `tearing` = 1: where `graphics +0x104`, 0x513ac84 and the render list's byte at +8 end up (presumably the hsync flip when late).
