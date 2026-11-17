@@ -24,6 +24,9 @@ class ThreadTimesTest(unittest.TestCase):
                     task = proc / pid / "task" / str(tid)
                     task.mkdir(parents=True)
                     (task / "stat").write_text(stat_line(tid, name, u, s))
+            for tid, raw in ((12, b"12 (bad\xff) S 1"), (13, b"")):  # cut short, gone
+                (proc / "10" / "task" / str(tid)).mkdir()
+                (proc / "10" / "task" / str(tid) / "stat").write_bytes(raw)
             times = sorted(rig.read_thread_times(["10", "20", "30"], proc))
         self.assertEqual(times, [(10, "bb-run", 5, 1), (11, "shadPS4:GpuComm", 900, 70),
                                  (20, "odd) name; x", 3, 0)])

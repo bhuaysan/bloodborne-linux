@@ -9,11 +9,10 @@
 
 Output of each run goes to analysis/rig/runs/<stamp>-<target>-<scenario>/: target.log, events.csv,
 frames.csv, memory.csv, threads.csv, shots/*.png, kernel.log, summary.json. Exit status 0 means
-the scenario
-finished (or a run without one reached its time limit) with no kernel GPU fault and an unchanged
-game directory. The run fails on an out-of-memory kill, an unreadable kernel log, a target that
-exits before the scenario ends, a shot step without its picture, and no frame presented at all
-by a target that should present (the reference, or bb-run with --window, with the layer on).
+the scenario finished (or a run without one reached its time limit) with no kernel GPU fault and
+an unchanged game directory. The run fails on an out-of-memory kill, an unreadable kernel log, a
+target that exits before the scenario ends, a shot step without its picture, and no frame presented
+at all by a target that should present (the reference, or bb-run with --window, with the layer on).
 
 The game directory is mounted read-only for the target. Nothing this tool writes is ever committed:
 analysis/ is excluded from git.
@@ -253,7 +252,9 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
         # only --user-callchains opens the event), with
         # frame pointers (the relwithdebinfo preset keeps them). tools/rig/perfmap.py names the
         # guest's functions afterwards.
-        argv = ["perf", "record", "-o", str(run / "perf.data"), "-k", "mono", "-F", "499", "-e", "cpu-clock:u",
+        # -k mono: samples carry CLOCK_MONOTONIC, the clock of events.csv, for perf report --time.
+        argv = ["perf", "record", "-o", str(run / "perf.data"), "-k", "mono", "-F", "499",
+                "-e", "cpu-clock:u",
                 "--call-graph", "fp", "--user-callchains", "--", *argv]
     return Program(argv, env, run)
 
@@ -402,7 +403,8 @@ class MemorySampler(threading.Thread):
                 out.write(f"{time.monotonic_ns()},{current},{self.peak},{program}\n")
 
 
-def read_thread_times(pids: list[str], proc: Path = Path("/proc")) -> list[tuple[int, str, int, int]]:
+def read_thread_times(pids: list[str],
+                      proc: Path = Path("/proc")) -> list[tuple[int, str, int, int]]:
     """(tid, name, utime, stime) of every thread of the processes, times in clock ticks."""
     result = []
     for pid in pids:
@@ -412,13 +414,14 @@ def read_thread_times(pids: list[str], proc: Path = Path("/proc")) -> list[tuple
             continue  # the process has exited
         for tid in tids:
             try:
-                stat = (proc / pid / "task" / tid / "stat").read_text()
-            except OSError:
-                continue
-            # The name is inside parentheses and may hold spaces and parentheses itself.
-            name = stat[stat.index("(") + 1:stat.rindex(")")].replace(",", ";")
-            fields = stat[stat.rindex(")") + 2:].split()
-            result.append((int(tid), name, int(fields[11]), int(fields[12])))
+                # The guest names its threads, so the name may be any bytes.
+                stat = (proc / pid / "task" / tid / "stat").read_text(errors="replace")
+                # The name is inside parentheses and may hold spaces and parentheses itself.
+                name = stat[stat.index("(") + 1:stat.rindex(")")].replace(",", ";")
+                fields = stat[stat.rindex(")") + 2:].split()
+                result.append((int(tid), name, int(fields[11]), int(fields[12])))
+            except (OSError, ValueError, IndexError):
+                continue  # the thread has exited, or its stat was cut short
     return result
 
 
