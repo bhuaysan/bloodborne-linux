@@ -17,7 +17,7 @@ tools/rig/rig.py perf yharnam-route --runs 5 --bb-user USER --reference-user USE
 tools/rig/rig.py perf --branch RUN... --main RUN... --reference RUN...   # the same report from finished runs
 ```
 
-A run writes `target.log`, `events.csv` (what the rig did, tied to places in the log), `frames.csv` (one line per present), `memory.csv` (`peak_program_bytes` in the summary leaves out the page cache of the game's files), `shots/*.png`, `kernel.log` and `summary.json`. For `bb-run`, `builds` and `segment_builds` in the summary spread the time its GPU thread spent on new pipelines (the `Pipeline build` and `Pipeline wait` lines in the log) over the frame intervals: the longest interval with a build in it and the most build time within one interval. The exit status is 0 when the scenario finished with no kernel GPU fault and an unchanged game directory. It is 1 after an out-of-memory kill, an unreadable kernel log, a target that exits before the scenario ends, a `shot` step without its picture, and a run with the layer in which the reference or a windowed `bb-run` presented no frame (a headless `bb-run` never presents).
+A run writes `target.log`, `events.csv` (what the rig did, tied to places in the log), `frames.csv` (one line per present), `memory.csv` (`peak_program_bytes` in the summary leaves out the page cache of the game's files), `threads.csv` (the user and system time of every thread of the target, once a second; `tools/rig/thread_cpu.py` reads it), `shots/*.png`, `kernel.log` and `summary.json`. For `bb-run`, `builds` and `segment_builds` in the summary spread the time its GPU thread spent on new pipelines (the `Pipeline build` and `Pipeline wait` lines in the log) over the frame intervals: the longest interval with a build in it and the most build time within one interval. The exit status is 0 when the scenario finished with no kernel GPU fault and an unchanged game directory. It is 1 after an out-of-memory kill, an unreadable kernel log, a target that exits before the scenario ends, a `shot` step without its picture, and a run with the layer in which the reference or a windowed `bb-run` presented no frame (a headless `bb-run` never presents).
 
 Scenario steps are documented at the top of `tools/rig/scenario.py`, and scenarios live in `tools/rig/scenarios/`.
 
@@ -238,7 +238,7 @@ Runs on 2026-11-16 (RADV, `relwithdebinfo`, `--window`, cold caches):
 
 ## Profiling `bb-run` (#513)
 
-Tracy is gone, so a slow frame is found with two tools: `perf` for where the threads spend CPU time, and frame counters for how much each part of the GPU thread's frame took.
+Tracy is gone, so a slow frame is found with three tools: `perf` for where the threads spend CPU time, frame counters for how much each part of the GPU thread's frame took, and the thread times of every run for what each thread costs per frame.
 
 ### perf
 
@@ -248,11 +248,15 @@ python3 tools/rig/perfmap.py --perf-data RUN/perf.data     # writes /tmp/perf-<p
 perf report -i RUN/perf.data --no-children --sort comm,symbol -g none --stdio
 ```
 
-`--perf` runs `bb-run` under `perf record -e cpu-clock:u -F 499 --call-graph fp --user-callchains` into the run's `perf.data`. With `kernel.perf_event_paranoid=2` (no sysctl change, no sudo) only user-space samples of our own process work, and the callchain event fails to open without `--user-callchains` ("Failure to open any events"). The `relwithdebinfo` preset builds with `BB_FRAME_POINTERS=ON` (`-fno-omit-frame-pointer`), so `--call-graph fp` unwinds our code and the system libraries it calls; guest code has no frame pointers to follow, so a chain stops at the first guest frame. Without a call chain, `--sort comm` is the split by thread (the guest's thread names, `shadPS4:GpuComm` for the GPU thread, `GXWorker:N`, `game main`).
+`--perf` runs `bb-run` under `perf record -k mono -e cpu-clock:u -F 499 --call-graph fp --user-callchains` into the run's `perf.data`. `-k mono` stamps the samples with `CLOCK_MONOTONIC`, the clock of `events.csv` and `frames.csv`, so `perf report --time START,END` (seconds with nine decimals, from the `mono_ns` of two marks) takes one segment of the scenario. With `kernel.perf_event_paranoid=2` (no sysctl change, no sudo) only user-space samples of our own process work, and the callchain event fails to open without `--user-callchains` ("Failure to open any events"). The `relwithdebinfo` preset builds with `BB_FRAME_POINTERS=ON` (`-fno-omit-frame-pointer`), so `--call-graph fp` unwinds our code and the system libraries it calls; guest code has no frame pointers to follow, so a chain stops at the first guest frame. Without a call chain, `--sort comm` is the split by thread (the guest's thread names, `shadPS4:GpuComm` for the GPU thread, `GXWorker:N`, `game main`).
 
 `perfmap.py` writes the file perf reads for code outside any file: the guest functions of `symbols/functions.csv` at the eboot's load base (`loader::default_base`, 0x10000000, plus the link address). The file has only the functions named so far (a handful), so guest samples mostly show as raw addresses `0x1xxxxxxx`; subtract 0x10000000 for the link address in Ghidra. Samples are CPU time only: a thread that sleeps (a lock, a wait for the GPU) shows nothing, which is what the frame counters are for.
 
-Run it under `flock` when other agents use the GPU, and keep a perf run apart from a counter run, so the counters do not show up in the samples.
+Run it under `flock` when other agents use the GPU, and keep a perf run apart from a counter run, so the counters do not show up in the samples. `perf` itself adds 2 to 4 % to the GPU thread (#533).
+
+### Thread times
+
+Every run writes `threads.csv`: once a second the rig reads the user and system time of every thread in the target's cgroup from `/proc` (in clock ticks of 10 ms). `tools/rig/thread_cpu.py RUN [--segment GLOB] [--thread GLOB]` divides each thread's CPU time between the samples at a segment's marks by the presents in the same span: CPU ms per frame, with the system time in brackets, and numbered siblings (`GXWorker:1` to `:5`) summed under one name. It costs the target nothing, works on the reference as on `bb-run`, and counts kernel time, which `cpu-clock:u` samples never see. Over a 10 s segment of 300 frames, the tick and the one-second sampling give it a resolution of about 0.05 ms per frame. It is the measure for changes that make the GPU thread cheaper: `thread_cpu.py RUN --thread shadPS4:GpuComm`.
 
 ### Frame counters
 
@@ -280,7 +284,7 @@ Each part is `part=<us> us/<calls>` of the time since the previous line, summed 
 | `wait`, `submit`, `present` | the scheduler waiting for the GPU; end-of-frame housekeeping; the presenter thread's present call |
 | `flip_wait` | a flip request waiting from its queueing to the vblank that took it |
 
-A scope is two `clock_gettime` calls, about 40 ns, and a frame has 15 000 to 25 000 of them (`buffer` alone 10 000 to 17 000), so the counters add around 0.5 to 1 ms to a frame of the GPU thread: they are for finding the big things, not for exact small numbers. The fault part is the one that runs in a signal handler: it only reads the clock and adds to atomics.
+The counters are for finding the big things, not for exact numbers. They make the GPU thread about 30 % slower: a `play-walk` frame of `yharnam-route` has about 46 000 scopes (`buffer` alone 15 800), at about 120 ns each, and the GPU thread's CPU time per frame is 24.1 to 24.2 ms with them against 18.3 to 18.6 ms without (#533; cutting that is #594). The cost lands in each part in proportion to its calls, so `buffer` reads about 2 ms too high there. Compare frames and runs with each other, and take the cost of a part from `perf` or `thread_cpu.py`. The fault part is the one that runs in a signal handler: it only reads the clock and adds to atomics.
 
 `tools/rig/frame_profile.py RUN [--segment GLOB]` reads a run's log, `events.csv` and `frames.csv` and prints for each scenario segment: the frame interval of the GPU thread (the submit-done to submit-done time), the slowest frames with their biggest parts (`build` is the `Pipeline build` and `Pipeline wait` time overlapping the frame), the parts' extra cost in a slow frame over a normal one, a normal frame, and the late presents (a present interval over 1.5 times the median): the time from the submit-done before the present to the present, and that frame's `commands`. Read it with `--cache-home` of an earlier run: a cold cache puts shader and pipeline builds into the slow frames and hides the rest.
 
@@ -303,7 +307,7 @@ The three slow frames of `play-walk` (run `20261114-155953`, the other run match
 - **Buffer sync on the GPU thread** (#531). `sync` (copying CPU-modified guest memory into a buffer) is 1.3 ms in a normal frame and 29 to 31 ms in two of the three slow ones (4800 calls), almost all of it inside `vertex` (the vertex buffer binding). The same 31 ms in two runs points to a large range that the game rewrote at that point of the route.
 - **Texture upload** (#532). 279 images refreshed in the 95 ms frame (11.5 ms, 0.7 ms of it detiling), against 5 in a normal frame.
   Result of #532 (runs of 2026-11-15, the `upload_new` counter, a diagnostic run that logged every refresh with a hash of its guest memory): the burst is not a write-tracking effect. Of the 176 images refreshed in the slow `play-walk` frame, 172 are images the cache sees for the first time (new addresses, never uploaded before in the run; 256x256 and 128x128 BC textures with a full mip chain, a few of 1024x1024): the game streams an area in at that point of the route and the draw binds its textures in the same frame. They have to be uploaded, so there is nothing to skip or defer without drawing with an empty texture. The write-tracking faults of the same frame (301 here) put only 40 us into `inval_texture`; the texture cache did not mark any of them dirty. The burst costs 7.3 ms of `upload` (about 42 us an image: 11 us staging and copy of the guest data, 18 us in `copyBufferToImage` with 9 to 12 regions per image, detiling 2 us), 2.5 ms more for creating the images, and is 8 % of the 94 ms frame; the rest is buffer sync (#531) and the fault storm (#530). Every other burst of a run is the same kind: `logos` (loading) has 3 to 6 bursts over 50 per run (188, 786, then 51 to 203), and the 1920x1080 and cube-map images that are refreshed every frame are GPU-modified images refreshed from the buffer cache, not changed guest memory. `tools/rig/frame_profile.py` lists the frames with over 50 refreshes and how many of them were first uploads of a cache image (a burst of re-uploads of changed images shows as few of them; images that the cache evicted under memory pressure and created again count as first uploads, so check the memory pressure before reading a burst as new content).
-- **The GPU thread is busy for 17 to 26 ms of a 33.3 ms frame** (`commands`; `draw` is 96 % of it): about 1400 to 2000 draws at 12 to 13 us (the per-draw cost of the GPU thread is #533, R8.3). Per normal `play-walk` frame: `bind` 7.5 to 8.5 ms (`buffer` 3.7 to 4.3, `texture` 2.3), `pipeline` lookup 2.3, `vertex` 2.7, `render` 1.7, `state` 0.9. In the perf samples of the GPU thread (21 % of all samples) the largest symbols are `TextureCache::FindImage` (1.6 % of all samples, 7 % of the thread), `memmove`, `radv_init_push_descriptor_set`, `XXH3` and `Rasterizer::ResetBindings`.
+- **The GPU thread is busy for 17 to 26 ms of a 33.3 ms frame** (`commands`; `draw` is 96 % of it): about 1400 to 2000 draws at 12 to 13 us (the per-draw cost of the GPU thread is #533, R8.3; these times include the counters' own cost, about 30 %, see "The GPU thread's cost per draw" below). Per normal `play-walk` frame: `bind` 7.5 to 8.5 ms (`buffer` 3.7 to 4.3, `texture` 2.3), `pipeline` lookup 2.3, `vertex` 2.7, `render` 1.7, `state` 0.9. In the perf samples of the GPU thread (21 % of all samples) the largest symbols are `TextureCache::FindImage` (1.6 % of all samples, 7 % of the thread), `memmove`, `radv_init_push_descriptor_set`, `XXH3` and `Rasterizer::ResetBindings`.
 - **Late presents are mostly not slow frames.** Outside `play-walk`, the late presents (interval over 1.5 times the median) follow GPU thread frames with the `commands` time of an on-time frame (for example 23.0 against 22.7 ms in `play-attack`), and they come 2 to 8 ms later after the submit-done. In `play-walk` they follow frames with a longer `commands` time (38 to 44 ms against 24 to 26), but most of the 5 to 10 are not among the 2 to 3 slow ones. Over a whole run (`20261114-152257`) the flip request of a late present had waited 14.7 ms for its vblank against 8.2 ms on average (`flip_wait`). A frame whose request reaches `video_out` just after a vblank misses it and shows 16.7 ms later; with a margin this thin, a jitter of 1 to 2 ms is enough. The flip timing finding is posted on #528.
 - **Pipeline builds** are not in these frames with a warm cache. In the cold run `20261114-150551` the slowest frames of the `logos` segment (416 and 227 ms) are 266 and 224 ms of build time.
 - **`game main`, 48 % of all samples, is a busy wait** of the guest on `gettimeofday` (guest code at link addresses 0x2034af0 to 0x2034b6f), 43 % of it in the vDSO `clock_gettime`, with `posix_gettimeofday`, `observe_gettimeofday` and `MainLoopProbe::count` of ours another 3 % of all samples. It costs a core but is not on the frame's critical path.
@@ -343,3 +347,56 @@ Tried on main at `7152033`: for a direct draw, the vertex binding bound the V# r
 So the upload frame does read most of what it syncs (the narrowed copy saves about 4 ms of 16), and every other frame pays about 7 ms: in a median frame 1136 draws find CPU-modified pages somewhere in their V# ranges (about 5 MiB each, and the game writes into them every frame), so each one scans its indices, 10.8 million per frame in 6.5 ms. A full sync clears the range at the first draw; a narrowed one leaves the pages no draw fetches modified, so the next draws scan again, and written data no draw reads stays modified for good. A cheaper scan (reading the guest memory in place, vectorized) would still cost around 1 ms in every frame for 4 ms in one.
 
 The upload frame (`20261117-001423`: 2134 draws, `commands` 57.0 ms) also spends 4.1 ms making sparse blocks resident, 8.9 ms in `protect` and 9.7 ms in `texture` (5.0 ms of first image uploads): new content streams in. Even with no `sync` at all its GPU-thread frame would stay around 54 ms, so the 50 ms present max needs more than the vertex sync. The reference has the same stall (present max 100.15 ms, median of five runs).
+
+### The GPU thread's cost per draw (#533, 2026-11-17)
+
+Runs of `yharnam-route` on main at `9e9ade9` (RADV, `relwithdebinfo`, `--window`, a warm `--cache-home`, all `end,scenario finished`, no kernel GPU fault, no other game run or difftest on the machine, load 2.6 to 3.9 from the desktop and idle sessions; suffix `-bb-run-yharnam-route` or `-reference-yharnam-route`): plain `20261117-041348`, `-042755` and `-045850` (the last with the rig's thread sampler); with `--perf` `-040407` and `-041827`; with `--log profile=debug` `-035926` and `-043722`; the reference `-040847`, `-042307` and `-043234`, with `perf record -k mono -e cpu-clock:u -F 499 -p PID` attached by hand (its binary is stripped, so its samples split by library only); `-044208` with `strace -c -w` on the GPU thread for 10 s of `play-walk`; and `-044731`, `-045211`, a throwaway build that skips the pending-operation poll (below). The thread times of the runs before `-045850` were sampled from `/proc` by hand, the same way `threads.csv` does it.
+
+**The GPU thread is busy, not waiting, and the cost is shadPS4's.** Its CPU time per present (`thread_cpu.py`, ms, system time inside):
+
+| segment | main, plain | main, with counters | reference | poll skipped |
+|---|---|---|---|---|
+| `play-stand` | 13.6, 13.7, 13.8 | 18.2 | 12.7, 12.6 | 11.5, 11.7 |
+| `play-walk` | 18.6, 18.3, 18.8 (sys 3.0 to 3.2) | 24.2, 24.1 | 17.7, 17.5 (sys 3.1, 3.2) | 16.1, 15.9 (sys 0.9, 1.0) |
+| `play-camera` | 14.6, 14.6, 15.0 | 19.6, 19.1 | 13.6, 13.6 | 12.3, 12.2 |
+| `play-attack` | 17.0, 17.0, 17.3 | 22.4, 22.2 | 16.1, 16.4 | 14.1, 14.2 |
+
+With the counters, `commands` (24.2 ms) equals that CPU time and the thread switches out about twice a frame, so the frame is work and not lock waits. The reference's GPU thread costs 0.6 to 1.2 ms less per frame. In the user samples of `play-walk` the emulator's own code is 10.3 to 10.5 ms for us and 8.9 to 9.2 ms for the reference, RADV 3.2 to 3.7 against 3.2 to 3.4 ms, libc 2.0 to 2.2 against 2.0 to 2.1 ms. Every hot spot below is code we imported from shadPS4 v.0.21.0 unchanged. At 60 FPS the game sends the same draws in half the time: a `play-walk` frame has about 2070 draws and dispatches (median, 1700 to 2230), 9 us of CPU each, 18.3 to 18.8 ms in all against 16.7 ms.
+
+**Where a `play-walk` frame goes.** User time from `perf` in ms per frame for the two `--perf` runs, inclusive, so a row contains the indented rows under it; the 3.0 ms of system time come on top:
+
+| part | `-040407` | `-041827` |
+|---|---|---|
+| GPU thread | 16.16 | 16.21 |
+| PM4 processing outside draws and dispatches | 0.78 | 0.59 |
+| draws (`Rasterizer::Draw`) | 12.70 | 13.07 |
+| - resource binding (`BindResources`): textures, buffers | 4.04: 1.95, 1.92 | 3.61: 1.58, 1.79 |
+| - pipeline lookup (`GetGraphicsPipeline`) | 1.66 | 1.77 |
+| - - shader stage lookup (`GetProgram`), of it building and comparing `StageSpecialization` | 1.10, 0.90 | 1.19, 0.90 |
+| - render targets (`PrepareRenderState`, `BeginRendering`) | 1.46 | 1.75 |
+| - vertex and index buffers | 1.16 | 1.23 |
+| - descriptors and push constants (`Pipeline::BindResources`) | 0.83 | 0.96 |
+| - barrier tracking after the draw (`ResetBindings`) | 0.89 | 0.88 |
+| - pending-operation poll (`PopPendingOperations`) | 0.75 | 0.66 |
+| - RADV draw calls, pipeline bind | 1.30, 0.33 | 1.59, 0.37 |
+| dispatches (`DispatchDirect`), of it the copy-shader HLE | 2.55, 1.66 | 2.42, 1.57 |
+| across callers: `TextureCache::FindImage`, `TouchImage` | 1.23, 0.24 | 1.42, 0.25 |
+| hashing images (`MarkAsMaybeGpuDirty`) | 0.62 | 0.46 |
+| `BufferCache::ObtainBuffer`, of it `SynchronizeMemory` | 2.08, 0.79 | 1.96, 0.79 |
+| `Runtime::AccessBuffer`, `IsBufferAccessed` | 0.67, 0.34 | 0.61, 0.21 |
+| RADV (its own code), `memmove` | 3.2, 1.0 | 3.7, 0.9 |
+
+The system time is a poll. Traced, the GPU thread made 272 680 `ioctl` of its 290 199 system calls in 10 s, about 1360 a frame at the 20 frames a second it ran at under `strace`, so about one a draw; `perf` puts all of them under `Semaphore::Refresh` in `PopPendingOperations`, which every draw and dispatch calls and which queries the timeline semaphore (`DRM_IOCTL_SYNCOBJ_QUERY`) even when no operation is pending. The rest is 62 `lseek` (`CopySparseMemory`) and 22 `mprotect` a frame. The throwaway build that returns when nothing is pending, and queries only when the first pending operation is not free by the last known tick, took 2.0 to 2.9 ms off every segment and the system time from 3.0 to 0.9 ms (table, last column).
+
+**Proposed changes.** One issue each, in R8.3; the savings are GPU-thread CPU per `play-walk` frame, measured for #589 and estimated for the rest from the function's share above and what a cached path would still cost:
+
+| issue | change | saving |
+|---|---|---|
+| #589 | poll the work semaphore only when an operation waits for it | 2.0 to 2.9 ms (measured) |
+| #590 | find a draw's targets and textures without a page-table walk per draw | 1.0 to 1.3 ms |
+| #591 | stop hashing whole images when a draw writes an aliasing buffer | 0.4 to 0.5 ms |
+| #592 | skip rebuilding the shader specialization of an unchanged draw | 0.6 to 0.9 ms |
+| #593 | cut the per-draw cost of buffer barrier tracking | 0.5 to 0.8 ms |
+| #594 | cut the frame counters' own cost (a measurement fix, no saving in play) | |
+
+Together about 4.5 to 6.4 ms, which brings a `play-walk` frame from 18.3 to 18.8 ms down to about 12 to 14 ms. Not proposed yet: RADV's own 3.2 to 3.7 ms (the reference pays the same; fewer state changes or descriptor buffers are a larger design), the buffer cache lookups (2 ms, 0.8 of it syncing data the game wrote, which #531 deals with), and the copy-shader HLE of the dispatches (1.6 ms, partly the hashing of #591). Measure those again once the five above have landed.
