@@ -177,8 +177,8 @@ public:
     u64 cpu_hash{};
     u64 gpu_hash{};
     /// Ours: gpu_hash is still to be taken, and every page of the image is write protected, so its
-    /// guest memory is what it was when the GPU wrote the buffer over it. With gpu_hash it is
-    /// guarded by `mutex`, since a fault on a guest thread takes the hash too.
+    /// guest memory is what it was when the draw that writes the buffer over it was recorded. With
+    /// gpu_hash it is guarded by `mutex`, since a fault on a guest thread takes the hash too.
     bool gpu_hash_pending{};
     u64 head_hash{};
     u64 tail_hash{};

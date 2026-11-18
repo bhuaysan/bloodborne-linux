@@ -218,10 +218,13 @@ void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
 // image, and an upload resets it, so an image that a shader writes through a buffer and reads again
 // every frame was hashed whole every frame (#591: 10 MiB per frame of the Yharnam walk). Ours: the
 // hash is taken at the last moment that gives the same value. While every page of the image is
-// write protected its guest memory can change in two ways only: a write through the guest mapping,
-// which faults first (InvalidateMemory), and a write through the backing (BeforeBackingWrite). Both
-// take the hash before the write, and the collector takes it before it reads the buffer back. An
-// image with an unprotected page is hashed at once, as upstream does.
+// write protected, the write tracking sees every change of its guest memory: a write through the
+// guest mapping faults first (InvalidateMemory), and a write through the backing announces itself
+// (BeforeBackingWrite). Both take the hash before the write, and the collector takes it before it
+// reads the buffer back. An image with an unprotected page is hashed at once, as upstream does.
+// What the tracking does not see, here as for CpuDirty and the buffer cache, is a write through a
+// second mapping of the same direct memory at another address: there upstream's early hash would
+// notice the change and this one would not.
 void TextureCache::MarkAsMaybeGpuDirty(VAddr addr, size_t size) {
     ForEachImageInRegion(addr, size, [&](ImageId image_id, Image& image) {
         std::scoped_lock lk{image.mutex};
