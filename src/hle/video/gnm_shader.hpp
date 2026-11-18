@@ -1,9 +1,9 @@
 // The stage register imports of libSceGnmDriver (docs/formats/gnm.md, "Stage register imports"
-// and "Shader objects and the stage writers"). Each one writes the
-// registers of a shader stage from the register block of a shader object as SET_SH_REG and
-// SET_CONTEXT_REG packets at `cmd`, then fills the rest of its fixed size with one NOP whose
-// payload is zero. The game's writers (0x10753c0..0x1075a70, 0x108a870) reserve the fixed size,
-// pass it as `dwords` and advance the cursor by it only when the result is 0.
+// and "Shader objects and the stage writers"). Each one writes the registers of a shader stage
+// from the register block of a shader object as SET_SH_REG and SET_CONTEXT_REG packets at `cmd`,
+// then fills the rest of its fixed size with one NOP whose payload is zero. The game's writers
+// (0x10753c0..0x1075a70, 0x108a870) reserve the fixed size, pass it as `dwords` and advance the
+// cursor by it only when the result is 0.
 //
 // A register block starts with the program address shifted right by 8, low dword then high
 // dword (`SPI_SHADER_PGM_LO/HI`), then `RSRC1` and `RSRC2`. The high dword must be 0. The other
