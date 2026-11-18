@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/amdgpu/liverpool.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-16
+// Changed for bloodborne-linux, 2026-11-18
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/assert.h"
@@ -17,8 +17,6 @@
 #include "common/frame_profile.hpp"
 
 namespace AmdGpu {
-
-static_assert(Liverpool::NumComputeRings <= 56);
 
 #define YIELD_CE() co_yield {}
 #define YIELD_GFX() co_yield {}

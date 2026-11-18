@@ -41,7 +41,6 @@
 #include "hle/kernel/file.hpp"
 #include "hle/kernel/vmem.hpp"
 #include "imgui/renderer/imgui_impl_vulkan.h"
-#include "imgui/renderer/texture_manager.h"
 #include "sdl_window.h"
 #include "shadps4_host/fault_handler.hpp"
 #include "video_core/amdgpu/liverpool.h"

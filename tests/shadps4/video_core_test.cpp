@@ -21,7 +21,6 @@
 #include "core/memory.h"
 #include "hle/video/video_core_presenter.hpp"
 #include "imgui/renderer/imgui_impl_vulkan.h"
-#include "imgui/renderer/texture_manager.h"
 #include "sdl_window.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/cache_storage.h"

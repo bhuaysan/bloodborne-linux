@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/imgui/renderer/imgui_impl_vulkan.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-18
 // License texts: third_party/shadps4/LICENSES/
 
 // Based on imgui_impl_vulkan.cpp from Dear ImGui repository
@@ -64,8 +64,6 @@ struct VkData {
     vk::ShaderModule shader_module_vert{};
     vk::ShaderModule shader_module_frag{};
 
-    std::mutex command_pool_mutex;
-    vk::CommandPool command_pool{};
     vk::Sampler simple_sampler{};
 
     // Font atlas uploads. A frame's staging buffers live until its slot comes round again
@@ -240,43 +238,6 @@ static inline vk::DeviceSize AlignBufferSize(vk::DeviceSize size, vk::DeviceSize
     return (size + alignment - 1) & ~(alignment - 1);
 }
 
-void UploadTextureData::Upload() {
-    VkData* bd = GetBackendData();
-    const InitInfo& v = bd->init_info;
-
-    vk::SubmitInfo submit_info{
-        .commandBufferCount = 1,
-        .pCommandBuffers = &command_buffer,
-    };
-    CheckVkErr(v.queue.submit({submit_info}));
-    CheckVkErr(v.queue.waitIdle());
-
-    v.device.destroyBuffer(upload_buffer, v.allocator);
-    v.device.freeMemory(upload_buffer_memory, v.allocator);
-    {
-        std::unique_lock lk(bd->command_pool_mutex);
-        v.device.freeCommandBuffers(bd->command_pool, {command_buffer});
-    }
-    upload_buffer = VK_NULL_HANDLE;
-    upload_buffer_memory = VK_NULL_HANDLE;
-}
-
-void UploadTextureData::Destroy() {
-    VkData* bd = GetBackendData();
-    const InitInfo& v = bd->init_info;
-
-    CheckVkErr(v.device.waitIdle());
-    RemoveTexture(im_texture);
-    im_texture = nullptr;
-
-    v.device.destroyImageView(image_view, v.allocator);
-    image_view = VK_NULL_HANDLE;
-    v.device.destroyImage(image, v.allocator);
-    image = VK_NULL_HANDLE;
-    v.device.freeMemory(image_memory, v.allocator);
-    image_memory = VK_NULL_HANDLE;
-}
-
 // Register a texture
 ImTextureID AddTexture(vk::ImageView image_view, vk::ImageLayout image_layout,
                        vk::Sampler sampler) {
@@ -321,165 +282,6 @@ ImTextureID AddTexture(vk::ImageView image_view, vk::ImageLayout image_layout,
         .descriptor_set = descriptor_set,
     };
 }
-UploadTextureData UploadTexture(const void* data, vk::Format format, u32 width, u32 height,
-                                size_t size) {
-    ImGuiIO& io = GetIO();
-    VkData* bd = GetBackendData();
-    const InitInfo& v = bd->init_info;
-
-    UploadTextureData info{};
-    {
-        std::unique_lock lk(bd->command_pool_mutex);
-        info.command_buffer =
-            CheckVkResult(v.device.allocateCommandBuffers(vk::CommandBufferAllocateInfo{
-                              .commandPool = bd->command_pool,
-                              .commandBufferCount = 1,
-                          }))
-                .front();
-        CheckVkErr(info.command_buffer.begin(vk::CommandBufferBeginInfo{
-            .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
-        }));
-    }
-
-    // Create Image
-    {
-        vk::ImageCreateInfo image_info{
-            .imageType = vk::ImageType::e2D,
-            .format = format,
-            .extent{
-                .width = width,
-                .height = height,
-                .depth = 1,
-            },
-            .mipLevels = 1,
-            .arrayLayers = 1,
-            .samples = vk::SampleCountFlagBits::e1,
-            .tiling = vk::ImageTiling::eOptimal,
-            .usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-            .sharingMode = vk::SharingMode::eExclusive,
-            .initialLayout = vk::ImageLayout::eUndefined,
-        };
-        info.image = CheckVkResult(v.device.createImage(image_info, v.allocator));
-        auto req = v.device.getImageMemoryRequirements(info.image);
-        vk::MemoryAllocateInfo alloc_info{
-            .allocationSize = IM_MAX(v.min_allocation_size, req.size),
-            .memoryTypeIndex =
-                FindMemoryType(vk::MemoryPropertyFlagBits::eDeviceLocal, req.memoryTypeBits),
-        };
-        info.image_memory = CheckVkResult(v.device.allocateMemory(alloc_info, v.allocator));
-        CheckVkErr(v.device.bindImageMemory(info.image, info.image_memory, 0));
-    }
-
-    // Create Image View
-    {
-        vk::ImageViewCreateInfo view_info{
-            .image = info.image,
-            .viewType = vk::ImageViewType::e2D,
-            .format = format,
-            .subresourceRange{
-                .aspectMask = vk::ImageAspectFlagBits::eColor,
-                .levelCount = 1,
-                .layerCount = 1,
-            },
-        };
-        info.image_view = CheckVkResult(v.device.createImageView(view_info, v.allocator));
-    }
-
-    // Create descriptor set (ImTextureID)
-    info.im_texture = AddTexture(info.image_view, vk::ImageLayout::eShaderReadOnlyOptimal);
-
-    // Create Upload Buffer
-    {
-        vk::BufferCreateInfo buffer_info{
-            .size = size,
-            .usage = vk::BufferUsageFlagBits::eTransferSrc,
-            .sharingMode = vk::SharingMode::eExclusive,
-        };
-        info.upload_buffer = CheckVkResult(v.device.createBuffer(buffer_info, v.allocator));
-        auto req = v.device.getBufferMemoryRequirements(info.upload_buffer);
-        auto alignemtn = IM_MAX(bd->buffer_memory_alignment, req.alignment);
-        vk::MemoryAllocateInfo alloc_info{
-            .allocationSize = IM_MAX(v.min_allocation_size, req.size),
-            .memoryTypeIndex =
-                FindMemoryType(vk::MemoryPropertyFlagBits::eHostVisible, req.memoryTypeBits),
-        };
-        info.upload_buffer_memory = CheckVkResult(v.device.allocateMemory(alloc_info, v.allocator));
-        CheckVkErr(v.device.bindBufferMemory(info.upload_buffer, info.upload_buffer_memory, 0));
-    }
-
-    // Upload to Buffer
-    {
-        char* map = (char*)CheckVkResult(v.device.mapMemory(info.upload_buffer_memory, 0, size));
-        memcpy(map, data, size);
-        vk::MappedMemoryRange range[1]{
-            {
-                .memory = info.upload_buffer_memory,
-                .size = size,
-            },
-        };
-        CheckVkErr(v.device.flushMappedMemoryRanges(range));
-        v.device.unmapMemory(info.upload_buffer_memory);
-    }
-
-    // Copy to Image
-    {
-        vk::ImageMemoryBarrier copy_barrier[1]{
-            {
-                .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
-                .oldLayout = vk::ImageLayout::eUndefined,
-                .newLayout = vk::ImageLayout::eTransferDstOptimal,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .image = info.image,
-                .subresourceRange{
-                    .aspectMask = vk::ImageAspectFlagBits::eColor,
-                    .levelCount = 1,
-                    .layerCount = 1,
-                },
-            },
-        };
-        info.command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eHost,
-                                            vk::PipelineStageFlagBits::eTransfer, {}, {}, {},
-                                            {copy_barrier});
-
-        vk::BufferImageCopy region{
-            .imageSubresource{
-                .aspectMask = vk::ImageAspectFlagBits::eColor,
-                .layerCount = 1,
-            },
-            .imageExtent{
-                .width = width,
-                .height = height,
-                .depth = 1,
-            },
-        };
-        info.command_buffer.copyBufferToImage(info.upload_buffer, info.image,
-                                              vk::ImageLayout::eTransferDstOptimal, {region});
-
-        vk::ImageMemoryBarrier use_barrier[1]{{
-            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-            .dstAccessMask = vk::AccessFlagBits::eShaderRead,
-            .oldLayout = vk::ImageLayout::eTransferDstOptimal,
-            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = info.image,
-            .subresourceRange{
-                .aspectMask = vk::ImageAspectFlagBits::eColor,
-                .levelCount = 1,
-                .layerCount = 1,
-            },
-        }};
-        info.command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                                            vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {},
-                                            {use_barrier});
-    }
-
-    CheckVkErr(info.command_buffer.end());
-
-    return info;
-}
-
 void RemoveTexture(ImTextureID texture) {
     IM_ASSERT(texture != nullptr);
     VkData* bd = GetBackendData();
@@ -1150,15 +952,6 @@ bool CreateDeviceObjects() {
 
     CreatePipeline(v.device, v.allocator, v.pipeline_cache, nullptr, &bd->pipeline, v.subpass);
 
-    if (bd->command_pool == VK_NULL_HANDLE) {
-        vk::CommandPoolCreateInfo info{
-            .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-            .queueFamilyIndex = v.queue_family,
-        };
-        std::unique_lock lk(bd->command_pool_mutex);
-        bd->command_pool = CheckVkResult(v.device.createCommandPool(info, v.allocator));
-    }
-
     if (!bd->simple_sampler) {
         // Bilinear sampling is required by default. Set 'io.Fonts->Flags |=
         // ImFontAtlasFlags_NoBakedLines' or 'style.AntiAliasedLinesUseTex = false' to allow
@@ -1191,11 +984,6 @@ void ImGuiImplVulkanDestroyDeviceObjects() {
     }
     for (auto& buffers : bd->upload_buffers) {
         DestroyStagingBuffers(buffers);
-    }
-    if (bd->command_pool) {
-        std::unique_lock lk(bd->command_pool_mutex);
-        v.device.destroyCommandPool(bd->command_pool, v.allocator);
-        bd->command_pool = VK_NULL_HANDLE;
     }
     if (bd->shader_module_vert) {
         v.device.destroyShaderModule(bd->shader_module_vert, v.allocator);

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/imgui/renderer/imgui_impl_vulkan.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-18
 // License texts: third_party/shadps4/LICENSES/
 
 // Based on imgui_impl_vulkan.h from Dear ImGui repository
@@ -38,29 +38,8 @@ struct InitInfo {
     void (*check_vk_result_fn)(vk::Result err);
 };
 
-// Prepare all resources needed for uploading textures
-// Caller should clean up the returned data.
-struct UploadTextureData {
-    vk::Image image;
-    vk::ImageView image_view;
-    vk::DeviceMemory image_memory;
-
-    vk::CommandBuffer command_buffer; // Submit to the queue
-    vk::Buffer upload_buffer;
-    vk::DeviceMemory upload_buffer_memory;
-
-    ImTextureID im_texture;
-
-    void Upload();
-
-    void Destroy();
-};
-
 ImTextureID AddTexture(vk::ImageView image_view, vk::ImageLayout image_layout,
                        vk::Sampler sampler = VK_NULL_HANDLE);
-
-UploadTextureData UploadTexture(const void* data, vk::Format format, u32 width, u32 height,
-                                size_t size);
 
 void RemoveTexture(ImTextureID descriptor_set);
 
