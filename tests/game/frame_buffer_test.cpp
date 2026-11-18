@@ -6,6 +6,9 @@
 #include <sys/mman.h>
 
 #include <cstdint>
+#include <fstream>
+#include <sstream>
+#include <string>
 
 #include <gtest/gtest.h>
 
@@ -73,13 +76,37 @@ TEST(GraphicsHeapSize, GrowsWithThePixelsAbove1080p) {
     EXPECT_GT(graphics_private_heap_size(1984, 1116), graphics_private_heap_default);
 }
 
+// The permissions ("r-xp" and the like) of the mapping in /proc/self/maps that holds `address`.
+std::string mapping_permissions(std::uintptr_t address) {
+    std::ifstream maps("/proc/self/maps");
+    std::string line;
+    while (std::getline(maps, line)) {
+        std::istringstream in(line);
+        std::uintptr_t start = 0;
+        std::uintptr_t end = 0;
+        char dash = 0;
+        std::string permissions;
+        in >> std::hex >> start >> dash >> end >> permissions;
+        if (start <= address && address < end) {
+            return permissions;
+        }
+    }
+    return "";
+}
+
 TEST_F(EbootTest, SetGraphicsHeapSizeWritesTheTableEntry) {
+    const std::uintptr_t entry = image().runtime(graphics_private_heap_size_entry);
+    const std::string before = mapping_permissions(entry);
+    EXPECT_EQ(before.substr(0, 3), "r-x");
     bb::game::set_graphics_heap_size(image(), 3840, 2160);
     EXPECT_EQ(table_size(1, 3), graphics_private_heap_size(3840, 2160));
     EXPECT_EQ(table_size(1, 4), 0x37600000U);
     EXPECT_EQ(table_size(1, 2), 0x09800000U);
+    // The page gets its protection back: the game's read-only data stays read-only.
+    EXPECT_EQ(mapping_permissions(entry), before);
     bb::game::set_graphics_heap_size(image(), 1920, 1080);
     EXPECT_EQ(table_size(1, 3), graphics_private_heap_default);
+    EXPECT_EQ(mapping_permissions(entry), before);
 }
 
 }  // namespace

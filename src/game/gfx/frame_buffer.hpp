@@ -56,6 +56,14 @@ constexpr std::uint64_t graphics_private_heap_size(std::uint32_t width, std::uin
     return graphics_private_heap_default + (extra + mib - 1) / mib * mib;
 }
 
+// The largest size bb-run takes, 3840x2160, gives 3996 MiB: below 4 GiB like the sizes measured,
+// and with the other heaps (4478 MiB together) inside the 8 GiB of direct memory the kernel layer
+// has (src/hle/kernel/dmem.hpp).
+static_assert(graphics_private_heap_size(3840, 2160) < (std::uint64_t{1} << 32));
+static_assert(graphics_private_heap_size(3840, 2160) - graphics_private_heap_default +
+                  std::uint64_t{4478} * (1 << 20) <
+              (std::uint64_t{8} << 30));
+
 // Writes graphics_private_heap_size(width, height) into the heap size table of `eboot`. Called
 // once after the eboot is mapped and before its entry point runs: the heaps are set up at start.
 // The table lies in the read-only segment; on a finalized image the page is made writable for the
