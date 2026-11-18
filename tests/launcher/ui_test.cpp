@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -11,8 +12,10 @@
 #include <vector>
 
 #include <SDL3/SDL.h>
+#include <fontconfig/fontconfig.h>
 #include <gtest/gtest.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include "launcher/fonts.hpp"
 #include "launcher/header_image.hpp"
@@ -138,6 +141,36 @@ TEST_F(Sdl, HeaderImageIsNullForMissingOrBrokenFiles) {
     fs::remove(bad);
 }
 
+// The label of a state's first button.
+const char* first_label(const Strings& t, Action a) {
+    switch (a) {
+    case Action::set_up: return t.set_up;
+    case Action::play: return t.play;
+    case Action::help: return t.help;
+    default: return "";
+    }
+}
+
+// Whether fontconfig matches "sans-serif" to a TrueType or CFF file, the fonts load_fonts uses.
+bool system_sans_available() {
+    bool found = false;
+    FcPattern* pattern = FcNameParse(reinterpret_cast<const FcChar8*>("sans-serif"));
+    FcConfigSubstitute(nullptr, pattern, FcMatchPattern);
+    FcDefaultSubstitute(pattern);
+    FcResult result;
+    if (FcPattern* match = FcFontMatch(nullptr, pattern, &result)) {
+        FcChar8* format = nullptr;
+        FcChar8* file = nullptr;
+        found = FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch &&
+                FcPatternGetString(match, FC_FONTFORMAT, 0, &format) == FcResultMatch &&
+                (std::strcmp(reinterpret_cast<char*>(format), "TrueType") == 0 ||
+                 std::strcmp(reinterpret_cast<char*>(format), "CFF") == 0);
+        FcPatternDestroy(match);
+    }
+    FcPatternDestroy(pattern);
+    return found;
+}
+
 TEST(LauncherUi, DrawsTheMainScreenForEveryStateWithoutPressing) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -158,11 +191,18 @@ TEST(LauncherUi, DrawsTheMainScreenForEveryStateWithoutPressing) {
             MainView view;
             view.state = s;
             view.status = "status";
+            view.focus_first = true;
             ImGui::NewFrame();
             ImGui::SetNextWindowPos(ImVec2(0, 0));
             ImGui::SetNextWindowSize(io.DisplaySize);
             ImGui::Begin("w");
             EXPECT_EQ(draw_main_screen(ctx, view), Action::none);
+            // The focus is on the state's own first button, in the context's language (a
+            // bevel_button's ID is its label's, then "##b").
+            ImGui::PushID(first_label(*ctx.text, first_button(s)));
+            const ImGuiID first = ImGui::GetID("##b");
+            ImGui::PopID();
+            EXPECT_EQ(ImGui::GetFocusID(), first) << static_cast<int>(s);
             ImGui::End();
             ImGui::Render();
             EXPECT_GT(ImGui::GetDrawData()->CmdListsCount, 0);
@@ -176,9 +216,12 @@ TEST(LauncherUi, DrawsTheMainScreenForEveryStateWithoutPressing) {
 }
 
 TEST(LauncherUi, FontsLoad) {
+    if (!system_sans_available()) {
+        GTEST_SKIP() << "fontconfig finds no TrueType or CFF sans-serif font on this machine";
+    }
     ImGui::CreateContext();
-    (void)load_fonts(16.0f);  // the system font or the built-in fallback, whichever exists here
-    EXPECT_GT(ImGui::GetIO().Fonts->Fonts.Size, 0);
+    EXPECT_TRUE(load_fonts(16.0f));  // the system font, not the built-in fallback
+    EXPECT_EQ(ImGui::GetIO().Fonts->Fonts.Size, 1);
     ImGui::DestroyContext();
 }
 
