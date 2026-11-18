@@ -11,6 +11,7 @@
 #include <format>
 #include <fstream>
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include "launcher/gpu_probe.hpp"
 #include "launcher/help_report.hpp"
@@ -132,6 +133,11 @@ public:
         }
         ImGui::EndChild();
         ImGui::SetCursorPosX(24 * s);
+        if (!focused_) {  // gamepad navigation starts at the first button
+            ImGui::SetKeyboardFocusHere();
+            ImGui::GetCurrentContext()->NavCursorVisible = true;
+            focused_ = true;
+        }
         if (bevel_button(copied_ ? t.copied : t.copy, ImVec2(432 * s, 40 * s))) {
             ImGui::SetClipboardText(collect_problem_report(ctx).c_str());
             copied_ = true;
@@ -153,6 +159,7 @@ public:
     }
 
     bool copied_ = false;
+    bool focused_ = false;
 };
 
 }  // namespace

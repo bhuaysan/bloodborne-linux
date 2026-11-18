@@ -205,6 +205,21 @@ TEST(LauncherRunGame, SeveralSearchHitsSaveAnOpenPicturePage) {
     EXPECT_EQ(slurp(dir.path() / "config/bloodborne-linux/config.toml"), "fullscreen = true\n");
 }
 
+// The Help page puts the pad's focus on its first button: A copies the report at once, and the
+// button shows it.
+TEST(LauncherRun, TheHelpPageTakesAOnItsFirstButton) {
+    const Dir dir;
+    const auto before = dir.path() / "before.png";
+    const auto after = dir.path() / "after.png";
+    const auto r = run_script(
+        dir, std::format("wait 3\npress down\nwait 2\npress down\nwait 2\npress down\nwait 2\n"
+                         "press accept\nwait 5\nshot {}\nwait 2\npress accept\nwait 5\nshot {}\n"
+                         "wait 2\nquit\n",
+                         before.string(), after.string()));
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(slurp(before), slurp(after));
+}
+
 // The Picture and sound page with the pad alone: fullscreen, 60 frames and extra sharp are chosen
 // with the d-pad and A, and Back writes them to the config file.
 TEST(LauncherRun, ThePicturePageSavesItsChoicesOnBack) {
