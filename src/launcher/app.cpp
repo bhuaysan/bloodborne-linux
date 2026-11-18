@@ -299,7 +299,13 @@ private:
         }
         // The callback gets its own reference; SDL calls back once.
         auto* ref = new std::shared_ptr<DialogMailbox>(dialog_);
-        SDL_ShowOpenFolderDialog(on_folder_chosen, ref, window_, nullptr, false);
+        // SDL reads the properties during the call, as its own SDL_ShowOpenFolderDialog does.
+        const SDL_PropertiesID props = SDL_CreateProperties();
+        SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_WINDOW_POINTER, window_);
+        SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING,
+                              strings(lang_).dialog_title);
+        SDL_ShowFileDialogWithProperties(SDL_FILEDIALOG_OPENFOLDER, on_folder_chosen, ref, props);
+        SDL_DestroyProperties(props);
     }
 
     // ---- the game ---------------------------------------------------------------------------
