@@ -29,7 +29,8 @@ void set_frame_buffer_size(std::uint32_t width, std::uint32_t height);
 // when that is 0, from the row of Master_ps4_GFXMIX; both indices come from configuration names
 // in data. GFX_GraphicsPrivate has no flexible size, so its size is the Master_ps4_GFXMIX entry.
 inline constexpr std::uint64_t heap_size_table = 0x04736d40;
-inline constexpr std::uint64_t graphics_private_heap_size_entry = heap_size_table + 1 * 0x80 + 3 * 8;
+inline constexpr std::uint64_t graphics_private_heap_size_entry =
+    heap_size_table + 1 * 0x80 + 3 * 8;
 inline constexpr std::uint64_t graphics_private_heap_default = 0x8ef00000;  // 2287 MiB
 
 // GFX_GraphicsPrivate and GFX_GraphicsPrivateB (886 MiB) form the mix allocator
@@ -57,8 +58,8 @@ constexpr std::uint64_t graphics_private_heap_size(std::uint32_t width, std::uin
 }
 
 // The largest size bb-run takes, 3840x2160, gives 3996 MiB: below 4 GiB like the sizes measured,
-// and with the other heaps (4478 MiB together) inside the 8 GiB of direct memory the kernel layer
-// has (src/hle/kernel/dmem.hpp).
+// and the row's heaps, 4478 MiB together at the default size, stay inside the 8 GiB of direct
+// memory the kernel layer has (src/hle/kernel/dmem.hpp).
 static_assert(graphics_private_heap_size(3840, 2160) < (std::uint64_t{1} << 32));
 static_assert(graphics_private_heap_size(3840, 2160) - graphics_private_heap_default +
                   std::uint64_t{4478} * (1 << 20) <

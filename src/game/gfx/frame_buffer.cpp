@@ -23,9 +23,10 @@ void set_graphics_heap_size(loader::Image& eboot, std::uint32_t width, std::uint
         std::memcpy(at, &size, sizeof size);
         return;
     }
-    const loader::Segment* segment = eboot.segment_at(graphics_private_heap_size_entry, sizeof size);
+    const loader::Segment* segment =
+        eboot.segment_at(graphics_private_heap_size_entry, sizeof size);
     if (segment == nullptr) {
-        throw std::out_of_range("set_graphics_heap_size: the heap size entry lies outside a segment");
+        throw std::out_of_range("set_graphics_heap_size: the heap entry lies outside a segment");
     }
     const std::uint64_t start = common::page_down(reinterpret_cast<std::uintptr_t>(at));
     const std::uint64_t end = common::page_up(reinterpret_cast<std::uintptr_t>(at) + sizeof size);

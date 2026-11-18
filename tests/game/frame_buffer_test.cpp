@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 #include <gtest/gtest.h>
 
@@ -61,6 +62,16 @@ TEST_F(EbootTest, HeapSizeTableHoldsTheGraphicsHeaps) {
     EXPECT_EQ(heap_size_table + 0x80 + 3 * 8, graphics_private_heap_size_entry);
     // Master_ps4_flexible (row 2), which the heap setup reads first, has no GFX_GraphicsPrivate.
     EXPECT_EQ(table_size(2, 3), 0U);
+    // The rows and the column by the names the heap setup compares: the configuration names at
+    // 0x05358c70 and the heap names at 0x05358cc0, pointers to UTF-16 strings.
+    const auto name = [](std::uint64_t pointer_link) {
+        return std::u16string_view(
+            reinterpret_cast<const char16_t*>(bb::game::global<std::uintptr_t>(pointer_link)));
+    };
+    EXPECT_EQ(name(0x05358c70 + 1 * 8), u"Master_ps4_GFXMIX");
+    EXPECT_EQ(name(0x05358c70 + 2 * 8), u"Master_ps4_flexible");
+    EXPECT_EQ(name(0x05358cc0 + 3 * 8), u"GFX_GraphicsPrivate");
+    EXPECT_EQ(name(0x05358cc0 + 4 * 8), u"GFX_GraphicsPrivateB");
 }
 
 TEST(GraphicsHeapSize, GrowsWithThePixelsAbove1080p) {
