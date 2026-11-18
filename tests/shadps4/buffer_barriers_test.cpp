@@ -1,5 +1,5 @@
-// The runtime's buffer barrier tracking (src/shadps4/video_core/renderer_vulkan/vk_buffer_barriers.h):
-// the hazards that need a barrier are found (read after write, write after write, write after
+// The runtime's buffer barrier tracking
+// (src/shadps4/video_core/renderer_vulkan/vk_buffer_barriers.h): the hazards that need a barrier are found (read after write, write after write, write after
 // read), the ones that don't are not, and over random accesses it answers exactly as the
 // tracking it replaced (#593): one read and one write interval list per buffer, added to on
 // every access. Needs no Vulkan device.
@@ -34,8 +34,9 @@ TEST(BufferBarriers, ReadAfterWriteIsAHazard) {
 TEST(BufferBarriers, WriteAfterWriteIsAHazard) {
     BufferBarrierTracker tracker;
     BufferBarrierSlot buffer;
-    tracker.Access(buffer, 0x100, 0x100, kRead, kWrite);
+    tracker.Access(buffer, 0x100, 0x100, !kRead, kWrite);
     EXPECT_TRUE(tracker.IsAccessed(buffer, 0x100, 0x100, true));
+    EXPECT_TRUE(tracker.IsAccessed(buffer, 0x100, 0x100, false));
 }
 
 TEST(BufferBarriers, WriteAfterReadIsAHazardOnlyWhenReadsAreChecked) {
@@ -115,9 +116,13 @@ TEST(BufferBarriers, EmptyAndWrappingRangesAreIgnored) {
     EXPECT_FALSE(tracker.IsAccessed(buffer, 0x0, 0x1000, true));
     tracker.Access(buffer, 0x0, 0x1000, kRead, kWrite);
     EXPECT_FALSE(tracker.IsAccessed(buffer, 0x100, 0, true));
+    EXPECT_FALSE(tracker.IsAccessed(buffer, ~std::uint64_t{0} - 0xf, 0x20, true));
+    tracker.Access(buffer, ~std::uint64_t{0} - 0x1f, 0x10, !kRead, kWrite);
+    EXPECT_TRUE(tracker.IsAccessed(buffer, ~std::uint64_t{0} - 0x18, 0x8, false));
 }
 
-// The tracking before #593, as Runtime had it.
+// The tracking before #593, as Runtime had it (from shadPS4's vk_runtime.cpp: AccessBuffer,
+// IsBufferAccessed and the clear in FlushBarriers).
 class ReferenceTracker {
 public:
     explicit ReferenceTracker(std::size_t buffers) : lists(buffers) {}
@@ -158,7 +163,9 @@ private:
 };
 
 TEST(BufferBarriers, MatchesTheReferenceOverRandomAccesses) {
-    constexpr std::size_t kBuffers = 6;
+    // A few busy buffers and many rarely touched ones, so the tracker's entries grow and are
+    // reused across batches.
+    constexpr std::size_t kBuffers = 64;
     std::mt19937_64 rng(593);
     BufferBarrierTracker tracker;
     ReferenceTracker reference(kBuffers);
@@ -166,18 +173,21 @@ TEST(BufferBarriers, MatchesTheReferenceOverRandomAccesses) {
     std::size_t checks = 0;
     std::size_t hazards = 0;
     for (int step = 0; step < 300000; ++step) {
-        const std::size_t buffer = rng() % kBuffers;
+        const std::size_t buffer = rng() % 4 == 0 ? rng() % kBuffers : rng() % 4;
         // Small sizes over a small space, so ranges touch, overlap, repeat and leave one-word
-        // gaps often; a few accesses span the whole buffer, like the GDS buffer.
-        const std::uint64_t offset = (rng() % 64) * 4;
+        // gaps often; a few accesses span the whole buffer, like the GDS buffer, and a few sit at
+        // the top of the address space, where some wrap.
+        const std::uint64_t base = rng() % 128 == 0 ? ~std::uint64_t{0} - 0xff : 0;
+        const std::uint64_t offset = base + (rng() % 64) * 4;
         const std::uint64_t size = rng() % 64 == 0 ? 256 : (rng() % 5) * 4;
         const unsigned op = rng() % 1000;
         if (op < 4) {
             tracker.Clear();
             reference.Clear();
         } else if (op < 500) {
+            // Now and then neither, as for an access flag outside both masks.
             const bool is_write = rng() % 4 == 0;
-            const bool is_read = !is_write || rng() % 2 == 0;
+            const bool is_read = rng() % 64 != 0 && (!is_write || rng() % 2 == 0);
             tracker.Access(slots[buffer], offset, size, is_read, is_write);
             reference.Access(buffer, offset, size, is_read, is_write);
         } else {

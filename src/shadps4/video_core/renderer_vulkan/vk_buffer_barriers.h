@@ -1,6 +1,7 @@
-// SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2024-2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_runtime.h @11557f2eb60b3b00712c8887c30852de7615d6df
+// Source: shadPS4 src/video_core/renderer_vulkan/vk_runtime.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
 // Changed for bloodborne-linux, 2026-11-18
 // License texts: third_party/shadps4/LICENSES/
 
@@ -20,7 +21,9 @@
 
 namespace Vulkan {
 
-/// Where a buffer's ranges sit in the tracker. A buffer carries one; the tracker sets it.
+/// Where a buffer's ranges sit in the tracker. A buffer carries one; the tracker sets it. A slot
+/// belongs to one tracker for the buffer's whole life: there is one Runtime, and the buffers die
+/// before it.
 struct BufferBarrierSlot {
     u64 batch = 0; ///< Batch that `index` belongs to; 0 is never a batch.
     u32 index = 0;
