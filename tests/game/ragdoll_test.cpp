@@ -27,10 +27,7 @@ using bb::harness::Result;
 using bb::hook::Replacement;
 using bb::test::EbootTest;
 
-template <class T>
-T& at(void* object, std::size_t offset) {
-    return *reinterpret_cast<T*>(static_cast<std::byte*>(object) + offset);
-}
+using bb::game::at;
 
 std::uint32_t bits(float f) {
     std::uint32_t b = 0;
@@ -265,16 +262,7 @@ const Call* only_call(What what) {
     return found;
 }
 
-class RagdollTest : public EbootTest {
-protected:
-    void SetUp() override {
-        EbootTest::SetUp();
-        if (IsSkipped()) {
-            return;
-        }
-        bb::game::set_ragdoll_patch_targets();
-    }
-};
+using RagdollTest = EbootTest;
 
 TEST_F(RagdollTest, PoseSyncMatchesAt30) {
     const CalleeFakes fakes;
@@ -422,6 +410,10 @@ constexpr std::array<std::uint8_t, 18> behind_impulse = {0xc4, 0xc1, 0x78, 0x28,
 constexpr std::array<std::uint8_t, 14> behind_pull = {0xc5, 0xf8, 0x29, 0x85, 0x70, 0xff, 0xff,
                                                       0xff, 0x48, 0x89, 0xd7, 0x44, 0x89, 0xfe};
 
+// The capture stubs end the run and never jump back, but apply wants a continuation for every
+// patch.
+std::uint64_t capture_back = 0;
+
 class RagdollPatchTest : public RagdollTest {
 protected:
     void SetUp() override {
@@ -432,10 +424,11 @@ protected:
         captures_.emplace(
             std::array{Replacement{bb::game::ragdoll_impulse_continue,
                                    reinterpret_cast<void*>(&ragdoll_test_capture),
-                                   "capture_impulse", behind_impulse, bb::game::ragdoll_update},
+                                   "capture_impulse", behind_impulse, bb::game::ragdoll_update,
+                                   &capture_back},
                        Replacement{bb::game::ragdoll_root_pull_continue,
                                    reinterpret_cast<void*>(&ragdoll_test_capture), "capture_pull",
-                                   behind_pull, bb::game::ragdoll_update}});
+                                   behind_pull, bb::game::ragdoll_update, &capture_back}});
     }
     void TearDown() override { captures_.reset(); }
 

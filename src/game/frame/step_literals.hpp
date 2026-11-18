@@ -58,14 +58,15 @@ inline constexpr std::array<std::uint8_t, 16> chr_fade_add_patched = {
     0xc5, 0xfa, 0x58, 0x05, 0xa5, 0x7f, 0x11, 0x03,
     0xc5, 0xfa, 0x5d, 0x05, 0x99, 0x7f, 0x11, 0x03};
 
-// Points the stubs at the image's code behind their patches. Called once before the hooks run
-// game code (bb-run's start, and the tests).
-void set_step_literal_targets();
+// hook::apply jumps each stub back behind its patched bytes; these are those places.
+static_assert(sfx_step_continue == sfx_step_load + sfx_step_patched.size());
+static_assert(shop_tab_continue == shop_tab_update + shop_tab_update_patched.size());
+static_assert(chr_fade_continue == chr_fade_add + chr_fade_add_patched.size());
 
 }  // namespace bb::game
 
 // The stubs (BB_PATCH), written in assembly for their places, and what they read besides
-// bb_frame_step: the absolute addresses to jump back to.
+// bb_frame_step: the absolute addresses to jump back to, which hook::apply fills.
 extern "C" {
 void bb_sfx_step_stub();
 void bb_shop_tab_update_stub();

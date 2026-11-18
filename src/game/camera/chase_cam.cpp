@@ -14,16 +14,6 @@
 namespace bb::game {
 namespace {
 
-float load(const void* cam, std::uint32_t offset) {
-    float value;
-    std::memcpy(&value, static_cast<const std::byte*>(cam) + offset, sizeof value);
-    return value;
-}
-
-void store(void* cam, std::uint32_t offset, float value) {
-    std::memcpy(static_cast<std::byte*>(cam) + offset, &value, sizeof value);
-}
-
 bool is_fraction(float k) {
     return k >= 0.0f && k <= 1.0f;
 }
@@ -52,25 +42,26 @@ struct Eased {
     float own_reset, reset_set;    // the reset value, and the one before the call
 
     void prepare(void* cam) const {
-        store(cam, offset, set);
-        store(cam, reset, reset_set);
+        store<float>(cam, offset, set);
+        store<float>(cam, reset, reset_set);
     }
 
     // After the call: a reset gives the reset value, a skipped ease the own value, an ease the
     // eased one.
     void settle(void* cam) const {
-        const float now = load(cam, offset);
-        store(cam, reset, own_reset);
-        store(cam, offset, now == reset_set ? own_reset : now == set ? own : eased);
+        const float now = load<float>(cam, offset);
+        store<float>(cam, reset, own_reset);
+        store<float>(cam, offset, now == reset_set ? own_reset : now == set ? own : eased);
     }
 };
 
 // An eased factor read before its ease: the game uses the value it had before the call.
 Eased eased_factor(const void* cam, std::uint32_t offset, std::uint32_t target,
                    std::uint32_t reset, double calls) {
-    const float own = load(cam, offset);
-    const float eased = own + (load(cam, target) - own) * scale_factor(chase_cam::rate_ease, calls);
-    const float own_reset = load(cam, reset);
+    const float own = load<float>(cam, offset);
+    const float eased =
+        own + (load<float>(cam, target) - own) * scale_factor(chase_cam::rate_ease, calls);
+    const float own_reset = load<float>(cam, reset);
     return {offset, reset, own, eased, scale_factor(own, calls), own_reset, own_reset};
 }
 
@@ -89,14 +80,14 @@ void chase_cam_update_scaled(ChaseCamUpdate* original, double calls, bool eases,
     std::size_t n = 0;
     for (std::uint32_t offset : factors) {
         if (offset != follow_rate && offset != lag_rate) {
-            const float own = load(cam, offset);
+            const float own = load<float>(cam, offset);
             plain[n++] = {offset, own, scale_factor(own, calls)};
         }
     }
-    const float keep = load(cam, pitch_keep);
+    const float keep = load<float>(cam, pitch_keep);
     plain[n++] = {pitch_keep, keep, scale_kept(keep, calls)};
     for (std::uint32_t offset : {stick_x_scale, stick_y_scale}) {
-        const float own = load(cam, offset);
+        const float own = load<float>(cam, offset);
         plain[n++] = {offset, own, static_cast<float>(own / calls)};
     }
 
@@ -108,37 +99,37 @@ void chase_cam_update_scaled(ChaseCamUpdate* original, double calls, bool eases,
     Eased lag = eased_factor(cam, lag_rate, lag_rate_target, lag_rate_reset, calls);
     if (eases) {
         const float lag_used = scale_factor(lag.eased, calls);
-        lag.set = (lag_used - load(cam, lag_rate_target) * rate_ease) / (1.0f - rate_ease);
+        lag.set = (lag_used - load<float>(cam, lag_rate_target) * rate_ease) / (1.0f - rate_ease);
     }
     lag.reset_set = scale_factor(lag.own_reset, calls);
 
     // input_weight: the game drops it by `fade` once the hold has run out (as it computes
     // that), then uses it. It is set so that the dropped value is the scaled one.
-    const float own_weight = load(cam, input_weight);
-    const float fade = dt / load(cam, input_fade_time);
-    const bool fades = !(0.0f < std::max(0.0f, load(cam, input_hold) - dt));
+    const float own_weight = load<float>(cam, input_weight);
+    const float fade = dt / load<float>(cam, input_fade_time);
+    const bool fades = !(0.0f < std::max(0.0f, load<float>(cam, input_hold) - dt));
     const float weight = fades ? std::max(0.0f, own_weight - fade) : own_weight;
     const float weight_used = scale_factor(weight, calls);
     const float weight_set = fades ? weight_used + fade : weight_used;
 
     for (std::size_t i = 0; i < n; ++i) {
-        store(cam, plain[i].offset, plain[i].scaled);
+        store<float>(cam, plain[i].offset, plain[i].scaled);
     }
     follow.prepare(cam);
     lag.prepare(cam);
-    store(cam, input_weight, weight_set);
+    store<float>(cam, input_weight, weight_set);
 
     original(cam, chr, world, dt);
 
     for (std::size_t i = 0; i < n; ++i) {
-        store(cam, plain[i].offset, plain[i].own);
+        store<float>(cam, plain[i].offset, plain[i].own);
     }
     follow.settle(cam);
     lag.settle(cam);
     // Camera input sets the weight to 1; a call that didn't drop it gives the own value back.
-    const float now_weight = load(cam, input_weight);
+    const float now_weight = load<float>(cam, input_weight);
     if (now_weight != 1.0f) {
-        store(cam, input_weight, now_weight == weight_set ? own_weight : weight);
+        store<float>(cam, input_weight, now_weight == weight_set ? own_weight : weight);
     }
 }
 
@@ -147,7 +138,8 @@ void chase_cam_update(void* cam, void* chr, void* world, float dt) {
     auto* const original =
         reinterpret_cast<ChaseCamUpdate*>(hook::original(image(), 0x0143ac60));
     const bool eases = global<std::uint8_t>(0x05127a94) != 0;  // camera collision on
-    chase_cam_update_scaled(original, frame_rate() / 30.0, eases, cam, chr, world, dt);
+    chase_cam_update_scaled(original, static_cast<double>(frame_rate_scale()), eases, cam, chr,
+                            world, dt);
 }
 
 }  // namespace bb::game

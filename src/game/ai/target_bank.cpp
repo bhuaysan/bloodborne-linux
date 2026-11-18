@@ -22,7 +22,7 @@ void target_bank_scan_tick(void* manager) {
     static unsigned count = 0;
     target_bank_scan_tick_every(
         reinterpret_cast<TargetBankScanTick*>(hook::original(image(), 0x012a43b0)),
-        frame_rate() / default_frame_rate, count, manager);
+        frame_rate_scale(), count, manager);
 }
 
 }  // namespace bb::game

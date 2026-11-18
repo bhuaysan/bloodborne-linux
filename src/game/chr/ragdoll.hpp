@@ -71,13 +71,14 @@ inline constexpr std::array<std::uint8_t, 17> ragdoll_root_pull_patched = {
     0xc5, 0xf2, 0x59, 0x0d, 0x82, 0x84, 0x11, 0x03, 0xc5,
     0xf9, 0x70, 0xc9, 0x00, 0xc5, 0xf8, 0x59, 0xc1};
 
-// Points the two stubs at the image's code behind their patches. Called once before the hooks run
-// game code (bb-run's start, and the tests).
-void set_ragdoll_patch_targets();
+// hook::apply jumps each stub back behind its patched bytes; these are those places.
+static_assert(ragdoll_impulse_continue == ragdoll_impulse_load + ragdoll_impulse_patched.size());
+static_assert(ragdoll_root_pull_continue == ragdoll_root_pull + ragdoll_root_pull_patched.size());
 
 }  // namespace bb::game
 
-// The stubs (BB_PATCH), written in assembly for their places, and their jump targets.
+// The stubs (BB_PATCH), written in assembly for their places, and their jump targets, which
+// hook::apply fills.
 extern "C" {
 void bb_ragdoll_impulse_stub();
 void bb_ragdoll_root_pull_stub();

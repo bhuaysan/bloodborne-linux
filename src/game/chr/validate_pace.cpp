@@ -32,7 +32,7 @@ std::uint32_t WorldFrames::frame(std::uint32_t counter, std::uint32_t main_loop_
 // 0x018b9890
 bool chr_validate(ValidateBudget* budget, void* chr) {
     auto* const original = reinterpret_cast<ChrValidate*>(hook::original(image(), 0x018b9890));
-    const auto scale = static_cast<std::int32_t>(frame_rate() / default_frame_rate);
+    const auto scale = static_cast<std::int32_t>(frame_rate_scale());
     const char* const world = global<const char*>(world_chr_man);
     if (scale <= 1 || world == nullptr) {
         return original(budget, chr);

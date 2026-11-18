@@ -17,6 +17,11 @@ inline constexpr unsigned default_frame_rate = 30;
 void set_frame_rate(unsigned fps);
 unsigned frame_rate();
 
+// Frames per 30 FPS frame, frame_rate() / default_frame_rate: 1 at 30, 2 at 60.
+inline unsigned frame_rate_scale() {
+    return frame_rate() / default_frame_rate;
+}
+
 // 1 / frame_rate() seconds as a float: the pacer's frame time and the main loop's time step. At
 // 30 it is the game's own constant 0x3d088889.
 float frame_step();

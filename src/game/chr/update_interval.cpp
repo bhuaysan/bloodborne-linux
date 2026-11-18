@@ -7,8 +7,8 @@
 #include "game/image.hpp"
 #include "hook/hook.hpp"
 
-// Read by the stub. Set on the main thread by world_chr_update before the check runs, on the
-// same thread, in the same call.
+// Read by the stub. The scale is set on the main thread by world_chr_update before the check
+// runs, on the same thread, in the same call; hook::apply fills the jump targets (BB_PATCH).
 extern "C" {
 std::int32_t bb_chr_due_scale = 1;
 std::uint64_t bb_chr_due_continue = 0;
@@ -53,14 +53,19 @@ bb_chr_due_check_stub:
 
 namespace bb::game {
 
-void set_chr_due_check(std::int32_t scale) {
+namespace {
+
+// The due check's other way out, besides its continuation.
+constexpr hook::JumpTarget chr_due_targets[] = {{chr_not_due_continue, &bb_chr_due_not_due}};
+
+}  // namespace
+
+void set_chr_due_scale(std::int32_t scale) {
     bb_chr_due_scale = scale;
-    bb_chr_due_continue = image().runtime(chr_due_continue);
-    bb_chr_due_not_due = image().runtime(chr_not_due_continue);
 }
 
 void world_chr_update_with(WorldChrUpdate* original, float step, void* world) {
-    set_chr_due_check(static_cast<std::int32_t>(frame_rate() / default_frame_rate));
+    set_chr_due_scale(static_cast<std::int32_t>(frame_rate_scale()));
     original(step, world);
 }
 
@@ -73,5 +78,5 @@ void world_chr_update(float step, void* world) {
 }  // namespace bb::game
 
 BB_WRAP(0x019173b0, bb::game::world_chr_update, bb::game::world_chr_update_prologue);
-BB_PATCH(0x019173b0, bb::game::chr_due_check, bb_chr_due_check_stub,
-         bb::game::chr_due_check_patched);
+BB_PATCH_TARGETS(0x019173b0, bb::game::chr_due_check, bb_chr_due_check_stub,
+                 bb::game::chr_due_check_patched, bb_chr_due_continue, bb::game::chr_due_targets);

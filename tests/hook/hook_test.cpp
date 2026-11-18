@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <fstream>
 #include <initializer_list>
 #include <span>
@@ -370,8 +371,12 @@ TEST(Hook, RefusesBadPrologues) {
 
 // A stub for a patch inside `summing` at 0x105, in place of mov ecx, 2; mov edx, 3; add eax, ecx;
 // add eax, edx: the same with 20 and 30, then back to the ret at 0x113. The function returns 51.
+// With hook_test_stub_skip set it skips those adds and jumps to the ret at 0x113 through
+// hook_test_stub_far instead; the function then returns 0.
 extern "C" {
 std::uint64_t hook_test_stub_back = 0;
+std::uint64_t hook_test_stub_far = 0;
+std::uint8_t hook_test_stub_skip = 0;
 void hook_test_stub();
 }
 asm(R"(
@@ -379,6 +384,11 @@ asm(R"(
     .globl hook_test_stub
     .intel_syntax noprefix
 hook_test_stub:
+    cmp byte ptr [rip + hook_test_stub_skip], 0
+    je 1f
+    xor eax, eax
+    jmp qword ptr [rip + hook_test_stub_far]
+1:
     mov ecx, 20
     mov edx, 30
     add eax, ecx
@@ -394,15 +404,18 @@ constexpr std::array<std::uint8_t, 14> summing_middle = {
 
 Replacement inside_patch(std::uint64_t function, std::uint64_t link,
                          std::span<const std::uint8_t> patched, const char* name = "stub") {
-    return Replacement{link, reinterpret_cast<void*>(&hook_test_stub), name, patched, function};
+    return Replacement{link,     reinterpret_cast<void*>(&hook_test_stub),
+                       name,     patched,
+                       function, &hook_test_stub_back};
 }
 
 TEST(Hook, PatchesInsideAFunction) {
     Image image = map_elf(build_elf(), test_base);
     image.finalize_protection();
-    hook_test_stub_back = image.base + 0x113;
+    hook_test_stub_back = 0;
     const Replacement patch[] = {inside_patch(0x100, 0x105, summing_middle)};
     bb::hook::apply(image, patch);
+    EXPECT_EQ(hook_test_stub_back, image.base + 0x113);  // apply filled the continuation
     EXPECT_EQ(image.fn<int()>(0x100)(), 51);
     Patch written = bytes_at(image, 0x105);
     const std::uint8_t jmp[] = {0xff, 0x25, 0, 0, 0, 0};
@@ -437,8 +450,10 @@ TEST(Hook, RefusesBadInsidePatches) {
     changed[6] = 4;
     expect_refusal([&] { apply({inside_patch(0x100, 0x105, changed)}); },
                    "the patched bytes differ from the bytes in memory");
-    const Replacement no_stub[] = {{0x105, nullptr, "null", summing_middle, 0x100}};
+    const Replacement no_stub[] = {
+        {0x105, nullptr, "null", summing_middle, 0x100, &hook_test_stub_back}};
     expect_refusal([&] { bb::hook::apply(image, no_stub); }, "the replacement is null");
+    EXPECT_EQ(image.fn<int()>(0x100)(), 6);  // nothing patched
 
     // Its span counts for overlaps: in the list, and against live hooks either way round.
     auto* a = reinterpret_cast<void*>(&replacement_a);
@@ -460,6 +475,58 @@ TEST(Hook, RefusesBadInsidePatches) {
                                                    "wrapper", summing_prologue}});
     wrapped_image = nullptr;
     EXPECT_EQ(image.fn<int()>(0x100)(), 6);  // nothing left patched
+}
+
+TEST(Hook, RefusesAPatchWithoutItsContinuation) {
+    Image image = map_elf(build_elf(), test_base);
+    image.finalize_protection();
+    // A patch whose continuation global was never named: its stub would jump through 0.
+    Replacement unset = inside_patch(0x100, 0x105, summing_middle, "unset");
+    unset.continuation = nullptr;
+    // Also when another, valid entry comes first: apply patches nothing.
+    const Replacement both[] = {{0x10, reinterpret_cast<void*>(&replacement_a), "a"}, unset};
+    expect_refusal([&] { bb::hook::apply(image, both); },
+                   "hook unset at 0x105: no continuation: the stub would jump back through "
+                   "address 0");
+    EXPECT_EQ(image.fn<int()>(0x100)(), 6);
+    EXPECT_EQ(image.fn<int()>(0x10)(), 42);
+    // A continuation belongs to a patch inside a function only.
+    const Replacement at_entry[] = {
+        {0x10, reinterpret_cast<void*>(&replacement_a), "a", {}, 0, &hook_test_stub_back}};
+    expect_refusal([&] { bb::hook::apply(image, at_entry); },
+                   "hook a at 0x10: a continuation or jump targets, but no patch inside a "
+                   "function");
+}
+
+TEST(Hook, FillsAPatchsJumpTargets) {
+    Image image = map_elf(build_elf(), test_base);
+    image.finalize_protection();
+    hook_test_stub_back = 0;
+    hook_test_stub_far = 0;
+    const bb::hook::JumpTarget far[] = {{0x113, &hook_test_stub_far}};
+    Replacement patch = inside_patch(0x100, 0x105, summing_middle);
+    patch.targets = far;
+    bb::hook::apply(image, std::array{patch});
+    EXPECT_EQ(hook_test_stub_far, image.base + 0x113);
+    hook_test_stub_skip = 1;
+    EXPECT_EQ(image.fn<int()>(0x100)(), 0);  // the stub jumped through the target
+    hook_test_stub_skip = 0;
+    EXPECT_EQ(image.fn<int()>(0x100)(), 51);
+    bb::hook::remove(image, std::array{patch});
+
+    // A target without a slot, or outside the function (0x100, 24 bytes), is refused.
+    const bb::hook::JumpTarget no_slot[] = {{0x113, nullptr}};
+    patch.targets = no_slot;
+    expect_refusal([&] { bb::hook::apply(image, std::array{patch}); },
+                   "hook stub at 0x105: the jump target 0x113 has no slot");
+    for (std::uint64_t outside : {0xffu, 0x118u}) {
+        const bb::hook::JumpTarget away[] = {{outside, &hook_test_stub_far}};
+        patch.targets = away;
+        expect_refusal([&] { bb::hook::apply(image, std::array{patch}); },
+                       std::format("the jump target {:#x} lies outside the function 0x100",
+                                   outside));
+    }
+    EXPECT_EQ(image.fn<int()>(0x100)(), 6);
 }
 
 TEST(HookGame, PatchesAnEbootFunction) {

@@ -38,13 +38,14 @@ inline constexpr std::array<std::uint8_t, 36> chr_due_check_patched = {
 inline constexpr std::uint64_t chr_due_check = 0x01917909;
 inline constexpr std::uint64_t chr_due_continue = 0x0191792d;  // vmulss xmm0, xmm0, [rbp-0xb0]
 inline constexpr std::uint64_t chr_not_due_continue = 0x01917a1b;  // mov [rbp-0xc8], ecx
+// hook::apply jumps the stub back behind the patched bytes.
+static_assert(chr_due_continue == chr_due_check + chr_due_check_patched.size());
 
-// Points the due check's stub at the image's code behind the check and sets the factor of the
-// intervals in it, frame_rate() / 30: with `scale` k a character with interval u > 0 is due every
-// k * u frames with k * u times the frame's step, which at k frames a 30 FPS frame is every u
-// frames and u steps of 30 FPS. The level of detail ([rbp-0xc8], chr+0xe4) stays u. At k = 1 the
-// stub does what the game's bytes do.
-void set_chr_due_check(std::int32_t scale);
+// Sets the factor of the intervals in the due check's stub, frame_rate() / 30: with `scale` k a
+// character with interval u > 0 is due every k * u frames with k * u times the frame's step, which
+// at k frames a 30 FPS frame is every u frames and u steps of 30 FPS. The level of detail
+// ([rbp-0xc8], chr+0xe4) stays u. At k = 1 the stub does what the game's bytes do.
+void set_chr_due_scale(std::int32_t scale);
 
 // Sets the due check for frame_rate(), then runs `original`.
 void world_chr_update_with(WorldChrUpdate* original, float step, void* world);
@@ -55,7 +56,8 @@ void world_chr_update(float step, void* world);
 }  // namespace bb::game
 
 // The stub that replaces the due check (BB_PATCH), written in assembly for that place, and what it
-// reads: the scale and the absolute addresses of chr_due_continue and chr_not_due_continue.
+// reads: the scale and the absolute addresses of chr_due_continue and chr_not_due_continue, which
+// hook::apply fills.
 extern "C" {
 void bb_chr_due_check_stub();
 extern std::int32_t bb_chr_due_scale;

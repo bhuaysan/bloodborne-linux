@@ -114,6 +114,10 @@ constexpr std::array<std::uint8_t, 16> not_due_bytes = {0x89, 0x8d, 0x38, 0xff, 
                                                         0x48, 0x8b, 0x87, 0xd0, 0x61, 0x00,
                                                         0x00, 0x48, 0x85, 0xc0};
 
+// The capture stubs end the run and never jump back, but apply wants a continuation for every
+// patch.
+std::uint64_t capture_back = 0;
+
 // The registered patch of the check (BB_PATCH) and wrapper of the update round (BB_WRAP).
 Replacement registered(std::uint64_t link) {
     for (const Replacement& r : bb::hook::replacements()) {
@@ -150,10 +154,10 @@ protected:
         chr_due_test_entry = bb::game::image().runtime(bb::game::chr_due_check);
         captures_.emplace(std::array{
             Replacement{bb::game::chr_due_continue, reinterpret_cast<void*>(&chr_due_test_due),
-                        "due", due_bytes, world_chr_update},
+                        "due", due_bytes, world_chr_update, &capture_back},
             Replacement{bb::game::chr_not_due_continue,
                         reinterpret_cast<void*>(&chr_due_test_not_due), "not_due",
-                        not_due_bytes, world_chr_update}});
+                        not_due_bytes, world_chr_update, &capture_back}});
     }
     void TearDown() override {
         captures_.reset();
@@ -186,7 +190,7 @@ TEST_F(ChrUpdateIntervalTest, IsTheGamesCheckAt30) {
     for (std::uint32_t u : intervals) {
         for (std::int32_t index = 0; index < 40; ++index) {
             for (std::uint32_t counter : {0u, 1u, 4u, 29u, 30u, 61u, 899u, 0xffffffffu}) {
-                bb::game::set_chr_due_check(1);
+                bb::game::set_chr_due_scale(1);
                 const DueRun stubbed = run(u, index, counter);
                 // The game's bytes: the stub's patch taken out for the call.
                 std::array once{registered(bb::game::chr_due_check)};
@@ -209,7 +213,7 @@ TEST_F(ChrUpdateIntervalTest, ChecksTwiceTheIntervalAt60AndKeepsIt) {
             for (std::uint32_t counter = 0; counter < 4 * u + 3; ++counter) {
                 const DueRun game = run(2 * u, index, counter);  // the game's bytes, 2u
                 bb::hook::apply(bb::game::image(), once);
-                bb::game::set_chr_due_check(2);
+                bb::game::set_chr_due_scale(2);
                 const DueRun stubbed = run(u, index, counter);
                 bb::hook::remove(bb::game::image(), once);
                 ASSERT_EQ(stubbed.exit, game.exit) << u << " " << index << " " << counter;
@@ -236,7 +240,7 @@ TEST_F(ChrUpdateIntervalTest, IsDueOnceIn2uFramesAt60) {
         EXPECT_EQ(due, 6u) << "u " << u;
     }
     const Hooked<1> stub(std::array{registered(bb::game::chr_due_check)});
-    bb::game::set_chr_due_check(2);
+    bb::game::set_chr_due_scale(2);
     for (std::uint32_t u : intervals) {
         for (std::int32_t index = 0; index < 40; ++index) {
             unsigned due = 0;

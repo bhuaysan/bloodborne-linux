@@ -4,6 +4,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <type_traits>
 
 #include "loader/image.hpp"
 
@@ -36,6 +38,27 @@ template <class R, class... A>
 R vcall(void* object, std::size_t offset, A... args) {
     void* const* vtable = *static_cast<void* const* const*>(object);
     return reinterpret_cast<R (*)(void*, A...)>(vtable[offset / sizeof(void*)])(object, args...);
+}
+
+// The field of type T at byte offset `offset` of a game object, as a reference: for aligned
+// fields, e.g. at<void*>(chr, 0x18).
+template <class T>
+T& at(void* object, std::size_t offset) {
+    return *reinterpret_cast<T*>(static_cast<std::byte*>(object) + offset);
+}
+
+// The value of type T at byte offset `offset` of a game object, read and written bytewise, so
+// any alignment does. T is named at the call, never deduced from the value.
+template <class T>
+T load(const void* object, std::size_t offset) {
+    T value;
+    std::memcpy(&value, static_cast<const std::byte*>(object) + offset, sizeof value);
+    return value;
+}
+
+template <class T>
+void store(void* object, std::size_t offset, std::type_identity_t<T> value) {
+    std::memcpy(static_cast<std::byte*>(object) + offset, &value, sizeof value);
 }
 
 }  // namespace bb::game

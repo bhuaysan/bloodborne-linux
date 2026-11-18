@@ -16,18 +16,6 @@
 namespace bb::game {
 namespace {
 
-template <class T>
-T load(const void* object, std::size_t offset) {
-    T value;
-    std::memcpy(&value, static_cast<const std::byte*>(object) + offset, sizeof value);
-    return value;
-}
-
-template <class T>
-void store(void* object, std::size_t offset, T value) {
-    std::memcpy(static_cast<std::byte*>(object) + offset, &value, sizeof value);
-}
-
 // The point the game's steering returns from a position and a direction (0x01dbc4d2 to
 // 0x01dbc529): position + 3 * direction, w = 3 * w + 1, each a multiply then an add (no fused
 // multiply-add: ISO C++ mode keeps -ffp-contract=off).
@@ -73,7 +61,7 @@ void chr_ai_control_update_noting(ChrAiControlUpdate* original, float dt, void* 
 void chr_ai_control_update(float dt, void* control) {
     auto* const original =
         reinterpret_cast<ChrAiControlUpdate*>(hook::original(image(), 0x01513c10));
-    if (frame_rate() == default_frame_rate) {
+    if (frame_rate_scale() == 1) {
         original(dt, control);  // nothing halves at 30: the note would not be read
         return;
     }
@@ -122,7 +110,7 @@ SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, SteerState& s
 // 0x01dbbd00
 SteerPoint agent_steer(void* agent, const FD4TaskData* task) {
     auto* const original = reinterpret_cast<AgentSteer*>(hook::original(image(), 0x01dbbd00));
-    const unsigned calls = frame_rate() / default_frame_rate;
+    const unsigned calls = frame_rate_scale();
     if (calls <= 1) {
         return original(agent, task);
     }

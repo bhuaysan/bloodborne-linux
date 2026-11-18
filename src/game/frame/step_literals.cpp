@@ -3,10 +3,9 @@
 #include "game/frame/step_literals.hpp"
 
 #include "game/frame/frame.hpp"
-#include "game/image.hpp"
 #include "hook/hook.hpp"
 
-// Written once by set_step_literal_targets, before the patches run.
+// Filled by hook::apply (BB_PATCH) before it writes the patches.
 extern "C" {
 std::uint64_t bb_sfx_step_continue = 0;
 std::uint64_t bb_shop_tab_continue = 0;
@@ -56,19 +55,9 @@ bb_chr_fade_add_stub:
     .popsection
 )");
 
-namespace bb::game {
-
-void set_step_literal_targets() {
-    bb_sfx_step_continue = image().runtime(sfx_step_continue);
-    bb_shop_tab_continue = image().runtime(shop_tab_continue);
-    bb_chr_fade_continue = image().runtime(chr_fade_continue);
-}
-
-}  // namespace bb::game
-
 BB_PATCH(bb::game::sfx_frame_update, bb::game::sfx_step_load, bb_sfx_step_stub,
-         bb::game::sfx_step_patched);
+         bb::game::sfx_step_patched, bb_sfx_step_continue);
 BB_PATCH(bb::game::shop_tab_refresh, bb::game::shop_tab_update, bb_shop_tab_update_stub,
-         bb::game::shop_tab_update_patched);
+         bb::game::shop_tab_update_patched, bb_shop_tab_continue);
 BB_PATCH(bb::game::chr_list_fade_step, bb::game::chr_fade_add, bb_chr_fade_add_stub,
-         bb::game::chr_fade_add_patched);
+         bb::game::chr_fade_add_patched, bb_chr_fade_continue);

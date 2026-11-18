@@ -14,12 +14,6 @@
 namespace bb::game {
 namespace {
 
-// The field of type T at byte offset `offset` of a game object.
-template <class T>
-T& at(void* object, std::size_t offset) {
-    return *reinterpret_cast<T*>(static_cast<std::byte*>(object) + offset);
-}
-
 const char* text(std::uint64_t link) {
     return reinterpret_cast<const char*>(image().runtime(link));
 }

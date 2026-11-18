@@ -172,10 +172,7 @@ std::uint64_t shared_mutex() {
 
 // ---- the manager --------------------------------------------------------------------------------
 
-template <class T>
-T& at(void* object, std::size_t offset) {
-    return *reinterpret_cast<T*>(static_cast<std::byte*>(object) + offset);
-}
+using bb::game::at;
 
 struct Case {
     const char* name;

@@ -60,10 +60,7 @@ public:
     FrameRateGuard& operator=(const FrameRateGuard&) = delete;
 };
 
-template <class T>
-T& at(void* object, std::size_t offset) {
-    return *reinterpret_cast<T*>(static_cast<std::byte*>(object) + offset);
-}
+using bb::game::at;
 
 // ---- the world's characters ---------------------------------------------------------------------
 

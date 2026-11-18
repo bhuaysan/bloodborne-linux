@@ -440,8 +440,6 @@ int start(const bb::tools::RunOptions& options) {
     bb::game::set_frame_buffer_size(options.resolution_width, options.resolution_height);
     bb::common::log(LogLevel::info, channel, "rendering at {}x{}", options.resolution_width,
                     options.resolution_height);
-    bb::game::set_step_literal_targets();
-    bb::game::set_ragdoll_patch_targets();
     bb::hle::kernel::check_eboot_tls();
 
     bb::hle::kernel::path_map().mount_game(*game_dir);

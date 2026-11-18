@@ -12,7 +12,7 @@
 #include "game/image.hpp"
 #include "hook/hook.hpp"
 
-// Written once by set_ragdoll_patch_targets, before the patches run.
+// Filled by hook::apply (BB_PATCH) before it writes the patches.
 extern "C" {
 std::uint64_t bb_ragdoll_impulse_continue = 0;
 std::uint64_t bb_ragdoll_root_pull_continue = 0;
@@ -58,11 +58,6 @@ bb_ragdoll_root_pull_stub:
 namespace bb::game {
 namespace {
 
-template <class T>
-T& at(void* object, std::size_t offset) {
-    return *reinterpret_cast<T*>(static_cast<std::byte*>(object) + offset);
-}
-
 // The game's 1/30 (0x04926364), 30.0 (0x0492636c) and 900.0 (0x04926370).
 constexpr float game_step = 1.0f / 30.0f;
 constexpr float update_thirty = 30.0f;
@@ -73,11 +68,6 @@ using RagdollUpdate = void(float step, float spacing_or_unused, void* ragdoll, v
 using RagdollIdle = void(float step, float not_read, void* ragdoll, void* transform, void* pose);
 
 }  // namespace
-
-void set_ragdoll_patch_targets() {
-    bb_ragdoll_impulse_continue = image().runtime(ragdoll_impulse_continue);
-    bb_ragdoll_root_pull_continue = image().runtime(ragdoll_root_pull_continue);
-}
 
 // 0x01515ec0
 void chr_physics_pose_sync(void* module, void* transform) {
@@ -148,6 +138,6 @@ void chr_physics_pose_sync(void* module, void* transform) {
 
 BB_REPLACE(bb::game::chr_physics_pose_sync_link, bb::game::chr_physics_pose_sync);
 BB_PATCH(bb::game::ragdoll_update, bb::game::ragdoll_impulse_load, bb_ragdoll_impulse_stub,
-         bb::game::ragdoll_impulse_patched);
+         bb::game::ragdoll_impulse_patched, bb_ragdoll_impulse_continue);
 BB_PATCH(bb::game::ragdoll_update, bb::game::ragdoll_root_pull, bb_ragdoll_root_pull_stub,
-         bb::game::ragdoll_root_pull_patched);
+         bb::game::ragdoll_root_pull_patched, bb_ragdoll_root_pull_continue);

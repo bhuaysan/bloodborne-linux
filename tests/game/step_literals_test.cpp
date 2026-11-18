@@ -26,10 +26,7 @@ using bb::harness::Result;
 using bb::hook::Replacement;
 using bb::test::EbootTest;
 
-template <class T>
-T& at(void* object, std::size_t offset) {
-    return *reinterpret_cast<T*>(static_cast<std::byte*>(object) + offset);
-}
+using bb::game::at;
 
 std::uint32_t float_bits(float f) {
     std::uint32_t bits = 0;
@@ -100,21 +97,16 @@ R call_patched(A... args) {
     return bb::game::fn<R(A...)>(Function)(args...);
 }
 
-class StepLiteralsTest : public EbootTest {
-protected:
-    void SetUp() override {
-        EbootTest::SetUp();
-        if (IsSkipped()) {
-            return;
-        }
-        bb::game::set_step_literal_targets();
-    }
-};
+using StepLiteralsTest = EbootTest;
 
 TEST_F(StepLiteralsTest, PatchesAreRegisteredInsideTheirFunctions) {
     EXPECT_EQ(registered(bb::game::sfx_step_load).function, bb::game::sfx_frame_update);
     EXPECT_EQ(registered(bb::game::shop_tab_update).function, bb::game::shop_tab_refresh);
     EXPECT_EQ(registered(bb::game::chr_fade_add).function, bb::game::chr_list_fade_step);
+    // apply fills the continuations.
+    const Hooked<3> patches(std::array{registered(bb::game::sfx_step_load),
+                                       registered(bb::game::shop_tab_update),
+                                       registered(bb::game::chr_fade_add)});
     EXPECT_EQ(bb_sfx_step_continue, bb::game::image().runtime(bb::game::sfx_step_continue));
     EXPECT_EQ(bb_shop_tab_continue, bb::game::image().runtime(bb::game::shop_tab_continue));
     EXPECT_EQ(bb_chr_fade_continue, bb::game::image().runtime(bb::game::chr_fade_continue));

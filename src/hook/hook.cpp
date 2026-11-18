@@ -196,6 +196,18 @@ void check_inside(const loader::Image& image, const Replacement& r) {
                     n) != 0) {
         refuse(r, "the patched bytes differ from the bytes in memory");
     }
+    if (r.continuation == nullptr) {
+        refuse(r, "no continuation: the stub would jump back through address 0");
+    }
+    for (const JumpTarget& t : r.targets) {
+        if (t.slot == nullptr) {
+            refuse(r, std::format("the jump target {:#x} has no slot", t.link_addr));
+        }
+        if (t.link_addr < r.function || t.link_addr - r.function >= size) {
+            refuse(r, std::format("the jump target {:#x} lies outside the function {:#x}",
+                                  t.link_addr, r.function));
+        }
+    }
 }
 
 }  // namespace
@@ -220,6 +232,9 @@ void apply(loader::Image& image, std::span<const Replacement> replaced) {
         if (r.function != 0) {
             check_inside(image, r);
         } else {
+            if (r.continuation != nullptr || !r.targets.empty()) {
+                refuse(r, "a continuation or jump targets, but no patch inside a function");
+            }
             const std::uint64_t size = checked_size(image, r, r.link_addr);
             if (size < patch_size) {
                 refuse(r, std::format("the function is {} bytes, a hook needs {}", size,
@@ -244,6 +259,15 @@ void apply(loader::Image& image, std::span<const Replacement> replaced) {
     for (const Replacement& r : replaced) {
         trampolines.push_back(r.prologue.empty() || r.function != 0 ? Trampoline{}
                                                                      : make_trampoline(image, r));
+    }
+    // The stubs' jump targets before any patch can send code to a stub.
+    for (const Replacement& r : replaced) {
+        if (r.function != 0) {
+            *r.continuation = image.base + r.link_addr + r.prologue.size();
+            for (const JumpTarget& t : r.targets) {
+                *t.slot = image.base + t.link_addr;
+            }
+        }
     }
     for (std::size_t i = 0; i < replaced.size(); ++i) {
         const Replacement& r = replaced[i];
