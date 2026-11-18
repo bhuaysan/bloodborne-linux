@@ -27,6 +27,18 @@ Our loader and OS layer carry the game to its main loop, but our program doesn't
 export BB_GAME_DIR=/path/to/your/CUSA03173
 ```
 
+## Playing
+
+Build the `release` preset (see Building), install it and start the launcher:
+
+```sh
+cmake --preset release
+cmake --build --preset release
+cmake --install build/release --prefix ~/.local   # or /usr/local with sudo
+```
+
+"Bloodborne on Linux" now shows in your application menu (log out and in if it doesn't at once), or run `~/.local/bin/bb-launcher`. On the first start the launcher looks for your game folder, the one that holds `eboot.bin`. If it finds none, press "Set up game" and choose the folder of your own dump, or drag it onto the window. Then press Play. The `BB_GAME_DIR` setup above is for developers.
+
 ## Building
 
 The runtime is C++20, built with CMake (3.27 or newer) and Ninja. The unit tests use GoogleTest, which the build finds as an installed package (on Fedora: `cmake ninja-build gtest-devel libasan libubsan`; on Debian and Ubuntu: `cmake ninja-build libgtest-dev`).

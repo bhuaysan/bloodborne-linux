@@ -40,3 +40,11 @@ target_link_libraries(bblauncherui PUBLIC bblauncherlogic bb_launcher_imgui
 
 add_executable(bb-launcher main.cpp app.cpp)
 target_link_libraries(bb-launcher PRIVATE bblauncherui bb_warnings)
+
+# Installation (#581): bb-run goes next to bb-launcher, which starts the one in its own directory.
+include(GNUInstallDirs)
+install(TARGETS bb-launcher bb-run RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES ${PROJECT_SOURCE_DIR}/packaging/bloodborne-linux.desktop
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(FILES ${PROJECT_SOURCE_DIR}/packaging/bloodborne-linux.svg
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)

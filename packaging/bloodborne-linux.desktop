@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Bloodborne on Linux
+GenericName=Game launcher
+Comment=Set up and start Bloodborne from your own game dump
+Exec=bb-launcher
+Icon=bloodborne-linux
+Terminal=false
+Categories=Game;
+Keywords=Bloodborne;PS4;

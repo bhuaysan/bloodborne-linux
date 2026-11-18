@@ -12,7 +12,7 @@ set(ZYDIS_BUILD_DOXYGEN OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(zydis
     GIT_REPOSITORY https://github.com/zyantific/zydis.git
     GIT_TAG 120e0e705f8e3b507dc49377ac2879979f0d545c
-    SYSTEM)
+    SYSTEM EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(zydis)
 
 find_package(SPIRV-Headers REQUIRED CONFIG)
