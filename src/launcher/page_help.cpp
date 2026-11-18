@@ -16,6 +16,7 @@
 #include "launcher/gpu_probe.hpp"
 #include "launcher/help_report.hpp"
 #include "launcher/page.hpp"
+#include "launcher/profiles.hpp"
 #include "launcher/widgets.hpp"
 
 #ifndef BB_LAUNCHER_VERSION
@@ -155,7 +156,7 @@ public:
         std::error_code ec;
         const fs::path dir = ctx.state_dir / "logs";
         fs::create_directories(dir, ec);
-        SDL_OpenURL(std::format("file://{}", dir.string()).c_str());
+        SDL_OpenURL(file_url(dir).c_str());
     }
 
     bool copied_ = false;
