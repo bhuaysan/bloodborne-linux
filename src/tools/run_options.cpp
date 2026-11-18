@@ -129,10 +129,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
         };
         if (arg == "-h" || arg == "--help") {
             options.help = true;
-        } else if (arg == "--config") {
-            options.config_path = std::filesystem::path(value());
-        } else if (arg == "--setup") {
-            options.setup_dir = std::filesystem::path(value());
+        } else if (arg == "--config" || arg == "--setup") {
+            value();  // read before parsing, by config_option and path_option
         } else if (arg == "--game-dir") {
             options.game_dir = std::filesystem::path(value());
         } else if (arg == "--profile") {

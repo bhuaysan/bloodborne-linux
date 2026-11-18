@@ -92,8 +92,6 @@ struct RunOptions {
     bool fsr = false;  // --fsr
     bool rcas = true;  // false with --no-rcas, only with --fsr
     float rcas_attenuation = 0.25f;  // --rcas-attenuation, only with --fsr
-    std::optional<std::filesystem::path> config_path;  // --config
-    std::optional<std::filesystem::path> setup_dir;    // --setup: check the folder, write the config
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 

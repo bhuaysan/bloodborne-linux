@@ -315,7 +315,13 @@ TEST(RunOptionsConfig, CommandLineWinsOverTheFile) {
 }
 
 TEST(RunOptionsConfig, ParsesSetup) {
-    EXPECT_EQ(parse({"--setup", "/dump"}).setup_dir, std::filesystem::path("/dump"));
+    // The parser skips --setup and --config with their values; bb-run reads them with
+    // path_option and config_option before it parses the rest.
+    const RunOptions skipped = parse({"--setup", "/dump", "--config", "/c.toml", "--fsr"});
+    EXPECT_TRUE(skipped.fsr);
+    EXPECT_FALSE(skipped.game_dir);
+    EXPECT_EQ(bb::tools::path_option(std::vector<std::string_view>{"--setup", "/dump"}, "--setup"),
+              std::filesystem::path("/dump"));
     const std::vector<std::string_view> args{"--setup", "/a", "--setup", "/b"};
     EXPECT_EQ(bb::tools::path_option(args, "--setup"), std::filesystem::path("/b"));
     EXPECT_THROW(parse({"--setup"}), std::invalid_argument);
