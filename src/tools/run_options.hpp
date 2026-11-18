@@ -23,7 +23,7 @@ inline constexpr std::string_view run_usage =
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
     "              [--sync-pipelines] [--pad-input PATH] [--frame-rate 30|60]\n"
     "              [--window-size WIDTHxHEIGHT] [--fullscreen] [--fsr] [--no-rcas]\n"
-    "              [--rcas-attenuation STOPS]\n"
+    "              [--rcas-attenuation STOPS] [--resolution WIDTHxHEIGHT]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
@@ -56,15 +56,28 @@ inline constexpr std::string_view run_usage =
     "  --window-size WxH    the window's size, from 640x360 to 16384x16384 (default 1280x720)\n"
     "  --fullscreen         a borderless window covering its display, at the display's size\n"
     "  --fsr                upscale the game's frame with AMD FSR 1 when the window is larger\n"
-    "                       than the frame (the game renders 1920x1080); without it the frame is\n"
-    "                       scaled bilinearly\n"
+    "                       than the frame (the game renders at --resolution); without it the\n"
+    "                       frame is scaled bilinearly\n"
     "  --no-rcas            with --fsr: no RCAS sharpening after the upscale\n"
     "  --rcas-attenuation STOPS\n"
     "                       with --fsr: RCAS sharpness, 0 (sharpest) to 2 stops of attenuation\n"
-    "                       (default 0.25)\n";
+    "                       (default 0.25)\n"
+    "  --resolution WxH     the size the game renders at: 16:9, the width a multiple of 64, from\n"
+    "                       1920x1080 to 2560x1440 (default 1920x1080); the window shows it\n"
+    "                       scaled to the window's size\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
+
+// --resolution: the engine's frame buffer size (docs/design/resolution.md). 16:9 only, because the
+// HUD layout scales width and height separately; the width a multiple of 64, so the half- and
+// quarter-size targets have whole sides as at 1080p. 3840x2160 waits for #640: the engine's own
+// memory pools run out there.
+inline constexpr unsigned default_resolution_width = 1920;
+inline constexpr unsigned default_resolution_height = 1080;
+inline constexpr unsigned max_resolution_width = 2560;
+inline constexpr unsigned max_resolution_height = 1440;
+inline constexpr unsigned resolution_width_step = 64;
 
 // --present-mode. Same order and meaning as Vulkan::PresentMode, which bb-run maps it to.
 enum class PresentMode { fifo, mailbox, immediate };
@@ -92,6 +105,8 @@ struct RunOptions {
     bool fsr = false;  // --fsr
     bool rcas = true;  // false with --no-rcas, only with --fsr
     float rcas_attenuation = 0.25f;  // --rcas-attenuation, only with --fsr
+    unsigned resolution_width = default_resolution_width;  // --resolution
+    unsigned resolution_height = default_resolution_height;
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 
@@ -99,7 +114,8 @@ struct RunOptions {
 // unknown option, a missing value, a profile name that valid_profile_name refuses, a timeout that
 // isn't a whole number from 1 to 86400, a log spec that LogFilter::parse refuses, a --present-mode
 // that is none of fifo, mailbox and immediate, a --frame-rate other than 30 and 60, a
-// --window-size that isn't WIDTHxHEIGHT in range, an --rcas-attenuation that isn't a number from 0
+// --window-size that isn't WIDTHxHEIGHT in range, a --resolution that isn't one of the sizes above,
+// an --rcas-attenuation that isn't a number from 0
 // to 2, --validation-sync or --validation-gpu without --validation, and --no-rcas or
 // --rcas-attenuation without --fsr.
 RunOptions parse_run_options(std::span<const std::string_view> args);

@@ -17,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -150,6 +151,35 @@ TEST(RunOptions, ParsesTheWindowOptions) {
         EXPECT_EQ(parse_error({"--window-size", size}),
                   std::format("--window-size: \"{}\" is not WIDTHxHEIGHT from 640x360 to "
                               "16384x16384",
+                              size));
+    }
+}
+
+TEST(RunOptions, ParsesTheResolution) {
+    const RunOptions d = parse({});
+    EXPECT_EQ(d.resolution_width, 1920U);
+    EXPECT_EQ(d.resolution_height, 1080U);
+    for (const auto& [text, width, height] :
+         {std::tuple{"1920x1080", 1920U, 1080U}, std::tuple{"1984x1116", 1984U, 1116U},
+          std::tuple{"2240x1260", 2240U, 1260U}, std::tuple{"2560x1440", 2560U, 1440U}}) {
+        const RunOptions o = parse({"--resolution", text});
+        EXPECT_EQ(o.resolution_width, width) << text;
+        EXPECT_EQ(o.resolution_height, height) << text;
+    }
+    // The last one wins.
+    EXPECT_EQ(parse({"--resolution", "2560x1440", "--resolution", "1920x1080"}).resolution_width,
+              1920U);
+    EXPECT_EQ(parse_error({"--resolution"}), "--resolution needs a value");
+    // Below and above the range, other aspect ratios, widths that aren't multiples of 64 (1936 is
+    // 16:9 with an odd height), and malformed sizes.
+    for (std::string_view size :
+         {"1280x720", "1856x1044", "2624x1476", "3840x2160", "1920x1200", "2560x1080",
+          "2560x1600", "1936x1089", "2000x1125", "2048x1153", "1920", "x1080", "1920x",
+          "1920X1080", "1920x1080x1", "+1920x1080", " 1920x1080", "1920.0x1080", "-1920x1080",
+          "4294967295x4294967295", "68719476736x38654705664", ""}) {
+        EXPECT_EQ(parse_error({"--resolution", size}),
+                  std::format("--resolution: \"{}\" is not a 16:9 WIDTHxHEIGHT from 1920x1080 to "
+                              "2560x1440 with a width that is a multiple of 64",
                               size));
     }
 }

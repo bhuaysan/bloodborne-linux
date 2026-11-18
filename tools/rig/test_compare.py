@@ -74,6 +74,45 @@ class PictureTests(unittest.TestCase):
                                                  [picture(12), picture(20)]), 5.0)
 
 
+class ScaleTests(unittest.TestCase):
+    def test_an_integer_factor_averages_each_block(self) -> None:
+        # 4x2 to 2x1: the left block of 2x2 pixels averages 0, 10, 20 and 30 in red.
+        rgb = bytes([0, 1, 2, 10, 1, 2, 40, 0, 0, 40, 0, 0,
+                     20, 1, 2, 30, 1, 2, 40, 0, 0, 40, 0, 255])
+        scaled = compare.scale_down(compare.Picture(4, 2, rgb), 2, 1)
+        self.assertEqual(scaled, compare.Picture(2, 1, bytes([15, 1, 2, 40, 0, 64])))
+
+    def test_a_fractional_factor_weights_by_covered_area(self) -> None:
+        # 3 pixels to 2: each output covers 1.5 source pixels, the middle one split between them.
+        rgb = bytes([0] * 3 + [90] * 3 + [180] * 3)
+        scaled = compare.scale_down(compare.Picture(3, 1, rgb), 2, 1)
+        self.assertEqual(scaled.rgb, bytes([30] * 3 + [150] * 3))
+
+    def test_a_flat_picture_stays_flat_at_any_size(self) -> None:
+        scaled = compare.scale_down(picture(77, 2560 // 64, 1440 // 64), 1920 // 64, 1080 // 64)
+        self.assertEqual(scaled, picture(77, 30, 16))  # 1080 / 64 is 16.875, so 16 rows here
+
+    def test_the_same_size_is_returned_unchanged(self) -> None:
+        p = picture(5, 3, 2)
+        self.assertIs(compare.scale_down(p, 3, 2), p)
+
+    def test_scaling_up_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "can't scale 2x2 down to 4x4"):
+            compare.scale_down(picture(0), 4, 4)
+
+    def test_the_common_size_is_the_smallest(self) -> None:
+        small, large = picture(10, 16, 9), picture(10, 32, 18)
+        self.assertEqual(compare.to_common_size([large, small]), [picture(10, 16, 9)] * 2)
+
+    def test_different_aspect_ratios_are_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "different aspect ratios"):
+            compare.to_common_size([picture(0, 16, 9), picture(0, 16, 10)])
+        # Within 1%: 1366x768 and 1280x720 are both 16:9.
+        sizes = {(p.width, p.height) for p in compare.to_common_size(
+            [picture(0, 1366 // 8, 768 // 8), picture(0, 1280 // 8, 720 // 8)])}
+        self.assertEqual(sizes, {(160, 90)})
+
+
 class VerdictTests(unittest.TestCase):
     def check(self, ours: int, our_time: float = 20.0) -> dict:
         # The two reference runs differ by 2, so twice the floor allows a mean difference of 4.
@@ -157,6 +196,21 @@ class CommandTests(unittest.TestCase):
             failing = self.run_rig(a, b, self.make_run(root, "bad", 16, 40))
             self.assertEqual(failing.returncode, 1, failing.stdout + failing.stderr)
             self.assertIn('"pictures_ok": false', failing.stdout)
+
+    def test_a_larger_run_is_scaled_down_before_comparing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a, b = self.make_run(root, "a", 10, 20), self.make_run(root, "b", 12, 30)
+            ours = self.make_run(root, "ours", 13, 40)
+            write_png(ours / "shots" / "menu-1.png", 4, 4, bytes([13, 13, 13, 255]) * 16)
+            result = self.run_rig(a, b, ours)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('"compared_at": "2x2"', result.stdout)
+            self.assertIn('"ratio": 1.0', result.stdout)
+            write_png(ours / "shots" / "menu-1.png", 4, 2, bytes([13, 13, 13, 255]) * 8)
+            refused = self.run_rig(a, b, ours)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("different aspect ratios", refused.stderr)
 
     def test_runs_with_different_numbers_of_shots_are_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

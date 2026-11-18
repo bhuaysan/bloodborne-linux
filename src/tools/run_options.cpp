@@ -49,6 +49,29 @@ void parse_window_size(std::string_view value, RunOptions& options) {
     }
 }
 
+void parse_resolution(std::string_view value, RunOptions& options) {
+    const std::size_t x = value.find('x');
+    unsigned width = 0;
+    unsigned height = 0;
+    const auto side = [](std::string_view text, unsigned& out) {
+        const char* end = text.data() + text.size();
+        const auto [ptr, ec] = std::from_chars(text.data(), end, out);
+        return ec == std::errc{} && ptr == end;
+    };
+    if (x == std::string_view::npos || !side(value.substr(0, x), width) ||
+        !side(value.substr(x + 1), height) || width < default_resolution_width ||
+        width > max_resolution_width || width % resolution_width_step != 0 ||
+        static_cast<unsigned long long>(width) * 9 != static_cast<unsigned long long>(height) * 16) {
+        throw std::invalid_argument(std::format(
+            "--resolution: \"{}\" is not a 16:9 WIDTHxHEIGHT from {}x{} to {}x{} with a width "
+            "that is a multiple of {}",
+            value, default_resolution_width, default_resolution_height, max_resolution_width,
+            max_resolution_height, resolution_width_step));
+    }
+    options.resolution_width = width;
+    options.resolution_height = height;
+}
+
 float parse_rcas_attenuation(std::string_view value) {
     float stops = 0;
     const char* end = value.data() + value.size();
@@ -179,6 +202,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             options.frame_rate = fps == "30" ? 30 : 60;
         } else if (arg == "--window-size") {
             parse_window_size(value(), options);
+        } else if (arg == "--resolution") {
+            parse_resolution(value(), options);
         } else if (arg == "--fullscreen") {
             options.fullscreen = true;
         } else if (arg == "--fsr") {

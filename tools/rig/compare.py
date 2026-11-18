@@ -4,13 +4,16 @@
 
 The two reference runs give the noise floor: the mean difference between their captures. Ours
 passes when its mean difference from the reference captures is at most twice that floor, and when
-it reached the menu in at most twice the reference's time. docs/test-rig.md has the reasons.
+it reached the menu in at most twice the reference's time. Shots of different sizes with the same
+aspect ratio are scaled down to the smallest size first, so a run at another --resolution or window
+size can be compared. docs/test-rig.md has the reasons.
 """
 
 from __future__ import annotations
 
 import csv
 import json
+import math
 import operator
 import re
 import struct
@@ -70,6 +73,66 @@ def difference(a: Picture, b: Picture) -> float:
         raise ValueError(f"pictures of different sizes: {a.width}x{a.height} and "
                          f"{b.width}x{b.height}")
     return sum(map(abs, map(operator.sub, a.rgb, b.rgb))) / len(a.rgb)
+
+
+# Two pictures have the same aspect ratio when their width/height ratios differ by at most this
+# fraction, for sizes that round a ratio differently (1366x768 and 1280x720 are both 16:9).
+ASPECT_TOLERANCE = 0.01
+
+
+def _area_taps(source: int, target: int) -> list[list[tuple[int, float]]]:
+    """For each of `target` output pixels, the source pixels it covers and their weights (summing
+    to 1), when `source` pixels are averaged down to `target` by area."""
+    taps = []
+    for i in range(target):
+        start, end = i * source / target, (i + 1) * source / target
+        pixel_taps = []
+        for j in range(int(start), min(source, math.ceil(end))):
+            overlap = min(end, j + 1) - max(start, j)
+            if overlap > 0:
+                pixel_taps.append((j, overlap * target / source))
+        taps.append(pixel_taps)
+    return taps
+
+
+def scale_down(picture: Picture, width: int, height: int) -> Picture:
+    """The picture averaged by area down to width x height, each channel rounded to the nearest
+    byte. Refuses to scale up, which would invent detail."""
+    if (picture.width, picture.height) == (width, height):
+        return picture
+    if not (0 < width <= picture.width and 0 < height <= picture.height):
+        raise ValueError(f"can't scale {picture.width}x{picture.height} down to {width}x{height}")
+    columns, rows = _area_taps(picture.width, width), _area_taps(picture.height, height)
+    stride = picture.width * 3
+    # Across first: each source row to `width` pixels, as floats of R, G and B.
+    narrowed = []
+    for y in range(picture.height):
+        channels = [picture.rgb[y * stride + c:(y + 1) * stride:3] for c in range(3)]
+        row = [0.0] * (width * 3)
+        for x, pixel_taps in enumerate(columns):
+            for c in range(3):
+                row[x * 3 + c] = sum(channels[c][j] * w for j, w in pixel_taps)
+        narrowed.append(row)
+    # Then down.
+    out = bytearray()
+    for pixel_taps in rows:
+        total = [0.0] * (width * 3)
+        for j, w in pixel_taps:
+            total = [t + v * w for t, v in zip(total, narrowed[j])]
+        out += bytes(min(255, max(0, round(t))) for t in total)
+    return Picture(width, height, bytes(out))
+
+
+def to_common_size(pictures: list[Picture]) -> list[Picture]:
+    """The pictures scaled down to the smallest width and height among them. Refuses pictures of
+    different aspect ratios, which scaling can't match."""
+    width = min(p.width for p in pictures)
+    height = min(p.height for p in pictures)
+    for p in pictures:
+        if abs(p.width * height - width * p.height) > ASPECT_TOLERANCE * width * p.height:
+            raise ValueError(f"pictures of different aspect ratios: {p.width}x{p.height} and "
+                             f"{width}x{height}")
+    return [scale_down(p, width, height) for p in pictures]
 
 
 def mean_difference(first: list[Picture], second: list[Picture]) -> float:
@@ -148,10 +211,14 @@ def run_compare(reference_1: Path, reference_2: Path, ours: Path, shots: str) ->
         if not len(r1) == len(r2) == len(o):
             raise SystemExit(f"the runs have different numbers of shots: reference_1 {len(r1)}, "
                              f"reference_2 {len(r2)}, ours {len(o)}")
+        sizes = sorted({f"{p.width}x{p.height}" for p in r1 + r2 + o})
+        scaled = to_common_size(r1 + r2 + o)
+        r1, r2, o = scaled[:len(r1)], scaled[len(r1):len(r1) + len(r2)], scaled[len(r1) + len(r2):]
         if mean_difference(r1, r2) == 0:
             raise SystemExit("the two reference runs are identical: the noise floor is 0, so "
                              "any difference would fail; the tolerance is not invented here")
         result = {"shots": {"reference_1": len(r1), "reference_2": len(r2), "ours": len(o)},
+                  "sizes": sizes, "compared_at": f"{o[0].width}x{o[0].height}",
                   **verdict(r1, r2, o, [t1, t2], t)}
     except ValueError as e:
         raise SystemExit(str(e)) from e

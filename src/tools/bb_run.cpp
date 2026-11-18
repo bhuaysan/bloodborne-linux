@@ -44,6 +44,7 @@
 #include "game/chr/ragdoll.hpp"
 #include "game/frame/frame.hpp"
 #include "game/frame/step_literals.hpp"
+#include "game/gfx/frame_buffer.hpp"
 #include "game/image.hpp"
 #include "hle/kernel/paths.hpp"
 #include "hle/kernel/thread.hpp"
@@ -427,6 +428,11 @@ int start(const bb::tools::RunOptions& options) {
                         bb::hook::replacements().size());
     });
     bb::game::set_image(game->eboot);
+    // Before the entry point: system_properties_init and the graphics device read the size from
+    // the globals (docs/design/resolution.md).
+    bb::game::set_frame_buffer_size(options.resolution_width, options.resolution_height);
+    bb::common::log(LogLevel::info, channel, "rendering at {}x{}", options.resolution_width,
+                    options.resolution_height);
     bb::game::set_step_literal_targets();
     bb::game::set_ragdoll_patch_targets();
     bb::hle::kernel::check_eboot_tls();

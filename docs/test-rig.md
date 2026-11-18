@@ -50,7 +50,7 @@ Scenario steps are documented at the top of `tools/rig/scenario.py`, and scenari
 
 **Mean absolute difference over the full frame.** It is the mean of |ours − reference| over every channel of every pixel, 0 to 255. Everything that differs counts, in proportion to how much it differs, and there is no threshold to tune. A count of pixels over a threshold would hinge on that threshold and treat a slightly wrong colour over the whole frame like one wrong pixel. The scenario's picture conditions use the same measure on their small grey copy.
 
-**Same resolution, no scaling.** Both programs present 1280×720, the default window of each. `compare` refuses pictures of different sizes rather than scaling them, because scaling would add a difference of its own.
+**Same resolution where possible, else scaled down.** Both programs present 1280×720, the default window of each, so menu runs compare unscaled. A run at another window size or `--resolution` (#515) has shots of another size; `compare` then averages every shot by area down to the smallest size among the three runs, and refuses shots whose aspect ratios differ by more than 1%. Scaling adds a small difference of its own, so compare scaled runs only against references taken at the same sizes, or read the ratio with that in mind.
 
 **Time to the menu is when the picture stopped changing.** The stable wait logs how long the picture had been unchanged, so the time from the start of the target to the first menu frame (within the 6 s wait's tolerance, and the one picture a second it looks at) is in `events.csv`. Ours passes when it is at most twice the mean of the two reference runs.
 
