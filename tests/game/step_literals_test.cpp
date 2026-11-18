@@ -305,8 +305,8 @@ TEST_F(StepLiteralsTest, ChrFadeIsTheGamesAt30) {
     harness().restore();
 }
 
-// From 0 the fade reaches 1 in a second of calls at either rate: 30 calls at 30, 60 at 60. The
-// kind 7 part gets each value, the kind 3 part none.
+// From 0 the fade reaches 1 in a second of calls at either rate: 30 calls at 30, 61 at 60 (an
+// ulp short after 60). The kind 7 part gets each value, the kind 3 part none.
 TEST_F(StepLiteralsTest, ChrFadeTakesASecondAt60) {
     const auto calls_to_full = [&](bool patched) {
         harness().restore();
@@ -332,14 +332,12 @@ TEST_F(StepLiteralsTest, ChrFadeTakesASecondAt60) {
         }
         return calls;
     };
-    const int at30 = calls_to_full(false);
-    EXPECT_GE(at30, 30);
-    EXPECT_LE(at30, 31);  // float sums of 1/30 may fall short of 1 by an ulp
+    // The float sums are exact to the call: 30 steps of 1/30 reach 1, while 60 steps of 1/60 fall
+    // short of it by an ulp, so the 61st call clamps.
+    EXPECT_EQ(calls_to_full(false), 30);
     {
         const FrameRateGuard rate(60);
-        const int at60 = calls_to_full(true);
-        EXPECT_GE(at60, 60);
-        EXPECT_LE(at60, 61);
+        EXPECT_EQ(calls_to_full(true), 61);
     }
     harness().restore();
 }
