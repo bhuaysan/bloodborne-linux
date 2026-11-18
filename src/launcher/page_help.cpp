@@ -140,7 +140,14 @@ public:
             focused_ = true;
         }
         if (bevel_button(copied_ ? t.copied : t.copy, ImVec2(432 * s, 40 * s))) {
-            ImGui::SetClipboardText(collect_problem_report(ctx).c_str());
+            const std::string report = collect_problem_report(ctx);
+            // Unattended checks: BB_LAUNCHER_CLIPBOARD_LOG names a file that gets the report
+            // instead of the clipboard.
+            if (const char* log = std::getenv("BB_LAUNCHER_CLIPBOARD_LOG"); log != nullptr && *log) {
+                std::ofstream(log, std::ios::trunc) << report;
+            } else {
+                ImGui::SetClipboardText(report.c_str());
+            }
             copied_ = true;
         }
         ImGui::SetCursorPosX(24 * s);

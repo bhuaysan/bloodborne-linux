@@ -36,15 +36,18 @@ private:
     fs::path path_;
 };
 
+// The Help page's copied report goes to <dir>/clipboard.txt, never to the clipboard.
 bb::test::Result run_script(const Dir& dir, const std::string& script) {
     std::ofstream(dir.path() / "script.txt") << script;
     const std::string d = dir.path().string();
     return bb::test::run(std::format(
         "cd {} && env -u BB_GAME_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
         "SDL_VIDEO_DRIVER=offscreen SDL_RENDER_DRIVER=software BB_LAUNCHER_SCRIPT={} "
+        "BB_LAUNCHER_CLIPBOARD_LOG={} "
         "HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} XDG_CACHE_HOME={} XDG_STATE_HOME={} timeout 60 {} 2>&1",
-        quote(d), quote(d + "/script.txt"), quote(d + "/home"), quote(d + "/config"), quote(d + "/data"),
-        quote(d + "/cache"), quote(d + "/state"), quote(BB_LAUNCHER_PATH)));
+        quote(d), quote(d + "/script.txt"), quote(d + "/clipboard.txt"), quote(d + "/home"),
+        quote(d + "/config"), quote(d + "/data"), quote(d + "/cache"), quote(d + "/state"),
+        quote(BB_LAUNCHER_PATH)));
 }
 
 bool is_png(const fs::path& file) {
@@ -221,6 +224,9 @@ TEST(LauncherRun, TheHelpPageTakesAOnItsFirstButton) {
                          before.string(), after.string()));
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_NE(slurp(before), slurp(after));
+    // A pressed Copy, the first button: the report was handed over.
+    EXPECT_NE(slurp(dir.path() / "clipboard.txt").find("bloodborne-linux problem report"),
+              std::string::npos);
 }
 
 // The Picture and sound page with the pad alone: fullscreen, 60 frames and extra sharp are chosen
