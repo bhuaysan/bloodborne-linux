@@ -14,7 +14,7 @@ The renderer, the shader translator and some system libraries are derived from t
 
 ## Status
 
-Our loader and OS layer carry the game to its main loop, but our program doesn't show a frame of the game yet. On 2026-11-09 we decided to derive the renderer and the shader translator from shadPS4 instead of finishing our own. See [docs/roadmap.md](docs/roadmap.md).
+`bb-run` plays the game. It goes from the title through character creation and the intro to the clinic, saves and continues, and plays Central Yharnam, fights included, at the game's 30 FPS. `bb-run --frame-rate 60` runs it at 60; the few differences from 30 that are left are listed in [docs/design/frame-rate.md](docs/design/frame-rate.md). A playthrough from start to an ending isn't checked yet (R7). See [docs/roadmap.md](docs/roadmap.md).
 
 ## Requirements
 
@@ -63,7 +63,7 @@ Each preset builds into `build/<preset>/`. Tests that need the game skip when `B
 build/debug/src/tools/bb-load --game-dir /path/to/your/CUSA03173
 ```
 
-CI (GitHub Actions, `.github/workflows/ci.yml`) builds all three presets on Ubuntu 24.04 with warnings as errors, runs the tests and checks every commit of a pull request with `tools/privacy-check.sh`. CI has no game files, so the game tests skip there.
+CI (GitHub Actions, `.github/workflows/ci.yml`) builds the presets in a Fedora 44 container (all three on `main`, `debug` and `release` on pull requests) with warnings as errors, runs the tests and checks every commit of a pull request with `tools/privacy-check.sh`. CI has no game files, so the game tests skip there.
 
 ## Documentation
 

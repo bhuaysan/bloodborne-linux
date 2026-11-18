@@ -2,7 +2,7 @@
 
 The main goal is the complete game, playable from start to end, with the best performance and quality we can reach. A complete decompilation is not a goal.
 
-On 2026-11-09 the plan changed. M0 to M4.3 gave us a loader and an OS layer that carry the game to its main loop, and a GPU path that never drew a frame of the game. shadPS4 already runs the game on the reference machine. So we stop rebuilding its renderer and shader translator and derive them from it instead. See [architecture.md](architecture.md) for what that means for the design.
+On 2026-11-09 the plan changed. M0 to M4.3 gave us a loader and an OS layer that carry the game to its main loop, and a GPU path that never drew a frame of the game. shadPS4 already ran the game on the reference machine, so we derived its renderer and shader translator instead of rebuilding them. See [architecture.md](architecture.md) for what that means for the design.
 
 ## Done
 
@@ -18,6 +18,7 @@ On 2026-11-09 the plan changed. M0 to M4.3 gave us a loader and an OS layer that
 | **R3 Shader translator** | shadPS4's `shader_recompiler` runs in our tree and translates all 3,832 programs of the corpus to valid SPIR-V, except nine that are listed by hash with their cause |
 | **R4 Renderer** | `video_core` runs behind a thin host layer, `bb-run` shows the main menu and matches the reference frame, and `src/gpu` and the memory mirror are gone |
 | **R5 OS gaps** | Pad, audio with ATRAC9, movies and the name dialog work: `bb-run` goes through a new game to the clinic, saves and continues, and plays 25 minutes without a crash or GPU fault, matching the reference |
+| **R6 Rewrite** | The emulator structure a single-game port doesn't need is gone: settings objects, debug state, singletons, other platforms. What stays in shadPS4's shape stays on purpose, with the reason in `docs/design/rewrite.md` |
 | **R9 Launcher** | `bb-launcher` sets up the game folder of the player's dump (by search, drop or dialog, with the `eboot.bin` hash check), sets picture and save profile in the shared config file, starts `bb-run --config` and appears in the application menu |
 
 R1 has no tag and no milestone review: it changed only rules and docs. R2 was reviewed and tagged after R5. M4.4 to M4.6 and the old M5 to M7 are dropped, and R1 closed or moved their open issues.
@@ -28,14 +29,13 @@ Each step is a GitHub milestone, and tasks are tracked as issues.
 
 | Milestone | Goal | Done when |
 |---|---|---|
-| **R6 Rewrite** | Fit the derived code to this port | Emulator structure a single-game port doesn't need is gone: settings objects, debug state, singletons, paths for other games. Each rewrite is checked against reference frames, frame times and the shader corpus. Whatever stays in shadPS4's shape stays on purpose, and the reason is written down. Can overlap R7 |
 | **R7 Playthrough** | The complete game is playable | The game can be played from the start to an ending on the reference machine, without a crash or a rendering fault that blocks play. The work goes area by area, and every fault found gets an issue |
 | **R8 Performance and quality** | The best version of the game | Frame times stay even at the game's original frame rate on the reference machine. Translated shaders and pipelines are cached on disk, so a second visit to an area doesn't stutter, and building them doesn't stall the frame on a first visit (translating ahead of time from the archives can't match the keys the game looks up: see #512 in `docs/design/shader-corpus.md`). A resolution and a frame rate above the PS4's can be set and run without gameplay faults. Engine render functions are replaced with hooks where that measurably helps. Can overlap R7 |
 | **Decomp** (continuous, as needed) | Replace game code where that helps | No end state of its own. A function is decompiled when an issue needs it for a bug, a crash, a bottleneck or a limit such as the frame rate. It passes its differential test and is hooked in. Progress is tracked in `symbols/functions.csv` |
 
-R8 runs in four parts, each a GitHub milestone. R8.1 (shader and pipeline cache) and R8.2 (frame times) don't need the playthrough and start alongside R7. R8.3 (frame rate) and R8.4 (resolution) start with research and need the areas R7 opens, since their checks include combat and outdoor scenes. Render hooks get issues only when R8.2 measures a bottleneck that the renderer can't fix.
+R8 runs in four parts, each a GitHub milestone. R8.1 (shader and pipeline cache) and R8.2 (frame times) have no open issues left. R8.3 (frame rate: `bb-run --frame-rate 60`, `docs/design/frame-rate.md`) and R8.4 (resolution) are open, and their checks use the combat and outdoor scenes of `docs/test-rig.md`. Render hooks get issues only when a measurement finds a bottleneck that the renderer can't fix.
 
-R9 needs the `bb-run` options of R8.4 (#510) and can start once they are merged. The launcher is our own SDL3 and Dear ImGui window, both already imported, and starts `bb-run` as a separate process. Its layout and behaviour are in `docs/design/launcher.md`. Installing from PKG files would need Sony's PKG and PFS keys, which `docs/source-policy.md` rules out, so the player brings the game as a folder (maintainer decision, 2026-11-16).
+The launcher of R9 is our own SDL3 and Dear ImGui window and starts `bb-run` as a separate process, with the `bb-run` options of R8.4 (#510). Its layout and behaviour are in `docs/design/launcher.md`. Installing from PKG files would need Sony's PKG and PFS keys, which `docs/source-policy.md` rules out, so the player brings the game as a folder (maintainer decision, 2026-11-16).
 
 `src/gpu` was removed in R4 (#435), with the memory mirror, `bb-gcn` and the options of the old path (maintainer decision, 2026-11-09).
 
@@ -49,6 +49,4 @@ The official shadPS4 v.0.21.0 Linux release on the reference machine (RADV on an
 - It ran 25 minutes without a crash and without an amdgpu fault in the kernel log.
 - It held 30 FPS, the game's cap, in the menu and the clinic, with 5.6 GB peak memory.
 
-The test rig (`docs/test-rig.md`) repeats the run from a fresh data directory to first control in the clinic. In its last five runs (2026-11-09) the median frame interval was 33.33 ms and the 99th percentile about 50 ms, with about 4.1 GB of program memory at peak.
-
-Not measured yet: combat, outdoor areas and sound.
+The test rig (`docs/test-rig.md`) repeats the run from a fresh data directory to first control in the clinic, and measures the reference and `bb-run` side by side in the clinic, in Central Yharnam with and without combat, and in sound.

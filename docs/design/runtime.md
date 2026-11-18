@@ -6,18 +6,26 @@ The interfaces that the loader, the import stubs, the hooks and the differential
 
 ```
 src/
-  common/    bbcommon   file reading, SHA-256, game directory lookup, logger, runtime directories (XDG, profile)
+  common/    bbcommon   file reading, SHA-256, game folder check, config file, logger, runtime directories
+                        (XDG, profile), the frame counters, the pad input stream
   loader/    bbloader   SELF → ELF, ELF parsing, mapping, relocation, eh_frame lookup, load set
   hle/       bbhle      HLE module registry, import stubs, NID name table, linking the load set, PRX init,
                         the libkernel modules (kernel/: threads, sync, event queues, memory, files, time,
                         TLS, process)
   hle/system/ bbhlesystem  system services (sysmodule, user and system service, app content, save data, …)
-  hle/video/  bbhlevideo   headless video out and GNM driver submission
+  hle/video/  bbhlevideo   video out and the GNM driver imports (submission, stage registers, default
+                           state), adapted from shadPS4; bbvideopresenter connects them to video_core
   hle/net/    bbhlenet     network and PSN libraries, reported as offline
   hle/eboot_tls/ bbeboottls  the eboot's static TLS reservation
-  hook/      bbhook     function-entry patches
-  game/      bbgame     decompiled functions (registered into bbhook), the image accessor
+  hook/      bbhook     function-entry hooks, wrappers and patches inside a function
+  game/      bbgame     decompiled and wrapped game functions (registered into bbhook), the image accessor
   harness/   bbharness  differential test harness (tests only)
+  shadps4/              code imported from shadPS4 (renderer, shader translator, system libraries), edited
+                        in place since R6 (rewrite.md); built from shadps4_host/CMakeLists.txt
+  shadps4_host/         the host layer the imported code builds against, and its libraries: bbshadps4 (the
+                        translator), bbvideocore (video_core: renderer, caches, window), bbsyslibs (pad,
+                        audio, AJM, AvPlayer, ImeDialog)
+  launcher/  bb-launcher  the player's launcher (launcher.md), with bblauncherlogic and bblauncherui
   tools/                command-line programs (bb-load, bb-run)
 tests/<target>/         GoogleTest unit and differential tests, one directory per target
 tests/support/          bbtestsupport: shared test helpers (game directory lookup, BB_REQUIRE_GAME)
