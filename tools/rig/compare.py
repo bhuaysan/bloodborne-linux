@@ -5,8 +5,8 @@
 The two reference runs give the noise floor: the mean difference between their captures. Ours
 passes when its mean difference from the reference captures is at most twice that floor, and when
 it reached the menu in at most twice the reference's time. Shots of different sizes with the same
-aspect ratio are scaled down to the smallest size first, so a run at another --resolution or window
-size can be compared. docs/test-rig.md has the reasons.
+aspect ratio are scaled down to the smallest size first, so a run in another window size can be
+compared (the shots have the window's size, whatever bb-run's --resolution). docs/test-rig.md has the reasons.
 """
 
 from __future__ import annotations

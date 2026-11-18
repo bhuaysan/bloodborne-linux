@@ -115,9 +115,8 @@ struct RunOptions {
 // isn't a whole number from 1 to 86400, a log spec that LogFilter::parse refuses, a --present-mode
 // that is none of fifo, mailbox and immediate, a --frame-rate other than 30 and 60, a
 // --window-size that isn't WIDTHxHEIGHT in range, a --resolution that isn't one of the sizes above,
-// an --rcas-attenuation that isn't a number from 0
-// to 2, --validation-sync or --validation-gpu without --validation, and --no-rcas or
-// --rcas-attenuation without --fsr.
+// an --rcas-attenuation that isn't a number from 0 to 2, --validation-sync or --validation-gpu
+// without --validation, and --no-rcas or --rcas-attenuation without --fsr.
 RunOptions parse_run_options(std::span<const std::string_view> args);
 
 // The same, starting from `base` (the options that the config file gave) instead of the defaults:

@@ -88,6 +88,12 @@ class ScaleTests(unittest.TestCase):
         scaled = compare.scale_down(compare.Picture(3, 1, rgb), 2, 1)
         self.assertEqual(scaled.rgb, bytes([30] * 3 + [150] * 3))
 
+    def test_rows_are_weighted_like_columns(self) -> None:
+        # 3 rows to 2: each output row covers 1.5 source rows.
+        rgb = bytes([0] * 3 + [90] * 3 + [180] * 3)
+        scaled = compare.scale_down(compare.Picture(1, 3, rgb), 1, 2)
+        self.assertEqual(scaled.rgb, bytes([30] * 3 + [150] * 3))
+
     def test_a_flat_picture_stays_flat_at_any_size(self) -> None:
         scaled = compare.scale_down(picture(77, 2560 // 64, 1440 // 64), 1920 // 64, 1080 // 64)
         self.assertEqual(scaled, picture(77, 30, 16))  # 1080 / 64 is 16.875, so 16 rows here

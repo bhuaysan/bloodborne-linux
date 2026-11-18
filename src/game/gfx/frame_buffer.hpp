@@ -14,7 +14,10 @@ inline constexpr std::uint64_t frame_buffer_width = 0x051289f8;
 inline constexpr std::uint64_t frame_buffer_height = 0x051289fc;
 
 // Writes `width` and `height` to the two globals of image(). Called once after the eboot is
-// mapped and before its entry point runs, so every reader sees the new size.
+// mapped and before its entry point runs, so every reader sees the new size. Unlike the game's
+// own setter of the same name (0x01d9e850) it leaves the HUD scale factors (0x055404d0,
+// 0x055404d4) alone: system_properties_init computes them from the globals later. Writing the
+// globals once the game runs would leave those factors and the allocated targets at the old size.
 void set_frame_buffer_size(std::uint32_t width, std::uint32_t height);
 
 }  // namespace bb::game
