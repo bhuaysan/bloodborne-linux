@@ -110,8 +110,8 @@ bool word_char(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
 }
 
-// Replaces every occurrence of `needle` that starts at a non-name character and ends before a
-// character for which `ends(c)` is false (or at the end).
+// Replaces every occurrence of `needle` that has no `is_part` character right before it or right
+// after it.
 std::string replace_bounded(const std::string& text, std::string_view needle,
                             std::string_view with, bool (*is_part)(char)) {
     std::string out;
@@ -138,18 +138,7 @@ std::string scrub(std::string_view text, std::string_view home, std::string_view
         while (home.size() > 1 && home.ends_with('/')) {
             home.remove_suffix(1);
         }
-        std::string result;
-        std::size_t i = 0;
-        while (i < out.size()) {
-            if (out.compare(i, home.size(), home) == 0 && (i == 0 || !name_char(out[i - 1])) &&
-                (i + home.size() == out.size() || !name_char(out[i + home.size()]))) {
-                result += '~';
-                i += home.size();
-            } else {
-                result += out[i++];
-            }
-        }
-        out = std::move(result);
+        out = replace_bounded(out, home, "~", name_char);
     }
     // Any other home directory: /home/<name> and /var/home/<name> (immutable distributions).
     std::string result;
