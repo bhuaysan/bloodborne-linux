@@ -55,6 +55,9 @@ GNM builds AMD GCN command buffers (PM4 packets). The game still produces those,
 
 Since 2026-11-09 all four steps are derived from shadPS4 (`video_core` and `shader_recompiler`). They went in nearly unchanged first and, since R6, are edited in place where that measurably helps ([design/rewrite.md](design/rewrite.md)). A thin host layer connects them to our runtime: guest memory, write tracking, flips and the window. [design/renderer.md](design/renderer.md) fixes that layer for R4. Our own GPU path from before that decision (`src/gpu`: a GCN translator, a PM4 parser, a Vulkan backend and a GPU memory mirror) is removed (#435). [design/graphics.md](design/graphics.md) keeps its history. What stays of it in `src/hle/video` is the default hardware state and marker writers that the game's GNM calls need.
 
+### Launcher
+`bb-launcher` (`src/launcher`) is the player's way to set up and start the game without a terminal. It draws its window with SDL_Renderer and its own build of Dear ImGui. It checks a game folder with `src/common/game_folder.*` and writes the config file that it shares with `bb-run` through `src/common/config.*`. Play starts `bb-run --config` as a separate process. See [design/launcher.md](design/launcher.md).
+
 ### Function replacement
 Decompiled functions are compiled into the runtime. At startup, a table of `{original_address, replacement}` pairs is applied. Each original function entry is patched to jump to the replacement. Replacements call other game functions through their original addresses. Only functions that serve playability, performance or quality are replaced, and the rest of the game keeps running as original machine code.
 
