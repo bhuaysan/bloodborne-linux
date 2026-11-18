@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/memory.cpp, src/core/address_space.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-15: the guest memory video_core reads and writes, on top
+// Changed for bloodborne-linux, 2026-11-18: the guest memory video_core reads and writes, on top
 // of our kernel's vmem and dmem (docs/design/renderer.md, "One backing for every page the GPU can
 // see", "The mapping observer replaces the mirror's"). The backing is dmem's memfd; the page table
 // follows the kernel's mapping observer instead of upstream's own map calls, and SetRasterizer
@@ -361,6 +361,13 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
     VAddr virtual_addr = std::bit_cast<VAddr>(address);
     ASSERT_MSG(IsValidMapping(virtual_addr, size), "Attempted to access invalid address {:#x}",
                virtual_addr);
+
+    // Ours (#591): a write through the backing takes no fault on a write protected page, so the
+    // texture cache hears of it here, before the bytes change. Only the GPU thread writes this way
+    // (downloads of buffers and images, the labels of EOP and EOS events).
+    if (Vulkan::Rasterizer* const r = rasterizer.load(std::memory_order_acquire)) {
+        r->BeforeBackingWrite(virtual_addr, size);
+    }
 
     const auto& backing_pages = impl.BackingPages();
     const auto* source = static_cast<const u8*>(data);

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/texture_cache/texture_cache.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-17
+// Changed for bloodborne-linux, 2026-11-18
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -171,6 +171,9 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
     for (const auto image_id : image_ids) {
         Image& image = slot_images[image_id];
         std::scoped_lock lk{image.mutex};
+        // Every branch below lifts the write protection of pages of the image, and the write that
+        // brought us here lands after: a hash MarkAsMaybeGpuDirty put off is taken now.
+        ResolveGpuHash(image);
 
         const auto image_begin = image.info.guest_address;
         const auto image_end = image.info.guest_address + image.info.guest_size;
@@ -210,13 +213,50 @@ void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
     });
 }
 
+// Upstream hashes the image's guest memory here, at the first GPU write into a buffer over it
+// since its last upload. The hash is read only when the collector decides whether to download the
+// image, and an upload resets it, so an image that a shader writes through a buffer and reads again
+// every frame was hashed whole every frame (#591: 10 MiB per frame of the Yharnam walk). Ours: the
+// hash is taken at the last moment that gives the same value. While every page of the image is
+// write protected its guest memory can change in two ways only: a write through the guest mapping,
+// which faults first (InvalidateMemory), and a write through the backing (BeforeBackingWrite). Both
+// take the hash before the write, and the collector takes it before it reads the buffer back. An
+// image with an unprotected page is hashed at once, as upstream does.
 void TextureCache::MarkAsMaybeGpuDirty(VAddr addr, size_t size) {
     ForEachImageInRegion(addr, size, [&](ImageId image_id, Image& image) {
-        if (image.gpu_hash == 0) {
-            // Read backing pages directly, without faulting through the guest readback path.
-            image.gpu_hash =
-                HashBackingMemory(memory, image.info.guest_address, image.info.guest_size);
+        std::scoped_lock lk{image.mutex};
+        if (image.gpu_hash != 0 || image.gpu_hash_pending) {
+            return;
         }
+        const VAddr image_begin = image.info.guest_address;
+        const VAddr image_end = image_begin + image.info.guest_size;
+        if (image.track_addr == image_begin && image.track_addr_end == image_end) {
+            image.gpu_hash_pending = true;
+        } else {
+            // Read backing pages directly, without faulting through the guest readback path.
+            image.gpu_hash = HashBackingMemory(memory, image_begin, image.info.guest_size);
+        }
+    });
+}
+
+void TextureCache::ResolveGpuHash(Image& image) {
+    if (image.gpu_hash_pending) {
+        image.gpu_hash_pending = false;
+        image.gpu_hash =
+            HashBackingMemory(memory, image.info.guest_address, image.info.guest_size);
+    }
+}
+
+void TextureCache::BeforeBackingWrite(VAddr addr, size_t size) {
+    // The page table ends where the GPU's addresses end, and so do the writes through the backing.
+    static constexpr VAddr table_end = 1ULL << Traits::ADDRESS_SPACE_BITS;
+    if (size == 0 || addr >= table_end) {
+        return;
+    }
+    size = std::min<u64>(size, table_end - addr);
+    ForEachImageInRegion(addr, size, [&](ImageId image_id, Image& image) {
+        std::scoped_lock lk{image.mutex};
+        ResolveGpuHash(image);
     });
 }
 
@@ -884,7 +924,11 @@ void TextureCache::RefreshImage(Image& image) {
         image.cpu_hash = hash;
     }
 
-    image.gpu_hash = 0;
+    {
+        std::scoped_lock lk{image.mutex};
+        image.gpu_hash = 0;
+        image.gpu_hash_pending = false;
+    }
 
     // A burst of refreshes in one frame is mostly images that show up for the first time (the
     // game streams a new area in), which must be uploaded: count those apart from re-uploads.
@@ -1133,6 +1177,11 @@ void TextureCache::GarbageCollectImages() {
         --num_deletions;
         const auto image_id = slot_images.GetSlotId(image);
         if (download) {
+            {
+                // While the image is still tracked, so no guest write comes between.
+                std::scoped_lock lk{image.mutex};
+                ResolveGpuHash(image);
+            }
             UntrackImage(image_id);
             UnregisterImage(image_id);
             if (image.gpu_hash != 0) {

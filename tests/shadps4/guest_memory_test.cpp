@@ -31,6 +31,7 @@
 #include <sanitizer/lsan_interface.h>
 #endif
 #include <imgui.h>
+#include <xxhash.h>
 
 #include "core/libraries/videoout/buffer.h"
 #include "core/memory.h"
@@ -879,6 +880,120 @@ TEST(GuestMemory, FindImageStampsItsImageOnceATickMovesOn) {
     }
 }
 
+// MarkAsMaybeGpuDirty notes that the GPU wrote a buffer over an image. Upstream hashes the image's
+// guest memory right then, for the collector's choice between downloading the image and dropping
+// it. Ours puts the hash off while every page of the image is write protected (#591) and takes it
+// before the memory can change, so it is the hash of what upstream hashed: before a guest write
+// into the image lands, before a write through the backing, and before a guest write to a page
+// the image shares with other data. An upload drops a hash that was put off, which is every
+// frame's case in the game, and an image with an unprotected page is hashed at once.
+TEST(GuestMemory, AnImagesGpuHashIsTakenBeforeItsMemoryChanges) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        Direct d(64 / pages_per_kernel_page);
+        auto* const base = static_cast<char*>(d.address);
+        // A 64 x 64 linear image (16 KiB) from the middle of page 4 to the middle of page 8.
+        Libraries::VideoOut::BufferAttributeGroup group{};
+        group.is_occupied = true;
+        group.attrib.pixel_format = Libraries::VideoOut::PixelFormat::A8R8G8B8Srgb;
+        group.attrib.tiling_mode = Libraries::VideoOut::TilingMode::Linear;
+        group.attrib.width = group.attrib.height = group.attrib.pitch_in_pixel = 64;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        char* const image_at = base + 4 * tp + tp / 2;
+        constexpr u64 image_size = 4 * tp;
+        for (u64 i = 0; i < image_size; ++i) {
+            image_at[i] = static_cast<char>(i * 7);
+        }
+        VideoCore::TextureCache::ImageDesc desc{group, addr(image_at)};
+        const VideoCore::ImageId id = textures.FindImage(desc);
+        VideoCore::Image& image = textures.GetImage(id);
+        ASSERT_EQ(image.info.guest_size, image_size);
+        const auto hash = [&] { return XXH3_64bits(image_at, image_size); };
+        const auto gpu_writes_buffer = [&] {
+            textures.MarkAsMaybeGpuDirty(addr(image_at), image_size);
+        };
+        // What a frame does after a shader wrote the buffer: the image is uploaded again.
+        const auto upload_again = [&] {
+            textures.InvalidateMemoryFromGPU(addr(image_at), image_size);
+            textures.UpdateImage(id);
+        };
+        const auto cpu_dirty = [&] {
+            return True(image.flags & VideoCore::ImageFlagBits::CpuDirty);
+        };
+        textures.UpdateImage(id);
+        ASSERT_FALSE(writable(image_at));
+        ASSERT_FALSE(writable(image_at + image_size - 1));
+
+        // Put off, and dropped by the upload.
+        gpu_writes_buffer();
+        EXPECT_TRUE(image.gpu_hash_pending);
+        EXPECT_EQ(image.gpu_hash, 0u);
+        upload_again();
+        EXPECT_FALSE(image.gpu_hash_pending);
+        EXPECT_EQ(image.gpu_hash, 0u);
+
+        // A guest write into the image: the hash is of the bytes before it.
+        gpu_writes_buffer();
+        u64 before = hash();
+        const std::uint64_t claimed = bb::shadps4::claimed_faults();
+        static_cast<volatile char*>(image_at)[tp] = 'c';
+        EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 1);
+        EXPECT_FALSE(image.gpu_hash_pending);
+        EXPECT_EQ(image.gpu_hash, before);
+        EXPECT_NE(hash(), before);
+        EXPECT_TRUE(cpu_dirty());
+        // A second buffer write keeps the first one's hash, as upstream.
+        gpu_writes_buffer();
+        EXPECT_FALSE(image.gpu_hash_pending);
+        EXPECT_EQ(image.gpu_hash, before);
+
+        // A write through the backing takes no fault. One beside the image leaves the hash put
+        // off; one into the image takes it first.
+        textures.UpdateImage(id);
+        ASSERT_FALSE(cpu_dirty());
+        ASSERT_EQ(image.gpu_hash, 0u);
+        gpu_writes_buffer();
+        ASSERT_TRUE(image.gpu_hash_pending);
+        EXPECT_TRUE(memory().TryWriteBacking(base + 16 * tp, "beside", 6));
+        EXPECT_TRUE(image.gpu_hash_pending);
+        before = hash();
+        EXPECT_TRUE(memory().TryWriteBacking(image_at + 2 * tp, "backing", 7));
+        EXPECT_FALSE(image.gpu_hash_pending);
+        EXPECT_EQ(image.gpu_hash, before);
+        EXPECT_NE(hash(), before);
+        EXPECT_FALSE(cpu_dirty());
+
+        // A guest write to the first page before the image starts: the image is not modified,
+        // but that page is no longer protected, so the hash is taken.
+        upload_again();
+        ASSERT_EQ(image.gpu_hash, 0u);
+        gpu_writes_buffer();
+        ASSERT_TRUE(image.gpu_hash_pending);
+        before = hash();
+        static_cast<volatile char*>(base)[4 * tp] = 'h';
+        EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 2);
+        EXPECT_FALSE(image.gpu_hash_pending);
+        EXPECT_EQ(image.gpu_hash, before);
+        EXPECT_FALSE(cpu_dirty());
+        EXPECT_TRUE(writable(image_at));
+
+        // With that page unprotected a guest write would go unseen: hashed at once. RefreshImage
+        // uploads without protecting the pages again.
+        textures.InvalidateMemoryFromGPU(addr(image_at), image_size);
+        textures.RefreshImage(image);
+        ASSERT_EQ(image.gpu_hash, 0u);
+        ASSERT_TRUE(writable(image_at));
+        image_at[8] = 'u';
+        gpu_writes_buffer();
+        EXPECT_FALSE(image.gpu_hash_pending);
+        EXPECT_EQ(image.gpu_hash, hash());
+        d.unmap();
+    }
+}
+
 // The buffer cache never frees the device memory that makes its sparse blocks resident (upstream
 // keeps it to the end), which LeakSanitizer reports. Allocations made while one of these lives are
 // left out of its report.
@@ -1054,6 +1169,9 @@ void concurrent_faults_and_syncs(bool through_backing) {
             const u64 length =
                 sync % 2 == 0 ? pages : std::min<u64>(1 + random() % 64, pages - first);
             upload(gpu.sync(start + first * tp, length * tp));
+            // As a GPU write into a buffer over the image: its hash is put off on this thread
+            // and taken by the writers' faults (#591).
+            textures.MarkAsMaybeGpuDirty(start + 100 * tp, 4 * tp);
             if (sync % 64 == 0) {
                 textures.UpdateImage(image);
             }

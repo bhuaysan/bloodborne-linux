@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/texture_cache/texture_cache.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-17
+// Changed for bloodborne-linux, 2026-11-18
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -131,6 +131,11 @@ public:
 
     /// Marks all images as maybe GPU dirty within the provided range.
     void MarkAsMaybeGpuDirty(VAddr addr, size_t size);
+
+    /// Ours: the GPU thread is about to write the range through the backing, which no write
+    /// tracking sees (MemoryManager::TryWriteBacking). Takes the hashes that MarkAsMaybeGpuDirty
+    /// put off.
+    void BeforeBackingWrite(VAddr addr, size_t size);
 
     /// Evicts any images that overlap the unmapped range.
     void UnmapMemory(VAddr cpu_addr, size_t size);
@@ -377,6 +382,10 @@ private:
     void MarkDirtyIfEdgesModified(Image& image);
 
     void MarkAsMaybeDirty(ImageId image_id, Image& image);
+
+    /// Takes the hash of the image's guest memory that MarkAsMaybeGpuDirty put off, if any. The
+    /// caller holds the image's mutex.
+    void ResolveGpuHash(Image& image);
 
     void RegisterMeta(VAddr address, MetaDataInfo info);
     void UnregisterMeta(VAddr address, u64 owner_uid);

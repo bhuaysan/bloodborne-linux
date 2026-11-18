@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/texture_cache/image.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-18
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -176,6 +176,10 @@ public:
     u64 tick_accessed_last{};
     u64 cpu_hash{};
     u64 gpu_hash{};
+    /// Ours: gpu_hash is still to be taken, and every page of the image is write protected, so its
+    /// guest memory is what it was when the GPU wrote the buffer over it. With gpu_hash it is
+    /// guarded by `mutex`, since a fault on a guest thread takes the hash too.
+    bool gpu_hash_pending{};
     u64 head_hash{};
     u64 tail_hash{};
     bool uploaded{}; ///< Set after the first upload from guest memory (profile counters only)
