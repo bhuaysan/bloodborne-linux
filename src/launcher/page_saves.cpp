@@ -205,8 +205,7 @@ private:
         current_ = std::string(common::default_profile);
         try {
             if (std::error_code ec; fs::exists(ctx.config_path, ec)) {
-                config_ = common::read_config(ctx.config_path).config;
-                current_ = config_.profile.value_or(current_);
+                current_ = common::read_config(ctx.config_path).config.profile.value_or(current_);
             }
             const auto dirs = common::RuntimeDirs::from_environment(current_, {});
             data_dir_ = dirs.data();
@@ -296,10 +295,10 @@ private:
         refresh();
     }
 
-    // Writes `name` as the profile into the config file, keeping the other settings.
+    // Writes `name` as the profile into the config file. The file is read again first: a drop
+    // may have set the game folder while the page was open.
     void save_profile(const std::string& name) {
-        config_.profile = name;
-        common::write_config(config_path_, config_);
+        common::update_config(config_path_, [&](common::Config& c) { c.profile = name; });
     }
 
     void open_folder(const Context& ctx) {
@@ -335,7 +334,6 @@ private:
     std::string selected_;
     std::string message_;
     fs::path data_dir_, cache_dir_, config_path_;
-    common::Config config_;
     std::vector<ProfileInfo> profiles_;
 };
 

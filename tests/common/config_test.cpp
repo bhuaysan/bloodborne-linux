@@ -137,6 +137,20 @@ TEST_F(ConfigFileTest, WriteThenReadGivesTheSameConfig) {
     EXPECT_EQ(bb::common::read_config(file).config, partial);
 }
 
+TEST_F(ConfigFileTest, UpdateKeepsWhatAnotherWriterSet) {
+    const fs::path file = dir_ / "config.toml";
+    bb::common::update_config(file, [](Config& c) { c.profile = "first"; });  // no file yet
+    Config other = bb::common::read_config(file).config;
+    other.game_dir = fs::path("/games/bb");
+    bb::common::write_config(file, other);  // written in between by someone else
+    bb::common::update_config(file, [](Config& c) { c.profile = "second"; });
+    const Config got = bb::common::read_config(file).config;
+    EXPECT_EQ(got.profile, "second");
+    EXPECT_EQ(got.game_dir, fs::path("/games/bb"));
+    std::ofstream(file) << "fsr = maybe\n";
+    EXPECT_THROW(bb::common::update_config(file, [](Config&) {}), ConfigError);
+}
+
 TEST_F(ConfigFileTest, ReadingAMissingFileFails) {
     try {
         bb::common::read_config(dir_ / "none.toml");

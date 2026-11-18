@@ -158,13 +158,10 @@ public:
             return;
         }
         // Read again: the file is the only state, and other keys (game folder, profile) stay.
-        common::Config config = config_;
         try {
-            if (std::filesystem::exists(ctx.config_path)) {
-                config = common::read_config(ctx.config_path).config;
-            }
-            apply_choices(config, before_, now_);
-            common::write_config(ctx.config_path, config);
+            common::update_config(ctx.config_path, [&](common::Config& config) {
+                apply_choices(config, before_, now_);
+            });
         } catch (const common::ConfigError&) {
             // An unreadable file is left as it is; the player sees the old settings next time.
         }
@@ -176,19 +173,19 @@ private:
             return;
         }
         loaded_ = true;
+        common::Config config;
         try {
             if (!ctx.config_path.empty() && std::filesystem::exists(ctx.config_path)) {
-                config_ = common::read_config(ctx.config_path).config;
+                config = common::read_config(ctx.config_path).config;
             }
         } catch (const common::ConfigError&) {
-            config_ = {};
+            config = {};
         }
-        before_ = now_ = choices_from_config(config_);
+        before_ = now_ = choices_from_config(config);
         sizes_ = resolution_choices(display_size(), now_.size);
     }
 
     bool loaded_ = false;
-    common::Config config_;
     PictureChoices before_;
     PictureChoices now_;
     std::vector<Size> sizes_;

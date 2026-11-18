@@ -7,6 +7,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -61,6 +62,11 @@ std::string format_config(const Config& config);
 // the directory when it is missing. Throws ConfigError when that fails. Unknown keys and comments
 // of an existing file are not kept.
 void write_config(const std::filesystem::path& path, const Config& config);
+
+// Reads `path` again (an empty config when it is missing), lets `change` set what it changes and
+// writes the result, so keys another writer set since the caller last read the file stay. Throws
+// ConfigError like read_config and write_config.
+void update_config(const std::filesystem::path& path, const std::function<void(Config&)>& change);
 
 // $XDG_CONFIG_HOME/bloodborne-linux/config.toml (HOME/.config when unset or relative). Nothing
 // when neither is usable.

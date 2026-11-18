@@ -282,6 +282,15 @@ void write_config(const fs::path& path, const Config& config) {
     }
 }
 
+void update_config(const fs::path& path, const std::function<void(Config&)>& change) {
+    Config config;
+    if (std::error_code ec; fs::exists(path, ec)) {
+        config = read_config(path).config;
+    }
+    change(config);
+    write_config(path, config);
+}
+
 std::optional<fs::path> default_config_path() {
     try {
         return RuntimeDirs::from_environment(default_profile, {}).config() / "config.toml";
