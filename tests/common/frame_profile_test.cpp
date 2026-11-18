@@ -1,5 +1,7 @@
 #include "common/frame_profile.hpp"
 
+#include <chrono>
+#include <cstdint>
 #include <set>
 #include <string_view>
 #include <thread>
@@ -62,6 +64,57 @@ TEST_F(FrameProfile, ThreadsAddUp) {
     const auto i = static_cast<std::size_t>(fp::Part::fault);
     EXPECT_EQ(totals.calls[i], 2000u);
     EXPECT_EQ(totals.ns[i], 20000u);
+}
+
+TEST_F(FrameProfile, ScopesOfThreadsAddUpAndOutliveTheThread) {
+    bb::common::set_log_filter(LogFilter::parse("profile=debug"));
+    const auto work = [] {
+        for (int i = 0; i < 1000; ++i) {
+            fp::Scope outer(fp::Part::fault);
+            fp::Scope inner(fp::Part::protect);
+        }
+    };
+    std::thread a(work);
+    std::thread b(work);
+    work();
+    a.join();
+    b.join();
+    const fp::Totals totals = fp::take();
+    const auto fault = static_cast<std::size_t>(fp::Part::fault);
+    const auto protect = static_cast<std::size_t>(fp::Part::protect);
+    EXPECT_EQ(totals.calls[fault], 3000u);
+    EXPECT_EQ(totals.calls[protect], 3000u);
+    EXPECT_GE(totals.ns[fault], totals.ns[protect]);  // inclusive
+    EXPECT_LT(totals.ns[fault], 1'000'000'000u);
+    const fp::Totals again = fp::take();
+    EXPECT_EQ(again.calls[fault], 0u);
+    EXPECT_EQ(again.ns[fault], 0u);
+}
+
+TEST_F(FrameProfile, ScopeTimeIsInNs) {
+    bb::common::set_log_filter(LogFilter::parse("profile=debug"));
+    const std::uint64_t before = fp::now_ns();
+    {
+        fp::Scope scope(fp::Part::wait);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    const std::uint64_t around = fp::now_ns() - before;
+    const std::uint64_t ns = fp::take().ns[static_cast<std::size_t>(fp::Part::wait)];
+    EXPECT_GE(ns, 20'000'000u);
+    EXPECT_LE(ns, around + around / 100);  // the tick rate is right to well under 1 %
+}
+
+// More threads than there are per-thread counters: the rest add to the shared ones.
+TEST_F(FrameProfile, ThreadsPastThePoolStillCount) {
+    bb::common::set_log_filter(LogFilter::parse("profile=debug"));
+    constexpr unsigned threads = 600;
+    for (unsigned i = 0; i < threads; ++i) {
+        std::thread([] {
+            fp::Scope first(fp::Part::irq);
+            fp::Scope second(fp::Part::irq);
+        }).join();
+    }
+    EXPECT_EQ(fp::take().calls[static_cast<std::size_t>(fp::Part::irq)], 2u * threads);
 }
 
 TEST_F(FrameProfile, LineNamesOnlyPartsWithCalls) {

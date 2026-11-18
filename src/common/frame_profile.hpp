@@ -1,11 +1,13 @@
 // Per-frame time counters for the CPU side of the GPU thread (docs/test-rig.md, "Profiling").
 //
-// Parts of the frame are timed with Scope and added up in atomics, so a fault handler or a
-// second thread may add to them. Once per frame (the guest's submit-done) log_frame() writes
-// one line with what each part took since the last one and clears the counters. Everything is
-// off unless the log filter enables channel "profile" at debug (BB_LOG=profile=debug or
-// `--log profile=debug`): a disabled Scope costs a few ns (one call and branch). Times are inclusive, so a
-// part inside another counts in both (upload inside texture, protect inside fault).
+// Parts of the frame are timed with Scope. A Scope reads the CPU's time-stamp counter twice and
+// adds to counters of its own thread, all inline, so it costs about 20 ns and the GPU thread
+// shares no cache line with the fault handlers of other threads (#594). Once per frame (the
+// guest's submit-done) log_frame() collects the threads' counters and writes one line with what
+// each part took since the last one. Everything is off unless the log filter enables channel
+// "profile" at debug (BB_LOG=profile=debug or `--log profile=debug`): a disabled Scope costs one
+// load and a branch. Times are inclusive, so a part inside another counts in both (upload inside
+// texture, protect inside fault).
 #pragma once
 
 #include <array>
@@ -13,6 +15,8 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+
+#include <x86intrin.h>
 
 namespace bb::common::frame_profile {
 
@@ -47,21 +51,67 @@ enum class Part : unsigned {
 
 std::string_view part_name(Part part);
 
-// Whether Scope and add() record. Follows the log filter (set_log_filter).
-bool enabled() noexcept;
+namespace detail {
+
+inline constexpr std::size_t parts = static_cast<std::size_t>(Part::count);
+
+// One thread's counters. They only grow: the owner adds with a plain load and store (no locked
+// instruction), take() reads them from another thread and reports what was added since its last
+// read. A write-tracking fault is the one signal handler that adds here, and it is synchronous:
+// it cannot interrupt an add, which touches no guest memory.
+struct alignas(64) ThreadCounters {
+    std::array<std::atomic<std::uint64_t>, parts> ticks{};
+    std::array<std::atomic<std::uint64_t>, parts> calls{};
+};
+
+inline constinit std::atomic<bool> on{false};
+[[gnu::tls_model("initial-exec")]] inline constinit thread_local ThreadCounters* mine = nullptr;
+
+// The first add of a thread: claims its counters. Async-signal-safe (no lock, no allocation).
+void add_ticks_slow(Part part, std::uint64_t ticks) noexcept;
+
+inline void add_ticks(Part part, std::uint64_t ticks) noexcept {
+    ThreadCounters* const c = mine;
+    if (c == nullptr) [[unlikely]] {
+        add_ticks_slow(part, ticks);
+        return;
+    }
+    const auto i = static_cast<std::size_t>(part);
+    c->ticks[i].store(c->ticks[i].load(std::memory_order_relaxed) + ticks,
+                      std::memory_order_relaxed);
+    c->calls[i].store(c->calls[i].load(std::memory_order_relaxed) + 1,
+                      std::memory_order_relaxed);
+}
+
+// The time-stamp counter. It has to run at a constant rate on every core (constant_tsc and
+// nonstop_tsc, as on every x86-64 CPU since about 2008); take() scales it to ns against
+// CLOCK_MONOTONIC.
+inline std::uint64_t ticks_now() noexcept {
+    return __rdtsc();
+}
+
+}  // namespace detail
+
+// Whether Scope records. Follows the log filter (set_log_filter).
+inline bool enabled() noexcept {
+    return detail::on.load(std::memory_order_relaxed);
+}
 void set_enabled(bool on) noexcept;
 
 // CLOCK_MONOTONIC in ns, the clock of the pipeline lines and of frames.csv.
 std::uint64_t now_ns() noexcept;
 
+// Adds a time measured by the caller and one call. Always counts; for the rare parts that are not
+// a Scope (it adds to counters all threads share).
 void add(Part part, std::uint64_t ns) noexcept;
 
 class Scope {
 public:
-    explicit Scope(Part part) noexcept : part_(part), start_(enabled() ? now_ns() : 0) {}
+    explicit Scope(Part part) noexcept
+        : part_(part), start_(enabled() ? detail::ticks_now() : 0) {}
     ~Scope() {
         if (start_ != 0) {
-            add(part_, now_ns() - start_);
+            detail::add_ticks(part_, detail::ticks_now() - start_);
         }
     }
     Scope(const Scope&) = delete;
@@ -77,14 +127,15 @@ struct Totals {
     std::array<std::uint64_t, static_cast<std::size_t>(Part::count)> calls{};
 };
 
-// What was added since the last call, and clears the counters.
+// What was added since the last call, by all threads. One caller at a time gets each addition
+// once.
 Totals take() noexcept;
 
 // "Frame profile: at <ns> ns, <us> us since the last, <part>=<us> us/<calls> ..." with the parts
 // that had a call (tools/rig/frame_profile.py reads it).
 std::string format_frame(const Totals& totals, std::uint64_t at_ns, std::uint64_t interval_ns);
 
-// Ends a frame: logs one line (when enabled) and clears the counters.
+// Ends a frame: logs one line (when enabled) with what was added since the last.
 void log_frame();
 
 }  // namespace bb::common::frame_profile
