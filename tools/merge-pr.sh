@@ -10,8 +10,9 @@
 # It is required unless --maintainer is given.
 #
 # Rebases the PR branch onto origin/main in a temporary worktree, runs
-# tools/run-tests.sh and tools/privacy-check.sh (which also checks
-# authorship) on the rebased commits, updates the PR branch, fast-forwards main and, once
+# tools/run-tests.sh (without the C++ build when only docs change, as in CI)
+# and tools/privacy-check.sh (which also checks authorship) on the rebased
+# commits, updates the PR branch, fast-forwards main and, once
 # GitHub shows the PR as merged, deletes the branch. The current
 # checkout is never touched.
 #
@@ -141,8 +142,22 @@ if [ "$maintainer" -eq 0 ]; then
     }
 fi
 
+# A PR that only changes docs needs no C++ build, by the rule of the
+# "changes" job in .github/workflows/ci.yml: every path under docs/ or a
+# top-level *.md, except docs/source-policy.md, whose hash table a test
+# reads. Without renames, so a file moved into docs/ shows its old path too.
+test_args=
+files="$(git diff --name-only --no-renames "$main_base" HEAD)"
+if [ -n "$files" ] &&
+   ! printf '%s\n' "$files" | grep -vE '^docs/|^[^/]+\.md$' >/dev/null &&
+   ! printf '%s\n' "$files" | grep -x 'docs/source-policy.md' >/dev/null; then
+    echo "only docs change: Python tests only, no C++ build"
+    test_args=--python-only
+fi
+
 # check the commits exactly as they will land on main
-tools/run-tests.sh || { echo "tests fail on the rebased branch" >&2; exit 1; }
+# shellcheck disable=SC2086  # empty or one flag
+tools/run-tests.sh $test_args || { echo "tests fail on the rebased branch" >&2; exit 1; }
 tools/privacy-check.sh "$main_base" ||
     { echo "privacy check fails on the rebased branch" >&2; exit 1; }
 echo "merging PR #$pr ($count commits from $head)"
