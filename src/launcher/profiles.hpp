@@ -25,7 +25,9 @@ enum class NameProblem { ok, empty, too_long, bad_character, exists };
 NameProblem check_profile_name(std::string_view name,
                                const std::filesystem::path* data_dir = nullptr);
 
-// <data_dir>/profiles/<name>: where bb-run keeps the profile's save data.
+// <data_dir>/profiles/<name>: where bb-run keeps the profile's save data. The same folder as
+// common::RuntimeDirs::profile_data(), which only comes from the environment; this one takes any
+// data folder, so the tests can use a temporary one.
 std::filesystem::path profile_folder(const std::filesystem::path& data_dir, std::string_view name);
 
 // The profiles in <data_dir>/profiles with a valid name, newest play first, then by name.
