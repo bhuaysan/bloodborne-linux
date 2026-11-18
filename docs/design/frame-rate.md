@@ -292,6 +292,24 @@ The scenario `clinic-door.scn` checks it: unpatched 60 FPS aborted when the hunt
 
 The backlog was also a buffer of one frame, and it is gone. The game's flips reach the queue 5 to 14 ms before their vblank, and that phase wanders by tenths of a millisecond per frame while the pacer keeps its period. When a flip slips past the vblank, the grid follows it, which gives one interval of about 18.7 ms. With the backlog the flip of the frame before was shown at that vblank.
 
+## Slow phases at 60 FPS (#610)
+
+While #608 was being checked, two runs of `clinic-fight` at 60 had a phase of 20 to 60 s in which about half the frames missed their slot. In those phases the GPU thread used 88 to 97 % of a core, against 47 to 75 % outside them. The game's render thread waited in `sceGnmSubmitCommandBuffers`, and the main loop waited for the render thread.
+
+**Cause: load from other programs.** The GPU thread does the same work in a phase. The other programs make that work run slower and wait for a core. No function of ours or of the driver takes the extra time on its own. Measured on `main` after #592 and #593 (runs with `--perf`, schedstat of the GPU thread every 250 ms):
+
+| `clinic-fight` at 60 | runs | GPU thread, share of a core | run-queue wait | presents over 17.5 ms |
+|---|---|---|---|---|
+| quiet machine (about 1 core busy outside the game) | 3 | 0.65 standing, 0.32 to 0.48 moving | under 1 % | 0 to 5 of 300 per 5 s, no phase |
+| 6 busy loops for 60 s (6 to 9.5 cores outside) | 1 | 0.40 to 0.59 | up to 2 % | 0 to 37 of 300 per 5 s, scattered |
+| 12 busy loops for 60 s (13.5 cores outside) | 1 | 0.58 to 0.63 | 9 to 12 % | 35 to 70 of 290 per 5 s, for exactly the 60 s |
+
+The core clock stayed at 3.9 GHz throughout. In `play-dodge`, perf counts 5.55 ms of GPU-thread CPU per present on a quiet machine (5.57 in a second quiet run) and 10.07 ms under 12 busy loops. The rise is spread over every function: the rasterizer's bind calls, RADV's state emission and the PM4 parser all grow, from about 20 % (`memmove`) to several times for small RADV functions. The biggest single rise is 0.17 ms (`Rasterizer::BindBuffers`), and between the two quiet runs no function differs by more than 0.03 ms. The machine has 8 cores with two threads each, so another process on the GPU thread's sibling slows it down although the thread still gets its core.
+
+**Why the phases saturated a core before.** Before #592 and #593 the GPU thread needed 47 to 75 % of a core at 60. A slowdown of 1.7 to 1.8 times takes that to a full core and more, which is the 88 to 97 % of the #608 runs. On current `main` the same load leaves the GPU thread at about 60 % of a core, and frames miss their slot through run-queue waits instead. No phase appeared in the three quiet runs.
+
+**Decision.** No change for #610: there is no cost that rises only in the phases. Frame-time measurements still need a quiet machine (`docs/test-rig.md`, "Thread times"). Making the GPU thread cheaper per draw, as #592 and #593 did, is also what keeps load from other programs from saturating its core. One phase in #608 came without a rise in the outside load that the probe saw. The probe measured only the game's threads, so what ran next to the game then is not known.
+
 ## Open questions
 
 - Ints that `param_blend_int` eases upward only rise while (target − current) · t ≥ 1, so they stop short of a higher target by fewer than 2/t: up to 15 at 30 and 30 at 60. Such a parameter can settle at a different value at 60 than at 30 (for example 0 → 20 settles at 6 at 30 and stays 0 at 60). Not seen to matter yet (#598).
