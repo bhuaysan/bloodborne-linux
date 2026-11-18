@@ -701,32 +701,6 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
     backing = new_backing;
 }
 
-bool Runtime::IsBufferAccessed(const VideoCore::Buffer* handle, u64 offset, u64 size,
-                               bool check_read_access) {
-    return buffer_barriers.IsAccessed(handle->barrier_slot, offset, size, check_read_access);
-}
-
-void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size,
-                           vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access) {
-    constexpr static vk::AccessFlags2 READ_MASK =
-        vk::AccessFlagBits2::eIndexRead | vk::AccessFlagBits2::eVertexAttributeRead |
-        vk::AccessFlagBits2::eUniformRead | vk::AccessFlagBits2::eShaderRead |
-        vk::AccessFlagBits2::eColorAttachmentRead |
-        vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eTransferRead |
-        vk::AccessFlagBits2::eMemoryRead;
-
-    constexpr static vk::AccessFlags2 WRITE_MASK =
-        vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eColorAttachmentWrite |
-        vk::AccessFlagBits2::eDepthStencilAttachmentWrite | vk::AccessFlagBits2::eTransferWrite |
-        vk::AccessFlagBits2::eMemoryWrite | vk::AccessFlagBits2::eTransformFeedbackWriteEXT;
-
-    buffer_barriers.Access(handle->barrier_slot, offset, size, bool(src_access & READ_MASK),
-                           bool(src_access & WRITE_MASK));
-
-    memory_barrier.srcStageMask |= src_stage;
-    memory_barrier.srcAccessMask |= src_access & WRITE_MASK;
-}
-
 void Runtime::FlushBarriers() {
     vk::DependencyInfo dep_info{};
 

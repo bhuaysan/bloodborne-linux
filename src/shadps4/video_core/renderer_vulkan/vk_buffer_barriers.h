@@ -37,9 +37,9 @@ public:
         if (end <= offset || (!is_read && !is_write)) {
             return;
         }
-        Entry& entry = Get(slot);
+        Entry& entry = slot.batch == batch ? entries[slot.index] : NewEntry(slot);
         if (is_write) {
-            entry.write_ranges.Add({offset, end});
+            AddWrite(entry, offset, end);
         }
         if (is_read) {
             AddRead(entry, offset, end);
@@ -93,15 +93,17 @@ private:
         }
     };
 
-    Entry& Get(BufferBarrierSlot& slot) {
-        if (slot.batch == batch) {
-            return entries[slot.index];
-        }
+    // The rare paths stay out of line, so the inlined common case stays small.
+    [[gnu::noinline]] Entry& NewEntry(BufferBarrierSlot& slot) {
         if (used == entries.size()) {
             entries.emplace_back();
         }
         slot = {batch, static_cast<u32>(used)};
         return entries[used++];
+    }
+
+    [[gnu::noinline]] static void AddWrite(Entry& entry, u64 start, u64 end) {
+        entry.write_ranges.Add({start, end});
     }
 
     static void AddRead(Entry& entry, u64 start, u64 end) {
@@ -120,7 +122,7 @@ private:
         entry.pending_reads.push_back({start, end});
     }
 
-    static void MergePendingReads(Entry& entry) {
+    [[gnu::noinline]] static void MergePendingReads(Entry& entry) {
         auto& pending = entry.pending_reads;
         if (pending.empty()) {
             return;
