@@ -275,7 +275,7 @@ std::map<std::uint32_t, std::uint32_t> registers(const Words& packets) {
 // Each entry of the shader files gives its register block (from 0x3c, with 0xffffffff for the
 // high address dword) to its stage's import, as the game does once it knows the code address.
 // The registers written must agree with what the entry's code uses and its header says
-// (docs/design/graphics.md, "Stage register imports").
+// (docs/formats/gnm.md, "Stage register imports").
 TEST(GnmShaderGame, LayoutsAgreeWithTheShaderFiles) {
     BB_REQUIRE_GAME(game);
     (void)game;

@@ -1,7 +1,7 @@
 """Pinned SHA-256 digests of the shader archives in dvdroot_ps4/shader/ (CUSA03173 patch 1.09).
 
-tools/shaderbnd reads only these files. The design table in docs/design/graphics.md lists the
-same archives with their file and program counts.
+tools/shaderbnd reads only these files. The table under "Shader archives" in
+docs/formats/shader-binary.md lists the same archives with their file and program counts.
 """
 
 SHADER_DIR = "dvdroot_ps4/shader"

@@ -1,6 +1,6 @@
 # GNM: how the eboot builds and submits GPU work
 
-What the eboot does with the GPU, as far as its own code shows: the command buffer object, the PM4 packets the statically linked GNM code writes, how buffers reach the GPU, how shaders are bound, where fetch shaders come from, and what each of the 50 `libSceGnmDriver` imports does. Design item 10 of [graphics.md](../design/graphics.md); the second wave (PM4 parser, submission) is planned from this note.
+What the eboot does with the GPU, as far as its own code shows: the command buffer object, the PM4 packets the statically linked GNM code writes, how buffers reach the GPU, how shaders are bound, where fetch shaders come from, and what each of the 50 `libSceGnmDriver` imports does. It was written for our own GPU path of M4, which #435 removed. Since R4 shadPS4's `video_core` runs these packets; the note stays as the record of what the eboot writes and of what the HLE in `src/hle/video` has to match.
 
 Sources: the eboot of CUSA03173 patch 1.09 (disassembled with `objdump` over byte ranges, call sites found by scanning for `call`/`jmp rel32` to the PLT stubs and to the functions in `eh_frame`) and AMD's public documents listed in [references.md](../references.md): the Southern Islands programming guide for the PM4 header format, the packet descriptions and the config, SH and context register bases; the Sea Islands register reference for register addresses and fields; the Sea Islands ISA guide for instruction encodings. No emulator code and no driver binary was read. The driver module itself (`libSceGnmDriver_padebug.prx` in the eboot's `DT_NEEDED` list) is firmware and not in the dump, so everything about the imports comes from their callers.
 
@@ -147,7 +147,7 @@ The submit calls take a CCB beside each DCB (address NULL and size 0 when a chun
 | Import | Arguments | Use |
 |---|---|---|
 | `zwY0YV91TTI` | `(count, dcb addresses[], dcb sizes in bytes[], ccb addresses[], ccb sizes in bytes[])` | Submit. 12 call sites, for example 0x11faff0 and 0x11fb2c0 (which returns the result) and the replay at 0x26bb730 (which ignores it) |
-| `iCO804ZgzdA` | Same as above | `sceGnmValidateCommandBuffers` (`symbols/nids.csv`): validates the buffers instead of submitting them; its wrapper 0x11fb340 is the validate twin of the submit wrapper 0x11fb2c0. The HLE returns `0x80d13fff` (validation not enabled) and queues nothing ([graphics.md](../design/graphics.md), item 18). At renderer start-up (0x216b1a2 → 0x26bb8e0) the game submits a one-dword DCB (the type-2 filler) through it and enables an optional feature only if the result is not `0x80d13fff`. Other callers: 0x11fb340, 0x11fc290 and two in 0x1094ad0/0x1096470 |
+| `iCO804ZgzdA` | Same as above | `sceGnmValidateCommandBuffers` (`symbols/nids.csv`): validates the buffers instead of submitting them; its wrapper 0x11fb340 is the validate twin of the submit wrapper 0x11fb2c0. The HLE returns `0x80d13fff` (validation not enabled) and queues nothing. At renderer start-up (0x216b1a2 → 0x26bb8e0) the game submits a one-dword DCB (the type-2 filler) through it and enables an optional feature only if the result is not `0x80d13fff`. Other callers: 0x11fb340, 0x11fc290 and two in 0x1094ad0/0x1096470 |
 | `xbxNatawohc` | `(count, dcb addresses[], dcb sizes[], ccb addresses[], ccb sizes[], video-out handle, buffer index, flip mode, 64-bit flip argument)`, the last three on the stack | Submit and flip. 8 call sites; the frame end at 0x26b0ce0 and 0x26b0e30 passes NULL CCB arrays and 1 or 2 DCBs |
 | `yvZ73uQUqrk` | `()` | Called right after every submit-and-flip at 0x26b0e04 and 0x26b0ee7; result ignored |
 
@@ -182,7 +182,7 @@ The user-data writers (0x1076390: 64-bit pointer, 155 call sites; 0x1076420: one
 | 5 | HS | 0x2D0C |
 | 6 | LS | 0x2D4C |
 
-Code paths exist for every stage (call sites pass every index). Whether the game runs GS, ES, HS or LS shaders at all is still for the shader footer (item 2) to show.
+Code paths exist for every stage (call sites pass every index). The shader files hold programs of all seven stages, and the game binds GS, ES, HS and LS shaders as well (#468).
 
 ### Shader objects and the stage writers
 
@@ -195,7 +195,7 @@ The state cache layer binds a shader object per stage. Its layout, as that layer
 | +0x8 | Register block handed to the driver import. Its first two dwords are the program address (`(hi:lo) << 8`, as for `SPI_SHADER_PGM_LO/HI`) |
 | stage-specific | Input-usage table, 4 bytes per entry: VS +0x28, PS +0x3c, ES +0x20, LS +0x20, GS +0x38, HS +0x40, CS +0x28 |
 
-If the constant block is not empty, the layer builds a buffer descriptor for `code address + offset`, stride 16 (0x1070960), and binds it as slot 15 of the stage (0x108e200). So data follows the code in GPU memory at an offset the shader object records. Whether that is the `OrbShdr` footer or a separate block is for item 2.
+If the constant block is not empty, the layer builds a buffer descriptor for `code address + offset`, stride 16 (0x1070960), and binds it as slot 15 of the stage (0x108e200). So data follows the code in GPU memory at an offset the shader object records. In the shader files that block is the data rows after the last footer ([shader-binary.md](shader-binary.md#entry-layout)).
 
 The driver imports write the shader's registers. Each takes the cursor, a dword count and the register block, returns 0 on success, and the caller advances the cursor by the fixed count only then:
 
@@ -213,7 +213,25 @@ The driver imports write the shader's registers. Each takes the cursor, a dword 
 | HS | `GNlx+y7xPdE` | 30 | same | same callers, used instead when the object's dwords and that u32 are unchanged |
 | LS | `vckdzbQ46SI` | 23 | u32 | 0x10901c0, 0x1090590 |
 
-The "used instead" variants have the same size; they probably avoid rewriting unchanged context registers. The HLE needs the meaning of each dword in the register blocks to write equivalent `SET_SH_REG`/`SET_CONTEXT_REG` packets and pad the rest with a `NOP`. The blocks come from the shader files, so the footer work (item 2) is where their layout gets pinned down; next to it, the HS/ES/VS writers that also set `VGT_GS_MODE` (0x10756b0), `VGT_GS_ONCHIP_CNTL` (0x1075750) and `VGT_ESGS_RING_ITEMSIZE` (0x1075a90) themselves show which registers the driver doesn't write.
+The "used instead" variants have the same size and are picked when the context-register dwords are unchanged (below). The HS, ES and VS writers that also set `VGT_GS_MODE` (0x10756b0), `VGT_GS_ONCHIP_CNTL` (0x1075750) and `VGT_ESGS_RING_ITEMSIZE` (0x1075a90) themselves show which registers the driver doesn't write.
+
+### Stage register imports
+
+The stage register imports (`sceGnmSetVsShader` and the others, `src/hle/video/gnm_shader.*`, #271; all seven stages, #468 added ES, GS, HS and LS) write the standard `SET_SH_REG`/`SET_CONTEXT_REG` packets for their register block and fill the rest of their fixed size with one `NOP` whose payload is zero. Block layouts (from shadPS4's `gnmdriver.cpp`, checked against the game's shader files below), with the dwords the import writes:
+
+| Stage | Dwords | Register block | Extra argument |
+|---|---|---|---|
+| VS | 29 | `PGM_LO, PGM_HI, RSRC1, RSRC2, SPI_VS_OUT_CONFIG, SPI_SHADER_POS_FORMAT, PA_CL_VS_OUT_CNTL` | modifier |
+| PS | 40 | `PGM_LO, PGM_HI, RSRC1, RSRC2, SPI_SHADER_Z_FORMAT, SPI_SHADER_COL_FORMAT, SPI_PS_INPUT_ENA, SPI_PS_INPUT_ADDR, SPI_PS_IN_CONTROL, SPI_BARYC_CNTL, DB_SHADER_CONTROL, CB_SHADER_MASK`; NULL unbinds (program address and `DB_SHADER_CONTROL` 0) | – |
+| CS | 25 | `COMPUTE_PGM_LO, COMPUTE_PGM_HI, RSRC1, RSRC2, COMPUTE_NUM_THREAD_X, Y, Z` | – |
+| ES | 20 | `PGM_LO, PGM_HI, RSRC1, RSRC2` | modifier |
+| GS | 29 | `PGM_LO, PGM_HI, RSRC1, RSRC2, VGT_STRMOUT_CONFIG, VGT_GS_OUT_PRIM_TYPE, VGT_GS_INSTANCE_CNT` | – |
+| HS | 30 | `PGM_LO, PGM_HI, RSRC1, RSRC2, VGT_TF_PARAM, VGT_HOS_MAX_TESS_LEVEL, VGT_HOS_MIN_TESS_LEVEL` | `VGT_LS_HS_CONFIG` |
+| LS | 23 | `PGM_LO, PGM_HI, RSRC1, RSRC2` | modifier |
+
+`PGM_HI` must be 0 (code below 1 TiB, which the guest window keeps), and a non-zero modifier may set only `SGPRS` and `VGPR_COMP_CNT` (the RSRC1 bits outside `0xfcfffc3f`); otherwise the import fails and writes nothing. For VS and ES a non-zero modifier replaces both fields; for LS it replaces `VGPR_COMP_CNT` only when it sets a bit there (and writes `RSRC2` once) (shadPS4's mask choice). The game's CS import is `sceGnmSetCsShader`, which takes no modifier (`0xfffffc3f` belongs to `sceGnmSetCsShaderWithModifier`, not imported). shadPS4 writes the context registers of the "unchanged" variants (`sceGnmUpdate*Shader`) inside `NOP`s with payload `0xc01exxxx`, and LS's `RSRC2` twice; we register the same functions for the "unchanged" variants. That is equivalent where the callers pick them only when the context-register dwords are unchanged: the VS (0x108fbb0), PS (0x108fdd0) and HS (0x1090380) binders compare exactly those dwords (object +0x18..+0x20, block dwords 4–6; +0x18..+0x34, dwords 4–11; dwords 4–6 and the `VGT_LS_HS_CONFIG` value), and `Liverpool` skips `0xc01e` tags like other `NOP`s. The GS binder (0x1090b30) instead compares the three context dwords of the copy shader's VS object, which follows the GS object's input-usage table (+0x50 + 4 × usage count). So where the GS's own context registers change while the copy shader's don't, the update variant writes the new values; that is the state the bound object asks for, and the copy shader's registers come from the VS binder anyway.
+
+**Checked against the shader files** (`GnmShaderGame.LayoutsAgreeWithTheShaderFiles`): the entry header of every shader file holds the shader object from 0x34 (so the register block from 0x3c, with the code offset from 0x34 as `PGM_LO` and 0xffffffff as `PGM_HI`, which the game replaces with the address). Each VS, PS and CS block (13,863 of the 18,517 entries) goes through its stage's import, and the registers written agree with the program: RSRC1's `VGPRS` and `SGPRS` cover every register the code uses; VS `SPI_SHADER_POS_FORMAT` has a format exactly for the exported positions, `VS_EXPORT_COUNT` + 1 is the number of parameter exports, and `PA_CL_VS_OUT_CNTL` is non-zero exactly when `pos1` is exported (0x400003, clip distances); PS `SPI_SHADER_COL_FORMAT` and `CB_SHADER_MASK` are set exactly for the exported render targets, `SPI_SHADER_Z_FORMAT` and `Z_EXPORT_ENABLE` exactly with an `mrtz` export, `SPI_PS_INPUT_ENA` equals `SPI_PS_INPUT_ADDR`, and `NUM_INTERP` covers the interpolated attributes; CS `NUM_THREAD_X/Y/Z` equal the three u16 at entry 0x18. Moving any of the checked dwords in the writers fails the test. The test also covers the other four stages (stage byte 0x2c: GS 3, ES 5, LS 6, HS 7; counts 1,701, 1,699, 850 and 404): the program address and RSRC1 land in the stage's registers, and the GS and HS context registers are the block's dwords. A survey found the GS and HS layouts in the files: GS `VGT_STRMOUT_CONFIG` is non-zero exactly in the 10 entries with stream-out records and the primitive type is 0–2; HS `VGT_TF_PARAM`'s `TYPE` equals entry byte 0x18 and `VGT_HOS_MAX_TESS_LEVEL` the float at entry 0x20 in all 404 entries. The objects also hold dwords the imports don't write (from the same survey): VS +0x24 (two small counts), PS +0x38 (equal to `NUM_INTERP`), CS +0x24 (0), ES +0x14 (in 1,695 of 1,699 four times the output count, so `VGT_ESGS_RING_ITEMSIZE`, which the eboot writes itself at 0x1075a90) and +0x10, LS +0x10 and +0x14 (a multiple of 16), GS +0x24..+0x34 (+0x34 the maximum output vertex count, equal to the u16 at entry 0x1a), HS +0x24..+0x3c. Their meaning is not worked out.
 
 ## Fetch shaders
 
@@ -231,11 +249,11 @@ The address reaches the shader through user data: the VS binder 0x108fbb0 writes
 
 What this means for the translator:
 
-- At draw time the fetch code is read from the address in the vertex stage's user-data dwords 0–1 and decoded up to its `s_setpc_b64`. Its code hash joins the cache key as the design says.
-- The generator uses only SMRD, VOP2, SOPP, MUBUF and SOP1, which items 3a, 3b and 3d cover.
-- Offline, real fetch shaders can be produced by calling 0x10877c0 itself through the differential harness, which maps the eboot. It calls no other game function, but it uses two libkernel imports for its stack protector: it loads the canary through the GOT slot 0x53e3be0 (`f7uOxY9mM1U`, `__stack_chk_guard`) and calls the PLT stub 0x2bbe4f8 (`Ou3iL1abvng`, `__stack_chk_fail`) at 0x1087ab4. The harness has to resolve both before the call. Its input comes from the shader objects, so this waits for item 2's register-block and input-usage layout.
+- At draw time the fetch code is read from the address in the vertex stage's user-data dwords 0–1 and decoded up to its `s_setpc_b64`. shadPS4's translator does this in `ParseFetchShader`.
+- The generator uses only SMRD, VOP2, SOPP, MUBUF and SOP1, all of which the translator handles.
+- Offline, real fetch shaders can be produced by calling 0x10877c0 itself through the differential harness, which maps the eboot. It calls no other game function, but it uses two libkernel imports for its stack protector: it loads the canary through the GOT slot 0x53e3be0 (`f7uOxY9mM1U`, `__stack_chk_guard`) and calls the PLT stub 0x2bbe4f8 (`Ou3iL1abvng`, `__stack_chk_fail`) at 0x1087ab4. The harness has to resolve both before the call. Its input comes from the shader objects (register block and input-usage table above).
 
-**Shaders inside the eboot.** The eboot holds 5493 `OrbShdr` markers: 5139 in the executable segment between 0x2d0a04a and 0x46d6e92 and 354 in the data segment between 0x50dfb04 and 0x52e3da4, one `s_endpgm` per marker. 210 of them contain one `s_swappc_b64 s[0:1], s[0:1]` each. They carry no readable names near the marker. Item 2's eboot scan extracts them like the archive shaders.
+**Shaders inside the eboot.** The eboot holds 5493 `OrbShdr` markers: 5139 in the executable segment between 0x2d0a04a and 0x46d6e92 and 354 in the data segment between 0x50dfb04 and 0x52e3da4, one `s_endpgm` per marker. 210 of them contain one `s_swappc_b64 s[0:1], s[0:1]` each. They carry no readable names near the marker. `shaderbnd.py --scan-eboot` reports them ([shader-binary.md](shader-binary.md#programs-embedded-in-the-eboot)).
 
 ## libSceGnmDriver imports
 
@@ -287,22 +305,6 @@ The HLE registers these as logging stubs.
 
 ## Open questions and next steps
 
-- ~~**Register blocks of the stage writers.**~~ Answered in #271: the layouts are in [graphics.md](../design/graphics.md#decisions) ("Stage register imports"), checked against the shader files, whose entry header holds the shader object from 0x34 ([shader-binary.md](shader-binary.md#entry-header)).
-- **Opcodes 0x8C, 0x8D.** AMD's opcode header does not name them, so they stay unnamed (likely Sony-specific). 0x8C/0x8D come in pairs with compute-side writers whose bodies differ from the graphics ones, and 0x8D sits where a draw sits; they may belong to a draw path that uses a compute command buffer. Next step: count them in captured streams once the game runs, and log each opcode once as the design says.
-- **Field layouts.** The packet names are checked (see the top of this note). The field layouts of the packets the SI guide doesn't describe (`RELEASE_MEM`, `DMA_DATA`, `ACQUIRE_MEM`, `REWIND`, `SET_QUEUE_REG`, `SET_UCONFIG_REG`, the two `*_MULTI` draws) still need a source; the opcode header has none. Uconfig register 0x200 is `GRBM_GFX_INDEX` (`si_ci_vi_merged_offset.h`). Event type 0x35 stays unnamed (the headers hold no event types).
-- ~~**`iCO804ZgzdA`'s start-up probe.**~~ Answered in #273: the import is `sceGnmValidateCommandBuffers`, and the HLE returns `0x80d13fff` (validation not enabled, as on retail firmware) and queues nothing, so the feature behind the renderer flag at +0x121 (set at 0x216b1b3) stays off ([graphics.md](../design/graphics.md), item 18).
+- **Opcodes 0x8C, 0x8D.** AMD's opcode header does not name them, so they stay unnamed (likely Sony-specific). 0x8C/0x8D come in pairs with compute-side writers whose bodies differ from the graphics ones, and 0x8D sits where a draw sits; they may belong to a draw path that uses a compute command buffer. Next step: count them in the command streams of a game run.
+- **Field layouts.** The packet names are checked (see the top of this note). The field layouts of the packets the SI guide doesn't describe (`RELEASE_MEM`, `DMA_DATA`, `ACQUIRE_MEM`, `REWIND`, `SET_QUEUE_REG`, `SET_UCONFIG_REG`, the two `*_MULTI` draws) come from shadPS4's `pm4_cmds.h` since R4; AMD's opcode header has none. Uconfig register 0x200 is `GRBM_GFX_INDEX` (`si_ci_vi_merged_offset.h`). Event type 0x35 stays unnamed (the headers hold no event types).
 - **`1qXLHIpROPE`, `TLV4mswiZ4A`, `ln33zjBrfjk`.** Roles above are partial. Each is called once or twice; a runtime log of their arguments once the renderer starts will settle them.
-- **Reading the driver HLE code of an emulator** would answer the dword layouts directly. Since 2026-11-06 the source policy allows it.
-
-## Second wave
-
-Planned in [graphics.md](../design/graphics.md#command-buffers-to-the-first-frame-second-wave), items 15–20 and 25–27 (item 3 below). The list below is what this note contributed.
-
-What the note gives the PM4 and submission issues:
-
-1. **PM4 parser core** (`bbpm4`, removed in #435; the packet names are checked): type-3 headers and the type-2 filler, the four register spaces and the predicate/shader-type bits, `NOP` skipping, `INDIRECT_BUFFER`/`INDIRECT_BUFFER_CONST`, `REWIND` (wait for the valid bit), and a log of unknown opcodes. Tests with synthetic streams.
-2. **Constant engine**: CE RAM, `WRITE_CONST_RAM`/`DUMP_CONST_RAM`, the CE/DE counters, running a DCB and its CCB together.
-3. **Draw and dispatch state**: the draw packets in the table, index state, user data, and the snapshot for the backend.
-4. **`libSceGnmDriver` HLE, submission**: the three submits, the call after flip, default-state writers (standard packets from the AMD default, padded), markers (`NOP` with the string), the profiling queries returning 0, and logging stubs for the unreachable imports.
-5. **Compute queues**: map/unmap, the ring parser and read-pointer write-back.
-6. **Shader stage writers**: after item 2 has the register block layout.

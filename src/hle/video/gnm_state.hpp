@@ -1,5 +1,5 @@
 // The default hardware state, debug marker and profiling query imports of libSceGnmDriver
-// (docs/design/graphics.md, item 18; docs/formats/gnm.md, "libSceGnmDriver imports"). The
+// (docs/formats/gnm.md, "libSceGnmDriver imports"). The
 // unreachable imports of that note stay logging stubs: nothing registers them.
 #pragma once
 

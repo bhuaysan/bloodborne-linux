@@ -22,8 +22,8 @@ std::int32_t sceNetInit();
 std::int32_t sceNetPoolCreate(const char* name, std::int32_t size, std::int32_t flags);
 
 // Blocks for `timeout_usec` microseconds, forever if it is negative, then returns 0 (no event):
-// no socket ever becomes ready. The network thread polls this in a loop (docs/m3-run.md), so
-// returning at once kept a core busy. `events` and `max_events` are not touched.
+// no socket ever becomes ready. The network thread polls this in a loop, so returning at once
+// kept a core busy. `events` and `max_events` are not touched.
 std::int32_t sceNetEpollWait(std::int32_t epoll, void* events, std::int32_t max_events,
                              std::int32_t timeout_usec);
 

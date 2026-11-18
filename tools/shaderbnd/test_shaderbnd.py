@@ -353,7 +353,7 @@ class MainTests(unittest.TestCase):
             self.assertFalse(Path(tmp, "out").exists())
 
 
-# File and program counts per archive, from the table in docs/design/graphics.md.
+# File and program counts per archive, from the table in docs/formats/shader-binary.md.
 EXPECTED = {
     "gxflvershader.shaderbnd.dcx": (14571, 16265),
     "gxflvershader.shaderbnddebug.dcx": (3194, 3194),

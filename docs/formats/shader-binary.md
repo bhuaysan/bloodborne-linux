@@ -8,7 +8,24 @@ Worked out from the 18,517 entries of the 8 pinned shader archives with a hex du
 
 The hardware stage of each program type was told from the program's code: which outputs it writes (`exp pos`/`param`, `exp mrt`, buffer stores, LDS writes) and which inputs it reads. The instruction classes come from the Sea Islands ISA guide (see `docs/references.md`).
 
-The split was checked on all 20,218 programs: each program's code, taken from the start found below and the code length described under "Footer block", ends with `s_endpgm` (`00 00 81 BF`), and the program counts per archive match the table in `docs/design/graphics.md`.
+The split was checked on all 20,218 programs: each program's code, taken from the start found below and the code length described under "Footer block", ends with `s_endpgm` (`00 00 81 BF`), and the program counts per archive match the table under [Shader archives](#shader-archives).
+
+## Shader archives
+
+The 8 archives in `dvdroot_ps4/shader/` hold about 20,300 shader programs. `tools/common/shaderarchives.py` pins their SHA-256, and `tools/shaderbnd` refuses any other file. Programs are counted by their `OrbShdr` marker; in every archive that count matches the count of `s_endpgm`.
+
+| Archive | Files | Programs |
+|---|---|---|
+| `gxflvershader.shaderbnd.dcx` | 14571 | 16265 |
+| `gxflvershader.shaderbnddebug.dcx` | 3194 | 3194 |
+| `gxffxshader.shaderbnd.dcx` | 301 | 308 |
+| `gxdecal.shaderbnd.dcx` | 193 | 193 |
+| `gxposteffect.shaderbnd.dcx` | 119 | 119 |
+| `gxrenderershader.shaderbnd.dcx` | 111 | 111 |
+| `gxshader.shaderbnd.dcx` | 15 | 15 |
+| `gxgui.shaderbnd.dcx` | 13 | 13 |
+
+The code hash (SHA-256 of a program's code) is the shader's identity in corpus reports and in the tests.
 
 ## Entry layout
 
@@ -50,7 +67,7 @@ All fields little-endian. Offsets are from the start of the entry.
 | 0x38 | 4 | 0, 4–24 | **data rows** before the metadata (gnm.md: the constant block size in 16-byte units) |
 | 0x3C | 4 | varies | **code offset** of the first program, from 0x34. Dword 0 of the **register block**, which the stage register imports read as `PGM_LO` once the game has put the code address there |
 | 0x40 | 4 | `FF FF FF FF` | dword 1 of the register block, `PGM_HI`; a placeholder the game replaces |
-| 0x44 | to the code | varies | the rest of the register block (`RSRC1`, `RSRC2`, then per stage, [graphics.md](../design/graphics.md#decisions), "Stage register imports"), the input-usage table at the stage's offset (gnm.md), and for a GS the copy shader's VS object after it. The register values were checked against the code (#271) |
+| 0x44 | to the code | varies | the rest of the register block (`RSRC1`, `RSRC2`, then per stage, [gnm.md](gnm.md#stage-register-imports)), the input-usage table at the stage's offset (gnm.md), and for a GS the copy shader's VS object after it. The register values were checked against the code (#271) |
 
 ### Footer block
 
