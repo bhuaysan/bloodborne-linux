@@ -1,8 +1,15 @@
+// SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Source: shadPS4 src/video_core/renderer_vulkan/vk_runtime.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
+// Changed for bloodborne-linux, 2026-11-18
+// License texts: third_party/shadps4/LICENSES/
+
 // The runtime's buffer barrier tracking
-// (src/shadps4/video_core/renderer_vulkan/vk_buffer_barriers.h): the hazards that need a barrier are found (read after write, write after write, write after
-// read), the ones that don't are not, and over random accesses it answers exactly as the
-// tracking it replaced (#593): one read and one write interval list per buffer, added to on
-// every access. Needs no Vulkan device.
+// (src/shadps4/video_core/renderer_vulkan/vk_buffer_barriers.h): the hazards that need a
+// barrier are found (read after write, write after write, write after read), the ones that
+// don't are not, and over random accesses it answers exactly as the tracking it replaced
+// (#593): one read and one write interval list per buffer, added to on every access. The
+// reference tracker below is that tracking, adapted from shadPS4. Needs no Vulkan device.
 
 #include <cstddef>
 #include <cstdint>
