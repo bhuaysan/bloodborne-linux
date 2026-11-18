@@ -1376,4 +1376,35 @@ TEST(GuestMemory, GuestUnmapsFreeImagesOnTheGpuThread) {
     }
 }
 
+// A rasterizer unregisters from the guest memory when it is destroyed (#629; upstream's never
+// does): the maps, unmaps, releases and writes that follow reach no rasterizer.
+TEST(GuestMemory, ADestroyedRasterizerHearsOfNothing) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto liverpool = std::make_unique<AmdGpu::Liverpool>(memory());
+    Frontend::WindowSDL window;
+    {
+        Vulkan::Instance instance{window, -1};
+        start_imgui(instance);
+        Vulkan::Scheduler scheduler{instance};
+        Vulkan::Runtime runtime{instance, scheduler};
+        Direct early(1);
+        {
+            const auto rasterizer = std::make_unique<Vulkan::Rasterizer>(instance, scheduler,
+                                                                         runtime, liverpool.get());
+            EXPECT_TRUE(rasterizer->IsMapped(addr(early.address), early.length));
+        }
+        Direct late(2);
+        EXPECT_TRUE(memory().TryWriteBacking(late.address, "backing", 8));
+        memory().InvalidateMemory(addr(late.address), 8);
+        EXPECT_EQ(sceKernelMprotect(late.address, late.length, 3), 0);
+        EXPECT_EQ(release_direct(late.offset + page_size, page_size), 0);
+        EXPECT_EQ(sceKernelMunmap(late.address, late.length), 0);
+        EXPECT_EQ(release_direct(late.offset, page_size), 0);
+        early.unmap();
+    }
+    liverpool.reset();
+}
+
 }  // namespace

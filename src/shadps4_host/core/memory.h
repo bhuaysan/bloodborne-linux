@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/memory.h, src/core/address_space.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12: only the parts video_core and AvPlayer use, on top of
+// Changed for bloodborne-linux, 2026-11-18: only the parts video_core and AvPlayer use, on top of
 // our kernel's vmem and dmem (memory.cpp) instead of upstream's address space and memory map
 // (docs/design/renderer.md, "One backing for every page the GPU can see").
 // License texts: third_party/shadps4/LICENSES/
@@ -85,9 +85,14 @@ public:
     ~MemoryManager();
 
     // The rasterizer registers itself when it is created. Ours: it hears of the GPU-visible
-    // mappings that are already there, and null unregisters it. A rasterizer unregisters before it
-    // goes; ~Rasterizer doesn't, as upstream's.
+    // mappings that are already there, and null unregisters it. The call returns once no thread
+    // is in a call this manager made into the rasterizer registered before (#629), so that one
+    // may be destroyed after.
     void SetRasterizer(Vulkan::Rasterizer* rasterizer_);
+
+    // Ours (#629): unregisters `rasterizer_` if it is the registered one, as SetRasterizer with
+    // null. ~Rasterizer calls it; upstream's never unregisters.
+    void UnregisterRasterizer(Vulkan::Rasterizer* rasterizer_);
 
     AddressSpace& GetAddressSpace() {
         return impl;
@@ -122,9 +127,12 @@ public:
 
 private:
     class Observer;
+    class RasterizerUse;
 
     AddressSpace impl;
     std::atomic<Vulkan::Rasterizer*> rasterizer{};
+    // The calls into the registered rasterizer that are under way (RasterizerUse, memory.cpp).
+    std::atomic<u32> rasterizer_uses{};
     std::unique_ptr<Observer> observer;
 };
 

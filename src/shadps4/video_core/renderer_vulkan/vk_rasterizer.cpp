@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_rasterizer.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-16
+// Changed for bloodborne-linux, 2026-11-18
 // License texts: third_party/shadps4/LICENSES/
 
 #include "core/gpu_stats.h"
@@ -54,7 +54,12 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     });
 }
 
-Rasterizer::~Rasterizer() = default;
+// Ours (#629): upstream never unregisters, so the memory manager would call a rasterizer that is
+// gone. The body runs before the caches are destroyed, and SetRasterizer returns once no thread
+// is in a call the memory manager made.
+Rasterizer::~Rasterizer() {
+    memory.UnregisterRasterizer(this);
+}
 
 bool Rasterizer::FilterDraw() {
     const auto& regs = liverpool->regs;

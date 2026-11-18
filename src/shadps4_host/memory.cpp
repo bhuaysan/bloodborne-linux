@@ -25,6 +25,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -43,6 +44,33 @@ namespace Core {
 namespace vmem = bb::hle::kernel::vmem;
 namespace dmem = bb::hle::kernel::dmem;
 
+// A call into the registered rasterizer, from a guest thread in a system call or the GPU thread.
+// Ours (#629): SetRasterizer waits until none is under way, so a rasterizer that unregistered can
+// be destroyed. The use is counted before the pointer is read and SetRasterizer stores the pointer
+// before it reads the count (all sequentially consistent): either the use sees the new pointer or
+// SetRasterizer sees the use.
+class MemoryManager::RasterizerUse {
+public:
+    explicit RasterizerUse(MemoryManager& manager) : manager{manager} {
+        manager.rasterizer_uses.fetch_add(1);
+        rasterizer = manager.rasterizer.load();
+    }
+    ~RasterizerUse() {
+        manager.rasterizer_uses.fetch_sub(1);
+    }
+    RasterizerUse(const RasterizerUse&) = delete;
+    RasterizerUse& operator=(const RasterizerUse&) = delete;
+
+    // The registered rasterizer, or null.
+    Vulkan::Rasterizer* get() const {
+        return rasterizer;
+    }
+
+private:
+    MemoryManager& manager;
+    Vulkan::Rasterizer* rasterizer;
+};
+
 // Keeps the backing table and the rasterizer in step with the kernel's mappings of direct and
 // flexible memory. The kernel calls it without its region lock, so the GPU thread, which looks up
 // regions (IsValidMapping), can go on while UnmapMemory waits for it.
@@ -59,7 +87,8 @@ public:
         for (u64 at = 0; at < length; at += GUEST_PAGE_SIZE) {
             pages[(address + at) >> GUEST_PAGE_BITS] = backing + at;
         }
-        if (Vulkan::Rasterizer* const r = manager.rasterizer.load(std::memory_order_acquire)) {
+        const RasterizerUse use{manager};
+        if (Vulkan::Rasterizer* const r = use.get()) {
             r->RegisterMemory(address, length);
             r->MapMemory(address, length);
         }
@@ -71,8 +100,11 @@ public:
         if (!manager.IsValidGpuMapping(address, length)) {
             return;
         }
-        if (Vulkan::Rasterizer* const r = manager.rasterizer.load(std::memory_order_acquire)) {
-            r->UnmapMemory(address, length);
+        {
+            const RasterizerUse use{manager};
+            if (Vulkan::Rasterizer* const r = use.get()) {
+                r->UnmapMemory(address, length);
+            }
         }
         auto& pages = manager.impl.backing_pages;
         for (u64 at = 0; at < length; at += GUEST_PAGE_SIZE) {
@@ -84,8 +116,9 @@ public:
     // (dmem.cpp, release_direct) with their backing entries, which read zeros once dmem punched
     // the hole; only the caches drop the range. A later unmap tells them again, to no effect.
     void released(std::uint64_t offset, std::uint64_t length) override {
-        Vulkan::Rasterizer* const r = manager.rasterizer.load(std::memory_order_acquire);
         vmem::without_changes([&] {
+            const RasterizerUse use{manager};
+            Vulkan::Rasterizer* const r = use.get();
             for (const vmem::Region& g : vmem::regions()) {
                 const u64 low = std::max(offset, g.backing);
                 const u64 high = std::min(offset + length, g.backing + (g.end - g.start));
@@ -114,7 +147,8 @@ private:
     // Invalidates the GPU-mapped parts of the range. The parts are collected first, so
     // InvalidateMemory runs without the rasterizer's range lock.
     void invalidate(std::uintptr_t address, std::uint64_t length) {
-        Vulkan::Rasterizer* const r = manager.rasterizer.load(std::memory_order_acquire);
+        const RasterizerUse use{manager};
+        Vulkan::Rasterizer* const r = use.get();
         if (r == nullptr) {
             return;
         }
@@ -181,7 +215,7 @@ void MemoryManager::SetRasterizer(Vulkan::Rasterizer* rasterizer_) {
     // Ours: the rasterizer hears of the GPU-visible mappings made before it, and no map or unmap
     // runs in between.
     vmem::without_changes([&] {
-        rasterizer.store(rasterizer_, std::memory_order_release);
+        rasterizer.store(rasterizer_);
         if (rasterizer_ == nullptr) {
             return;
         }
@@ -192,6 +226,19 @@ void MemoryManager::SetRasterizer(Vulkan::Rasterizer* rasterizer_) {
             }
         }
     });
+    // Ours (#629): the calls into the rasterizer registered before end here (RasterizerUse). After
+    // the change lock, which a release of direct memory takes inside its use.
+    while (rasterizer_uses.load() != 0) {
+        std::this_thread::yield();
+    }
+}
+
+void MemoryManager::UnregisterRasterizer(Vulkan::Rasterizer* rasterizer_) {
+    // The check and the store are two steps: only a rasterizer's destructor and its owner
+    // unregister it, never two threads at once.
+    if (rasterizer.load() == rasterizer_) {
+        SetRasterizer(nullptr);
+    }
 }
 
 u64 MemoryManager::ClampRangeSize(VAddr virtual_addr, u64 size) {
@@ -365,8 +412,11 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
     // Ours (#591): a write through the backing takes no fault on a write protected page, so the
     // texture cache hears of it here, before the bytes change. Only the GPU thread writes this way
     // (downloads of buffers and images, the labels of EOP and EOS events).
-    if (Vulkan::Rasterizer* const r = rasterizer.load(std::memory_order_acquire)) {
-        r->BeforeBackingWrite(virtual_addr, size);
+    {
+        const RasterizerUse use{*this};
+        if (Vulkan::Rasterizer* const r = use.get()) {
+            r->BeforeBackingWrite(virtual_addr, size);
+        }
     }
 
     const auto& backing_pages = impl.BackingPages();
