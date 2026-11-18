@@ -307,18 +307,15 @@ TEST_F(ChrValidatePaceTest, SetsUpAsManyAGameSecondAt60) {
 // counter that stands still does not stop the setups.
 TEST_F(ChrValidatePaceTest, LetsThroughWhileTheWorldStandsStill) {
     bb::game::set_frame_rate(60);
-    set_frame(7);
-    for (int i = 0; i < 2; ++i) {  // the frame it changed and the one after: paced
-        EXPECT_EQ(call(true, {1, 0}).setups, 0) << i;
-        bb::game::set_frame_count(bb::game::frame_count() + 1);
-    }
+    set_frame(7);  // the frame it changed: paced
+    EXPECT_EQ(call(true, {1, 0}).setups, 0);
     for (int i = 0; i < 6; ++i) {  // then each frame is let through
+        bb::game::set_frame_count(bb::game::frame_count() + 1);
         const Call hooked = call(true, {1, 0});
         expect_same(hooked, call(false, {1, 0}), "still");
         EXPECT_EQ(hooked.setups, 1) << i;
-        bb::game::set_frame_count(bb::game::frame_count() + 1);
     }
-    set_counter(8);  // the world goes on: even, then odd
+    set_frame(8);  // the world goes on: even, then odd
     EXPECT_EQ(call(true, {1, 0}).setups, 1);
     set_frame(9);
     EXPECT_EQ(call(true, {1, 0}).setups, 0);
@@ -329,17 +326,14 @@ TEST(WorldFrames, PacesByTheCounterWhileItAdvances) {
     bb::game::WorldFrames frames;
     EXPECT_EQ(frames.frame(5, 100), 5u);
     EXPECT_EQ(frames.frame(5, 100), 5u);  // several gate calls in a frame
-    EXPECT_EQ(frames.frame(5, 101), 5u);  // the step's round comes before its update adds 1
-    EXPECT_EQ(frames.frame(6, 101), 6u);
-    EXPECT_EQ(frames.frame(6, 102), 6u);
-    EXPECT_EQ(frames.frame(7, 103), 7u);
-    EXPECT_EQ(frames.frame(7, 104), 7u);
-    EXPECT_EQ(frames.frame(7, 105), 0u);  // stood still for a whole frame: let through
+    EXPECT_EQ(frames.frame(6, 101), 6u);  // a new value each frame while the world goes on
+    EXPECT_EQ(frames.frame(7, 102), 7u);
+    EXPECT_EQ(frames.frame(7, 103), 0u);  // stands still: let through
     EXPECT_EQ(frames.frame(7, 200), 0u);
     EXPECT_EQ(frames.frame(8, 201), 8u);
     EXPECT_EQ(frames.frame(9, 0xffffffffu), 9u);
-    EXPECT_EQ(frames.frame(9, 0), 9u);  // the main loop's count wraps
-    EXPECT_EQ(frames.frame(9, 2), 0u);
+    EXPECT_EQ(frames.frame(10, 0), 10u);  // the main loop's count wraps
+    EXPECT_EQ(frames.frame(10, 1), 0u);
 }
 
 // The wrapper without the game: the budget the original sees and what reaches the caller.

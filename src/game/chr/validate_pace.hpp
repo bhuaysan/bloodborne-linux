@@ -46,16 +46,19 @@ bool chr_validate_paced(ChrValidate* original, ValidateBudget* budget, void* chr
 
 // The WorldChrMan singleton (0x0553e878) and its frame counter, which only its frame update
 // (0x01915320) adds 1 to. WorldChrMan's step (0x0193ac10) runs chr_frame_update before that
-// update, and the load steps (0x01939bb0, 0x01939e90, 0x0193a2d0, 0x0193a3e0) and one mode of the
-// step (+0x150 of its object clear, 0x0193b76a) run it without the update.
+// update, so each round sees the value the previous frame's update left. The load steps
+// (0x01939bb0, 0x01939e90, 0x0193a2d0, 0x0193a3e0) run the round without the update, and so does
+// the step in frames where it skips the update (r12b clear at 0x0193b5ce, for instance with +0x150
+// of its object set).
 inline constexpr std::uint64_t world_chr_man = 0x0553e878;
 inline constexpr std::uint64_t world_chr_man_frame = 0xa68;
 
 // Which frames of setups to pace: those in which the world's time goes on, told by WorldChrMan's
 // frame counter advancing. Fed once per gate call with the counter and frame_count(), it returns
-// the frame number to pace by: the counter while it changed in this main loop frame or the one
-// before (the step runs the round before its update adds 1), else 0, which the pacing lets
-// through, so while the counter stands still the game's gate runs as it does, once a frame.
+// the frame number to pace by: the counter if it changed in this main loop frame (the first round
+// of a frame in which the world goes on sees a new value), else 0, which the pacing lets through,
+// so while the counter stands still the game's gate runs as it does, once a frame. The first
+// frame after a stand-still still sees the old value and is let through too.
 class WorldFrames {
 public:
     std::uint32_t frame(std::uint32_t counter, std::uint32_t main_loop_frame);

@@ -26,7 +26,7 @@ std::uint32_t WorldFrames::frame(std::uint32_t counter, std::uint32_t main_loop_
         counter_ = counter;
         changed_at_ = main_loop_frame;
     }
-    return main_loop_frame - changed_at_ <= 1 ? counter : 0;
+    return main_loop_frame == changed_at_ ? counter : 0;
 }
 
 // 0x018b9890
