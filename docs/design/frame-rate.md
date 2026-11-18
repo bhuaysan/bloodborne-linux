@@ -102,7 +102,7 @@ Each site below was checked at 60 against 30 FPS runs, by pictures or by a local
 - **Fades, effects and menus** (`chr_list_fade_step`, 0x180f5e0, and the `update(1/30)` calls): done in #556.
 - **Chase camera** (`chase_cam_update`, 0x143ac60): done in #557.
 - **AI steering** (`agent_steer`, 0x1dbbd00): done in #570 and #603.
-- **Character update intervals** (`world_chr_update`, 0x19173b0) and **setups a frame** (0x18b9890): done in #573. One agent of the `aiwait` scene that walks in contact with another still walks up to 0.8 m further in its first 10 s in some runs at 60, and #573 stays open for it.
+- **Character update intervals** (`world_chr_update`, 0x19173b0) and **setups a frame** (0x18b9890): done in #573. Every agent of the `aiwait` scene walks within 0.2 m of its 30 FPS range in its first 10 s.
 - **Parameter blend** (`param_blend_int`, 0x29262f0): done in #598.
 - **`chr_pad_step`** (0x1572900) is not the player's input: its 1/30 goes to 0x1d145b0, which turns a matrix by the pad's axes times π/2 and −π/3 rad/s, a debug free camera behind a mode check. Low priority.
 - **Input latency**: kept on purpose, see below.
@@ -219,7 +219,7 @@ The count is per agent, not per frame: the path follower doesn't step every agen
 
 **Check runs (`aiwait`, AI log with 7 digits).** With the wrapper every agent of the load group starts walking at the same game time as at 30 (it was 0.2 to 0.4 s earlier), and (−230.9, 45.6) walks 8.1 to 8.2 m in its first 10 s at 60, 8.0 to 8.1 m at 30 (7.7 to 7.8 m at 60 before). In the two runs of the final version every agent's 10 s distance at 60 is within 0.2 m of the range of five runs at 30. At 30 the runs with the wrapper differ from runs of `main` no more than two runs of `main` differ from each other.
 
-**Left: an agent in contact.** (−231.8, 43.3) walks the same path at both rates until another enemy, (−234.0, 38.2), appears next to it about 5.5 s after it starts, and from there in contact with it. Its 10 s distance is 9.9 to 10.1 m in five runs at 30. In six runs at 60 paced by the world's counter it is 9.8 to 10.1 m in four and 10.8 m in two (10.4 to 10.5 m before the wrapper). This stays open in #573.
+**The agent in contact.** (−231.8, 43.3) walks the same path at both rates until other enemies of a later group come up next to it, about 5.5 s after it starts. From there it passes (−234.0, 38.2) on one of two sides, and the two paths differ by 0.8 m after 10 s. Which side it takes follows from when (−232.4, 40.1) starts moving, counted from its own start. Across 20 runs, it took the east side whenever that offset was at most 142.5 frames at 30 FPS (4.75 s) and the west side whenever it was 143.5 or more. There is no push between the characters that differs per frame: up to the split, the tracks of both branches agree. At 30 the offset is 140 to 141 frames, and every run takes the east side. With the final pacing at 60 it is 142.5 in every run and every run takes the east side. The first wrapper, paced by the raw counter, gave 143.5 in 2 of 4 runs, and pacing by the main loop's count gave 146.5 or more. In both cases the agent took the west side and walked 10.8 m in 10 s. The 2.5 frames come from the setup order after the load (the agent comes 1.5 frames earlier counted from the first agent, (−232.4, 40.1) one frame later). In six runs of the final version at 60, every agent's 10 s distance is within 0.16 m of its range in nine runs at 30 (the agent in contact: 9.8 to 10.1 m at 60, 9.9 to 10.4 m at 30).
 
 ## Fades, effects and menus (#556)
 
