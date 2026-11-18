@@ -42,9 +42,9 @@ bb::test::Result run_script(const Dir& dir, const std::string& script) {
     return bb::test::run(std::format(
         "cd {} && env -u BB_GAME_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
         "SDL_VIDEO_DRIVER=offscreen SDL_RENDER_DRIVER=software BB_LAUNCHER_SCRIPT={} "
-        "HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} XDG_CACHE_HOME={} timeout 60 {} 2>&1",
+        "HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} XDG_CACHE_HOME={} XDG_STATE_HOME={} timeout 60 {} 2>&1",
         quote(d), quote(d + "/script.txt"), quote(d + "/home"), quote(d + "/config"), quote(d + "/data"),
-        quote(d + "/cache"), quote(BB_LAUNCHER_PATH)));
+        quote(d + "/cache"), quote(d + "/state"), quote(BB_LAUNCHER_PATH)));
 }
 
 bool is_png(const fs::path& file) {
@@ -89,9 +89,9 @@ std::string play_with_fake_bb_run(const Dir& dir, const fs::path& game, int exit
     result = bb::test::run(std::format(
         "cd {} && env -u BB_GAME_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
         "SDL_VIDEO_DRIVER=offscreen SDL_RENDER_DRIVER=software BB_LAUNCHER_SCRIPT={} "
-        "HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} XDG_CACHE_HOME={} timeout 60 {} 2>&1",
+        "HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} XDG_CACHE_HOME={} XDG_STATE_HOME={} timeout 60 {} 2>&1",
         quote(d), quote(d + "/script.txt"), quote(d + "/home"), quote(d + "/config"), quote(d + "/data"),
-        quote(d + "/cache"), quote((bin / "bb-launcher").string())));
+        quote(d + "/cache"), quote(d + "/state"), quote((bin / "bb-launcher").string())));
     return slurp(dir.path() / "record.txt");
 }
 
@@ -121,6 +121,18 @@ TEST(LauncherRunGame, PlayWorksAfterAPageWasOpenedAndClosed) {
         dir, game, 0, r, "press down\nwait 2\npress accept\nwait 3\npress back\nwait 3\n");
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_NE(rec.find("args=--config "), std::string::npos) << r.output;
+}
+
+// The output and the end of the run are kept for the Help page.
+TEST(LauncherRunGame, TheRunsOutputAndStatusAreCaptured) {
+    BB_REQUIRE_GAME(game);
+    const Dir dir;
+    bb::test::Result r;
+    const fs::path bin = dir.path() / "bin";
+    play_with_fake_bb_run(dir, game, 3, r);
+    EXPECT_EQ(slurp(dir.path() / "state/bloodborne-linux/logs/launcher-last-run.status"),
+              "exit status 3\n");
+    EXPECT_TRUE(fs::exists(dir.path() / "state/bloodborne-linux/logs/launcher-last-run.log"));
 }
 
 // The dump: the folder goes into the config file, only in the XDG config directory.

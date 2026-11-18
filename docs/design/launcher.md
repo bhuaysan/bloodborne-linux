@@ -89,6 +89,8 @@ Changes are saved when the page closes. There is no Apply button.
 - **Copy problem report:** copies to the clipboard the launcher and `bb-run` versions, distribution, kernel, GPU and driver, the last run's exit status and the last 200 lines of its log. Home-directory paths are replaced with `~` and the user name never appears. The player can paste the report into an issue.
 - **Open log folder.**
 
+The page lists the four problems with what to do and puts the ones that apply now first (the check of the game folder, the GPU probe, the last run's status). Play sends the output of `bb-run` to `$XDG_STATE_HOME/bloodborne-linux/logs/launcher-last-run.log` and writes how it ended to `launcher-last-run.status` next to it, because `bb-run` has no log file of its own when it stops early. The report takes the last 200 lines of that capture, then replaces the home directory and any `/home/<name>` with `~` and every whole word equal to the user name with `<user>`. The launcher has no version number yet, so the report gives the commit it was built from; `bb-run` is built with it.
+
 ## Starting the game
 
 - Play starts `bb-run` from the launcher's own directory (found via `/proc/self/exe`) as a separate process, with `--config <path>` and nothing else. The launcher holds no settings of its own: the config file is the only state.

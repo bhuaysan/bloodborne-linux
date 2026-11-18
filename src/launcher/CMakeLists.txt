@@ -1,6 +1,6 @@
 # bb-launcher (docs/design/launcher.md). Built where SDL3, fontconfig and the Vulkan headers are
 # found. The pure logic is a library of its own for the unit tests (tests/launcher).
-add_library(bblauncherlogic STATIC logic.cpp profiles.cpp text.cpp find_game.cpp)
+add_library(bblauncherlogic STATIC logic.cpp profiles.cpp text.cpp find_game.cpp help_report.cpp)
 target_include_directories(bblauncherlogic PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(bblauncherlogic PUBLIC bbcommon PRIVATE bb_warnings)
 
@@ -26,6 +26,15 @@ add_library(bb_launcher_imgui STATIC
 target_include_directories(bb_launcher_imgui SYSTEM PUBLIC ${BB_LAUNCHER_IMGUI_DIR})
 target_link_libraries(bb_launcher_imgui PUBLIC SDL3::SDL3)
 target_compile_options(bb_launcher_imgui PRIVATE -w)
+
+# The version the problem report shows: the commit this build was made from.
+execute_process(COMMAND git describe --always --dirty WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    OUTPUT_VARIABLE BB_LAUNCHER_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT BB_LAUNCHER_VERSION)
+    set(BB_LAUNCHER_VERSION unknown)
+endif()
+set_source_files_properties(page_help.cpp PROPERTIES
+    COMPILE_DEFINITIONS BB_LAUNCHER_VERSION="${BB_LAUNCHER_VERSION}")
 
 # The window's parts: widgets, the main screen, fonts, the GPU probe, the header picture and the
 # pages. One file per page: a new page_*.cpp is picked up without editing this list.

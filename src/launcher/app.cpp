@@ -11,6 +11,8 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
+#include <fstream>
 #include <format>
 #include <iostream>
 #include <memory>
@@ -29,9 +31,11 @@
 #include "common/file.hpp"
 #include "common/game_folder.hpp"
 #include "launcher/find_game.hpp"
+#include "common/runtime_dirs.hpp"
 #include "launcher/fonts.hpp"
 #include "launcher/gpu_probe.hpp"
 #include "launcher/header_image.hpp"
+#include "launcher/help_report.hpp"
 #include "launcher/logic.hpp"
 #include "launcher/main_screen.hpp"
 #include "launcher/page.hpp"
@@ -250,6 +254,7 @@ private:
     // Takes the result of a check of `folder`: a passing folder becomes the game, a failing one
     // becomes the message of the status line.
     void accept_check(const common::FolderResult& r, const fs::path& folder) {
+        folder_check_ = r.kind;
         if (r.ok()) {
             std::error_code ec;
             game_dir_ = fs::canonical(folder, ec);
@@ -296,6 +301,33 @@ private:
     }
 
     // ---- the game ---------------------------------------------------------------------------
+    // The XDG state directory of the runtime, empty when HOME is not usable.
+    fs::path state_dir() const {
+        try {
+            return common::RuntimeDirs::from_environment(common::default_profile, {}).state();
+        } catch (const std::exception&) {
+            return {};
+        }
+    }
+
+    // Creates the log folder and returns the file of the next run's capture, or an empty path.
+    fs::path prepare_run_log() const {
+        try {
+            const auto dirs = common::RuntimeDirs::from_environment(common::default_profile, {});
+            dirs.ensure(dirs.logs());
+            return last_run_log(dirs.state());
+        } catch (const std::exception&) {
+            return {};
+        }
+    }
+
+    void write_run_status(const std::string& text) const {
+        const fs::path dir = state_dir();
+        if (!dir.empty()) {
+            std::ofstream(last_run_status(dir), std::ios::trunc) << text << '\n';
+        }
+    }
+
     void play() {
         notice_.clear();
         const fs::path dir = own_directory();
@@ -309,11 +341,20 @@ private:
         posix_spawn_file_actions_t actions;
         posix_spawn_file_actions_init(&actions);
         posix_spawn_file_actions_addchdir_np(&actions, dir.c_str());
+        // The output of bb-run goes to a log the Help page can read; it may have no log file of
+        // its own when it stops early.
+        const fs::path log = prepare_run_log();
+        if (!log.empty()) {
+            posix_spawn_file_actions_addopen(&actions, 1, log.c_str(),
+                                             O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+            posix_spawn_file_actions_adddup2(&actions, 1, 2);
+        }
         pid_t pid = 0;
         const int rc = posix_spawn(&pid, argv[0], &actions, nullptr, argv.data(), environ);
         posix_spawn_file_actions_destroy(&actions);
         if (rc != 0) {
             last_run_failed_ = true;
+            write_run_status(std::format("could not start bb-run ({})", strerror(rc)));
             return;
         }
         SDL_HideWindow(window_);
@@ -338,6 +379,7 @@ private:
             SDL_Delay(100);
         }
         // Any result other than the child's own exit with status 0 is a failed run.
+        write_run_status(waited == pid ? describe_wait_status(status) : "wait failed");
         last_run_failed_ = waited != pid || !(WIFEXITED(status) && WEXITSTATUS(status) == 0);
         SDL_ShowWindow(window_);
         SDL_RaiseWindow(window_);
@@ -392,6 +434,11 @@ private:
         ctx.config_path = config_path_;
         ctx.game_ready = game_ready_;
         ctx.game_dir = game_dir_;
+        ctx.state_dir = state_dir();
+        ctx.have_folder = game_ready_ || tried_folder_;
+        ctx.folder_check = folder_check_;
+        ctx.gpu_ok = gpu_ok_;
+        ctx.last_run_failed = last_run_failed_;
         return ctx;
     }
 
@@ -576,6 +623,7 @@ private:
     bool refocus_ = false;  // a page was closed in the last frame
     bool popup_open_ = false;  // a choice list of the page was open in the last frame
     fs::path config_path_;
+    common::FolderCheck folder_check_ = common::FolderCheck::ok;
     fs::path play_config_;  // set by a script's config step
     fs::path game_dir_;
     std::string title_;
