@@ -9,6 +9,7 @@
 #include <array>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <thread>
 #include <unordered_set>
 #include <absl/container/flat_hash_map.h>
@@ -123,7 +124,8 @@ public:
         return tile_manager;
     }
 
-    /// Invalidates any image in the logical page range.
+    /// Invalidates any image in the logical page range. Comes from any thread: write faults and
+    /// system calls of guest threads, and the GPU thread.
     void InvalidateMemory(VAddr addr, size_t size);
 
     /// Marks an image as dirty if it exists at the provided address.
@@ -137,7 +139,9 @@ public:
     /// put off.
     void BeforeBackingWrite(VAddr addr, size_t size);
 
-    /// Evicts any images that overlap the unmapped range.
+    /// Evicts any images that overlap the unmapped range. Comes from the guest thread that
+    /// unmaps or releases the memory. Ours (#629): the images are freed on the GPU thread, and the
+    /// caller waits for it.
     void UnmapMemory(VAddr cpu_addr, size_t size);
 
     /// Retrieves the image handle of the image with the provided attributes.
@@ -409,6 +413,9 @@ private:
     void GarbageCollectImages();
     void GarbageCollectSamplers();
 
+    /// Runs `func` on the GPU thread and waits for it, as BufferCache::OnGpuThread.
+    void OnGpuThread(auto&& func);
+
     /// The fields of a request that FindImage's perfect match and its resource check read.
     struct FindImageKey {
         VAddr guest_address{};
@@ -446,6 +453,14 @@ private:
     BufferCache& buffer_cache;
     PageManager& page_manager;
     Core::MemoryManager& memory;
+    // Ours (#629). The cache belongs to the GPU thread: only it registers, unregisters, creates
+    // and deletes images, and it reads the page table and the slots without a lock. Other threads
+    // come in through InvalidateMemory and UnmapMemory. They walk the page table under the shared
+    // lock, and the GPU thread changes it (RegisterImage, UnregisterImage) under the exclusive
+    // one. So an image a guest thread found stays registered, and its slot allocated, until that
+    // thread lets go of the lock. Lock order: registry_mutex, an image's mutex, the page
+    // manager's locks. The GPU thread never takes registry_mutex while it holds an image's mutex.
+    std::shared_mutex registry_mutex;
     PageTable page_table;
     Common::SlotVector<Image> slot_images;
     Common::SlotVector<ImageView> slot_image_views;

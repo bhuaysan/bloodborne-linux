@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
@@ -19,6 +20,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <atomic>
 #include <random>
 #include <string>
@@ -1220,6 +1222,158 @@ TEST(GuestMemory, ConcurrentWritesIntoHolesReachTheCopy) {
         GTEST_SKIP() << reason;
     }
     concurrent_faults_and_syncs(true);
+}
+
+// The texture cache belongs to the GPU thread (#629). Guest threads map blocks of memory, write
+// them and unmap them, while the GPU thread finds images in the mapped blocks, tracks and uploads
+// them and runs the collector. A guest write to a tracked page is a fault that walks the cache's
+// page table on the guest thread, and an unmap frees the images of its block: upstream on the
+// guest thread, under the GPU thread's hands (the page table's buckets, the LRU list, the lookup
+// table of FindImage). Here the GPU thread frees them between two of its steps. In the end every
+// block is unmapped and no image is left where the blocks were.
+TEST(GuestMemory, GuestUnmapsFreeImagesOnTheGpuThread) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        Libraries::VideoOut::BufferAttributeGroup group{};
+        group.is_occupied = true;
+        group.attrib.pixel_format = Libraries::VideoOut::PixelFormat::A8R8G8B8Srgb;
+        group.attrib.tiling_mode = Libraries::VideoOut::TilingMode::Linear;
+        group.attrib.width = group.attrib.height = group.attrib.pitch_in_pixel = 64;
+        constexpr u64 image_size = 64 * 64 * 4;
+        constexpr u64 block_size = 4 * page_size;  // 64 KiB: blocks share the table's 256 KiB pages
+        constexpr u64 block_images = block_size / image_size;
+        constexpr u64 block_words = block_size / sizeof(u64);
+
+        // The block a guest thread has mapped, zero between two blocks, and how often the GPU
+        // thread used it. The mutex keeps a block mapped during a step of the GPU thread, as a
+        // game unmaps memory only once it no longer draws from it.
+        struct Block {
+            std::mutex mutex;
+            std::uintptr_t address = 0;
+            std::atomic<u32> uses{0};
+        };
+        constexpr int guests = 6;
+        std::array<Block, guests> blocks;
+        std::atomic<bool> stop{false};
+        std::atomic<u64> unmaps{0};
+        std::atomic<std::uintptr_t> lowest{std::numeric_limits<std::uintptr_t>::max()};
+        std::atomic<std::uintptr_t> highest{0};
+
+        const std::uint64_t claimed = bb::shadps4::claimed_faults();
+        std::vector<std::thread> threads;
+        for (int t = 0; t < guests; ++t) {
+            threads.emplace_back([&, t] {
+                std::mt19937_64 random(t + 1);
+                Block& block = blocks[t];
+                while (!stop.load(std::memory_order_relaxed)) {
+                    Direct d(block_size / page_size);
+                    const std::uintptr_t start = addr(d.address);
+                    for (std::uintptr_t low = lowest.load(); start < low;) {
+                        if (lowest.compare_exchange_weak(low, start)) {
+                            break;
+                        }
+                    }
+                    for (std::uintptr_t high = highest.load(); start + block_size > high;) {
+                        if (highest.compare_exchange_weak(high, start + block_size)) {
+                            break;
+                        }
+                    }
+                    block.uses.store(0);
+                    {
+                        const std::scoped_lock lock{block.mutex};
+                        block.address = start;
+                    }
+                    // Writes all over the block until the GPU thread used it a few times: those
+                    // to a page of a tracked image fault.
+                    auto* const words = static_cast<u64*>(d.address);
+                    const u32 enough = 1 + random() % 4;
+                    for (u64 i = 0; block.uses.load(std::memory_order_relaxed) < enough &&
+                                    !stop.load(std::memory_order_relaxed);
+                         ++i) {
+                        std::atomic_ref<u64>(words[random() % block_words])
+                            .store(i, std::memory_order_relaxed);
+                    }
+                    {
+                        const std::scoped_lock lock{block.mutex};
+                        block.address = 0;
+                    }
+                    d.unmap();
+                    unmaps.fetch_add(1, std::memory_order_relaxed);
+                }
+            });
+        }
+
+        // The images over the blocks. Only the GPU thread may walk the cache without its lock.
+        const auto images = [&] {
+            u64 count = 0;
+            const std::uintptr_t low = lowest.load();
+            if (low < highest.load()) {
+                textures.ForEachImageInRegion(
+                    low, highest.load() - low,
+                    [&](VideoCore::ImageId, VideoCore::Image&) { ++count; });
+            }
+            return count;
+        };
+        // One step of the GPU thread, on Liverpool's thread as in a game run: it finds an image
+        // in a mapped block, tracks and uploads it and runs the collector (which frees nothing
+        // here: the device is far from the memory use that starts it). Then it looks at the
+        // cache twice, a moment apart: an image that left in between was freed by another
+        // thread, in the middle of what the GPU thread was doing.
+        std::mt19937_64 random(99);
+        u64 steps = 0;
+        u64 changed_under_gpu_thread = 0;
+        const auto step = [&] {
+            Block& block = blocks[random() % guests];
+            {
+                const std::scoped_lock lock{block.mutex};
+                if (block.address != 0) {
+                    VideoCore::TextureCache::ImageDesc desc{
+                        group, block.address + (random() % block_images) * image_size};
+                    textures.UpdateImage(textures.FindImage(desc));
+                    block.uses.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            textures.RunGarbageCollector();
+            const u64 before = images();
+            const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(20);
+            while (std::chrono::steady_clock::now() < until) {
+            }
+            changed_under_gpu_thread += images() != before ? 1 : 0;
+            if (++steps % 64 == 0) {
+                gpu.rasterizer.Finish();  // runs the deferred deletions
+            }
+        };
+        constexpr u64 min_steps = 5000;
+        constexpr u64 min_unmaps = 1000;
+        constexpr u64 min_faults = 1000;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (steps < min_steps || unmaps.load() < min_unmaps ||
+               bb::shadps4::claimed_faults() - claimed < min_faults) {
+            if (std::chrono::steady_clock::now() > deadline) {
+                break;
+            }
+            gpu.liverpool->SendCommand<true>(step);
+        }
+        stop.store(true);
+        for (auto& thread : threads) {
+            thread.join();
+        }
+        EXPECT_EQ(changed_under_gpu_thread, 0u) << steps << " steps";
+        EXPECT_GE(steps, min_steps);
+        EXPECT_GE(unmaps.load(), min_unmaps) << steps << " steps";
+        EXPECT_GE(bb::shadps4::claimed_faults() - claimed, min_faults) << steps << " steps";
+
+        u64 left = 0;
+        gpu.liverpool->SendCommand<true>([&] {
+            left = images();
+            gpu.rasterizer.Finish();
+        });
+        EXPECT_EQ(left, 0u);
+    }
 }
 
 }  // namespace

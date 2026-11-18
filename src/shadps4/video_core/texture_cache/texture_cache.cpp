@@ -7,12 +7,15 @@
 #include <algorithm>
 #include <limits>
 #include <optional>
+#include <shared_mutex>
+#include <thread>
 #include <xxhash.h>
 
 #include "common/assert.h"
 #include "common/div_ceil.h"
 #include "common/hash.h"
 #include "core/memory.h"
+#include "video_core/amdgpu/liverpool.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/page_manager.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
@@ -164,6 +167,10 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
     const auto pages_start = PageManager::GetPageAddr(addr);
     const auto pages_end = PageManager::GetNextPageAddr(addr + size - 1);
 
+    // Ours (#629): held to the end, so the images found below stay registered and allocated
+    // while this thread, mostly a guest thread in a write fault, works on them.
+    std::shared_lock registry{registry_mutex};
+
     SmallVector<ImageId, 8> image_ids;
     ForEachImageInRegion(pages_start, pages_end - pages_start,
                          [&](ImageId image_id, Image&) { image_ids.push_back(image_id); });
@@ -263,12 +270,39 @@ void TextureCache::BeforeBackingWrite(VAddr addr, size_t size) {
     });
 }
 
+// Upstream frees the images on the calling thread, a guest thread that unmaps or releases memory,
+// while the GPU thread may be walking the page table, the LRU list or the lookup table of
+// FindImage, or queueing a deferred deletion. Ours (#629): the GPU thread frees them between two
+// commands, and the caller waits, so the range's images are gone before its memory is. Most
+// ranges hold no image, which the walk under the shared lock tells without the GPU thread. An
+// image registered right after that walk would be one the GPU thread makes from memory the game
+// is unmapping, as one registered right after upstream's walk.
 void TextureCache::UnmapMemory(VAddr cpu_addr, size_t size) {
-    SmallVector<ImageId, 16> deleted_images;
-    ForEachImageInRegion(cpu_addr, size, [&](ImageId id, Image&) { deleted_images.push_back(id); });
-    for (const ImageId id : deleted_images) {
-        // TODO: Download image data back to host.
-        FreeImage(id);
+    {
+        std::shared_lock registry{registry_mutex};
+        bool found = false;
+        ForEachImageInRegion(cpu_addr, size, [&](ImageId, Image&) { return found = true; });
+        if (!found) {
+            return;
+        }
+    }
+    OnGpuThread([this, cpu_addr, size] {
+        SmallVector<ImageId, 16> deleted_images;
+        ForEachImageInRegion(cpu_addr, size,
+                             [&](ImageId id, Image&) { deleted_images.push_back(id); });
+        for (const ImageId id : deleted_images) {
+            // TODO: Download image data back to host.
+            FreeImage(id);
+        }
+    });
+}
+
+void TextureCache::OnGpuThread(auto&& func) {
+    if (liverpool == nullptr ||
+        std::this_thread::get_id() == liverpool->GetGpuCommandProcessorThread()) {
+        func();
+    } else {
+        liverpool->SendCommand<true>(func);
     }
 }
 
@@ -1015,6 +1049,8 @@ void TextureCache::RegisterImage(ImageId image_id) {
     image_lru_cache.Insert(image, gc_tick);
     const auto& info = image.info;
     ASSERT_MSG((info.guest_address & 0xff) == 0, "Trying to register an unaligned image");
+    // Other threads walk the page table (registry_mutex).
+    std::scoped_lock registry{registry_mutex};
     ForEachPage(info.guest_address, info.guest_size, [this, image_id, info](u64 page) {
         page_table[page].entries.emplace_back(BucketEntry{
             .key = u32(info.guest_address >> 8),
@@ -1028,6 +1064,9 @@ void TextureCache::UnregisterImage(ImageId image_id) {
     Image& image = slot_images[image_id];
     ASSERT_MSG(True(image.flags & ImageFlagBits::Registered),
                "Trying to unregister an already unregistered image");
+    // Waits for the threads that found the image in the page table (registry_mutex): once this
+    // returns, only the GPU thread knows the image.
+    std::scoped_lock registry{registry_mutex};
     image.flags &= ~ImageFlagBits::Registered;
     ++image_generation;
     image.memory_usage_counter = nullptr;
