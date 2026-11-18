@@ -7,7 +7,6 @@
 #pragma once
 
 #include <bitset>
-#include <cstring>
 #include <span>
 #include <type_traits>
 
@@ -232,9 +231,16 @@ struct StageSpecialization {
         }
         if (parses) {
             const u32* code = Gcn::GetFetchShaderCode(info_, info_.fetch_shader_sgpr_base);
-            if (fetch_code.size_bytes() != fetch_shader_data.size ||
-                std::memcmp(code, fetch_code.data(), fetch_code.size_bytes()) != 0) {
+            if (fetch_code.size_bytes() != fetch_shader_data.size) {
                 return false;
+            }
+            // Word by word, stopping at the first difference: the stored words hold no s_setpc
+            // before their last, so a shorter shader differs at its own s_setpc at the latest,
+            // and nothing past it is read (a memcmp may read the whole length).
+            for (size_t i = 0; i < fetch_code.size(); ++i) {
+                if (code[i] != fetch_code[i]) {
+                    return false;
+                }
             }
             if (vs_attribs.size() != fetch_shader_data.attributes.size()) {
                 return false;

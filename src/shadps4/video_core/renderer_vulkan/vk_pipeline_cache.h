@@ -75,8 +75,10 @@ struct Program {
     // as it is now and the arguments, or modules.size() when there is none; then `built` holds
     // that specialization for the new permutation, appended next by the caller. A lookup whose
     // specialization would be the same in every part as the last one's takes the last answer
-    // without building it (#592): permutations are only appended, so the first match stays the
-    // first.
+    // without building it (#592). Permutations are only appended at run time, so the first
+    // match stays the first; after a miss the stored index is modules.size(), which the caller
+    // appends next, and the lookup takes it only once it exists. InsertPermut, which puts a
+    // permutation in place, drops the last answer.
     size_t FindPermutation(const Shader::RuntimeInfo& runtime_info,
                            const Shader::Profile& profile, Shader::Backend::Bindings start,
                            std::optional<Shader::StageSpecialization>& built);
