@@ -344,11 +344,11 @@ private:
         posix_spawn_file_actions_init(&actions);
         posix_spawn_file_actions_addchdir_np(&actions, dir.c_str());
         // The output of bb-run goes to a log the Help page can read; it may have no log file of
-        // its own when it stops early.
+        // its own when it stops early. No O_CLOEXEC: the log has to stay open as bb-run's fd 1.
         const fs::path log = prepare_run_log();
         if (!log.empty()) {
-            posix_spawn_file_actions_addopen(&actions, 1, log.c_str(),
-                                             O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+            posix_spawn_file_actions_addopen(&actions, 1, log.c_str(), O_WRONLY | O_CREAT | O_TRUNC,
+                                             0600);
             posix_spawn_file_actions_adddup2(&actions, 1, 2);
         }
         pid_t pid = 0;

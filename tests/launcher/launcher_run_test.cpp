@@ -71,15 +71,16 @@ std::string slurp(const fs::path& file) {
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 
-// Runs a copy of bb-launcher next to a fake bb-run that records its arguments and directory and
-// exits with `exit_code`. The script drops the dump, presses Play and takes a shot afterwards.
+// Runs a copy of bb-launcher next to a fake bb-run that records its arguments and directory,
+// prints one line to stdout and one to stderr and exits with `exit_code`. The script drops the dump, presses Play and takes a shot afterwards.
 std::string play_with_fake_bb_run(const Dir& dir, const fs::path& game, int exit_code,
                                   bb::test::Result& result, const std::string& before_play = "") {
     const fs::path bin = dir.path() / "bin";
     fs::create_directories(bin);
     fs::copy_file(BB_LAUNCHER_PATH, bin / "bb-launcher");
     std::ofstream(bin / "bb-run") << std::format(
-        "#!/bin/sh\necho \"cwd=$(pwd) args=$*\" > {}\nexit {}\n",
+        "#!/bin/sh\necho \"cwd=$(pwd) args=$*\" > {}\necho fake-run-stdout\necho fake-run-stderr >&2\n"
+        "exit {}\n",
         quote((dir.path() / "record.txt").string()), exit_code);
     fs::permissions(bin / "bb-run", fs::perms::owner_all);
     std::ofstream(dir.path() / "script.txt") << std::format(
@@ -132,7 +133,9 @@ TEST(LauncherRunGame, TheRunsOutputAndStatusAreCaptured) {
     play_with_fake_bb_run(dir, game, 3, r);
     EXPECT_EQ(slurp(dir.path() / "state/bloodborne-linux/logs/launcher-last-run.status"),
               "exit status 3\n");
-    EXPECT_TRUE(fs::exists(dir.path() / "state/bloodborne-linux/logs/launcher-last-run.log"));
+    const std::string log = slurp(dir.path() / "state/bloodborne-linux/logs/launcher-last-run.log");
+    EXPECT_NE(log.find("fake-run-stdout"), std::string::npos) << log;
+    EXPECT_NE(log.find("fake-run-stderr"), std::string::npos) << log;
 }
 
 // The dump: the folder goes into the config file, only in the XDG config directory.
