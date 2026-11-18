@@ -41,7 +41,7 @@ void draw_header(const MainView& view, float scale) {
 
 }  // namespace
 
-float draw_top(const Context& ctx, const MainView& view) {
+float draw_top(const Context& ctx, const MainView& view, bool* choose_another) {
     draw_header(view, ctx.scale);
     ImGui::SetCursorPos(ImVec2(margin * ctx.scale, header_height * ctx.scale));
     if (view.header == nullptr) {
@@ -55,6 +55,18 @@ float draw_top(const Context& ctx, const MainView& view) {
     ImGui::SetCursorPosY(header_height * ctx.scale + 10 * ctx.scale);
     ImGui::SetCursorPosX(margin * ctx.scale);
     status_line(view.status, view.status_kind, ctx.scale);
+    if (choose_another != nullptr && !view.found_folder.empty()) {
+        const FindText& f = find_text(ctx.lang);
+        ImGui::SetCursorPosX(margin * ctx.scale);
+        const float link =
+            ImGui::CalcTextSize(f.choose_another).x + 2 * ImGui::GetStyle().FramePadding.x;
+        const float width = (header_width - 2 * margin) * ctx.scale - link - 8 * ctx.scale;
+        const std::string label = std::string(f.found) + " ";
+        ImGui::TextDisabled("%s%s", label.c_str(),
+                            ellipsize_left(view.found_folder, width - ImGui::CalcTextSize(label.c_str()).x).c_str());
+        ImGui::SameLine(0, 8 * ctx.scale);
+        *choose_another = ImGui::SmallButton(f.choose_another);
+    }
     // The status text wraps: the area grows with it so the buttons never overlap.
     const float fixed = (header_height + status_height) * ctx.scale;
     const float wrapped = ImGui::GetCursorPosY() + 8 * ctx.scale;
@@ -63,7 +75,8 @@ float draw_top(const Context& ctx, const MainView& view) {
 
 Action draw_main_screen(const Context& ctx, const MainView& view) {
     const float s = ctx.scale;
-    const float below = draw_top(ctx, view);
+    bool another = false;
+    const float below = draw_top(ctx, view, &another);
     const Strings& t = *ctx.text;
     const auto label = [&](Action a) {
         switch (a) {
@@ -81,7 +94,7 @@ Action draw_main_screen(const Context& ctx, const MainView& view) {
         list.push_back(Action::help);
     }
     list.push_back(Action::quit);
-    Action result = Action::none;
+    Action result = another ? Action::choose_another : Action::none;
     ImGui::SetCursorPos(ImVec2(margin * s, below + 8 * s));
     for (std::size_t i = 0; i < list.size(); ++i) {
         const bool primary = i == 0;

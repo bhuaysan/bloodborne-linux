@@ -21,12 +21,15 @@ struct MainView {
     StatusKind status_kind = StatusKind::warning;
     SDL_Texture* header = nullptr;  // the title picture; null shows the drop target
     bool focus_first = false;       // move the focus to the first button in this frame
+    std::string found_folder;       // the folder the first-start search took; empty otherwise
 };
 
 // Draws the whole window content and returns the action of the button that was pressed.
 Action draw_main_screen(const Context& ctx, const MainView& view);
 
 // The header and the status line only, for the pages. Returns the y of the area below them.
-float draw_top(const Context& ctx, const MainView& view);
+// With `choose_another`, a found folder is shown under the status line with its link, and
+// *choose_another tells whether the link was pressed.
+float draw_top(const Context& ctx, const MainView& view, bool* choose_another = nullptr);
 
 }  // namespace bb::launcher

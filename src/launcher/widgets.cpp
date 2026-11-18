@@ -53,6 +53,24 @@ bool bevel_button(const char* label, ImVec2 size, bool accent, bool focus_now) {
     return pressed;
 }
 
+std::string ellipsize_left(const std::string& text, float max_width) {
+    if (ImGui::CalcTextSize(text.c_str()).x <= max_width) {
+        return text;
+    }
+    std::size_t cut = 0;
+    while (cut < text.size()) {
+        ++cut;
+        while (cut < text.size() && (static_cast<unsigned char>(text[cut]) & 0xc0) == 0x80) {
+            ++cut;  // stay on a UTF-8 character boundary
+        }
+        const std::string shorter = "..." + text.substr(cut);
+        if (ImGui::CalcTextSize(shorter.c_str()).x <= max_width) {
+            return shorter;
+        }
+    }
+    return "...";
+}
+
 void status_line(const std::string& text, StatusKind kind, float scale) {
     ImU32 colour = IM_COL32(110, 200, 120, 255);
     if (kind == StatusKind::warning) {

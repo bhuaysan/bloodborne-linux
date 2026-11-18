@@ -42,8 +42,8 @@ bb::test::Result run_script(const Dir& dir, const std::string& script) {
     return bb::test::run(std::format(
         "cd {} && env -u BB_GAME_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
         "SDL_VIDEO_DRIVER=offscreen SDL_RENDER_DRIVER=software BB_LAUNCHER_SCRIPT={} "
-        "XDG_CONFIG_HOME={} XDG_DATA_HOME={} XDG_CACHE_HOME={} timeout 60 {} 2>&1",
-        quote(d), quote(d + "/script.txt"), quote(d + "/config"), quote(d + "/data"),
+        "HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} XDG_CACHE_HOME={} timeout 60 {} 2>&1",
+        quote(d), quote(d + "/script.txt"), quote(d + "/home"), quote(d + "/config"), quote(d + "/data"),
         quote(d + "/cache"), quote(BB_LAUNCHER_PATH)));
 }
 
@@ -89,8 +89,8 @@ std::string play_with_fake_bb_run(const Dir& dir, const fs::path& game, int exit
     result = bb::test::run(std::format(
         "cd {} && env -u BB_GAME_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
         "SDL_VIDEO_DRIVER=offscreen SDL_RENDER_DRIVER=software BB_LAUNCHER_SCRIPT={} "
-        "XDG_CONFIG_HOME={} XDG_DATA_HOME={} XDG_CACHE_HOME={} timeout 60 {} 2>&1",
-        quote(d), quote(d + "/script.txt"), quote(d + "/config"), quote(d + "/data"),
+        "HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} XDG_CACHE_HOME={} timeout 60 {} 2>&1",
+        quote(d), quote(d + "/script.txt"), quote(d + "/home"), quote(d + "/config"), quote(d + "/data"),
         quote(d + "/cache"), quote((bin / "bb-launcher").string())));
     return slurp(dir.path() / "record.txt");
 }
@@ -124,6 +124,40 @@ TEST(LauncherRunGame, TheDumpFolderIsWrittenToTheConfig) {
     ASSERT_TRUE(fs::exists(config));
     EXPECT_NE(slurp(config).find(fs::canonical(game).string()), std::string::npos);
     EXPECT_FALSE(fs::exists(dir.path() / "data"));
+}
+
+// The first-start search: a folder of another game under $HOME is no hit, the search ends and
+// the drop target stays; nothing is written.
+TEST(LauncherRun, TheSearchFindsNothingAndLeavesTheDropTarget) {
+    const Dir dir;
+    fs::create_directories(dir.path() / "home/Games/Other/sce_sys");
+    std::ofstream(dir.path() / "home/Games/Other/eboot.bin") << "x";
+    std::ofstream(dir.path() / "home/Games/Other/sce_sys/param.sfo") << "x";
+    const auto r = run_script(dir, std::format("wait 60\nshot {}\nquit\n",
+                                               (dir.path() / "shot.png").string()));
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(r.output.find("search took"), std::string::npos) << r.output;
+    EXPECT_NE(r.output.find("0 hit(s)"), std::string::npos) << r.output;
+    EXPECT_TRUE(is_png(dir.path() / "shot.png"));
+    EXPECT_FALSE(fs::exists(dir.path() / "config"));
+}
+
+// With the dump under $HOME (its files linked into a temporary home, as the search doesn't follow
+// directory links) the launcher takes it on its own, without a drop or a dialog.
+TEST(LauncherRunGame, TheSearchTakesTheDumpUnderHome) {
+    BB_REQUIRE_GAME(game);
+    const Dir dir;
+    const fs::path folder = dir.path() / "home/Games/Bloodborne";
+    fs::create_directories(folder / "sce_sys");
+    fs::create_symlink(fs::canonical(game) / "eboot.bin", folder / "eboot.bin");
+    fs::create_symlink(fs::canonical(game) / "sce_sys/param.sfo", folder / "sce_sys/param.sfo");
+    const auto r = run_script(dir, std::format("wait 400\nshot {}\nquit\n",
+                                               (dir.path() / "shot.png").string()));
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(r.output.find("1 hit(s)"), std::string::npos) << r.output;
+    const fs::path config = dir.path() / "config/bloodborne-linux/config.toml";
+    ASSERT_TRUE(fs::exists(config));
+    EXPECT_NE(slurp(config).find(fs::canonical(folder).string()), std::string::npos);
 }
 
 TEST(LauncherRun, ABadScriptEndsWithAMessage) {

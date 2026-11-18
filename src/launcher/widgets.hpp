@@ -12,6 +12,10 @@ namespace bb::launcher {
 // `focus_now` moves the gamepad focus to it. Returns true when it was pressed.
 bool bevel_button(const char* label, ImVec2 size, bool accent = false, bool focus_now = false);
 
+// `text` shortened from the left with "..." until it fits `max_width` (a long folder path keeps
+// its end, the part the player recognises).
+std::string ellipsize_left(const std::string& text, float max_width);
+
 enum class StatusKind { ok, warning, error };
 // A one-line status with a coloured marker. Wraps to the window's width.
 void status_line(const std::string& text, StatusKind kind, float scale);

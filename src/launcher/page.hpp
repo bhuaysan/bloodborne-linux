@@ -4,7 +4,9 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <vector>
 
 #include "launcher/logic.hpp"
 #include "launcher/text.hpp"
@@ -37,5 +39,18 @@ public:
 std::unique_ptr<Page> make_picture_page();
 std::unique_ptr<Page> make_saves_page();
 std::unique_ptr<Page> make_help_page();
+
+// The first-start search (page_find.cpp): its strings, and the list of several folders that
+// passed the check. `chosen` is called from draw() when the player picks one.
+struct FindText {
+    const char* title;           // the list's heading
+    const char* hint;            // above the list
+    const char* searching;       // status line while the search runs
+    const char* found;           // before the folder under the status line
+    const char* choose_another;  // the link next to it
+};
+const FindText& find_text(Lang lang);
+std::unique_ptr<Page> make_find_page(std::vector<std::filesystem::path> folders,
+                                     std::function<void(const std::filesystem::path&)> chosen);
 
 }  // namespace bb::launcher

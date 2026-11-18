@@ -42,7 +42,7 @@ struct StateInput {
 };
 MainState select_state(const StateInput& in);
 
-enum class Action { none, set_up, play, picture, saves, help, quit };
+enum class Action { none, set_up, play, picture, saves, help, quit, choose_another };
 // The first button of a state.
 Action first_button(MainState state);
 // Whether Help with problems is drawn highlighted.

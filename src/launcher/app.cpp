@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
@@ -17,6 +18,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #include <SDL3/SDL.h>
 #include <backends/imgui_impl_sdl3.h>
@@ -26,6 +28,7 @@
 #include "common/config.hpp"
 #include "common/file.hpp"
 #include "common/game_folder.hpp"
+#include "launcher/find_game.hpp"
 #include "launcher/fonts.hpp"
 #include "launcher/gpu_probe.hpp"
 #include "launcher/header_image.hpp"
@@ -66,6 +69,13 @@ void on_folder_chosen(void* userdata, const char* const* list, int) {
     }
 }
 
+// The first-start search, which runs on a thread of its own and hands over its result here.
+struct SearchBox {
+    std::mutex mutex;
+    std::atomic<bool> cancel{false};
+    std::optional<FindResult> result;
+};
+
 fs::path own_directory() {
     std::error_code ec;
     const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
@@ -98,6 +108,7 @@ public:
         init_window();
         load_config();
         gpu_ok_ = vulkan_gpu_usable();
+        start_search();
         while (running_) {
             frame();
         }
@@ -145,6 +156,10 @@ private:
     }
 
     void shutdown() {
+        if (search_thread_.joinable()) {
+            search_->cancel = true;
+            search_thread_.join();
+        }
         ImGui_ImplSDLRenderer3_Shutdown();
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
@@ -180,6 +195,58 @@ private:
     }
 
     // ---- the game folder ----------------------------------------------------------------------
+    // The first start: look for the dump while no game folder is set up (docs/design/launcher.md).
+    void start_search() {
+        if (game_ready_ || tried_folder_ || config_path_.empty()) {
+            return;
+        }
+        const char* home = std::getenv("HOME");
+        const char* user = std::getenv("USER");
+        auto roots = default_search_roots(home != nullptr ? home : "", user != nullptr ? user : "");
+        searching_ = true;
+        auto box = search_;
+        search_thread_ = std::thread([box, roots = std::move(roots)] {
+            FindResult r = find_game_folders(roots, FindOptions{}, box->cancel);
+            const std::lock_guard lock(box->mutex);
+            box->result = std::move(r);
+        });
+    }
+
+    void poll_search() {
+        if (!searching_) {
+            return;
+        }
+        std::optional<FindResult> result;
+        {
+            const std::lock_guard lock(search_->mutex);
+            result = std::move(search_->result);
+        }
+        if (!result) {
+            return;
+        }
+        search_thread_.join();
+        searching_ = false;
+        std::cerr << std::format("bb-launcher: game folder search took {} ms, {} hit(s){}\n",
+                                 result->elapsed.count(), result->folders.size(),
+                                 result->timed_out ? " (time limit)" : "");
+        if (game_ready_ || tried_folder_) {
+            return;  // the player was faster: a drop or the dialog
+        }
+        if (result->folders.size() == 1) {
+            take_found(result->folders[0]);
+        } else if (result->folders.size() > 1) {
+            page_ = make_find_page(result->folders, [this](const fs::path& f) { pending_choice_ = f; });
+            focus_first_ = true;
+        }
+    }
+
+    void take_found(const fs::path& folder) {
+        set_up_folder(folder);
+        if (game_ready_) {
+            found_folder_ = game_dir_.string();
+        }
+    }
+
     // Takes the result of a check of `folder`: a passing folder becomes the game, a failing one
     // becomes the message of the status line.
     void accept_check(const common::FolderResult& r, const fs::path& folder) {
@@ -205,6 +272,7 @@ private:
 
     void set_up_folder(const fs::path& folder) {
         tried_folder_ = true;
+        found_folder_.clear();
         const common::SetupResult r = common::setup_game_folder(folder, config_path_);
         if (r.folder.ok() && !r.config_written) {
             notice_ = r.config_error;
@@ -338,9 +406,12 @@ private:
         v.state = select_state(in);
         v.header = shows_picture(v.state) ? header_ : nullptr;
         v.focus_first = focus_first_;
+        v.found_folder = game_ready_ ? found_folder_ : std::string();
         switch (v.state) {
         case MainState::no_folder:
-            v.status = notice_.empty() ? t.status_no_game : notice_;
+            v.status = !notice_.empty() ? notice_
+                       : searching_ ? find_text(lang_).searching
+                                    : t.status_no_game;
             v.status_kind = notice_.empty() ? StatusKind::warning : StatusKind::error;
             break;
         case MainState::check_failed:
@@ -374,7 +445,8 @@ private:
 
     void act(Action a) {
         switch (a) {
-        case Action::set_up: open_folder_dialog(); break;
+        case Action::set_up:
+        case Action::choose_another: open_folder_dialog(); break;
         case Action::play: play(); break;
         case Action::picture: page_ = make_picture_page(); break;
         case Action::help: page_ = make_help_page(); break;
@@ -423,6 +495,13 @@ private:
                 dialog_->folder.reset();
                 set_up_folder(folder);
             }
+        }
+        poll_search();
+        if (pending_choice_) {
+            const fs::path chosen = *pending_choice_;
+            pending_choice_.reset();
+            close_page();
+            take_found(chosen);
         }
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
@@ -491,6 +570,11 @@ private:
     std::string title_;
     std::string version_;
     bool game_ready_ = false;
+    bool searching_ = false;
+    std::shared_ptr<SearchBox> search_ = std::make_shared<SearchBox>();
+    std::thread search_thread_;
+    std::optional<fs::path> pending_choice_;  // picked from the list of several hits
+    std::string found_folder_;                // taken by the search, shown with its link
     bool tried_folder_ = false;  // a folder was set or chosen, whatever its check said
     bool gpu_ok_ = true;
     bool last_run_failed_ = false;
