@@ -40,14 +40,16 @@ public:
         ImGui::PopTextWrapPos();
         ImGui::Dummy(ImVec2(0, 8 * s));
         const ImVec2 size(432 * s, 40 * s);
-        bool first = true;
-        for (const auto& folder : folders_) {
+        for (std::size_t i = 0; i < folders_.size(); ++i) {
+            const auto& folder = folders_[i];
             ImGui::SetCursorPosX(24 * s);
             const std::string label = ellipsize_left(folder.string(), size.x - 16 * s);
-            if (bevel_button(label.c_str(), size, false, first && !focused_)) {
+            // Two hits can end in the same shortened label; the row number keeps their IDs apart.
+            ImGui::PushID(static_cast<int>(i));
+            if (bevel_button(label.c_str(), size, false, i == 0 && !focused_)) {
                 chosen_(folder);
             }
-            first = false;
+            ImGui::PopID();
             ImGui::Dummy(ImVec2(0, 4 * s));
         }
         focused_ = true;
