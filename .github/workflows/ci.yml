@@ -83,7 +83,7 @@ jobs:
       # the main checkout (tests/CMakeLists.txt).
       # spirv-headers is a build dependency of the shader translator. The
       # Vulkan loader, lavapipe (mesa-vulkan-drivers), spirv-tools and llvm-mc
-      # run its execution, validation and corpus tests (docs/design/graphics.md).
+      # run its execution, validation and corpus tests (docs/formats/shader-binary.md).
       # SDL3 is for the window, presentation, sound and the pad. FFmpeg decodes
       # the movies and MP3 behind AJM (docs/design/os-libraries.md, #456).
       - name: Install build tools
