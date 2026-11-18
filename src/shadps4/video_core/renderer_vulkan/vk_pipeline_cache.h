@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_pipeline_cache.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-14
+// Changed for bloodborne-linux, 2026-11-18
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -68,7 +68,27 @@ struct Program {
                       size_t perm_idx) {
         modules.resize(std::max(modules.size(), perm_idx + 1)); // <-- beware of realloc
         modules[perm_idx] = {module, std::move(spec)};
+        last.reset();
     }
+
+    // The index of the first permutation whose specialization equals the one built from `info`
+    // as it is now and the arguments, or modules.size() when there is none; then `built` holds
+    // that specialization for the new permutation, appended next by the caller. A lookup whose
+    // specialization would be the same in every part as the last one's takes the last answer
+    // without building it (#592): permutations are only appended, so the first match stays the
+    // first.
+    size_t FindPermutation(const Shader::RuntimeInfo& runtime_info,
+                           const Shader::Profile& profile, Shader::Backend::Bindings start,
+                           std::optional<Shader::StageSpecialization>& built);
+
+private:
+    struct LastLookup {
+        Shader::StageSpecialization spec;
+        // The fetch shader's words spec.fetch_shader_data was parsed from.
+        std::vector<u32> fetch_code;
+        size_t perm_idx{};
+    };
+    std::optional<LastLookup> last;
 };
 
 struct DrawIndirectParams {

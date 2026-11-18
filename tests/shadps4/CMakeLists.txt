@@ -14,6 +14,7 @@ if(TARGET bbvideocore)
     # bbvideocore's guest memory sits on the kernel (bbhle).
     bb_add_test(shadps4_video_core_test
         SOURCES video_core_test.cpp cache_storage_test.cpp pipeline_workers_test.cpp
+            spec_reuse_test.cpp
         LIBS bbvideocore bbvideopresenter bbhle bbvktest)
     # Maps guest memory in the guest window (tests/support/guest_window_asan.cpp).
     bb_add_test(shadps4_guest_memory_test

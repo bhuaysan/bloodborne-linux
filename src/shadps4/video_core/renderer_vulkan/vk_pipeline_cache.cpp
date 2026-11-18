@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_pipeline_cache.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-14
+// Changed for bloodborne-linux, 2026-11-18
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -769,12 +769,35 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
     return module;
 }
 
+size_t Program::FindPermutation(const Shader::RuntimeInfo& runtime_info,
+                                const Shader::Profile& profile, Shader::Backend::Bindings start,
+                                std::optional<Shader::StageSpecialization>& built) {
+    if (last && last->perm_idx < modules.size() &&
+        last->spec.Matches(info, runtime_info, start, last->fetch_code)) {
+        return last->perm_idx;
+    }
+    const auto& spec = built.emplace(info, runtime_info, profile, start);
+    const auto it = std::ranges::find(modules, spec, &Module::spec);
+    if (!last) {
+        last.emplace();
+    }
+    last->spec = spec;
+    last->fetch_code.clear();
+    if (!spec.fetch_shader_data.Empty()) {
+        const u32* code = Shader::Gcn::GetFetchShaderCode(info, info.fetch_shader_sgpr_base);
+        last->fetch_code.assign(code, code + spec.fetch_shader_data.size / sizeof(u32));
+    }
+    last->perm_idx = std::distance(modules.begin(), it);
+    return last->perm_idx;
+}
+
 PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_stage,
                                                 const Shader::ShaderParams& params,
                                                 Shader::Backend::Bindings& binding) {
-    auto runtime_info = BuildRuntimeInfo(hw_stage, sw_stage);
+    const auto& stage_runtime_info = BuildRuntimeInfo(hw_stage, sw_stage);
     auto [it_pgm, new_program] = program_cache.try_emplace(params.hash);
     if (new_program) {
+        auto runtime_info = stage_runtime_info;
         it_pgm.value() = std::make_unique<Program>(hw_stage, sw_stage, params);
         auto& program = it_pgm.value();
         auto start = binding;
@@ -795,25 +818,22 @@ PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_sta
     info.pgm_base = params.Base(); // Needs to be actualized for inline cbuffer address fixup
     info.user_data = params.user_data;
     info.RefreshFlatBuf();
-    auto spec = Shader::StageSpecialization(info, runtime_info, profile, binding);
 
-    size_t perm_idx = program->modules.size();
-    u64 perm_hash = HashCombine(params.hash, perm_idx);
+    std::optional<Shader::StageSpecialization> spec;
+    const size_t perm_idx = program->FindPermutation(stage_runtime_info, profile, binding, spec);
+    const u64 perm_hash = HashCombine(params.hash, perm_idx);
 
     vk::ShaderModule module{};
-
-    const auto it = std::ranges::find(program->modules, spec, &Program::Module::spec);
-    if (it == program->modules.end()) {
+    if (perm_idx == program->modules.size()) {
+        auto runtime_info = stage_runtime_info;
         auto new_info = Shader::Info(hw_stage, sw_stage, params);
         module = CompileModule(new_info, runtime_info, params.code, perm_idx, binding);
 
-        RegisterShaderMeta(info, spec.fetch_shader_data, spec, perm_hash, perm_idx);
-        program->AddPermut(module, std::move(spec));
+        RegisterShaderMeta(info, spec->fetch_shader_data, *spec, perm_hash, perm_idx);
+        program->AddPermut(module, std::move(*spec));
     } else {
         info.AddBindings(binding);
-        module = it->module;
-        perm_idx = std::distance(program->modules.begin(), it);
-        perm_hash = HashCombine(params.hash, perm_idx);
+        module = program->modules[perm_idx].module;
     }
     if (auto& fetch = program->modules[perm_idx].spec.fetch_shader_data; !fetch.Empty()) {
         fetch_shader = &fetch;
