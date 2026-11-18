@@ -45,7 +45,9 @@ address,name,signature,status,file
 0x019baa40,navmesh_test_module_step,,named,
 0x01a0f910,ai_pad_step,"void ai_pad_step(void * pad, FD4TaskData * task)",named,
 0x01cb4dd0,anim_slots_update,,named,
+0x01d969f0,graphics_init,,named,
 0x01d978e0,graphics_apply_flip_settings,void graphics_apply_flip_settings(void),named,
+0x01d9e850,set_frame_buffer_size,,named,
 0x01dbbd00,agent_steer,"SteerPoint agent_steer(void * agent, FD4TaskData * task)",replaced,src/game/ai/steering.cpp
 0x01dbca40,agent_path_direction,,named,
 0x01dcdad0,ai_world_step,"void ai_world_step(void * manager, FD4TaskData * task)",replaced,src/game/ai/world_step.cpp
@@ -54,6 +56,7 @@ address,name,signature,status,file
 0x01f77bd0,sfx_frame_update,,replaced,src/game/frame/step_literals.cpp
 0x01fc5f30,locked_heap_alloc,"void * locked_heap_alloc(void * heap, ulonglong size, ulonglong alignment)",named,
 0x01fc5fc0,locked_heap_free,"void locked_heap_free(void * heap, void * block)",named,
+0x02017770,system_properties_init,,named,
 0x02018d20,main_loop_tick,bool main_loop_tick(void),replaced,src/game/frame/main_loop.cpp
 0x02018f00,shutdown_loop_tick,bool shutdown_loop_tick(void),named,
 0x02034520,flipper_construct,void flipper_construct(SprjFlipper * self),named,
@@ -64,6 +67,7 @@ address,name,signature,status,file
 0x0207ebc0,atomic_compare_exchange_ptr,"void * atomic_compare_exchange_ptr(void * * target, void * desired, void * expected)",named,
 0x020b55b0,fd4_singleton_missing,"void fd4_singleton_missing(char * file, int line, char * format, char * name, ...)",named,
 0x020eba00,config_get_int,"int config_get_int(void * config, void * key, int fallback)",named,
+0x02194580,graphics_create,,named,
 0x021b2fb0,swap_chain_present,"void swap_chain_present(void * self, int present_interval)",named,
 0x0263b8b0,fast_fixed_alloc,void * fast_fixed_alloc(void * pool),named,
 0x0263b9b0,fast_fixed_free,"void fast_fixed_free(void * pool, void * item)",named,
