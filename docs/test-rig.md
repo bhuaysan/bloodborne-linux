@@ -388,13 +388,13 @@ With the counters, `commands` (24.2 ms) equals that CPU time and the thread swit
 
 The system time is a poll. Traced, the GPU thread made 272 680 `ioctl` of its 290 199 system calls in 10 s, about 1360 a frame at the 20 frames a second it ran at under `strace`, so about one a draw; `perf` puts all of them under `Semaphore::Refresh` in `PopPendingOperations`, which every draw and dispatch calls and which queries the timeline semaphore (`DRM_IOCTL_SYNCOBJ_QUERY`) even when no operation is pending. The rest is 62 `lseek` (`CopySparseMemory`) and 22 `mprotect` a frame. The throwaway build that returns when nothing is pending, and queries only when the first pending operation is not free by the last known tick, took 2.0 to 2.9 ms off every segment and the system time from 3.0 to 0.9 ms (table, last column).
 
-**Proposed changes.** One issue each, in R8.3; the savings are GPU-thread CPU per `play-walk` frame, measured for #589 and estimated for the rest from the function's share above and what a cached path would still cost:
+**Proposed changes.** One issue each, in R8.3; the savings are GPU-thread CPU per `play-walk` frame, measured for #589 and #591 and estimated for the rest from the function's share above and what a cached path would still cost:
 
 | issue | change | saving |
 |---|---|---|
 | #589 | poll the work semaphore only when an operation waits for it | 2.0 to 2.9 ms (measured) |
 | #590 | find a draw's targets and textures without a page-table walk per draw | 1.0 to 1.3 ms |
-| #591 | stop hashing whole images when a draw writes an aliasing buffer | 0.4 to 0.5 ms |
+| #591 | stop hashing whole images when a draw writes an aliasing buffer | 0.4 to 0.5 ms (measured, in every play segment) |
 | #592 | skip rebuilding the shader specialization of an unchanged draw | 0.6 to 0.9 ms |
 | #593 | cut the per-draw cost of buffer barrier tracking | 0.5 to 0.8 ms |
 | #594 | cut the frame counters' own cost (a measurement fix, no saving in play) | |
