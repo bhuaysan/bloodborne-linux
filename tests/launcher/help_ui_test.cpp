@@ -52,18 +52,20 @@ TEST(HelpPage, TheReportOfThisMachineHoldsNoPersonalData) {
         std::ofstream(out) << report;
     }
 
-    // The patterns of the privacy check; skipped when the checkout or git is not there.
+    // The patterns of the privacy check; skipped only when the checkout's library is not there.
+    // When it is, a library or pattern that fails is a failure of this test.
+    const fs::path source = bb::common::source_dir();
+    if (!fs::exists(source / "tools/githooks/privacy-lib.sh")) {
+        GTEST_SKIP() << "tools/githooks/privacy-lib.sh not found below " << source;
+    }
     const fs::path file = fs::temp_directory_path() / std::format("bb-help-report-{}.txt", getpid());
     std::ofstream(file) << report;
     const auto r = bb::test::run(std::format(
-        "cd {} && . tools/githooks/privacy-lib.sh 2>/dev/null && pat=\"$(privacy_pattern)\" && "
+        "cd {} && . tools/githooks/privacy-lib.sh && pat=\"$(privacy_pattern)\" && "
         "[ -n \"$pat\" ] && if grep -Eq -e \"$pat\" {}; then echo MATCH; else echo CLEAN; fi",
-        bb::test::quote(bb::common::source_dir().string()), bb::test::quote(file.string())));
+        bb::test::quote(source.string()), bb::test::quote(file.string())));
     fs::remove(file);
-    if (r.output.find("CLEAN") == std::string::npos && r.output.find("MATCH") == std::string::npos) {
-        GTEST_SKIP() << "privacy patterns not available";
-    }
-    EXPECT_EQ(r.output, "CLEAN\n") << "the report matches a privacy pattern";
+    EXPECT_EQ(r.output, "CLEAN\n") << "the privacy patterns failed or the report matches one";
 }
 
 }  // namespace
