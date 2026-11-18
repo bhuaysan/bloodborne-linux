@@ -96,7 +96,7 @@ Replacing the pacer moved `bb-run`'s main-loop probe: it counted the pacer's `ge
 Each site below was checked at 60 against 30 FPS runs, by pictures or by a local probe build that logged positions:
 
 - **Havok world step** (`havok_world_step`, 0x17f99d0): done in #553.
-- **Ragdolls** (`chr_physics_pose_sync`, 0x1515ec0): the step is fixed in #567. The corpses still come to rest about 0.3 m from where they do at 30; the cause is not isolated and #567 stays open.
+- **Ragdolls** (`chr_physics_pose_sync`, 0x1515ec0): done in #567. The corpses come to rest about 0.3 m from where they do at 30, from Havok's own sensitivity to the step size; kept (see "The ragdolls").
 - **AI step** (`chr_ai_step`, 0x1e2bc10): done in #554.
 - **Target bank** (`target_bank_scan_tick`, 0x12a43b0): done in #555.
 - **Fades, effects and menus** (`chr_list_fade_step`, 0x180f5e0, and the `update(1/30)` calls): done in #556.
@@ -266,7 +266,11 @@ The other branch of the anti-penetration block sets a body's velocity along a di
 
 **Tests.** `tests/game/ragdoll_test.cpp` runs the pose sync against the game's function through the harness, with the four callees faked, over the three paths, the lock object's init, the active test's branches and fakes that change the module during the init. At 60 the replacement passes 1/60 to all three and keeps u/30 and the 30.0 and 900.0. The two patches are entered at their place from an assembly driver: at 30 the stubs leave the same registers and frame slots as the game's bytes; at 60 they halve the strengths and the pull.
 
-**Left.** The bodies' drop times now agree with 30 within a 30 FPS step, but they still come to rest about 0.3 m (median) from where they do at 30. Stepping the world at 30's step did not isolate the cause: the collapse is chaotic, so a small difference anywhere grows. Havok's deactivation by step count and the motion properties' per-step limits were not examined. #567 stays open.
+**Left: Havok's step size.** The bodies' drop times agree with 30 within a 30 FPS step. At 60 they still come to rest about 0.35 m (median per body) from where they do at 30, and a body settles (stays within 5 cm of its rest position) a median 0.4 s later, counted from its first move, with ±1 s per body. That is not noise: two runs of one build at 60 differ by 0.003 m and 0.00 s (quartiles ±0.05 s). The probe's "last move" (the last step faster than 1 cm/s) is noise, though: it differs by 0.4 to 0.7 s per body between runs of one build, and that was the 0.4 s run-to-run wobble of the stop time.
+
+The cause is Havok itself. A local probe ran the game at 30 and stepped only the Havok world twice a frame at 1/60, so every game function ran as at 30. The corpses then came to rest 0.32 m from 30 and settled a median 0.3 s *earlier* (±1 s per body), the same size as at 60 with the other sign. Four steps a frame at 1/120 did not converge either: every step size (1/30, 1/60, 1/120, and 60 FPS) rests 0.40 to 0.53 m from every other. The collapse of a pile of ragdolls is chaotic, so any change of the step gives other rest positions and settle times, and there is no rest position at 30 for 60 to match. Medians were bootstrapped over the 47 to 52 corpses (bodies grouped by position).
+
+The rest of the shift at 60 comes from the corpse placement at load (above): at 60 it runs in half the game time, so the bodies first move about 2.2 s of game time earlier than at 30 and settle about 1.8 s earlier in game time. At both rates every corpse has settled more than 3 s before the hunter stands in the street (`settle`'s standing mark), so none of this shows in play. The issue's stop-time check (within one 30 FPS step) can't be met by any change of the physics step and was dropped; matching 30 exactly would need the world stepped at 1/30 with interpolated poses at 60. Not examined: a death fling (the two patched impulses in a game run) and state 1.
 
 ## The parameter blend (#598)
 
