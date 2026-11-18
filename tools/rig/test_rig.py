@@ -115,6 +115,16 @@ class CommandTests(unittest.TestCase):
         rig.check_target_options(rig.argparse.Namespace(target="reference", frame_rate=None,
                                                         log=None, perf=False, bb_run_args=None))
 
+    def test_bb_run_config_refuses_user_from(self) -> None:
+        args = rig.argparse.Namespace(target="bb-run", bb_run_config="/c.toml", user_from=Path("/u"))
+        with self.assertRaises(SystemExit) as caught:
+            rig.check_target_options(args)
+        self.assertIn("--user-from", str(caught.exception))
+        rig.check_target_options(rig.argparse.Namespace(target="bb-run", bb_run_config="/c.toml",
+                                                        user_from=None))
+        rig.check_target_options(rig.argparse.Namespace(target="bb-run", bb_run_config=None,
+                                                        user_from=Path("/u")))
+
     def test_bb_run_under_perf_record(self) -> None:
         with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
             program = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"),

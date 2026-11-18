@@ -525,6 +525,11 @@ def check_target_options(args: argparse.Namespace) -> None:
                                        or getattr(args, "bb_run_config", None)):
         raise SystemExit("--log, --perf, --frame-rate, --bb-run-args and --bb-run-config only "
                          "apply to the bb-run target")
+    if getattr(args, "bb_run_config", None) and getattr(args, "user_from", None):
+        # bb-run takes the profile from the config file, while the save goes to and comes back
+        # from the rig's own profile.
+        raise SystemExit("--user-from can't be used with --bb-run-config: bb-run reads the save "
+                         "of the config's profile, not the copied one")
 
 
 def run_target(args: argparse.Namespace) -> int:
