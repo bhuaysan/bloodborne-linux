@@ -21,6 +21,12 @@ unsigned frame_rate();
 // 30 it is the game's own constant 0x3d088889.
 float frame_step();
 
+// The number of main loop iterations so far (main_loop_tick adds 1 before it runs the tasks): a
+// frame count that no game state holds back, unlike the game's own counters. Read and written on
+// the game's main thread. set_frame_count is for tests.
+std::uint32_t frame_count();
+void set_frame_count(std::uint32_t count);
+
 // Called at the start of every frame pacer call, on the game's main thread (bb-run's main-loop
 // probe). Returns the observer it replaces; nullptr removes it.
 using FrameObserver = void (*)();

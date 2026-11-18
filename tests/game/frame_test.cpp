@@ -433,7 +433,9 @@ TEST_F(EbootTest, MainLoopTickAt60) {
     const FakeClockGuard clock;
     const FrameRateGuard rate(60);
     tick_inputs({})(harness().arena());
+    bb::game::set_frame_count(41);
     EXPECT_EQ(bb::game::main_loop_tick(), 1);
+    EXPECT_EQ(bb::game::frame_count(), 42U);  // one more a tick
     std::uint32_t bits = 0;
     std::memcpy(&bits, &global<float>(0x54b7e08), sizeof bits);
     EXPECT_EQ(bits, 0x3c888889U);

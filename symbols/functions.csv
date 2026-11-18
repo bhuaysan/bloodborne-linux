@@ -39,6 +39,8 @@ address,name,signature,status,file
 0x01810000,ragdoll_change_state,,named,
 0x01811040,ragdoll_update_spaced,,named,
 0x01811650,ragdoll_update_idle,,named,
+0x018b9890,chr_validate,"bool chr_validate(ValidateBudget * budget, void * chr)",replaced,src/game/chr/validate_pace.cpp
+0x018bd320,chr_state_step,"void chr_state_step(float step, void * chr, ValidateBudget * budget)",named,
 0x01915320,world_chr_frame_update,"void world_chr_frame_update(float step, void * world, void * task)",named,
 0x019173b0,world_chr_update,"void world_chr_update(float step, void * world)",replaced,src/game/chr/update_interval.cpp
 0x019a6860,hkai_test_module_step,,named,

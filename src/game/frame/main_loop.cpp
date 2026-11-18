@@ -17,6 +17,7 @@ namespace bb::game {
 namespace {
 
 unsigned target_fps = default_frame_rate;
+std::uint32_t frames = 0;
 
 }  // namespace
 
@@ -35,6 +36,14 @@ unsigned frame_rate() {
 
 float frame_step() {
     return bb_frame_step;
+}
+
+std::uint32_t frame_count() {
+    return frames;
+}
+
+void set_frame_count(std::uint32_t count) {
+    frames = count;
 }
 
 // 0x02018d20
@@ -63,6 +72,7 @@ std::uint8_t main_loop_tick() {
         }
     }
     fn<void(SprjFlipper*)>(0x02034770)(flipper);  // flipper_wait_frame
+    ++frames;
 
     FD4TaskData data{reinterpret_cast<const void*>(image().runtime(0x052efd40)), frame_step()};
     if (global<void*>(0x05540510) == nullptr) {
