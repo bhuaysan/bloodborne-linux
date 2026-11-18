@@ -31,7 +31,7 @@ The cost is that image and buffer types follow a null sharp. A shader whose SPIR
 
 ## Result
 
-Of the 3,832 programs, 3,793 translate to a module that passes `spirv-val --target-env vulkan1.3` and 30 are copy shaders that `ParseCopyShader` accepts (2026-11-09, debug and optimized builds, the device profile of the reference GPU). Nine don't translate, and the test lists exactly these programs by the SHA-256 of their code, each with its cause. Another program that fails, a listed one that fails for another cause and a listed one that stops failing all fail the test:
+Of the 3,832 programs, 3,793 translate to a module that passes `spirv-val --target-env vulkan1.3` and 30 are copy shaders that `ParseCopyShader` accepts (debug and optimized builds, the device profile of the reference GPU). Nine don't translate, and the test lists exactly these programs by the SHA-256 of their code, each with its cause. Another program that fails, a listed one that fails for another cause and a listed one that stops failing all fail the test:
 
 | Programs | Stage | Cause |
 |---|---|---|
@@ -50,15 +50,8 @@ The per-program report goes to `analysis/shadps4-corpus-report.txt` and is never
 
 **No module is translated ahead of time from the archives, so there is no `bb-shader-cache` tool.** The renderer reuses a module only when its `StageSpecialization` equals the one of the draw: the runtime information (render-target formats, pixel inputs, vertex outputs, the register settings), the fetch shader, the first binding, and the formats and types of every bound V#, T# and sampler. Those come from the game's state at draw time and from guest memory, which the archives don't hold. A module the corpus translates with its fixed state could only be stored under a key the game never looks up, or under the game's key with SPIR-V the GPU thread would not have produced.
 
-`shadps4_shader_cache_match_test` measures this. Given the cache of a game run (`BB_SHADER_CACHE_DIR`), it translates the corpus program of every module in it with the corpus's state and the run's device profile and compares the specialization the renderer would compare, and the SPIR-V bytes. On 2026-11-14, with the caches of two cold runs (RADV):
+`shadps4_shader_cache_match_test` measures this. Given the cache of a game run (`BB_SHADER_CACHE_DIR`), it translates the corpus program of every module in it with the corpus's state and the run's device profile and compares the specialization the renderer would compare, and the SPIR-V bytes. On the caches of two cold runs no key matched: every pixel shader from the archives differs in its render targets and its sharps, every vertex shader in its fetch shader and first binding. About half the modules come from programs embedded in `eboot.bin`, which the corpus does not read at all.
 
-| Run | Modules | From the archives | Key matches | From programs in the executable |
-|---|---|---|---|---|
-| new-game-name to the opening movie (#507's run) | 81 | 38 | 0 | 43 (all 16 compute modules) |
-| start to the title (`20261114-032142-bb-run-new-game-name`, the pad did not reach the game) | 38 | 2 | 0 | 36 |
-
-Every pixel shader from the archives differs in its render targets and its buffer or image sharps, 11 of 19 also in pixel state. Every vertex shader differs in its fetch shader and its first binding (the pixel stage's bindings come first), most also in buffer sharps. Five pixel shaders give the same SPIR-V under a different key, which the renderer would not find. Half the modules come from programs embedded in `eboot.bin`, which the corpus does not read at all.
-
-The first run's cost is not small once the game gets past the title. A cold run through the name dialog into the intro (`20261114-033430-bb-run-new-game-name`) translated 369 shaders and built 293 pipelines in 2.4 s in all, 553 ms of it within about 15 s when the intro starts (`Pipeline cache: ... 2403 ms spent building them`). From the second run on, #507's cache loads every module and pipeline the game used. A cold first run needs another way to keep this work off the frame: #521 creates graphics pipelines on worker threads (`docs/design/renderer.md`).
+From the second run on, #507's cache loads every module and pipeline the game used. A cold first run keeps its builds off the frame by creating graphics pipelines on worker threads (#521, `docs/design/renderer.md`).
 
 The vertex shaders also differ in their register settings, so `runtime_info_of` reads a vertex program's register block wrongly. It does not change the corpus test's result, and is left as it is.
