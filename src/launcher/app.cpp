@@ -239,8 +239,10 @@ private:
         if (result->folders.size() == 1) {
             take_found(result->folders[0]);
         } else if (result->folders.size() > 1) {
+            close_page();  // an open page saves its choices first; the list replaces it
             page_ = make_find_page(result->folders, [this](const fs::path& f) { pending_choice_ = f; });
             focus_first_ = true;
+            refocus_ = false;
         }
     }
 

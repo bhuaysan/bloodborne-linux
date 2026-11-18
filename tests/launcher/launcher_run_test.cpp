@@ -183,6 +183,28 @@ TEST(LauncherRunGame, TheSearchTakesTheDumpUnderHome) {
     EXPECT_NE(slurp(config).find(fs::canonical(folder).string()), std::string::npos);
 }
 
+// Several hits while the Picture and sound page is open: the page is closed properly first, so
+// its choices are saved, and the list of folders replaces it.
+TEST(LauncherRunGame, SeveralSearchHitsSaveAnOpenPicturePage) {
+    BB_REQUIRE_GAME(game);
+    const Dir dir;
+    for (const char* name : {"Games/BloodborneA", "Games/BloodborneB"}) {
+        const fs::path folder = dir.path() / "home" / name;
+        fs::create_directories(folder / "sce_sys");
+        fs::create_symlink(fs::canonical(game) / "eboot.bin", folder / "eboot.bin");
+        fs::create_symlink(fs::canonical(game) / "sce_sys/param.sfo", folder / "sce_sys/param.sfo");
+    }
+    for (int i = 0; i < 1500; ++i) {  // keeps the search busy until the page is open
+        fs::create_directories(dir.path() / "home/Pad" / std::to_string(i) / "x");
+    }
+    const auto r = run_script(
+        dir, "wait 3\npress down\nwait 2\npress accept\nwait 3\npress accept\nwait 2\npress down\nwait 2\n"
+             "press accept\nwait 400\nquit\n");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(r.output.find("2 hit(s)"), std::string::npos) << r.output;
+    EXPECT_EQ(slurp(dir.path() / "config/bloodborne-linux/config.toml"), "fullscreen = true\n");
+}
+
 // The Picture and sound page with the pad alone: fullscreen, 60 frames and extra sharp are chosen
 // with the d-pad and A, and Back writes them to the config file.
 TEST(LauncherRun, ThePicturePageSavesItsChoicesOnBack) {
