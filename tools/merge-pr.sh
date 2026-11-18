@@ -146,11 +146,12 @@ fi
 # "changes" job in .github/workflows/ci.yml: every path under docs/ or a
 # top-level *.md, except docs/source-policy.md, whose hash table a test
 # reads. Without renames, so a file moved into docs/ shows its old path too.
+# Counted with grep -c, so a grep error gives no "0" and the full run.
 test_args=
 files="$(git diff --name-only --no-renames "$main_base" HEAD)"
-if [ -n "$files" ] &&
-   ! printf '%s\n' "$files" | grep -vE '^docs/|^[^/]+\.md$' >/dev/null &&
-   ! printf '%s\n' "$files" | grep -x 'docs/source-policy.md' >/dev/null; then
+other="$(printf '%s\n' "$files" | grep -cvE '^docs/|^[^/]+\.md$' || true)"
+policy="$(printf '%s\n' "$files" | grep -cx 'docs/source-policy.md' || true)"
+if [ -n "$files" ] && [ "$other" = 0 ] && [ "$policy" = 0 ]; then
     echo "only docs change: Python tests only, no C++ build"
     test_args=--python-only
 fi
