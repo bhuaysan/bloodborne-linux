@@ -87,8 +87,11 @@ double tick_rate(State& s, ClockPair& now) noexcept {
     do {
         now = read_clocks();
     } while (now.ns - s.anchor_ns < shortest_ns);
-    return static_cast<double>(now.ns - s.anchor_ns) /
-           static_cast<double>(now.ticks - s.anchor_ticks);
+    const std::uint64_t ticks = now.ticks - s.anchor_ticks;
+    if (ticks == 0 || ticks > (std::uint64_t{1} << 62)) {
+        return 0.0;  // a counter that stands still or ran backwards: the times read 0
+    }
+    return static_cast<double>(now.ns - s.anchor_ns) / static_cast<double>(ticks);
 }
 
 Totals take_locked(State& s, ClockPair& now) noexcept {
