@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_runtime.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-18
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/alignment.h"
@@ -703,23 +703,11 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
 
 bool Runtime::IsBufferAccessed(const VideoCore::Buffer* handle, u64 offset, u64 size,
                                bool check_read_access) {
-    MakeCurrent(handle);
-    bool has_access = resource->write_ranges.Overlaps(offset, offset + size);
-    if (check_read_access && !has_access) {
-        has_access |= resource->read_ranges.Overlaps(offset, offset + size);
-    }
-    return has_access;
+    return buffer_barriers.IsAccessed(handle->barrier_slot, offset, size, check_read_access);
 }
 
 void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size,
                            vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access) {
-    MakeCurrent(handle);
-
-    const Interval range = {
-        .start = offset,
-        .end = offset + size,
-    };
-
     constexpr static vk::AccessFlags2 READ_MASK =
         vk::AccessFlagBits2::eIndexRead | vk::AccessFlagBits2::eVertexAttributeRead |
         vk::AccessFlagBits2::eUniformRead | vk::AccessFlagBits2::eShaderRead |
@@ -732,12 +720,8 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
         vk::AccessFlagBits2::eDepthStencilAttachmentWrite | vk::AccessFlagBits2::eTransferWrite |
         vk::AccessFlagBits2::eMemoryWrite | vk::AccessFlagBits2::eTransformFeedbackWriteEXT;
 
-    if (src_access & WRITE_MASK) {
-        resource->write_ranges.Add(range);
-    }
-    if (src_access & READ_MASK) {
-        resource->read_ranges.Add(range);
-    }
+    buffer_barriers.Access(handle->barrier_slot, offset, size, bool(src_access & READ_MASK),
+                           bool(src_access & WRITE_MASK));
 
     memory_barrier.srcStageMask |= src_stage;
     memory_barrier.srcAccessMask |= src_access & WRITE_MASK;
@@ -767,24 +751,7 @@ void Runtime::FlushBarriers() {
     memory_barrier.srcAccessMask = vk::AccessFlagBits2::eNone;
 
     image_barriers.clear();
-    for (auto& resource : resources) {
-        resource.read_ranges.Clear();
-        resource.write_ranges.Clear();
-    }
-    resources.clear();
-    resource = nullptr;
-}
-
-void Runtime::MakeCurrent(const VideoCore::Buffer* handle) {
-    if (resource && resource->handle == handle) {
-        return;
-    }
-    auto it = std::ranges::find(resources, handle, &BufferBarriers::handle);
-    if (it != resources.end()) {
-        resource = std::addressof(*it);
-        return;
-    }
-    resource = &resources.emplace_back(handle);
+    buffer_barriers.Clear();
 }
 
 } // namespace Vulkan
