@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <cstring>
 
 #include "game/frame/frame.hpp"
 #include "game/image.hpp"

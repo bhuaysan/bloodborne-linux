@@ -483,13 +483,21 @@ TEST(Hook, RefusesAPatchWithoutItsContinuation) {
     // A patch whose continuation global was never named: its stub would jump through 0.
     Replacement unset = inside_patch(0x100, 0x105, summing_middle, "unset");
     unset.continuation = nullptr;
-    // Also when another, valid entry comes first: apply patches nothing.
+    // Also when a valid entry comes first: apply patches nothing.
     const Replacement both[] = {{0x10, reinterpret_cast<void*>(&replacement_a), "a"}, unset};
     expect_refusal([&] { bb::hook::apply(image, both); },
                    "hook unset at 0x105: no continuation: the stub would jump back through "
                    "address 0");
     EXPECT_EQ(image.fn<int()>(0x100)(), 6);
     EXPECT_EQ(image.fn<int()>(0x10)(), 42);
+    // A valid patch before a refused entry: its continuation is not written either.
+    hook_test_stub_back = 0;
+    const Replacement then_refused[] = {inside_patch(0x100, 0x105, summing_middle),
+                                        {0x10, nullptr, "null"}};
+    expect_refusal([&] { bb::hook::apply(image, then_refused); },
+                   "hook null at 0x10: the replacement is null");
+    EXPECT_EQ(hook_test_stub_back, 0u);
+    EXPECT_EQ(image.fn<int()>(0x100)(), 6);
     // A continuation belongs to a patch inside a function only.
     const Replacement at_entry[] = {
         {0x10, reinterpret_cast<void*>(&replacement_a), "a", {}, 0, &hook_test_stub_back}};
@@ -526,6 +534,11 @@ TEST(Hook, FillsAPatchsJumpTargets) {
                        std::format("the jump target {:#x} lies outside the function 0x100",
                                    outside));
     }
+    // Nor one behind the patch's first byte inside the patched bytes, which the patch overwrites.
+    const bb::hook::JumpTarget mid_patch[] = {{0x106, &hook_test_stub_far}};
+    patch.targets = mid_patch;
+    expect_refusal([&] { bb::hook::apply(image, std::array{patch}); },
+                   "the jump target 0x106 lies inside the patched bytes");
     EXPECT_EQ(image.fn<int()>(0x100)(), 6);
 }
 

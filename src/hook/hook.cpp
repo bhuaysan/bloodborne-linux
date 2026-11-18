@@ -207,6 +207,10 @@ void check_inside(const loader::Image& image, const Replacement& r) {
             refuse(r, std::format("the jump target {:#x} lies outside the function {:#x}",
                                   t.link_addr, r.function));
         }
+        if (t.link_addr > r.link_addr && t.link_addr - r.link_addr < n) {
+            refuse(r, std::format("the jump target {:#x} lies inside the patched bytes",
+                                  t.link_addr));
+        }
     }
 }
 

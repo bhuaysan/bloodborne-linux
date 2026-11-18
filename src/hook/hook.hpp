@@ -88,10 +88,11 @@ public:
 // A patch inside a function (`function` set) is refused instead of the entry checks when
 // `function` is not an FDE start, link_addr is not after it, the patched bytes are fewer than
 // patch_size, more than max_patched or don't all lie inside the function, or differ from the bytes
-// in memory, or when it has no continuation, or a jump target has no slot or lies outside the
-// function. Its span (the patched bytes) must not overlap another entry's: two patches of the
+// in memory, or when it has no continuation, or a jump target has no slot, lies outside the
+// function or behind the first patched byte inside the patched bytes (the patch overwrites them). Its span (the patched bytes) must not overlap another entry's: two patches of the
 // list, or a live hook's patch or prologue. Once every entry passes, apply writes the
-// continuations and jump targets, then the patches; remove leaves them as they are.
+// continuations and jump targets, then the patches; remove leaves them as they are. The slots are
+// globals, so a patch is applied to one image at a time, and no two patches share a slot.
 void apply(loader::Image& image, std::span<const Replacement> replaced);
 
 // The longest prologue a trampoline takes.
