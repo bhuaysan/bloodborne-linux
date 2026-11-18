@@ -422,10 +422,17 @@ int start(const bb::tools::RunOptions& options) {
 #endif
     // Never destroyed: the game runs in it until the process ends.
     auto* game = new Game{bb::loader::map_load_set(*game_dir)};
-    game->eboot = &bb::hle::prepare(game->set, [](bb::loader::Image& eboot) {
+    game->eboot = &bb::hle::prepare(game->set, [&options](bb::loader::Image& eboot) {
         bb::hook::apply(eboot, bb::hook::replacements());
         bb::common::log(LogLevel::info, channel, "{} hooks applied",
                         bb::hook::replacements().size());
+        // Before the entry point: the engine sets its heaps up at start, and the larger targets
+        // of a larger frame buffer come out of GFX_GraphicsPrivate (docs/design/resolution.md).
+        bb::game::set_graphics_heap_size(eboot, options.resolution_width,
+                                         options.resolution_height);
+        bb::common::log(LogLevel::info, channel, "GFX_GraphicsPrivate heap {} MiB",
+                        bb::game::graphics_private_heap_size(options.resolution_width,
+                                                             options.resolution_height) >> 20);
     });
     bb::game::set_image(game->eboot);
     // Before the entry point: system_properties_init and the graphics device read the size from

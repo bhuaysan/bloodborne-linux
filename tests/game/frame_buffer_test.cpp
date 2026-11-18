@@ -1,5 +1,6 @@
 // The frame buffer size globals of src/game/gfx/frame_buffer.cpp: they hold the game's 1920x1080
-// in its data, lie in a writable segment, and set_frame_buffer_size writes both (#515).
+// in its data, lie in a writable segment, and set_frame_buffer_size writes both (#515). The heap
+// size table holds the GFX_GraphicsPrivate size that set_graphics_heap_size grows (#640).
 #include "game/gfx/frame_buffer.hpp"
 
 #include <sys/mman.h>
@@ -14,6 +15,10 @@
 namespace {
 
 using bb::game::frame_buffer_height;
+using bb::game::graphics_private_heap_default;
+using bb::game::graphics_private_heap_size;
+using bb::game::graphics_private_heap_size_entry;
+using bb::game::heap_size_table;
 using bb::game::frame_buffer_width;
 using bb::test::EbootTest;
 
@@ -32,6 +37,49 @@ TEST_F(EbootTest, SetFrameBufferSizeWritesBothGlobals) {
     bb::game::set_frame_buffer_size(old_width, old_height);
     EXPECT_EQ(bb::game::global<std::uint32_t>(frame_buffer_width), old_width);
     EXPECT_EQ(bb::game::global<std::uint32_t>(frame_buffer_height), old_height);
+}
+
+// The size of heap `heap` (the order of the names at 0x05358cc0) in configuration row `row`.
+std::uint64_t table_size(int row, int heap) {
+    return bb::game::global<std::uint64_t>(heap_size_table + row * 0x80 + heap * 8);
+}
+
+TEST_F(EbootTest, HeapSizeTableHoldsTheGraphicsHeaps) {
+    // Read-only data: the write needs the page made writable.
+    EXPECT_EQ(image().segment_at(heap_size_table, 9 * 0x80, PROT_WRITE), nullptr);
+    EXPECT_NE(image().segment_at(heap_size_table, 9 * 0x80, PROT_READ), nullptr);
+    // Master_ps4_GFXMIX (row 1): MAIN, GFX, GFX_SystemShared, GFX_GraphicsPrivate and
+    // GFX_GraphicsPrivateB.
+    EXPECT_EQ(table_size(1, 0), 0x20c00000U);
+    EXPECT_EQ(table_size(1, 1), 0x11400000U);
+    EXPECT_EQ(table_size(1, 2), 0x09800000U);
+    EXPECT_EQ(table_size(1, 3), graphics_private_heap_default);
+    EXPECT_EQ(table_size(1, 4), 0x37600000U);
+    EXPECT_EQ(heap_size_table + 0x80 + 3 * 8, graphics_private_heap_size_entry);
+    // Master_ps4_flexible (row 2), which the heap setup reads first, has no GFX_GraphicsPrivate.
+    EXPECT_EQ(table_size(2, 3), 0U);
+}
+
+TEST(GraphicsHeapSize, GrowsWithThePixelsAbove1080p) {
+    constexpr std::uint64_t mib = 1 << 20;
+    EXPECT_EQ(graphics_private_heap_size(1920, 1080), graphics_private_heap_default);
+    EXPECT_EQ(graphics_private_heap_size(1280, 720), graphics_private_heap_default);
+    // 1612800 more pixels at 288 bytes: 464486400 bytes, 443.0 MiB rounded up.
+    EXPECT_EQ(graphics_private_heap_size(2560, 1440), graphics_private_heap_default + 443 * mib);
+    // 6220800 more pixels: 1791590400 bytes, 1708.6 MiB rounded up.
+    EXPECT_EQ(graphics_private_heap_size(3840, 2160), graphics_private_heap_default + 1709 * mib);
+    // A whole number of MiB, also when the growth is not.
+    EXPECT_EQ(graphics_private_heap_size(1984, 1116) % mib, 0U);
+    EXPECT_GT(graphics_private_heap_size(1984, 1116), graphics_private_heap_default);
+}
+
+TEST_F(EbootTest, SetGraphicsHeapSizeWritesTheTableEntry) {
+    bb::game::set_graphics_heap_size(image(), 3840, 2160);
+    EXPECT_EQ(table_size(1, 3), graphics_private_heap_size(3840, 2160));
+    EXPECT_EQ(table_size(1, 4), 0x37600000U);
+    EXPECT_EQ(table_size(1, 2), 0x09800000U);
+    bb::game::set_graphics_heap_size(image(), 1920, 1080);
+    EXPECT_EQ(table_size(1, 3), graphics_private_heap_default);
 }
 
 }  // namespace

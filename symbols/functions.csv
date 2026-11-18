@@ -56,8 +56,12 @@ address,name,signature,status,file
 0x01e2bc10,chr_ai_step,"void chr_ai_step(void * nvm_manager, void * context, bool before, bool after)",named,
 0x01e4a6c0,game_main,int game_main(void),named,
 0x01f77bd0,sfx_frame_update,,replaced,src/game/frame/step_literals.cpp
+0x01fbeb30,graphics_mix_alloc,"void * graphics_mix_alloc(void * mix, ulonglong size, ulonglong alignment)",named,
+0x01fc0e60,sprj_memory_init_heaps,void sprj_memory_init_heaps(void * memory),named,
 0x01fc5f30,locked_heap_alloc,"void * locked_heap_alloc(void * heap, ulonglong size, ulonglong alignment)",named,
 0x01fc5fc0,locked_heap_free,"void locked_heap_free(void * heap, void * block)",named,
+0x01fc7d20,sprj_memory_init_range_heap,"void sprj_memory_init_range_heap(void * memory, void * heap_desc, void * node_parent)",named,
+0x01fca9e0,heap_table_size,"ulonglong heap_table_size(uint config_row, wchar16 * heap_name, ulonglong fallback)",named,
 0x02017770,system_properties_init,,named,
 0x02018d20,main_loop_tick,bool main_loop_tick(void),replaced,src/game/frame/main_loop.cpp
 0x02018f00,shutdown_loop_tick,bool shutdown_loop_tick(void),named,

@@ -63,7 +63,7 @@ inline constexpr std::string_view run_usage =
     "                       with --fsr: RCAS sharpness, 0 (sharpest) to 2 stops of attenuation\n"
     "                       (default 0.25)\n"
     "  --resolution WxH     the size the game renders at: 16:9, the width a multiple of 64, from\n"
-    "                       1920x1080 to 2560x1440 (default 1920x1080); the window shows it\n"
+    "                       1920x1080 to 3840x2160 (default 1920x1080); the window shows it\n"
     "                       scaled to the window's size\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
@@ -71,12 +71,12 @@ inline constexpr int timeout_status = 124;
 
 // --resolution: the engine's frame buffer size (docs/design/resolution.md). 16:9 only, because the
 // HUD layout scales width and height separately; the width a multiple of 64, so the half- and
-// quarter-size targets have whole sides as at 1080p. 3840x2160 waits for #640: the engine's own
-// memory pools run out there.
+// quarter-size targets have whole sides as at 1080p. Above 1080p bb-run grows the engine's graphics
+// heap with the size (set_graphics_heap_size); 3840x2160 is the largest size checked.
 inline constexpr unsigned default_resolution_width = 1920;
 inline constexpr unsigned default_resolution_height = 1080;
-inline constexpr unsigned max_resolution_width = 2560;
-inline constexpr unsigned max_resolution_height = 1440;
+inline constexpr unsigned max_resolution_width = 3840;
+inline constexpr unsigned max_resolution_height = 2160;
 inline constexpr unsigned resolution_width_step = 64;
 
 // --present-mode. Same order and meaning as Vulkan::PresentMode, which bb-run maps it to.

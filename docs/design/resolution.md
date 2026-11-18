@@ -70,7 +70,22 @@ All three runs ended `scenario finished` with no GPU fault in the kernel log.
 
 **What fails, at 3840×2160 only:** the map's static geometry and its full-size textures are missing. The G-buffer pass has 280 draws instead of 505, without the shaders of the walls and floor, and samples only 128×128 and 256×256 textures. The game's memory peaked 1 GiB lower than at 1x. The game's guest memory ends with the same mappings in all three runs (21 regions, 314312 pages), so the 4× larger targets come out of the engine's own fixed pools. The map's resources and texture streaming then no longer fit, and the game drops them without a crash. 2560×1440 still fits.
 
+## The graphics heap (#640)
+
+The engine sets its heaps up at start from a size table in the eboot (0x4736d40): one row of 16 sizes for each of 9 build configurations, the heaps named at 0x5358cc0 (MAIN, GFX, GFX_SystemShared, GFX_GraphicsPrivate, GFX_GraphicsPrivateB, …). This build reads the row `Master_ps4_GFXMIX`, after the row `Master_ps4_flexible`, which only sizes CORERES, MENU and DEBUG. The render targets and the map's textures come from `GFX_GraphicsPrivateMix` (0x569d448), which joins `GFX_GraphicsPrivate` (2287 MiB) and `GFX_GraphicsPrivateB` (886 MiB): blocks of 1 MiB and more go to the first, smaller ones to the second, and each spills into the other (0x1fbeb30).
+
+That is the pool that runs out. A local probe read both heaps' free bytes once a second through the clinic scenario of #511:
+
+| Frame buffer | `GFX_GraphicsPrivate` | Least free in both | Taken beyond 1x |
+|---|---|---|---|
+| 1920×1080 | 2287 MiB | 600 MiB | |
+| 2560×1440 | 2287 MiB | 194 MiB | 406 MiB (264 bytes per pixel above 1080p) |
+| 3840×2160 | 2287 MiB | 3 MiB, the map dropped | |
+| 3840×2160 | 3901 MiB | 572 MiB | 1642 MiB (277 bytes per pixel) |
+
+The need grows with the pixels: the larger targets, and nothing else. `bb-run` writes the size of `GFX_GraphicsPrivate` in that table before the game starts, 2287 MiB plus 288 bytes for each pixel above 1920×1080 (the larger measured rate plus 4 %), so every size keeps at least the free space of 1x: 2730 MiB at 2560×1440, 3996 MiB at 3840×2160. Growing `GFX_GraphicsPrivateB` instead would not help the large blocks, which only spill into it. The heap's backing is direct memory, of which the kernel layer has 8 GiB; with the larger heap the game's heaps take about 6 GiB of it at 3840×2160. At 1920×1080 the table keeps its own value.
+
 ## Work for #515
 
 1. **#515: the option.** `bb-run --resolution WxH` (default 1920x1080) writes the two globals before the game starts, as the prototype did, in `src/game/gfx/`, with a unit test of the option parsing and the write. Sizes are 16:9 and at most 2560×1440 until #640 raises the limit; other aspect ratios need their own check of the HUD layout, which scales width and height separately. `rig.py compare` scales a shot to the other's size before comparing, so a run at another size can be compared with a 1x run. The option takes widths that are multiples of 64, so the half- and quarter-size targets have whole sides as they do at 1080p, and nothing below 1920×1080, which no run has checked. The launcher's picture settings (`docs/design/launcher.md`) get the option in an issue of R9 once it lands. Check: the clinic and `rig.py perf clinic-fight` at 2560×1440 without a crash, GPU fault or validation error, the frames matching 1x frames scaled down, the logos and the title menu right, 1x unchanged against `main`, frame times at both sizes in the issue. About 200 changed lines.
-2. **#640: 3840×2160.** Find which engine pool runs out at 3840×2160 and grow it so the map loads as it does at 1x, then raise the option's limit to 3840×2160. Check: at 3840×2160 the clinic frame has the passes and draws of the 1x frame, the shots match 1x, and `rig.py perf clinic-fight` and `yharnam-route` run with frame times in the issue. Depends on #515.
+2. **#640: 3840×2160.** Find which engine pool runs out at 3840×2160 and grow it so the map loads as it does at 1x, then raise the option's limit to 3840×2160 (done: "The graphics heap (#640)"). Check: at 3840×2160 the clinic frame has the passes and draws of the 1x frame, the shots match 1x, and `rig.py perf clinic-fight` and `yharnam-route` run with frame times in the issue. Depends on #515.
