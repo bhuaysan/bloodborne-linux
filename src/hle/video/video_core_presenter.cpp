@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <thread>
 #include <utility>
 
 #include "common/log.hpp"
@@ -49,11 +50,20 @@ void VideoCorePresenter::send_command(std::function<void()> work) {
     liverpool_->SendCommand(std::move(work));
 }
 
-// Without the Presenter there are no surfaces and no frames.
+// Without the Presenter there are no surfaces and no frames. The surface's image is found in the
+// texture cache, which belongs to the GPU thread, and sceVideoOutRegisterBuffers comes from a
+// guest thread: the GPU thread registers the surface between two commands and the caller waits
+// (#629). Upstream registers it on the calling thread.
 void VideoCorePresenter::register_surface(const BufferAttributeGroup& group,
                                           std::uint64_t address) {
-    if (presenter_) {
-        presenter_->RegisterVideoOutSurface(group, address);
+    if (!presenter_) {
+        return;
+    }
+    const auto work = [&] { presenter_->RegisterVideoOutSurface(group, address); };
+    if (std::this_thread::get_id() == liverpool_->GetGpuCommandProcessorThread()) {
+        work();
+    } else {
+        liverpool_->SendCommand<true>(work);
     }
 }
 
