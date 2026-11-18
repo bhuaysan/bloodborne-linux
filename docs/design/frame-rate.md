@@ -314,6 +314,33 @@ The core clock stayed at 3.9 GHz throughout. In `play-dodge`, perf counts 5.55 m
 
 **Decision.** No change for #610: there is no cost that rises only in the phases. Frame-time measurements still need a quiet machine (`docs/test-rig.md`, "Thread times"). Making the GPU thread cheaper per draw, as #592 and #593 did, is also what keeps load from other programs from saturating its core. One phase in #608 came without a rise in the outside load that the probe saw. The probe measured only the game's threads, so what ran next to the game then is not known.
 
+## The final check (#514)
+
+After every site above had landed, the check of #514 ran on `main` at d5c8f6f, on a quiet machine (load 2.5 to 4.6 from the desktop, no compiler running, build lock held for each run). Every run counted ended in `end,scenario finished`.
+
+**Frame times at 60.** `rig.py perf clinic-fight --runs 3 --frame-rate 60`: the median present interval is 16.67 ms in every segment, from the logos to `play-walk-again`, with p95 16.70 to 16.72 ms and p99 at most 18.74 ms. The same three runs at 30 hold 33.33 ms in every segment.
+
+**Durations at 30 and 60.** The rig checks a picture at most once a second, so the durations come from game state. A local probe build (not committed) logged the hunter's position (`[chr+0x58]+0x350`) once a frame from the chase camera and the time of every pad read, and the rig's Vulkan layer wrote a 64×36 picture of every present during the menu part. Time is counted in game steps: pad reads (one per frame) times 1/F. A scenario held its inputs for frames, N at 30 and 2N at 60: four walks of 2 s, four back steps, four side dodges, four punches, two charged attacks, and the pause menu opened and closed three times. Three runs at each rate, after one run to warm the cache. A fourth run at 30 ended in the GXWorker segfault at 0x263b8e7 (#559), at 30 FPS; it was left out.
+
+The noise first. The three 30 FPS runs agree to the step on every event but two: the first punch (end of motion 1167 to 1333 ms after the press) and two settles after a dodge (33 ms). The 60 FPS runs agree within one 60 FPS step on all events that don't touch a wall.
+
+| What | 30 FPS | 60 FPS |
+|---|---|---|
+| walking speed, 0.5 to 1.5 s into a hold | 4.0006 m/s | 4.0006 to 4.0007 m/s |
+| distance of a 2 s walk | 7.09 m | 7.22 m |
+| back step: press to end of motion, distance | 1333 ms, 2.30 m | 1300 to 1317 ms, 2.26 m |
+| free side dodge: end of motion, distance | 600 ms, 3.08 m | 583 ms, 2.99 to 3.07 m |
+| punch (2nd to 4th): end of motion | 1267 ms | 1233 ms |
+| charged attack: end of motion, distance | 1400 ms, 0.30 to 0.31 m | 1400 ms, 0.32 m |
+| pause menu opens: first to last changed picture | 167 ms | 167 ms |
+| pause menu closes | 133 ms | 167 ms |
+
+Every duration matches within one 30 FPS frame, most within one 60 FPS frame. Motion starts one 60 FPS frame earlier at 60, the input latency of two frames that is kept (see "The input latency"), and that also gives the walk its extra 0.13 m. The menu pictures change only every second step at 60, so the menu animates at 30 Hz at both rates, and its 33 ms at 30 is the resolution of the 30 FPS run.
+
+Some events differ in distance by more than this: the dodges and punches in the corner by the clinic door, where the hunter meets a wall. The four back steps end at the wall 0.09 m further at 60, since the walks before them started from a place 0.15 m apart, and the side dodges after them then hit the wall at other places (2.17 m at 30, 2.62 m at 60, and in one 60 FPS run 0.95 m). One 60 FPS run ended up 1.5 m from the others and its punches slid along the wall for up to 2 s. Where the hunter does not touch the wall, the same dodge covers 3.08 m at both rates. The difference is where the hunter stands, not how long things take.
+
+**Nothing changes at 30.** `rig.py compare` of `main-menu` at 30, with two runs of a `bb-run` built before the 60 FPS work (e2f1cf6^) as the noise floor and current `main` as ours: ratio 1.029 and 1.018 for two runs, time to the menu 19.83 and 20.54 s against 19.81 and 19.82 s (`time_ok`). Against two shadPS4 reference runs, current `main` gives 1.045 and 1.032 and the old build 0.997 and 1.007.
+
 ## Open questions
 
 - Ints that `param_blend_int` eases upward only rise while (target − current) · t ≥ 1, so they stop short of a higher target by fewer than 2/t: up to 15 at 30 and 30 at 60. Such a parameter can settle at a different value at 60 than at 30 (for example 0 → 20 settles at 6 at 30 and stays 0 at 60). Not seen to matter yet (#598).
