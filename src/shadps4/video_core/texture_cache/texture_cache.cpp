@@ -1211,7 +1211,11 @@ void TextureCache::GarbageCollectImages() {
             return true;
         }
         // An edge write means the guest reused the memory, so the image is freed without download.
-        MarkDirtyIfEdgesModified(image);
+        {
+            // Ours (#629): a write fault on a guest thread sets the edge hashes under the mutex.
+            std::scoped_lock lk{image.mutex};
+            MarkDirtyIfEdgesModified(image);
+        }
         const bool download = image.HasGpuValidData();
         if (download && (!pressured || !image.CanBeDownloaded())) {
             return false;
@@ -1220,11 +1224,13 @@ void TextureCache::GarbageCollectImages() {
         const auto image_id = slot_images.GetSlotId(image);
         if (download) {
             {
-                // While the image is still tracked, so no guest write comes between.
+                // While the image is still tracked, so no guest write comes between. Ours
+                // (#629): the untracking is under the mutex too, as FreeImage's, since a write
+                // fault on a guest thread may untrack the image at the same time.
                 std::scoped_lock lk{image.mutex};
                 ResolveGpuHash(image);
+                UntrackImage(image_id);
             }
-            UntrackImage(image_id);
             UnregisterImage(image_id);
             if (image.gpu_hash != 0) {
                 buffer_cache.ReadMemory(image.info.guest_address, image.info.guest_size);
