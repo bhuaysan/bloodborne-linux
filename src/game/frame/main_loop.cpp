@@ -3,6 +3,7 @@
 #include <format>
 #include <stdexcept>
 
+#include "common/config.hpp"
 #include "game/fd4.hpp"
 #include "game/frame/frame.hpp"
 #include "game/image.hpp"
@@ -23,7 +24,7 @@ std::uint32_t frames = 0;
 }  // namespace
 
 void set_frame_rate(unsigned fps) {
-    if (fps != 30 && fps != 60 && fps != 120) {
+    if (!common::valid_frame_rate(fps)) {
         throw std::invalid_argument(std::format("frame rate {} is not 30, 60 or 120", fps));
     }
     target_fps = fps;

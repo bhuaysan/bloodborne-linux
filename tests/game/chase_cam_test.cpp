@@ -219,6 +219,24 @@ TEST_F(ChaseCam, TwoCallsAt60MatchOneAt30) {
     }
 }
 
+// The same at 120: four calls with c = 4.
+TEST_F(ChaseCam, FourCallsAt120MatchOneAt30) {
+    Camera at30 = make_camera(), at120 = make_camera(), unscaled = make_camera();
+    chase_cam_update_scaled(&stand_in, 1.0, true, &at30, nullptr, nullptr, 1.0f / 30);
+    for (int i = 0; i < 4; ++i) {
+        chase_cam_update_scaled(&stand_in, 4.0, true, &at120, nullptr, nullptr, 1.0f / 120);
+        stand_in(&unscaled, nullptr, nullptr, 1.0f / 120);
+    }
+    for (std::uint32_t offset : {value, stick_turn, follow_rate, lag_rate, input_weight}) {
+        EXPECT_NEAR(at120.get(offset), at30.get(offset), 1e-6) << offset;
+    }
+    for (std::uint32_t offset : {follow_value, lag_value}) {
+        const float error = std::abs(at120.get(offset) - at30.get(offset));
+        EXPECT_LT(error, 0.1f) << offset;
+        EXPECT_LT(error * 5, std::abs(unscaled.get(offset) - at30.get(offset))) << offset;
+    }
+}
+
 TEST_F(ChaseCam, LeavesFactorsOutsideZeroToOne) {
     Camera cam = make_camera();
     cam.set(0x240, 1.5f);

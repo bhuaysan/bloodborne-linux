@@ -14,7 +14,7 @@ The renderer, the shader translator and some system libraries are derived from t
 
 ## Status
 
-`bb-run` plays the game. It goes from the title through character creation and the intro to the clinic, saves and continues, and plays Central Yharnam, fights included, at the game's 30 FPS. `bb-run --frame-rate 60` runs it at 60; the few differences from 30 that are left are listed in [docs/design/frame-rate.md](docs/design/frame-rate.md). A playthrough from start to an ending isn't checked yet (R7). See [docs/roadmap.md](docs/roadmap.md).
+`bb-run` plays the game. It goes from the title through character creation and the intro to the clinic, saves and continues, and plays Central Yharnam, fights included, at the game's 30 FPS. `bb-run --frame-rate 60` runs it at 60 and `--frame-rate 120` at 120 where the GPU thread keeps up (#676); the few differences from 30 that are left are listed in [docs/design/frame-rate.md](docs/design/frame-rate.md). A playthrough from start to an ending isn't checked yet (R7). See [docs/roadmap.md](docs/roadmap.md).
 
 ## Requirements
 

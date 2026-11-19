@@ -533,6 +533,10 @@ TEST_F(StepLiteralsTest, HoldLastsTwoSecondsAt60) {
         // A hold armed while the phase is 1 is one call short.
         EXPECT_EQ(hold_step(true, {1, 3, 1}), (HoldState{1, 2, 0}));
     }
+    {
+        const FrameRateGuard rate(120);
+        EXPECT_EQ(calls(true), 241);
+    }
     bb_hold_phase = 0;
 }
 

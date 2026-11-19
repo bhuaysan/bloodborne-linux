@@ -270,7 +270,7 @@ TEST_F(ChrUpdateIntervalTest, TheWrapperSetsTheScaleForTheFrameRate) {
     const Hooked<2> both(
         std::array{registered(world_chr_update), registered(bb::game::chr_due_check)});
     EXPECT_EQ(registered(bb::game::chr_due_check).function, world_chr_update);
-    for (unsigned fps : {60u, 30u}) {
+    for (unsigned fps : {120u, 60u, 30u}) {
         bb::game::set_frame_rate(fps);
         bb::game::world_chr_update_with(&fake_update, 1.0f / static_cast<float>(fps), nullptr);
         EXPECT_EQ(scale_seen, static_cast<std::int32_t>(fps / 30));
