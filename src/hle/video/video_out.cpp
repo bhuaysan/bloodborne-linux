@@ -5,12 +5,13 @@
 // Changed for bloodborne-linux, 2026-11-11: the driver and the eight exports the game imports on
 // our runtime. Flip events go to our EventQueue, the presenter and Liverpool calls through
 // FlipPresenter (none when headless), times from our libkernel. Vblanks on a grid of 60 Hz, or of
-// the target frame rate above 60 (#657), with sleep_until instead of AccurateTimer, and a flip waits for the first vblank after it was queued,
-// or takes the one just before when it was queued up to flip_grace late (vblank_grid.hpp, #528).
-// A flip still in flight when the port closes is presented but leaves the port alone. Negative
-// indices and counts, flip rates other than 0..2 and an unknown handle fail instead of being used.
-// Surfaces are registered outside the port lock. An EOP flip to a slot outside the port fails. No
-// vblank events, resolution status or HDR output modes: the game imports none of them.
+// the target frame rate above 60 (#657), with sleep_until instead of AccurateTimer, and a flip
+// waits for the first vblank after it was queued, or takes the one just before when it was queued
+// up to flip_grace late (vblank_grid.hpp, #528). A flip still in flight when the port closes is
+// presented but leaves the port alone. Negative indices and counts, flip rates other than 0..2 and
+// an unknown handle fail instead of being used. Surfaces are registered outside the port lock. An
+// EOP flip to a slot outside the port fails. No vblank events, resolution status or HDR output
+// modes: the game imports none of them.
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>

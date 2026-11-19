@@ -9,7 +9,7 @@ The 30 FPS cap is two separate things in the game's main loop, and both have to 
 1. **The wait.** The frame pacer `flipper_wait_frame` (0x2034770) spins on `gettimeofday` until `SprjFlipper::target_frame_time` (+0x18) has passed since the previous frame. The value comes from the flip mode, default 4 (`30FPS_withoutSkipTearing`): 1/30 s. The game has a 60 FPS mode of its own, flip mode 2 (`60FPS_withoutSkip`, target 1/60 s), selected only by a debug configuration key.
 2. **The step.** The main loop tick `main_loop_tick` (0x2018d20) hands every task a fixed time step of 1/30 s (an immediate at 0x2018e36), whatever the frame really took. The simulation advances 1/30 s per frame. At 60 FPS with that step the game runs twice as fast; with the step at 1/60 s it runs at normal speed.
 
-The video side needs nothing: the game sets `sceVideoOutSetFlipRate(handle, 0)` and flips through `sceGnmSubmitAndFlipCommandBuffers`, and our video out takes a flip at every vblank.
+The video side needs nothing at 60: the game sets `sceVideoOutSetFlipRate(handle, 0)` and flips through `sceGnmSubmitAndFlipCommandBuffers`, and our video out takes a flip at every vblank. Above 60 the vblanks follow the frame rate ("The vblank grid above 60").
 
 ## The main loop
 
@@ -295,6 +295,16 @@ The scenario `clinic-door.scn` checks it: unpatched 60 FPS aborted when the hunt
 **Cost.** A frame that was queued behind a stall is never shown. The player loses it only when a backlog exists; at most one frame per vblank was shown before and is shown now.
 
 The backlog was also a buffer of one frame, and it is gone. The game's flips reach the queue 5 to 14 ms before their vblank, and that phase wanders by tenths of a millisecond per frame while the pacer keeps its period. When a flip slips past the vblank, the grid follows it, which gives one interval of about 18.7 ms. With the backlog the flip of the frame before was shown at that vblank.
+
+## The vblank grid above 60 (#657)
+
+**Decision.** Above 60 FPS the vblank grid of video out runs at the target frame rate: its period is 1/fps s rounded up to whole nanoseconds (8.33 ms at 120, 6.94 ms at 144), and the grace and the margin keep their share of a period, 6/25 and 3/25 (`vblank_timing` in `src/hle/video/video_out.hpp`). At 30 and 60 it stays the 60 Hz grid with the 4 ms grace and the 2 ms margin of #528. `bb-run` sets it from its target frame rate before video out starts.
+
+**Reason.** The game sets flip rate 0 and video out shows at most one flip per vblank, so a 60 Hz grid caps the screen at 60 whatever the pacer and the step do. The game has no notion of the display rate that a faster grid would break: of the video out exports it imports only the eight listed in `symbols/nids.csv`, with no vblank status, vblank wait or vblank event. Vblanks reach it only through completed flips (the flip status, the flip events and the flip labels), which `submit_and_flip` (0x26d6e50) waits on when its flip queue is full: back pressure, not a clock. No game code counts vblanks as time.
+
+**The game's own 60 Hz.** `swap_chain_present` (0x21b2fb0) has a wait of `present_interval` 60 Hz periods on `gettimeofday` behind its own timing flag (see "The present"). It did not hold back the presents in the check below, where frames that were ready on time were shown 8.33 ms apart, so that path is not taken in the clinic. #663 keeps it on its list as the one 60 Hz constant of the present path.
+
+**Check.** A local build whose pacer takes 1/120 while the step stays 1/30 (the game runs 4x fast) and whose grid runs at 120, in the `play-stand` segment of `clinic-fight` (clinic, warm cache): the median present interval was 8.5 ms (8.8 ms with the frame profile on, two runs), and half of the intervals were within half a millisecond of 8.33 ms. The rest are frames that came late, not vblanks the grid lost: the GPU thread needs 11.5 ms per frame there (p50 of its submit-done intervals, with 6.4 ms of write-tracking faults), so the game makes about 88 frames a second, and a late frame is shown at the next vblank or, within the grace, at once. Reaching 120 is the frame's cost, for #664 and #654.
 
 ## Slow phases at 60 FPS (#610)
 
