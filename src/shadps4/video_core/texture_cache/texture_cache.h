@@ -361,11 +361,13 @@ public:
         }
     }
 
-private:
-    /// Iterate over all page indices in a range
+    /// Iterate over all page indices in a range. A callback that returns true ends the walk.
+    /// Ours (#632): public for tests, and invoke_result_t instead of the trait's struct, which
+    /// never equals bool, so upstream walked every page past a stop.
     template <typename Func>
     static void ForEachPage(PAddr addr, size_t size, Func&& func) {
-        static constexpr bool RETURNS_BOOL = std::is_same_v<std::invoke_result<Func, u64>, bool>;
+        static constexpr bool RETURNS_BOOL =
+            std::is_same_v<std::invoke_result_t<Func, u64>, bool>;
         const u64 page_end = (addr + size - 1) >> Traits::PAGE_BITS;
         for (u64 page = addr >> Traits::PAGE_BITS; page <= page_end; ++page) {
             if constexpr (RETURNS_BOOL) {
@@ -378,6 +380,7 @@ private:
         }
     }
 
+private:
     /// Copies image memory back to CPU.
     void DownloadImageMemory(ImageId image_id,
                              DownloadMemoryFlags flags = DownloadMemoryFlags::None);

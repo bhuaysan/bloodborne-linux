@@ -1667,4 +1667,33 @@ TEST(GuestMemory, ADestroyedRasterizerHearsOfNothing) {
     liverpool.reset();
 }
 
+// A callback that returns true ends the texture cache's page walk (#632): upstream compared the
+// invoke_result struct with bool, so a stopping callback still saw every page of the range.
+TEST(TextureCachePages, AStoppingCallbackEndsTheWalk) {
+    constexpr u64 page = u64{1} << 18;  // TextureCache::Traits::PAGE_BITS (private)
+    constexpr u64 start = 0x200000000 + page / 2;
+    constexpr size_t size = 7 * page;  // pages 0 to 7 of the range, eight pages
+    int stopped = 0;
+    VideoCore::TextureCache::ForEachPage(start, size, [&](u64) {
+        ++stopped;
+        return true;
+    });
+    EXPECT_EQ(stopped, 1);
+    std::vector<u64> seen;
+    VideoCore::TextureCache::ForEachPage(start, size, [&](u64 p) {
+        seen.push_back(p);
+        return seen.size() == 3;
+    });
+    EXPECT_EQ(seen, (std::vector<u64>{start / page, start / page + 1, start / page + 2}));
+    int all = 0;
+    VideoCore::TextureCache::ForEachPage(start, size, [&](u64) { ++all; });
+    EXPECT_EQ(all, 8);
+    int never = 0;
+    VideoCore::TextureCache::ForEachPage(start, size, [&](u64) {
+        ++never;
+        return false;
+    });
+    EXPECT_EQ(never, 8);
+}
+
 }  // namespace
