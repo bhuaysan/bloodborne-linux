@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/texture_cache/image.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-18
+// Changed for bloodborne-linux, 2026-11-19
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
 
+#include <atomic>
 #include <mutex>
 #include <optional>
 
@@ -40,6 +41,31 @@ enum ImageFlagBits : u32 {
     Registered = 1 << 6,  ///< True when the image is registered
 };
 DECLARE_ENUM_FLAG_OPERATORS(ImageFlagBits)
+
+/// Ours (#631): a write fault on a guest thread sets CpuDirty or MaybeCpuDirty while the GPU
+/// thread sets and clears other bits, so each change is one atomic read-modify-write and no
+/// thread's bit is lost in another's.
+class AtomicImageFlags {
+public:
+    AtomicImageFlags(ImageFlagBits value) : bits{value} {}
+    AtomicImageFlags(const AtomicImageFlags&) = delete;
+    AtomicImageFlags& operator=(const AtomicImageFlags&) = delete;
+
+    operator ImageFlagBits() const {
+        return static_cast<ImageFlagBits>(bits.load(std::memory_order_acquire));
+    }
+    AtomicImageFlags& operator|=(ImageFlagBits value) {
+        bits.fetch_or(value, std::memory_order_acq_rel);
+        return *this;
+    }
+    AtomicImageFlags& operator&=(ImageFlagBits value) {
+        bits.fetch_and(value, std::memory_order_acq_rel);
+        return *this;
+    }
+
+private:
+    std::atomic<u32> bits;
+};
 
 struct UniqueImage {
     explicit UniqueImage() = default;
@@ -108,6 +134,13 @@ struct Image : public Common::LRUNode<> {
         return track_addr == 0 || track_addr_end == 0;
     }
 
+    /// Ours: every page of the image is write protected, so a guest write faults first. The
+    /// caller holds `mutex`.
+    bool IsFullyTracked() const {
+        return track_addr == info.guest_address &&
+               track_addr_end == info.guest_address + info.guest_size;
+    }
+
     bool HasGpuValidData() const {
         return True(flags & ImageFlagBits::GpuModified) && False(flags & ImageFlagBits::Dirty);
     }
@@ -147,7 +180,8 @@ public:
     ImageInfo info;
     vk::ImageAspectFlags aspect_mask = vk::ImageAspectFlagBits::eColor;
     vk::SampleCountFlags supported_samples = vk::SampleCountFlagBits::e1;
-    ImageFlagBits flags = ImageFlagBits::Dirty;
+    AtomicImageFlags flags{ImageFlagBits::Dirty};
+    /// The tracked range. Changed under `mutex`: a write fault on a guest thread untracks pages.
     VAddr track_addr = 0;
     VAddr track_addr_end = 0;
     ImageId depth_id{};
@@ -174,7 +208,7 @@ public:
     u64 image_uid{};
     u64 lru_id{};
     u64 tick_accessed_last{};
-    u64 cpu_hash{};
+    u64 cpu_hash{}; ///< Guarded by `mutex`: a write fault on a guest thread sets it (#631).
     u64 gpu_hash{};
     /// Ours: gpu_hash is still to be taken, and every page of the image is write protected, so its
     /// guest memory is what it was when the draw that writes the buffer over it was recorded. With

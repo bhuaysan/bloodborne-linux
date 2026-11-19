@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/page_manager.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-14
+// Changed for bloodborne-linux, 2026-11-19
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
+#include <atomic>
 #include <utility>
 #include "common/adaptive_mutex.h"
 #include "common/assert.h"
@@ -51,7 +52,11 @@ struct PageManager::Impl {
     static constexpr size_t ADDRESS_BITS = 40;
     static constexpr size_t NUM_ADDRESS_PAGES = 1ULL << (40 - PM_PAGE_BITS);
     static constexpr size_t NUM_ADDRESS_LOCKS = NUM_ADDRESS_PAGES / NUM_REGION_PAGES;
-    inline static Vulkan::Rasterizer* rasterizer;
+    // Ours (#631): atomic, and cleared when its page manager goes, so a fault after that is not
+    // ours. The handler stays registered. A fault that races with the destruction is not covered:
+    // bb-run's rasterizer lives to the end of the process, and the tests destroy theirs once no
+    // guest thread writes tracked pages.
+    inline static std::atomic<Vulkan::Rasterizer*> rasterizer;
 
     Impl() = default;
     virtual ~Impl() = default;
@@ -95,7 +100,7 @@ struct PageManager::Impl {
         // Iterate requested pages
         const u64 aligned_addr = page_start << PM_PAGE_BITS;
         const u64 aligned_end = page_end << PM_PAGE_BITS;
-        if (!rasterizer->IsMapped(aligned_addr, aligned_end - aligned_addr)) {
+        if (!rasterizer.load(std::memory_order_acquire)->IsMapped(aligned_addr, aligned_end - aligned_addr)) {
             LOG_WARNING(Render,
                         "Tracking memory region {:#x} - {:#x} which is not fully GPU mapped.",
                         aligned_addr, aligned_end);
@@ -273,8 +278,8 @@ struct PageManager::Impl {
 
 struct SignalImpl : public PageManager::Impl {
     SignalImpl(Vulkan::Rasterizer* rasterizer_, Core::MemoryManager& memory_)
-        : Impl(), memory{memory_} {
-        rasterizer = rasterizer_;
+        : Impl(), memory{memory_}, own{rasterizer_} {
+        rasterizer.store(rasterizer_, std::memory_order_release);
 
         // Should be called first.
         constexpr auto priority = std::numeric_limits<u32>::min();
@@ -298,10 +303,17 @@ struct SignalImpl : public PageManager::Impl {
         bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::fault);
         const auto addr = reinterpret_cast<VAddr>(fault_address);
         const auto size = std::min<u64>(8, PageManager::GetNextPageAddr(addr) - addr);
-        return rasterizer->InvalidateFromFault(addr, size);
+        Vulkan::Rasterizer* const current = rasterizer.load(std::memory_order_acquire);
+        return current != nullptr && current->InvalidateFromFault(addr, size);
+    }
+
+    ~SignalImpl() override {
+        Vulkan::Rasterizer* expected = own;
+        rasterizer.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
     }
 
     Core::MemoryManager& memory;
+    Vulkan::Rasterizer* const own;
 };
 
 PageManager::PageManager(Vulkan::Rasterizer* rasterizer_, Core::MemoryManager& memory) {

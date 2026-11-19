@@ -56,7 +56,10 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
 
 // Ours (#629): upstream never unregisters, so the memory manager would call a rasterizer that is
 // gone. The body runs before the caches are destroyed, and SetRasterizer returns once no thread
-// is in a call the memory manager made.
+// is in a call the memory manager made. Liverpool keeps its pointer (#631: BindRasterizer is not
+// undone), so its GPU thread and the presenter have to be done with the rasterizer before it goes:
+// bb-run's lives to the end of the process, and a test destroys its own once the GPU thread is
+// idle.
 Rasterizer::~Rasterizer() {
     memory.UnregisterRasterizer(this);
 }

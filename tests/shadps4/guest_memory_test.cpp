@@ -23,6 +23,7 @@
 #include <mutex>
 #include <atomic>
 #include <random>
+#include <span>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1372,6 +1373,127 @@ TEST(GuestMemory, GuestUnmapsFreeImagesOnTheGpuThread) {
             gpu.rasterizer.Finish();
         });
         EXPECT_EQ(left, 0u);
+    }
+}
+
+// The contents of a linear 64 x 64 image as the GPU holds them, read back through a staging
+// buffer. On the GPU thread.
+std::vector<u8> read_back(Gpu& gpu, VideoCore::Image& image) {
+    const u32 size = image.info.guest_size;
+    auto& pool = gpu.runtime.GetStagingPool();
+    const auto staging = pool.Request(size, VideoCore::MemoryType::HostCached, 16, true);
+    const vk::BufferImageCopy copy{
+        .bufferOffset = staging.offset,
+        .imageSubresource{.aspectMask = vk::ImageAspectFlagBits::eColor, .layerCount = 1},
+        .imageExtent = {64, 64, 1},
+    };
+    gpu.runtime.DownloadImage(&image, staging.buffer, std::span{&copy, 1});
+    gpu.rasterizer.Finish();
+    staging.Invalidate();
+    std::vector<u8> bytes(staging.mapped, staging.mapped + size);
+    pool.FreeDeferred(staging);
+    return bytes;
+}
+
+// A guest write to a tracked image's pages faults on its guest thread and marks the image written
+// by the CPU, while the GPU thread uploads the image (#631). Upstream clears the dirty bits after
+// the copy from guest memory, with plain read-modify-writes, so a write whose fault came around
+// the copy was lost: the image stayed stale and untracked until the next write to its memory.
+// Guest threads write the images while the GPU thread finds, uploads and collects them, with the
+// collector set to free whatever went unused for a while (on lavapipe its memory thresholds are
+// never met), so it frees images under the faults too. Each time the writers stop, one more
+// UpdateImage has to make every image equal to its guest memory.
+TEST(GuestMemory, GuestWritesDuringUploadsAreNotLost) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        textures.SetGcThresholds(0, 0, 0);
+        Libraries::VideoOut::BufferAttributeGroup group{};
+        group.is_occupied = true;
+        group.attrib.pixel_format = Libraries::VideoOut::PixelFormat::A8R8G8B8Srgb;
+        group.attrib.tiling_mode = Libraries::VideoOut::TilingMode::Linear;
+        group.attrib.width = group.attrib.height = group.attrib.pitch_in_pixel = 64;
+        constexpr u64 image_size = 64 * 64 * 4;
+        constexpr u64 images = 64;  // so that some go unused long enough for the collector
+        constexpr u64 image_words = image_size / sizeof(u64);
+        Direct d(images * image_size / page_size);
+        const std::uintptr_t start = addr(d.address);
+        auto* const words = static_cast<u64*>(d.address);
+        const auto find = [&](u64 i) {
+            VideoCore::TextureCache::ImageDesc desc{group, start + i * image_size};
+            return textures.FindImage(desc);
+        };
+
+        const std::uint64_t claimed = bb::shadps4::claimed_faults();
+        std::mt19937_64 random(99);
+        std::array<u64, images> uids{};
+        u64 steps = 0;
+        u64 freed = 0;
+        u64 stale = 0;
+        constexpr int rounds = 20;
+        constexpr u64 min_steps = 400;
+        constexpr u64 min_faults = 400;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
+        for (int round = 0; round < rounds; ++round) {
+            std::atomic<bool> stop{false};
+            std::vector<std::thread> threads;
+            for (int t = 0; t < 4; ++t) {
+                threads.emplace_back([&, t] {
+                    std::mt19937_64 writer(round * 16 + t + 1);
+                    for (u64 n = 0; !stop.load(std::memory_order_relaxed); ++n) {
+                        const u64 at = (writer() % images) * image_words + writer() % image_words;
+                        std::atomic_ref<u64>(words[at]).store((u64(t) << 56) | n,
+                                                              std::memory_order_relaxed);
+                        // A short pause of random length, so the faults land anywhere in an
+                        // upload, not only right after the GPU thread tracked the image.
+                        for (u64 spin = writer() % 256; spin > 0; --spin) {
+                            asm volatile("" ::: "memory");
+                        }
+                    }
+                });
+            }
+            const u64 round_faults = bb::shadps4::claimed_faults();
+            for (u64 step = 0; step < min_steps ||
+                               bb::shadps4::claimed_faults() - round_faults < min_faults;
+                 ++step) {
+                if (std::chrono::steady_clock::now() > deadline) {
+                    break;
+                }
+                gpu.liverpool->SendCommand<true>([&] {
+                    textures.UpdateImage(find(random() % images));
+                    textures.RunGarbageCollector();
+                    if (++steps % 32 == 0) {
+                        gpu.rasterizer.Finish();  // runs the deferred deletions
+                    }
+                });
+            }
+            stop.store(true);
+            for (auto& thread : threads) {
+                thread.join();
+            }
+            gpu.liverpool->SendCommand<true>([&] {
+                for (u64 i = 0; i < images; ++i) {
+                    const VideoCore::ImageId id = find(i);
+                    textures.UpdateImage(id);
+                    VideoCore::Image& image = textures.GetImage(id);
+                    freed += uids[i] != 0 && uids[i] != image.image_uid ? 1 : 0;
+                    uids[i] = image.image_uid;
+                    const std::vector<u8> bytes = read_back(gpu, image);
+                    stale += std::memcmp(bytes.data(), &words[i * image_words], image_size) != 0
+                                 ? 1
+                                 : 0;
+                }
+            });
+        }
+        EXPECT_EQ(stale, 0u) << steps << " steps";
+        EXPECT_GE(steps, rounds * min_steps);
+        EXPECT_GE(bb::shadps4::claimed_faults() - claimed, rounds * min_faults);
+        EXPECT_GT(freed, 0u) << steps << " steps";
+        gpu.liverpool->SendCommand<true>([&] { gpu.rasterizer.Finish(); });
+        d.unmap();
     }
 }
 

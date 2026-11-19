@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/texture_cache/texture_cache.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-18
+// Changed for bloodborne-linux, 2026-11-19
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -941,30 +941,42 @@ void TextureCache::RefreshImage(Image& image) {
     }
     bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::upload);
 
-    if (True(image.flags & ImageFlagBits::MaybeCpuDirty) &&
-        False(image.flags & ImageFlagBits::CpuDirty)) {
-        // The image size should be less than page size to be considered MaybeCpuDirty
-        // So this calculation should be very uncommon and reasonably fast
-        // For now we'll just check up to 64 first pixels
-        const auto addr = std::bit_cast<u8*>(image.info.guest_address);
-        const u32 w = std::min(image.info.size.width, u32(8));
-        const u32 h = std::min(image.info.size.height, u32(8));
-
-        const u32 s_w = image.info.props.is_block ? Common::DivCeil(w, 4u) : w;
-        const u32 s_h = image.info.props.is_block ? Common::DivCeil(h, 4u) : h;
-        const u32 size = s_w * s_h * (image.info.num_bits / 8);
-        const u64 hash = XXH3_64bits(addr, size);
-        if (image.cpu_hash == hash) {
-            image.flags &= ~ImageFlagBits::MaybeCpuDirty;
-            return;
-        }
-        image.cpu_hash = hash;
-    }
-
+    // Ours (#631): upstream clears the dirty bits after the copy from guest memory, so a guest
+    // write that faulted in between lost its CpuDirty and the image stayed stale, untracked. Here
+    // they are cleared before the copy, under the mutex a write fault takes, and only while every
+    // page of the image is still write protected: a write after that faults and sets CpuDirty
+    // again. A fault that came since UpdateImage tracked the image may have its write land after
+    // the copy, so the image stays dirty and the next UpdateImage uploads it again. An image the
+    // caller didn't track (a new one that is copied into next) keeps its bits for the caller.
     {
         std::scoped_lock lk{image.mutex};
+        const bool fully_tracked = image.IsFullyTracked();
+        if (True(image.flags & ImageFlagBits::MaybeCpuDirty) &&
+            False(image.flags & ImageFlagBits::CpuDirty)) {
+            // The image size should be less than page size to be considered MaybeCpuDirty
+            // So this calculation should be very uncommon and reasonably fast
+            // For now we'll just check up to 64 first pixels
+            const auto addr = std::bit_cast<u8*>(image.info.guest_address);
+            const u32 w = std::min(image.info.size.width, u32(8));
+            const u32 h = std::min(image.info.size.height, u32(8));
+
+            const u32 s_w = image.info.props.is_block ? Common::DivCeil(w, 4u) : w;
+            const u32 s_h = image.info.props.is_block ? Common::DivCeil(h, 4u) : h;
+            const u32 size = s_w * s_h * (image.info.num_bits / 8);
+            const u64 hash = XXH3_64bits(addr, size);
+            if (image.cpu_hash == hash) {
+                if (fully_tracked) {
+                    image.flags &= ~ImageFlagBits::MaybeCpuDirty;
+                }
+                return;
+            }
+            image.cpu_hash = hash;
+        }
         image.gpu_hash = 0;
         image.gpu_hash_pending = false;
+        if (fully_tracked) {
+            image.flags &= ~ImageFlagBits::Dirty;
+        }
     }
 
     // A burst of refreshes in one frame is mostly images that show up for the first time (the
@@ -1004,7 +1016,6 @@ void TextureCache::RefreshImage(Image& image) {
     }
 
     if (image_copies.empty()) {
-        image.flags &= ~ImageFlagBits::Dirty;
         return;
     }
 
@@ -1090,11 +1101,11 @@ void TextureCache::TrackImage(ImageId image_id) {
     }
     const auto image_begin = image.info.guest_address;
     const auto image_end = image.info.guest_address + image.info.guest_size;
-    if (image_begin == image.track_addr && image_end == image.track_addr_end) {
+    // Ours (#631): the tracked range is read under the mutex, as a write fault changes it.
+    std::scoped_lock lk{image.mutex};
+    if (image.IsFullyTracked()) {
         return;
     }
-
-    std::scoped_lock lk{image.mutex};
     if (image.IsUntracked()) {
         page_manager.UpdatePageWatchers(image_begin, image.info.guest_size, PageOp::Track);
     } else {

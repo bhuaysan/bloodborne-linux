@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_runtime.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-18
+// Changed for bloodborne-linux, 2026-11-19
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/alignment.h"
@@ -196,8 +196,8 @@ void Runtime::UploadImage(VideoCore::Image* dst, const VideoCore::Buffer* src,
         AccessBuffer(src, copy.bufferOffset, copy_size, vk::PipelineStageFlagBits2::eCopy,
                      vk::AccessFlagBits2::eTransferRead);
     }
-
-    dst->flags &= ~VideoCore::ImageFlagBits::Dirty;
+    // Ours (#631): TextureCache::RefreshImage clears the dirty bits before the copy from guest
+    // memory, so that a guest write after it keeps its CpuDirty.
 }
 
 void Runtime::DownloadImage(VideoCore::Image* src, const VideoCore::Buffer* dst,

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/texture_cache/texture_cache.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-18
+// Changed for bloodborne-linux, 2026-11-19
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -295,6 +295,15 @@ public:
 
     /// Runs the garbage collector.
     void RunGarbageCollector();
+
+    /// Ours (#631), for tests: the memory use at which the collector starts, at which it frees
+    /// images that hold GPU data, and at which it gets aggressive. On lavapipe the defaults are
+    /// never reached.
+    void SetGcThresholds(u64 trigger, u64 pressure, u64 critical) {
+        trigger_gc_memory = trigger;
+        pressure_gc_memory = pressure;
+        critical_gc_memory = critical;
+    }
 
     template <typename Func>
     void ForEachImageInRegion(VAddr cpu_addr, size_t size, Func&& func) {
