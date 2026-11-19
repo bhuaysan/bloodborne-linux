@@ -1376,15 +1376,17 @@ TEST(GuestMemory, GuestUnmapsFreeImagesOnTheGpuThread) {
     }
 }
 
-// The contents of a linear 64 x 64 image as the GPU holds them, read back through a staging
-// buffer. On the GPU thread.
-std::vector<u8> read_back(Gpu& gpu, VideoCore::Image& image) {
+// The contents of one layer of a linear 64 x 64 image as the GPU holds them, read back through a
+// staging buffer. On the GPU thread.
+std::vector<u8> read_back(Gpu& gpu, VideoCore::Image& image, u32 layer = 0) {
     const u32 size = image.info.guest_size;
     auto& pool = gpu.runtime.GetStagingPool();
     const auto staging = pool.Request(size, VideoCore::MemoryType::HostCached, 16, true);
     const vk::BufferImageCopy copy{
         .bufferOffset = staging.offset,
-        .imageSubresource{.aspectMask = vk::ImageAspectFlagBits::eColor, .layerCount = 1},
+        .imageSubresource{.aspectMask = vk::ImageAspectFlagBits::eColor,
+                          .baseArrayLayer = layer,
+                          .layerCount = 1},
         .imageExtent = {64, 64, 1},
     };
     gpu.runtime.DownloadImage(&image, staging.buffer, std::span{&copy, 1});
@@ -1630,6 +1632,82 @@ TEST(GuestMemory, ANeighbourWriteKeepsAGpuClear) {
             textures.UpdateImage(id);
             const std::vector<u8> written = read_back(gpu, image);
             EXPECT_EQ(std::memcmp(written.data(), bytes + neighbour, image_size), 0);
+            gpu.rasterizer.Finish();
+        });
+        d.unmap();
+    }
+}
+
+// A resolve into layer 1 of a two-layer render target clears the target's dirty bits (#689).
+// A guest write to layer 0 that the cache has not uploaded yet must still reach the image (#691):
+// Rasterizer::Resolve brings the target up to date before it. Upstream only tracks it, and the
+// write is lost. Driven through Draw with the resolve registers, as the game does.
+TEST(GuestMemory, AResolveIntoOneLayerKeepsAGuestWriteToAnother) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        constexpr u64 layer_size = 64 * 64 * 4;
+        Direct d((3 * layer_size + page_size - 1) / page_size);
+        const std::uintptr_t start = addr(d.address);
+        ASSERT_EQ(start % 256, 0u);
+        ASSERT_LT(start >> 8, u64(1) << 32);
+        auto* const bytes = static_cast<u8*>(d.address);
+        std::memset(bytes, 0x11, 2 * layer_size);  // the target's two layers
+        std::memset(bytes + 2 * layer_size, 0x55, layer_size);  // the resolve's source
+
+        // A linear 64 x 64 RGBA8 render target at `at`, its view on layer `layer` of `layer + 1`.
+        const auto color_buffer = [](std::uintptr_t at, u32 layer) {
+            AmdGpu::ColorBuffer buffer{};
+            buffer.base_address = u32(at >> 8);
+            buffer.pitch.tile_max = 64 / 8 - 1;
+            buffer.slice.tile_max = 64 * 64 / 64 - 1;
+            buffer.view.slice_start = layer;
+            buffer.view.slice_max = layer;
+            buffer.info.format = u32(AmdGpu::DataFormat::Format8_8_8_8);
+            buffer.info.number_type = u32(AmdGpu::NumberFormat::Unorm);
+            buffer.attrib.tile_mode_index = AmdGpu::TileMode::DisplayLinearAligned;
+            return buffer;
+        };
+        const AmdGpu::ColorBuffer source = color_buffer(start + 2 * layer_size, 0);
+        const AmdGpu::ColorBuffer target = color_buffer(start, 1);
+
+        VideoCore::ImageId id{};
+        gpu.liverpool->SendCommand<true>([&] {
+            VideoCore::TextureCache::ImageDesc source_desc{source, {}};
+            textures.UpdateImage(textures.FindImage(source_desc));
+            VideoCore::TextureCache::ImageDesc target_desc{target, {}};
+            id = textures.FindImage(target_desc);
+            ASSERT_EQ(textures.GetImage(id).info.resources.layers, 2u);
+            textures.UpdateImage(id);
+            ASSERT_TRUE(False(textures.GetImage(id).flags & VideoCore::ImageFlagBits::Dirty));
+            gpu.rasterizer.Finish();
+        });
+
+        // The guest writes layer 0 of the tracked target: it faults and marks it.
+        for (u64 i = 0; i < layer_size; i += 64) {
+            std::atomic_ref<u8>(bytes[i]).store(0x77, std::memory_order_relaxed);
+        }
+        gpu.liverpool->SendCommand<true>([&] {
+            VideoCore::Image& image = textures.GetImage(id);
+            EXPECT_TRUE(True(image.flags & VideoCore::ImageFlagBits::CpuDirty));
+            auto& regs = gpu.liverpool->regs;
+            regs.color_control.mode = AmdGpu::ColorControl::OperationMode::Resolve;
+            regs.color_buffers[0] = source;
+            regs.color_buffers[1] = target;
+            gpu.rasterizer.Draw(false);
+            regs.color_control.mode = AmdGpu::ColorControl::OperationMode::Normal;
+            regs.color_buffers[0] = {};
+            regs.color_buffers[1] = {};
+
+            textures.UpdateImage(id);
+            const std::vector<u8> layer0 = read_back(gpu, image, 0);
+            EXPECT_EQ(std::memcmp(layer0.data(), bytes, layer_size), 0);
+            const std::vector<u8> layer1 = read_back(gpu, image, 1);
+            EXPECT_TRUE(std::all_of(layer1.begin(), layer1.begin() + layer_size,
+                                    [](u8 b) { return b == 0x55; }));
             gpu.rasterizer.Finish();
         });
         d.unmap();

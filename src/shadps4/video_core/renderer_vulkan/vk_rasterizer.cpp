@@ -1192,7 +1192,12 @@ void Rasterizer::Resolve() {
     const auto mrt1_id = texture_cache.FindImage(mrt1_desc, true);
     auto& mrt1_image = texture_cache.GetImage(mrt1_id);
 
-    texture_cache.TrackImage(mrt1_id);  // ours (#689), see IsComputeImageCopy
+    // Ours (#691): the resolve writes only some layers of mip 0 (and only the source's extent),
+    // then clears the destination's dirty bits. A guest write to the rest that the cache has not
+    // uploaded yet would be lost, so the destination is brought up to date first, as
+    // ResolveOverlap does before CopyMip. UpdateImage tracks it too (#689) and uploads only when
+    // it is dirty. Upstream does neither, and loses the write the same way.
+    texture_cache.UpdateImage(mrt1_id);
     runtime.ResolveImage(&mrt0_image, &mrt1_image, mrt0_desc.view_info.range,
                          mrt1_desc.view_info.range);
 }
@@ -1217,7 +1222,7 @@ void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
     sub_range.base.layer = liverpool->regs.depth_view.slice_start;
     sub_range.extent.layers = liverpool->regs.depth_view.NumSlices() - sub_range.base.layer;
 
-    texture_cache.TrackImage(write_id);  // ours (#689), see IsComputeImageCopy
+    texture_cache.UpdateImage(write_id);  // ours (#691), see Resolve
     runtime.CopyDepthStencil(&read_image, &write_image, sub_range);
 }
 
