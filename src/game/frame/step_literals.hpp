@@ -58,7 +58,7 @@ inline constexpr std::array<std::uint8_t, 16> chr_fade_add_patched = {
     0xc5, 0xfa, 0x58, 0x05, 0xa5, 0x7f, 0x11, 0x03,
     0xc5, 0xfa, 0x5d, 0x05, 0x99, 0x7f, 0x11, 0x03};
 
-// ---- the effect lights ---------------------------------------------------------------------------
+// ---- the effect lights -------------------------------------------------------------------------
 
 // 0x02313870 gathers the dynamic lights of the effects attached to a model into the model's light
 // list (two banks of four; called once a frame per model by 0x01d6f9d0 and 0x01d24660, with the
@@ -97,8 +97,8 @@ inline constexpr std::array<std::uint8_t, 27> light_step_empty_patched = {
 // and SprjScaleform (0x01cf4fda) set +0x50 to 60: two seconds at 30 FPS. The patch counts +0x50
 // down once every bb_frame_scale calls, so the hold lasts 60 game frames at any rate. The phase
 // of that count is 0 in every call without a running hold, so a hold armed from outside starts at
-// 0; one armed again while a hold runs keeps the phase, up to bb_frame_scale - 1 calls short. At 0x0231750a, with
-// r12 = the object:
+// 0; one armed again while a hold runs keeps the phase, up to bb_frame_scale - 1 calls short.
+// At 0x0231750a, with r12 = the object:
 //   cmp byte [r12+0x4d], 0; je 0x0231752a; mov eax, [r12+0x50]; test eax, eax; je 0x02317524
 //   dec eax; mov [r12+0x50], eax; jmp 0x0231752a; 0x02317524: mov byte [r12+0x4d], 0
 // Nothing else jumps into these bytes; the jumps out land right behind them, at 0x0231752a.
@@ -135,6 +135,7 @@ extern std::uint64_t bb_light_step_continue;
 extern std::uint64_t bb_light_step_target;  // 0x02315d79
 extern std::uint64_t bb_light_step_empty_continue;
 extern std::uint64_t bb_hold_continue;
-// The hold's calls since its last count, 0 to bb_frame_scale - 1 (the effect object is a singleton).
+// The hold's calls since its last count, 0 to bb_frame_scale - 1 (the effect object is a
+// singleton).
 extern std::uint32_t bb_hold_phase;
 }

@@ -8,10 +8,10 @@
 
 #include <algorithm>
 #include <array>
-#include <iterator>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <tuple>
@@ -351,12 +351,13 @@ TEST_F(StepLiteralsTest, ChrFadeTakesASecondAt60) {
     harness().restore();
 }
 
-// ---- the patched bytes alone ---------------------------------------------------------------------
+// ---- the patched bytes alone -------------------------------------------------------------------
 
 }  // namespace
 
 // bb_test_run_bytes(entry, object) saves the callee-saved registers and the stack pointer, sets rax
-// and r12 to `object` and jumps to `entry`. bb_test_land, patched in behind the bytes under test,
+// and r12 to `object`, sets every bit of xmm0 and xmm4 (so a step load that keeps their upper lanes
+// shows) and jumps to `entry`. bb_test_land, patched in behind the bytes under test,
 // stores all 16 bytes of xmm0 and xmm4 (the game reads the step as a vector later) and returns from
 // bb_test_run_bytes.
 extern "C" {
@@ -383,6 +384,8 @@ bb_test_run_bytes:
     mov qword ptr [rip + bb_test_saved_rsp], rsp
     mov rax, rsi
     mov r12, rsi
+    vpcmpeqd xmm0, xmm0, xmm0
+    vmovdqa xmm4, xmm0
     jmp rdi
     .size bb_test_run_bytes, . - bb_test_run_bytes
 
