@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/buffer_cache.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-16
+// Changed for bloodborne-linux, 2026-11-19
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -77,7 +77,12 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
       staging_pool{runtime_.GetStagingPool()}, liverpool{liverpool_},
       memory{memory_}, texture_cache{texture_cache_},
       memory_tracker{std::make_unique<MemoryTracker>(tracker)},
-      stream_buffer{instance, scheduler, MemoryType::Stream, STREAM_BUFFER_SIZE},
+      // Ours: the stream buffer lives in cached host memory, not in device-local memory the CPU
+      // writes through write combining (upstream's Stream type). The GPU thread copies a few
+      // small buffers into it per draw, and every locked instruction after such a copy (the
+      // driver's reference counts, mutexes) waited for the write-combining buffers to drain: at
+      // 120 FPS in the clinic the GPU thread's frame took 1.4 ms (12 %) longer (#676).
+      stream_buffer{instance, scheduler, MemoryType::HostCached, STREAM_BUFFER_SIZE},
       gds_buffer{instance, 0, GDS_BUFFER_SIZE, MemoryType::Stream, "GDS Buffer"},
       memory_semaphore{instance} {
     const vk::BufferCreateInfo probe_ci = {

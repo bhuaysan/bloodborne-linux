@@ -6,6 +6,8 @@ bb_add_test(shadps4_translate_test
 bb_add_test(shadps4_fault_handler_test SOURCES fault_handler_test.cpp LIBS bbshadps4 bbcommon)
 # The runtime's buffer barrier tracking (#593); header-only, needs no Vulkan device.
 bb_add_test(shadps4_buffer_barriers_test SOURCES buffer_barriers_test.cpp LIBS bbshadps4 bbcommon)
+# The runs of the copy shader's destination ranges (#676); header-only, needs no Vulkan device.
+bb_add_test(shadps4_range_run_test SOURCES range_run_test.cpp LIBS bbshadps4 bbcommon)
 
 # The renderer on the host layer and video out's presenter over it, where bbvideocore is built
 # (Vulkan headers, SDL3, glslang). It runs on lavapipe and skips without a Vulkan device. bbvktest holds the LeakSanitizer

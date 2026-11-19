@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_shader_hle.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-19
 // License texts: third_party/shadps4/LICENSES/
+
+#include <utility>
+#include <vector>
 
 #include "shader_recompiler/info.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
@@ -101,12 +104,21 @@ static bool ExecuteCopyShaderHLE(const Shader::Info& info, const AmdGpu::Compute
         batch_start = batch_end;
     }
 
+    // Ours: the destinations are marked GPU modified in runs of ranges that overlap or touch,
+    // the same bytes as one call per entry (#676: in the clinic those calls cost about 2 % of
+    // the GPU thread).
+    static std::vector<std::pair<u64, u64>> dst_ranges;
+    dst_ranges.clear();
+    dst_ranges.reserve(cs_program.dim_x);
     for (u32 i = 0; i < cs_program.dim_x; i++) {
         const auto& [dst_idx, src_idx, end] = ctl_buf[i];
         const VAddr dst_addr = dst_buf_sharp.base_address + (dst_idx * buf_stride);
         const u32 size = (end + 1) * buf_stride;
-        buffer_cache.MarkRegionAsGpuModified(dst_addr, size);
+        dst_ranges.emplace_back(dst_addr, dst_addr + size);
     }
+    ForEachRangeRun(dst_ranges, [&](u64 start, u64 size) {
+        buffer_cache.MarkRegionAsGpuModified(start, size);
+    });
 
     return true;
 }
