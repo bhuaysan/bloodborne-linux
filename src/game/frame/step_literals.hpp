@@ -58,10 +58,64 @@ inline constexpr std::array<std::uint8_t, 16> chr_fade_add_patched = {
     0xc5, 0xfa, 0x58, 0x05, 0xa5, 0x7f, 0x11, 0x03,
     0xc5, 0xfa, 0x5d, 0x05, 0x99, 0x7f, 0x11, 0x03};
 
+// ---- the effect lights ---------------------------------------------------------------------------
+
+// 0x02313870 gathers the dynamic lights of the effects attached to a model into the model's light
+// list (two banks of four; called once a frame per model by 0x01d6f9d0 and 0x01d24660, with the
+// model's effect handle into the table of the effect object at 0x05540e00). Its step fades a light
+// in over 0.1 s and out over 0.75 s, ages it and scales an offset. The step is not the frame's:
+// it is 1/60 when the graphics object's present_interval ([0x055406c8]+0x100) is 1 and 1/30
+// otherwise, per call. The game's default flip mode 4 has interval 1, so the lights take 1/60 a
+// 30 FPS frame. Both loads of the step are patched to that literal times bb_step_ratio:
+// bb_frame_step / 2 for interval 1, bb_frame_step otherwise (at 30 the same floats).
+// The main path, at 0x02313d80 with rax = the graphics object, continuing at 0x02315d79:
+//   cmp dword [rax+0x100], 1; jne 0x02315d71 (vmovss xmm4, [0x04929e74] (1/30))
+//   vmovss xmm4, [0x04929e70] (1/60); jmp 0x02315d79
+// Nothing else jumps into these bytes; 0x02315d71 is reached only from the jne.
+inline constexpr std::uint64_t effect_light_gather = 0x02313870;
+inline constexpr std::uint64_t light_step_load = 0x02313d80;
+inline constexpr std::uint64_t light_step_continue = 0x02313d9a;
+inline constexpr std::uint64_t light_step_target = 0x02315d79;
+inline constexpr std::array<std::uint8_t, 26> light_step_patched = {
+    0x83, 0xb8, 0x00, 0x01, 0x00, 0x00, 0x01, 0x0f, 0x85, 0xe4, 0x1f, 0x00, 0x00,
+    0xc5, 0xfa, 0x10, 0x25, 0xdb, 0x60, 0x61, 0x02, 0xe9, 0xdf, 0x1f, 0x00, 0x00};
+// The path for a handle with no table entry, at 0x02313da4 (behind the jump target 0x02313d9a,
+// whose lea loads rax), the same choice into xmm0:
+//   cmp dword [rax+0x100], 1; jne +10; vmovss xmm0, [0x04929e70]; jmp +8; vmovss xmm0, [0x04929e74]
+// Its jumps land inside the bytes or right behind them, at 0x02313dbf.
+inline constexpr std::uint64_t light_step_empty_load = 0x02313da4;
+inline constexpr std::uint64_t light_step_empty_continue = 0x02313dbf;
+inline constexpr std::array<std::uint8_t, 27> light_step_empty_patched = {
+    0x83, 0xb8, 0x00, 0x01, 0x00, 0x00, 0x01, 0x75, 0x0a, 0xc5, 0xfa, 0x10, 0x05, 0xbb,
+    0x60, 0x61, 0x02, 0xeb, 0x08, 0xc5, 0xfa, 0x10, 0x05, 0xb5, 0x60, 0x61, 0x02};
+
+// ---- the effect object's hold -------------------------------------------------------------------
+
+// 0x023174e0, the frame update of the effect object at 0x05540e00, called once a frame by the
+// effect system's update (0x022ff340). While +0x4d is set it counts +0x50 down by one a call and
+// clears +0x4d at 0; 0x02313870 gives the lights a step of 0 meanwhile. The pacer's request_0x274
+// and SprjScaleform (0x01cf4fda) set +0x50 to 60: two seconds at 30 FPS. The patch counts +0x50
+// down once every bb_frame_scale calls, so the hold lasts 60 game frames at any rate. The phase
+// of that count starts at 0 when a hold ends; a hold armed again while one runs keeps the phase, up
+// to bb_frame_scale - 1 calls short. At 0x0231750a, with
+// r12 = the object:
+//   cmp byte [r12+0x4d], 0; je 0x0231752a; mov eax, [r12+0x50]; test eax, eax; je 0x02317524
+//   dec eax; mov [r12+0x50], eax; jmp 0x0231752a; 0x02317524: mov byte [r12+0x4d], 0
+// Nothing else jumps into these bytes; the jumps out land right behind them, at 0x0231752a.
+inline constexpr std::uint64_t effect_object_update = 0x023174e0;
+inline constexpr std::uint64_t hold_count = 0x0231750a;
+inline constexpr std::uint64_t hold_continue = 0x0231752a;
+inline constexpr std::array<std::uint8_t, 32> hold_count_patched = {
+    0x41, 0x80, 0x7c, 0x24, 0x4d, 0x00, 0x74, 0x18, 0x41, 0x8b, 0x44, 0x24, 0x50, 0x85, 0xc0, 0x74,
+    0x09, 0xff, 0xc8, 0x41, 0x89, 0x44, 0x24, 0x50, 0xeb, 0x06, 0x41, 0xc6, 0x44, 0x24, 0x4d, 0x00};
+
 // hook::apply jumps each stub back behind its patched bytes; these are those places.
 static_assert(sfx_step_continue == sfx_step_load + sfx_step_patched.size());
 static_assert(shop_tab_continue == shop_tab_update + shop_tab_update_patched.size());
 static_assert(chr_fade_continue == chr_fade_add + chr_fade_add_patched.size());
+static_assert(light_step_continue == light_step_load + light_step_patched.size());
+static_assert(light_step_empty_continue == light_step_empty_load + light_step_empty_patched.size());
+static_assert(hold_continue == hold_count + hold_count_patched.size());
 
 }  // namespace bb::game
 
@@ -71,7 +125,16 @@ extern "C" {
 void bb_sfx_step_stub();
 void bb_shop_tab_update_stub();
 void bb_chr_fade_add_stub();
+void bb_light_step_stub();
+void bb_light_step_empty_stub();
+void bb_hold_count_stub();
 extern std::uint64_t bb_sfx_step_continue;
 extern std::uint64_t bb_shop_tab_continue;
 extern std::uint64_t bb_chr_fade_continue;
+extern std::uint64_t bb_light_step_continue;
+extern std::uint64_t bb_light_step_target;  // 0x02315d79
+extern std::uint64_t bb_light_step_empty_continue;
+extern std::uint64_t bb_hold_continue;
+// The hold's calls since its last count, 0 to bb_frame_scale - 1 (the effect object is a singleton).
+extern std::uint32_t bb_hold_phase;
 }

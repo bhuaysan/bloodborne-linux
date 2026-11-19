@@ -75,6 +75,8 @@ address,name,signature,status,file
 0x020eba00,config_get_int,"int config_get_int(void * config, void * key, int fallback)",named,
 0x02194580,graphics_create,,named,
 0x021b2fb0,swap_chain_present,"void swap_chain_present(void * self, int present_interval)",named,
+0x02313870,effect_light_gather,,replaced,src/game/frame/step_literals.cpp
+0x023174e0,effect_object_update,"void effect_object_update(void * object, float step)",replaced,src/game/frame/step_literals.cpp
 0x0263b8b0,fast_fixed_alloc,void * fast_fixed_alloc(void * pool),named,
 0x0263b9b0,fast_fixed_free,"void fast_fixed_free(void * pool, void * item)",named,
 0x0263baa0,fast_fixed_init,"void fast_fixed_init(void * pool, void * parent, ulonglong item_size, ulonglong block_size, ulonglong alignment)",named,

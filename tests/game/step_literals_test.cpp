@@ -1,7 +1,9 @@
 // Differential tests of the step patches in src/game/frame/step_literals.cpp: each patched game
 // function runs whole, once with the game's bytes and once with the patch, from the same state; at
 // 30 FPS the harness finds no difference in anything they touch, and at 60 FPS the step they pass
-// on is 1/60. Their callees are fakes that record what they get.
+// on is 1/60. Their callees are fakes that record what they get. The effect lights' and the hold's
+// patches sit in functions too large to run whole with fakes, so their tests run only the patched
+// bytes: a thunk jumps to their first byte, and a landing patched right behind them returns.
 #include "game/frame/step_literals.hpp"
 
 #include <array>
@@ -9,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <span>
 #include <tuple>
 
 #include <gtest/gtest.h>
@@ -100,6 +103,10 @@ R call_patched(A... args) {
 using StepLiteralsTest = EbootTest;
 
 TEST_F(StepLiteralsTest, PatchesAreRegisteredInsideTheirFunctions) {
+    EXPECT_EQ(registered(bb::game::light_step_load).function, bb::game::effect_light_gather);
+    EXPECT_EQ(registered(bb::game::light_step_empty_load).function,
+              bb::game::effect_light_gather);
+    EXPECT_EQ(registered(bb::game::hold_count).function, bb::game::effect_object_update);
     EXPECT_EQ(registered(bb::game::sfx_step_load).function, bb::game::sfx_frame_update);
     EXPECT_EQ(registered(bb::game::shop_tab_update).function, bb::game::shop_tab_refresh);
     EXPECT_EQ(registered(bb::game::chr_fade_add).function, bb::game::chr_list_fade_step);
@@ -110,6 +117,14 @@ TEST_F(StepLiteralsTest, PatchesAreRegisteredInsideTheirFunctions) {
     EXPECT_EQ(bb_sfx_step_continue, bb::game::image().runtime(bb::game::sfx_step_continue));
     EXPECT_EQ(bb_shop_tab_continue, bb::game::image().runtime(bb::game::shop_tab_continue));
     EXPECT_EQ(bb_chr_fade_continue, bb::game::image().runtime(bb::game::chr_fade_continue));
+    const Hooked<3> more(std::array{registered(bb::game::light_step_load),
+                                    registered(bb::game::light_step_empty_load),
+                                    registered(bb::game::hold_count)});
+    EXPECT_EQ(bb_light_step_continue, bb::game::image().runtime(bb::game::light_step_continue));
+    EXPECT_EQ(bb_light_step_target, bb::game::image().runtime(bb::game::light_step_target));
+    EXPECT_EQ(bb_light_step_empty_continue,
+              bb::game::image().runtime(bb::game::light_step_empty_continue));
+    EXPECT_EQ(bb_hold_continue, bb::game::image().runtime(bb::game::hold_continue));
 }
 
 // ---- the effects --------------------------------------------------------------------------------
@@ -332,6 +347,184 @@ TEST_F(StepLiteralsTest, ChrFadeTakesASecondAt60) {
         EXPECT_EQ(calls_to_full(true), 61);
     }
     harness().restore();
+}
+
+// ---- the patched bytes alone ---------------------------------------------------------------------
+
+}  // namespace
+
+// bb_test_run_bytes(entry, object) saves the callee-saved registers and the stack pointer, sets rax
+// and r12 to `object` and jumps to `entry`. bb_test_land, patched in behind the bytes under test,
+// stores xmm0 and xmm4 and returns from bb_test_run_bytes.
+extern "C" {
+void bb_test_run_bytes(std::uint64_t entry, void* object);
+void bb_test_land();
+std::uint64_t bb_test_saved_rsp = 0;
+std::uint64_t bb_test_land_continue = 0;  // filled by apply, unused
+float bb_test_xmm0 = 0.0f;
+float bb_test_xmm4 = 0.0f;
+}
+
+asm(R"(
+    .pushsection .text
+    .intel_syntax noprefix
+    .globl bb_test_run_bytes
+    .type bb_test_run_bytes, @function
+bb_test_run_bytes:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    mov qword ptr [rip + bb_test_saved_rsp], rsp
+    mov rax, rsi
+    mov r12, rsi
+    jmp rdi
+    .size bb_test_run_bytes, . - bb_test_run_bytes
+
+    .globl bb_test_land
+    .type bb_test_land, @function
+bb_test_land:
+    vmovss dword ptr [rip + bb_test_xmm0], xmm0
+    vmovss dword ptr [rip + bb_test_xmm4], xmm4
+    mov rsp, qword ptr [rip + bb_test_saved_rsp]
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+    .size bb_test_land, . - bb_test_land
+    .att_syntax prefix
+    .popsection
+)");
+
+namespace {
+
+// The game's bytes at the landings, whole instructions of at least hook::patch_size bytes.
+// 0x02315d79: vmovss xmm13, [0x04929e6c]; xor r13d, r13d; test r14, r14
+constexpr std::array<std::uint8_t, 14> light_land_bytes = {
+    0xc5, 0x7a, 0x10, 0x2d, 0xeb, 0x40, 0x61, 0x02, 0x45, 0x31, 0xed, 0x4d, 0x85, 0xf6};
+// 0x02313dbf: vmovaps [rbp-0x170], xmm0; xor r13d, r13d; xor r14d, r14d
+constexpr std::array<std::uint8_t, 14> light_empty_land_bytes = {
+    0xc5, 0xf8, 0x29, 0x85, 0x90, 0xfe, 0xff, 0xff, 0x45, 0x31, 0xed, 0x45, 0x31, 0xf6};
+// 0x0231752a: mov byte [r12+0x4c], 0; lea rdi, [rbp-0x78]; xor esi, esi; call 0x02bbe728
+constexpr std::array<std::uint8_t, 17> hold_land_bytes = {
+    0x41, 0xc6, 0x44, 0x24, 0x4c, 0x00, 0x48, 0x8d, 0x7d,
+    0x88, 0x31, 0xf6, 0xe8, 0xed, 0x71, 0x8a, 0x00};
+
+Replacement landing(std::uint64_t function, std::uint64_t link,
+                    std::span<const std::uint8_t> bytes) {
+    return Replacement{link,     reinterpret_cast<void*>(&bb_test_land), "bb_test_land", bytes,
+                       function, &bb_test_land_continue};
+}
+
+// Runs the bytes from `entry` to the landing at `land` with rax = r12 = object, with the patch at
+// `entry` applied when `patched`.
+void run_bytes(std::uint64_t function, std::uint64_t entry, std::uint64_t land,
+               std::span<const std::uint8_t> land_bytes, bool patched, void* object) {
+    const Hooked<1> landed(std::array{landing(function, land, land_bytes)});
+    std::optional<Hooked<1>> patch;
+    if (patched) {
+        patch.emplace(std::array{registered(entry)});
+    }
+    bb_test_xmm0 = -1.0f;
+    bb_test_xmm4 = -1.0f;
+    bb_test_run_bytes(bb::game::image().runtime(entry), object);
+}
+
+// The light step, from a graphics object whose present_interval (+0x100) is `interval`: xmm4 at
+// 0x02315d79 for the main path, xmm0 at 0x02313dbf for the empty one.
+std::uint32_t light_step(bool empty, bool patched, std::int32_t interval) {
+    alignas(16) std::array<std::byte, 0x200> graphics{};
+    at<std::int32_t>(graphics.data(), 0x100) = interval;
+    if (empty) {
+        run_bytes(bb::game::effect_light_gather, bb::game::light_step_empty_load,
+                  bb::game::light_step_empty_continue, light_empty_land_bytes, patched,
+                  graphics.data());
+        return float_bits(bb_test_xmm0);
+    }
+    run_bytes(bb::game::effect_light_gather, bb::game::light_step_load,
+              bb::game::light_step_target, light_land_bytes, patched, graphics.data());
+    return float_bits(bb_test_xmm4);
+}
+
+TEST_F(StepLiteralsTest, LightStepIsTheGamesAt30) {
+    for (const bool empty : {false, true}) {
+        for (const std::int32_t interval : {0, 1, 2, -1}) {
+            const std::uint32_t game = light_step(empty, false, interval);
+            EXPECT_EQ(game, interval == 1 ? 0x3c888889u : game_step_bits)
+                << "empty " << empty << " interval " << interval;
+            EXPECT_EQ(light_step(empty, true, interval), game)
+                << "empty " << empty << " interval " << interval;
+        }
+    }
+}
+
+TEST_F(StepLiteralsTest, LightStepIsHalvedAt60) {
+    const FrameRateGuard rate(60);
+    for (const bool empty : {false, true}) {
+        for (const std::int32_t interval : {0, 1, 2}) {
+            EXPECT_EQ(light_step(empty, true, interval),
+                      float_bits(interval == 1 ? 1.0f / 120.0f : 1.0f / 60.0f))
+                << "empty " << empty << " interval " << interval;
+        }
+    }
+}
+
+struct HoldState {
+    std::uint8_t active;  // +0x4d
+    std::int32_t count;   // +0x50
+    std::uint32_t phase;  // bb_hold_phase
+    bool operator==(const HoldState&) const = default;
+};
+
+HoldState hold_step(bool patched, HoldState in) {
+    alignas(16) std::array<std::byte, 0x60> object{};
+    at<std::uint8_t>(object.data(), 0x4c) = 0x77;  // the landing skips the game's clear of +0x4c
+    at<std::uint8_t>(object.data(), 0x4d) = in.active;
+    at<std::int32_t>(object.data(), 0x50) = in.count;
+    bb_hold_phase = in.phase;
+    run_bytes(bb::game::effect_object_update, bb::game::hold_count, bb::game::hold_continue,
+              hold_land_bytes, patched, object.data());
+    EXPECT_EQ(at<std::uint8_t>(object.data(), 0x4c), 0x77);
+    return {at<std::uint8_t>(object.data(), 0x4d), at<std::int32_t>(object.data(), 0x50),
+            bb_hold_phase};
+}
+
+TEST_F(StepLiteralsTest, HoldCountIsTheGamesAt30) {
+    for (const HoldState in : {HoldState{0, 5, 0}, HoldState{1, 5, 0}, HoldState{1, 1, 0},
+                               HoldState{1, 0, 0}, HoldState{2, 60, 0}, HoldState{0, 0, 0}}) {
+        const HoldState game = hold_step(false, in);
+        EXPECT_EQ(hold_step(true, in), game) << int{in.active} << " " << in.count;
+    }
+    bb_hold_phase = 0;
+}
+
+// A hold of 60 lasts 60 counts and one call that clears it: 61 calls at 30 with the game's bytes
+// and with the patch, 121 at 60, and the next hold starts at phase 0.
+TEST_F(StepLiteralsTest, HoldLastsTwoSecondsAt60) {
+    const auto calls = [](bool patched) {
+        HoldState s{1, 60, 0};
+        int n = 0;
+        while (s.active != 0 && n < 1000) {
+            s = hold_step(patched, s);
+            ++n;
+        }
+        EXPECT_EQ(s.phase, 0u);
+        return n;
+    };
+    EXPECT_EQ(calls(false), 61);
+    EXPECT_EQ(calls(true), 61);
+    {
+        const FrameRateGuard rate(60);
+        EXPECT_EQ(calls(true), 121);
+        // A hold armed while the phase is 1 is one call short.
+        EXPECT_EQ(hold_step(true, {1, 3, 1}), (HoldState{1, 2, 0}));
+    }
+    bb_hold_phase = 0;
 }
 
 }  // namespace

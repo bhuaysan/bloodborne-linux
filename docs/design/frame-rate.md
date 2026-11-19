@@ -361,7 +361,7 @@ Every site of "What is left at 60 FPS", every `BB_REPLACE`, `BB_WRAP` and `BB_PA
 |---|---|---|---|
 | `main_loop_tick` 0x2018d20 (`BB_REPLACE`) | step 1/F in the task data | works | works |
 | `flipper_wait_frame` 0x2034770 (`BB_REPLACE`) | frame time 1/F for modes 3 and 4; the sleep ends 2 ms before it (#656) | works: the sleep ends 6.3 ms into 8.33 | works: 4.9 ms into 6.94 |
-| the same, `request_0x274` (60 at +0x50 of the object at 0x5540e00) | arms a hold of 60 calls of 0x23174e0, which counts +0x50 down once a call, not by time; set on the pacer's first tick, on a state change (0x1733fa0) and with `SprjScaleform` (0x1cf4c70) | **run** (#672): 2 s at 30, 1 s at 60, 0.5 s at 120 if the update runs once a frame | **run** (#672): 0.42 s |
+| the same, `request_0x274` (60 at +0x50 of the object at 0x5540e00) | arms a hold of 60 calls of `effect_object_update` (0x23174e0, once a frame), which counts +0x50 down once a call; set on the pacer's first tick, on a state change (0x1733fa0) and with `SprjScaleform` (0x1cf4c70) | works: since #672 the count goes down once every k calls (`BB_PATCH`, see "The effect lights") | **change** (#673): k = 4, 0.42 s short of 2 s at 144 |
 | `swap_chain_present` 0x21b2fb0 (game code) | waits `present_interval` 60 Hz periods since its last present, behind its own timing flag | works: on by default (+0x8 = 1, 0x21b2f17), its period is the refresh rate video out reports (0x26d5d50, compared with 60); in `clinic-fight` at 120 the fight segments presented at a median of 8.33 ms, so it does not hold the presents back | works by the same run; not run at 144 |
 | video out vblank grid (#657) | period 1/F | works | works |
 | `havok_world_step` 0x17f99d0 (`BB_REPLACE`, #553) | world step 1/F | works; ragdoll rest positions shift as at 60 (chaos of the pile, see "The ragdolls") | works, same |
@@ -375,8 +375,8 @@ Every site of "What is left at 60 FPS", every `BB_REPLACE`, `BB_WRAP` and `BB_PA
 | `chase_cam_update` 0x143ac60 (`BB_WRAP`, #557) | the per-call filters scaled for c = k calls | run: the approximations of the eased factors and the input weight (within 1/5 of the error at 60 in the unit test) are sampled four times a step; the check runs below | **change** (#673): c is `frame_rate_scale()`, 4; the formulas take a fractional c, so `frame_rate() / 30.0` is enough |
 | `sfx_frame_update`, `shop_tab_refresh`, `chr_list_fade_step` (`BB_PATCH`, #556) | `bb_frame_step` = 1/F | works (the fade reaches 1 in 121 calls, one more than 120 from float rounding: 8 ms) | works (145 calls) |
 | the other `update(1/30)` sites of #556 (0x18bc4f7, 0x1044943, 0x15dc1f7) | one step at creation or per message | works | works |
-| 0x2277780 (0x227784b, 0x2277874), the effect system | `0xebbda0` adds the literal to an emitter's age per call. +0x2977 is set to 1 by the effect system's init (0x22c4fd0), so the path is open in play; whether its caller 0x22c53e0 (a virtual) runs once a frame is open, and the #556 probe saw no hits | **run** (#672) | **run** (#672) |
-| 0x2313870 (game code, found here), a per-entity update called from 0x1d24a3d and 0x1d6fde8 that consumes the hold above | a literal 1/30 (0x4929e74) as its step per call (0x2315d71), 0 while the hold runs | **run** (#672): if it runs once a frame it is a 60 FPS site too, twice as fast at 60 | **run** (#672) |
+| 0x2277780 (0x227784b, 0x2277874), the effect system | `0xebbda0` adds the literal to an emitter's age per call. 0x2277780 runs once a frame in the street, but the call with the literal never ran (see "The effect lights") | works: not reached in play | works, same |
+| `effect_light_gather` 0x2313870 (`BB_PATCH`, #672) | the effect lights' step: half `bb_frame_step` when `present_interval` is 1, `bb_frame_step` otherwise (see "The effect lights") | works | works (k need not be whole) |
 | `param_blend_int` 0x29262f0 (`BB_REPLACE`, #598) | t = 2 · step; an entry equal to the current value keeps it | works for the fault of #598. Ints that rise stop short of their target by up to 1/t: 60 at 120 (30 at 60, 15 at 30), not seen to matter (see "Open questions") | works, up to 72 |
 | `chr_pad_step` 0x1572900 | literal 1/30, a debug free camera | unchanged (4.8 times as fast at 144), low priority | the same |
 | input latency (#558) | two frames from the pad read to motion | kept: 17 ms at 120, 14 ms at 144 | kept |
@@ -396,7 +396,16 @@ Every site of "What is left at 60 FPS", every `BB_REPLACE`, `BB_WRAP` and `BB_PA
 
 Pictures can't show the pacing sites of #673 or the residues of the chase camera at 120. Those need #664's checks with holds of 4N frames and a game that keeps up with 120.
 
-**Also found.** The game's own 0x2313870 takes a literal 1/30 a call and a hold of 60 calls (rows above), so it may be a 60 FPS site that the 1/30 survey missed (#672).
+**Also found.** The game's own 0x2313870 takes a literal step a call and a hold of 60 calls (rows above), a 60 FPS site that the 1/30 survey missed; #672 patched it (see "The effect lights").
+
+## The effect lights (#672)
+**Decision.** `effect_light_gather` (0x2313870) gets its step times `bb_step_ratio`, and `effect_object_update` (0x23174e0) counts its hold down once every k = F / 30 calls, both by `BB_PATCH` (`src/game/frame/step_literals.cpp`). At 30 FPS the patched bytes give the game's values bit for bit (the differential tests run the game's bytes and the stubs from the same registers).
+
+**What they are.** `effect_light_gather` builds the dynamic lights of the effects attached to a model (two banks of four) for the model's draw: 0x1d6f9d0 and 0x1d24660, virtuals of two model classes, call it once a frame per model with the model's effect handle into the table of the effect object at 0x5540e00. Its step fades a light in over 0.1 s (`acc += step`, `min(acc / 0.1, 1)`) and out over 0.75 s (`life -= step`), ages it and scales an offset. The step is not the frame's and not a plain 1/30: the function loads 1/60 (0x4929e70) when the graphics object's `present_interval` (+0x100) is 1 and 1/30 otherwise, at two places (0x2313d80 for a handle with a table entry, 0x2313da4 for one without). The default flip mode 4 has interval 1, so at 30 FPS the lights take 1/60 a frame. While +0x4d (the hold) or +0x4c of the effect object is set, the step is 0. `effect_object_update` is the effect object's frame update, called by the effect system's (0x22ff340), and counts the hold's +0x50 down once a call.
+
+**Probe** (gdb hit counts per frame and register logs, `clinic-fight` and `yharnam-fight` at 30 and 60, unpatched): `effect_object_update` and 0x22c53e0 ran once a frame from the logos on. `effect_light_gather` ran once a frame in the clinic and 2 to 4 times a frame in the street (one model each), always through the 1/60 load at 0x2313d8d: the 1/30 loads (0x2315d71, 0x2313db7) and the empty-handle path never ran, nor did 0x227784b. The lights' step at 0x2315d79 was 0x3c888889 (1/60) in every call at 30 and at 60, so the fades ran twice as fast at 60; with the patch it was 0x3c088889 (1/120) at 60 (10,076 calls) and still 1/60 at 30 (13,456 calls). The hold was never armed in these routes: +0x4d stayed 0, with +0x50 at 60, in every frame of the three logged runs, so only the unit test shows its length (61 calls at 30, 121 at 60).
+
+**At 144.** The step follows `bb_frame_step`, so the lights work at any rate; the hold counts k = 4 calls and lasts 1.7 s instead of 2 (#673).
 
 ## Open questions
 
@@ -404,6 +413,6 @@ Pictures can't show the pacing sites of #673 or the residues of the chase camera
 - Mode 2's `tearing` = 1: where `graphics +0x104`, 0x513ac84 and the render list's byte at +8 end up (presumably the hsync flip when late).
 - Whether the cloth update takes the task data's step. The Havok behaviour does: motion durations match at 60 ("The final check").
 - Whether the step-machine functions with task data of 1/30 read `delta_time`.
-- `skip_wait` (+0x273, set by 0x1cf4c70 with `SprjScaleform`): what state skips the wait. `request_0x274` arms a hold of 60 calls (see "Above 60 FPS", #672).
+- `skip_wait` (+0x273, set by 0x1cf4c70 with `SprjScaleform`): what state skips the wait. `request_0x274` arms the effect object's hold (see "The effect lights"), which no checked route armed.
 - The remaining uses of 1/30 and 30.0f that the survey did not classify.
-- 0x2277780's step (0x227784b, 0x2277874): +0x2977 is set at the effect system's init; whether 0xebbda0 then runs once a frame is #672.
+- 0x2277780's step (0x227784b, 0x2277874): 0x2277780 runs once a frame, but the call of 0xebbda0 with 1/30 never ran in `clinic-fight` or `yharnam-fight` (#672). If a scene reaches it, it is a 60 FPS site.
