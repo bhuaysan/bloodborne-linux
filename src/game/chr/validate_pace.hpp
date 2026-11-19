@@ -36,13 +36,14 @@ inline constexpr std::array<std::uint8_t, 17> chr_validate_prologue = {
     0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41,
     0x54, 0x53, 0x48, 0x89, 0xf3, 0x49, 0x89, 0xfe};
 
-// Runs `original` with `budget`, but with `scale` k > 1 frames a 30 FPS frame and a limited
-// budget, only on frames `frame` that are a multiple of k: on the others the original sees a
-// budget with limit 0, so it sets up only characters the budget skips, and their count is
-// added to `budget`. The limit then holds per k frames, as often a game second as at 30. With
-// k = 1 or no limit it calls `original` with `budget`.
+// Runs `original` with `budget`, but at `fps` > 30 and with a limited budget only on the world
+// frames `frame` where a 30 Hz clock of game time ticks (frame * 30 modulo fps below 30: the
+// multiples of k = fps / 30 when that is whole, 4 or 5 frames apart at 144): on the others the
+// original sees a budget with limit 0, so it sets up only characters the budget skips, and their
+// count is added to `budget`. The limit then holds 30 times a game second, as at 30. At fps <= 30
+// or with no limit it calls `original` with `budget`.
 bool chr_validate_paced(ChrValidate* original, ValidateBudget* budget, void* chr,
-                        std::uint32_t frame, std::int32_t scale);
+                        std::uint32_t frame, unsigned fps);
 
 // The WorldChrMan singleton (0x0553e878) and its frame counter, which only its frame update
 // (0x01915320) adds 1 to. WorldChrMan's step (0x0193ac10) runs chr_frame_update before that
@@ -70,7 +71,7 @@ private:
 };
 
 // 0x018b9890, wrapped: chr_validate_paced with the game's function, the frame of a WorldFrames
-// fed with WorldChrMan's counter and frame_count(), and frame_rate() / 30. A frame count of the
+// fed with WorldChrMan's counter and frame_count(), and frame_rate(). A frame count of the
 // main loop alone would also pace the setups of the load steps, in which no game time passes, so
 // at 60 fewer characters would be set up by the time the world runs. The counter alone can stand
 // still on an odd value and stop the setups.

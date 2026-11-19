@@ -95,9 +95,12 @@ inline constexpr std::array<std::uint8_t, 27> light_step_empty_patched = {
 // effect system's update (0x022ff340). While +0x4d is set it counts +0x50 down by one a call and
 // clears +0x4d at 0; 0x02313870 gives the lights a step of 0 meanwhile. The pacer's request_0x274
 // and SprjScaleform (0x01cf4fda) set +0x50 to 60: two seconds at 30 FPS. The patch counts +0x50
-// down once every bb_frame_scale calls, so the hold lasts 60 game frames at any rate. The phase
-// of that count is 0 in every call without a running hold, so a hold armed from outside starts at
-// 0; one armed again while a hold runs keeps the phase, up to bb_frame_scale - 1 calls short.
+// down on the calls where a 30 Hz clock of game time ticks: a phase in 1/bb_frame_rate of a call
+// goes up by 30 a call, and when it reaches bb_frame_rate it drops by that and +0x50 goes down.
+// That is every (bb_frame_rate / 30)-th call at a whole multiple of 30, 4 or 5 calls apart at 144,
+// so the hold lasts 60 game frames at any rate. The phase is 0 in every call without a running
+// hold, so a hold armed from outside starts at 0; one armed again while a hold runs keeps the
+// phase, up to one 30 FPS frame short.
 // At 0x0231750a, with r12 = the object:
 //   cmp byte [r12+0x4d], 0; je 0x0231752a; mov eax, [r12+0x50]; test eax, eax; je 0x02317524
 //   dec eax; mov [r12+0x50], eax; jmp 0x0231752a; 0x02317524: mov byte [r12+0x4d], 0
@@ -135,7 +138,7 @@ extern std::uint64_t bb_light_step_continue;
 extern std::uint64_t bb_light_step_target;  // 0x02315d79
 extern std::uint64_t bb_light_step_empty_continue;
 extern std::uint64_t bb_hold_continue;
-// The hold's calls since its last count, 0 to bb_frame_scale - 1 (the effect object is a
-// singleton).
+// The hold's phase since its last count, 0 to bb_frame_rate - 1 in 1/bb_frame_rate of a call (30
+// a call; the effect object is a singleton).
 extern std::uint32_t bb_hold_phase;
 }

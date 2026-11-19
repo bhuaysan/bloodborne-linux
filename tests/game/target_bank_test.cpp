@@ -169,7 +169,9 @@ void ticks_unhooked(void* manager, unsigned calls) {
 // As many calls through the hook as the frame rate makes of `calls` calls at 30.
 void ticks_hooked(void* manager, unsigned calls) {
     const WrapperHook hook;
-    const unsigned n = calls * (bb::game::frame_rate() / bb::game::default_frame_rate);
+    // A whole number of calls when `calls` is a multiple of 5 at 144; the wrapper's phase is then
+    // back at 0 for the next case.
+    const unsigned n = calls * bb::game::frame_rate() / bb::game::default_frame_rate;
     for (unsigned i = 0; i < n; ++i) {
         bb::game::fn<bb::game::TargetBankScanTick>(target_bank_scan_tick)(manager);
     }
@@ -196,6 +198,20 @@ TEST_F(EbootTest, TargetBankTickAt60MatchesTheTickAt30) {
     const FrameRateGuard rate(60);
     for (const Case& c : cases) {
         for (const unsigned calls : {1u, calls_at_30}) {
+            const Result r = harness().compare_functions<Ticks>(
+                &ticks_unhooked, &ticks_hooked, [&](Arena& a) { return build(a, c, calls); });
+            EXPECT_TRUE(r) << c.name << ", " << calls << " calls: " << r.report();
+        }
+    }
+    harness().restore();
+}
+
+// At 144, 4.8 times as many calls through the hook (the tick 4 or 5 calls apart) leave the same:
+// the timer and the ring move on 30 times a game second.
+TEST_F(EbootTest, TargetBankTickAt144MatchesTheTickAt30) {
+    const FrameRateGuard rate(144);
+    for (const Case& c : cases) {
+        for (const unsigned calls : {5u, calls_at_30}) {
             const Result r = harness().compare_functions<Ticks>(
                 &ticks_unhooked, &ticks_hooked, [&](Arena& a) { return build(a, c, calls); });
             EXPECT_TRUE(r) << c.name << ", " << calls << " calls: " << r.report();
@@ -234,17 +250,18 @@ TEST(TargetBankTick, RunsOnEveryCallsthCall) {
     for (const unsigned calls : {1u, 2u, 4u}) {
         for (const unsigned start : {0u, 1u}) {
             stand_in_calls = 0;
-            unsigned count = start % calls;
+            const unsigned fps = 30 * calls;
+            unsigned phase = 30 * (start % calls);
             std::string pattern;
             for (int i = 0; i < 8; ++i) {
                 const int before = stand_in_calls;
-                bb::game::target_bank_scan_tick_every(&stand_in, calls, count, nullptr);
+                bb::game::target_bank_scan_tick_every(&stand_in, fps, phase, nullptr);
                 pattern += stand_in_calls > before ? 'x' : '.';
             }
             EXPECT_EQ(stand_in_calls, static_cast<int>(8 / calls)) << calls << " " << start;
             if (calls == 1) {
                 EXPECT_EQ(pattern, "xxxxxxxx");
-                EXPECT_EQ(count, 0u);
+                EXPECT_EQ(phase, 0u);
             } else if (calls == 2) {
                 EXPECT_EQ(pattern, start == 0 ? "x.x.x.x." : ".x.x.x.x");
             } else {
@@ -254,13 +271,35 @@ TEST(TargetBankTick, RunsOnEveryCallsthCall) {
     }
 }
 
-// A count left over from 60 FPS doesn't skip a call at 30.
-TEST(TargetBankTick, RunsEveryCallAt30WhateverTheCount) {
+// At 144 the tick runs 4 or 5 calls apart, 30 times in 144 calls (a game second), whatever the
+// phase it starts at.
+TEST(TargetBankTick, RunsThirtyTimesAGameSecondAt144) {
+    for (const unsigned start : {0u, 6u, 29u, 30u, 143u}) {
+        stand_in_calls = 0;
+        unsigned phase = start;
+        int last = -1;
+        for (int i = 0; i < 144; ++i) {
+            const int before = stand_in_calls;
+            bb::game::target_bank_scan_tick_every(&stand_in, 144, phase, nullptr);
+            if (stand_in_calls > before) {
+                if (last >= 0) {
+                    EXPECT_TRUE(i - last == 4 || i - last == 5) << start << " " << i;
+                }
+                last = i;
+            }
+        }
+        EXPECT_EQ(stand_in_calls, 30) << start;
+        EXPECT_EQ(phase, start);  // 144 calls move the phase on by 144 * 30, a whole turn
+    }
+}
+
+// A phase left over from 60 FPS doesn't skip a call at 30.
+TEST(TargetBankTick, RunsEveryCallAt30WhateverThePhase) {
     stand_in_calls = 0;
-    unsigned count = 1;
-    bb::game::target_bank_scan_tick_every(&stand_in, 1, count, nullptr);
+    unsigned phase = 30;
+    bb::game::target_bank_scan_tick_every(&stand_in, 30, phase, nullptr);
     EXPECT_EQ(stand_in_calls, 1);
-    EXPECT_EQ(count, 0u);
+    EXPECT_EQ(phase, 0u);
 }
 
 TEST(TargetBankTick, IsRegisteredWithItsPrologue) {

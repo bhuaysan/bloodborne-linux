@@ -368,7 +368,7 @@ TEST_F(EbootTest, FlipperWaitFrameTellsTheObserver) {
 TEST(FrameRate, RefusesOtherRates) {
     EXPECT_THROW(bb::game::set_frame_rate(0), std::invalid_argument);
     EXPECT_THROW(bb::game::set_frame_rate(90), std::invalid_argument);
-    EXPECT_THROW(bb::game::set_frame_rate(144), std::invalid_argument);
+    EXPECT_THROW(bb::game::set_frame_rate(100), std::invalid_argument);
     EXPECT_EQ(bb::game::frame_rate(), 30U);
     {
         const FrameRateGuard rate(60);
@@ -377,11 +377,16 @@ TEST(FrameRate, RefusesOtherRates) {
     {
         const FrameRateGuard rate(120);
         EXPECT_EQ(bb::game::frame_step(), 1.0f / 120.0f);
-        EXPECT_EQ(bb::game::frame_rate_scale(), 4U);
-        EXPECT_EQ(bb_frame_scale, 4U);
+        EXPECT_EQ(bb_frame_rate, 120U);
         EXPECT_EQ(bb_step_ratio, 0.25f);
         // Four steps of 1/120 are the game's 1/30 bit for bit, as two of 1/60 are.
         EXPECT_EQ(4.0f * bb::game::frame_step(), 1.0f / 30.0f);
+    }
+    {
+        const FrameRateGuard rate(144);
+        EXPECT_EQ(bb::game::frame_step(), 1.0f / 144.0f);
+        EXPECT_EQ(bb_frame_rate, 144U);
+        EXPECT_EQ(bb_step_ratio, 30.0f / 144.0f);
     }
     EXPECT_EQ(bb::game::frame_rate(), 30U);
     std::uint32_t bits = 0;

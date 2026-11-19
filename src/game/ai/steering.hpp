@@ -63,33 +63,35 @@ void chr_ai_control_update(float dt, void* control);
 // The note of this thread.
 ChrUpdateNote noted_chr_update();
 
-// What the wrapper keeps per agent: the count of its calls, and whether the last call that ran
-// the original on an agent with a character passed a step of exactly 0.0f.
+// What the wrapper keeps per agent: the phase of its 30 Hz clock (game_tick), and whether the last
+// call that ran the original on an agent with a character passed a step of exactly 0.0f.
 struct SteerState {
-    unsigned count = 0;
+    unsigned phase = 0;
     bool ran_zero_step = false;
 };
 
-// Runs `original` as the game does at 30 FPS when the frame rate is `calls` times 30, counting the
-// agent's own calls in `state.count` (the path follower doesn't step every agent every frame): when
-// `count` is 0, with the task data's step times `calls`. On the agent's other calls, if it has a
+// Runs `original` as the game does at 30 FPS when the frame rate is `fps`, on the agent's own calls
+// where its 30 Hz clock game_tick(fps, state.phase) ticks (the path follower doesn't step every
+// agent every frame): every (fps / 30)-th call at a whole multiple of 30, 4 or 5 calls apart at
+// 144, with game_tick_step of the task data's step (the game's 1/30 at the normal step). On the
+// agent's other calls, if it has a
 // Havok AI character, its ring, state and step stay as they are: it gets two of the writes the
 // game's steering does on every call (+0x28c = 1 and the character's +0x64 copied to +0x1c of the
 // object at [[agent+0x238]+0x58]) and the point the game returns, from the character's position
 // now and the direction stored at +0x20. The third, clearing the requests at +0x289 and +0x28a,
 // is left to the next call that runs `original`, which acts on them. An agent whose stored step
-// (+0x280) is still 0.0f, the constructor's value, runs `original` on this call whatever `count`
-// says, and `count` goes on from there, unless `ran_zero_step`: a run with a step of exactly 0
-// (full hit-stop) stores 0.0f too and is no sign of a new agent, so then the count rules. An
+// (+0x280) is still 0.0f, the constructor's value, runs `original` on this call whatever `phase`
+// says, and the clock goes on from phase 0, unless `ran_zero_step`: a run with a step of exactly 0
+// (full hit-stop) stores 0.0f too and is no sign of a new agent, so then the clock rules. An
 // agent without a character gets `original` as is and a fresh state, so its first call with one
-// runs `original`. Then moves `count` on, modulo `calls`.
-// With calls <= 1, or `halve` false (the call comes from the update of a character with an update
-// interval above 0, which is stepped at 30 FPS's rate by itself, #603), every call is `original`
-// with the caller's task data and `count` is 0.
-SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, SteerState& state, void* agent,
+// runs `original`.
+// At fps <= 30, or with `halve` false (the call comes from the update of a character with an
+// update interval above 0, which is stepped at 30 FPS's rate by itself, #603), every call is
+// `original` with the caller's task data and `phase` is 0.
+SteerPoint agent_steer_every(AgentSteer* original, unsigned fps, SteerState& state, void* agent,
                              const FD4TaskData* task, bool halve = true);
 
-// 0x01dbbd00, wrapped: agent_steer_every with frame_rate() / 30 calls and a count per agent, kept
+// 0x01dbbd00, wrapped: agent_steer_every at frame_rate() with a state per agent, kept
 // in a table by the agent's address; an agent not in it starts at 0. `halve` is false inside the
 // control update of a character with an update interval above 0. At 30 FPS it is the original.
 SteerPoint agent_steer(void* agent, const FD4TaskData* task);

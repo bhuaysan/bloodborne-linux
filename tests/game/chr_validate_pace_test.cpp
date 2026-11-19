@@ -348,13 +348,13 @@ bool stand_in(ValidateBudget* budget, void*) {
 }
 
 TEST(ChrValidatePaced, PassesTheBudgetThroughOnDueFrames) {
-    for (std::int32_t scale : {1, 2}) {
+    for (unsigned fps : {30u, 60u}) {
         for (std::uint32_t frame : {0u, 2u, 4u, 1u, 3u}) {
-            if (scale == 2 && frame % 2 == 1) {
+            if (fps == 60 && frame % 2 == 1) {
                 continue;
             }
             ValidateBudget b{1, 0};
-            EXPECT_TRUE(bb::game::chr_validate_paced(&stand_in, &b, nullptr, frame, scale));
+            EXPECT_TRUE(bb::game::chr_validate_paced(&stand_in, &b, nullptr, frame, fps));
             EXPECT_EQ(seen_budget.limit, 1);
             EXPECT_EQ(b.count, 1);
         }
@@ -363,15 +363,42 @@ TEST(ChrValidatePaced, PassesTheBudgetThroughOnDueFrames) {
 
 TEST(ChrValidatePaced, HandsASpentBudgetOnOtherFrames) {
     ValidateBudget b{2, 1};
-    EXPECT_FALSE(bb::game::chr_validate_paced(&stand_in, &b, nullptr, 3, 2));
+    EXPECT_FALSE(bb::game::chr_validate_paced(&stand_in, &b, nullptr, 3, 60));
     EXPECT_EQ(seen_budget.limit, 0);
     EXPECT_EQ(seen_budget.count, 1);
     EXPECT_EQ(b.limit, 2);
     EXPECT_EQ(b.count, 1);
     ValidateBudget unlimited{-1, 4};
-    EXPECT_TRUE(bb::game::chr_validate_paced(&stand_in, &unlimited, nullptr, 3, 2));
+    EXPECT_TRUE(bb::game::chr_validate_paced(&stand_in, &unlimited, nullptr, 3, 60));
     EXPECT_EQ(seen_budget.limit, -1);
     EXPECT_EQ(unlimited.count, 5);
+}
+
+// At 144 the budget holds on the world frames where a 30 Hz clock ticks: 30 in any 144 frames (a
+// game second), 4 or 5 frames apart; frame 0 (WorldFrames' stand-still) is let through.
+TEST(ChrValidatePaced, HoldsTheBudgetThirtyTimesAGameSecondAt144) {
+    for (const std::uint32_t first : {0u, 1u, 1000u, 0xffffff00u}) {
+        int full = 0;
+        std::int64_t last = -1;
+        for (std::uint32_t i = 0; i < 144; ++i) {
+            const std::uint32_t frame = first + i;
+            ValidateBudget b{1, 0};
+            bb::game::chr_validate_paced(&stand_in, &b, nullptr, frame, 144);
+            if (seen_budget.limit == 1) {
+                ++full;
+                if (last >= 0) {
+                    EXPECT_TRUE(i - last == 4 || i - last == 5) << first << " " << i;
+                }
+                last = i;
+            } else {
+                EXPECT_EQ(seen_budget.limit, 0);
+            }
+        }
+        EXPECT_EQ(full, 30) << first;
+    }
+    ValidateBudget b{1, 0};
+    EXPECT_TRUE(bb::game::chr_validate_paced(&stand_in, &b, nullptr, 0, 144));
+    EXPECT_EQ(seen_budget.limit, 1);
 }
 
 }  // namespace

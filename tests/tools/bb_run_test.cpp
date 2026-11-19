@@ -124,12 +124,13 @@ TEST(RunOptions, ParsesTheFrameRate) {
     EXPECT_EQ(parse({}).frame_rate, 30U);
     EXPECT_EQ(parse({"--frame-rate", "60"}).frame_rate, 60U);
     EXPECT_EQ(parse({"--frame-rate", "120"}).frame_rate, 120U);
+    EXPECT_EQ(parse({"--frame-rate", "144"}).frame_rate, 144U);
     EXPECT_EQ(parse({"--frame-rate", "60", "--frame-rate", "30"}).frame_rate, 30U);
     EXPECT_EQ(parse_error({"--frame-rate"}), "--frame-rate needs a value");
     for (std::string_view fps :
-         {"0", "45", "90", "144", "1200", "12", "60.0", " 60", "", "sixty"}) {
+         {"0", "45", "90", "100", "1200", "12", "60.0", " 60", "", "sixty"}) {
         EXPECT_EQ(parse_error({"--frame-rate", fps}),
-                  std::format("--frame-rate: \"{}\" is not 30, 60 or 120", fps));
+                  std::format("--frame-rate: \"{}\" is not 30, 60, 120 or 144", fps));
     }
 }
 
@@ -449,7 +450,7 @@ TEST(BbRun, ABadConfigValueEndsTheRunWithAMessage) {
     const std::string file = write_config_file(dir, "frame_rate = 45\n");
     const Result r = run_bb_run(dir, "--game-dir /nonexistent --config " + quote(file));
     EXPECT_EQ(r.status, 2);
-    EXPECT_NE(r.output.find("test.toml:1: frame_rate: \"45\" is not 30, 60 or 120"),
+    EXPECT_NE(r.output.find("test.toml:1: frame_rate: \"45\" is not 30, 60, 120 or 144"),
               std::string::npos)
         << r.output;
 }

@@ -92,10 +92,10 @@ bb_hold_count_stub:
     cmp dword ptr [r12 + 0x50], 0
     je 1f
     mov eax, dword ptr [rip + bb_hold_phase]
-    inc eax
-    cmp eax, dword ptr [rip + bb_frame_scale]
+    add eax, 30
+    cmp eax, dword ptr [rip + bb_frame_rate]
     jb 3f
-    xor eax, eax
+    sub eax, dword ptr [rip + bb_frame_rate]
     dec dword ptr [r12 + 0x50]
 3:
     mov dword ptr [rip + bb_hold_phase], eax

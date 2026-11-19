@@ -513,7 +513,7 @@ TEST_F(StepLiteralsTest, HoldCountIsTheGamesAt30) {
 }
 
 // A hold of 60 lasts 60 counts and one call that clears it: 61 calls at 30 with the game's bytes
-// and with the patch, 121 at 60, and the next hold starts at phase 0.
+// and with the patch, 121 at 60, 241 at 120 and 289 at 144, and the next hold starts at phase 0.
 TEST_F(StepLiteralsTest, HoldLastsTwoSecondsAt60) {
     const auto calls = [](bool patched) {
         HoldState s{1, 60, 0};
@@ -530,12 +530,19 @@ TEST_F(StepLiteralsTest, HoldLastsTwoSecondsAt60) {
     {
         const FrameRateGuard rate(60);
         EXPECT_EQ(calls(true), 121);
-        // A hold armed while the phase is 1 is one call short.
-        EXPECT_EQ(hold_step(true, {1, 3, 1}), (HoldState{1, 2, 0}));
+        // A hold armed one call into the phase (30 of 60) is one call short.
+        EXPECT_EQ(hold_step(true, {1, 3, 30}), (HoldState{1, 2, 0}));
     }
     {
         const FrameRateGuard rate(120);
         EXPECT_EQ(calls(true), 241);
+    }
+    {
+        // 60 ticks of a 30 Hz clock at 144 are 288 calls, 4 or 5 apart: two seconds.
+        const FrameRateGuard rate(144);
+        EXPECT_EQ(calls(true), 289);
+        EXPECT_EQ(hold_step(true, {1, 3, 120}), (HoldState{1, 2, 6}));
+        EXPECT_EQ(hold_step(true, {1, 3, 6}), (HoldState{1, 3, 36}));
     }
     bb_hold_phase = 0;
 }

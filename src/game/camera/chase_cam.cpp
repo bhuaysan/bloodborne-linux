@@ -137,8 +137,8 @@ void chase_cam_update(void* cam, void* chr, void* world, float dt) {
     auto* const original =
         reinterpret_cast<ChaseCamUpdate*>(hook::original(image(), 0x0143ac60));
     const bool eases = global<std::uint8_t>(0x05127a94) != 0;  // camera collision on
-    chase_cam_update_scaled(original, static_cast<double>(frame_rate_scale()), eases, cam, chr,
-                            world, dt);
+    chase_cam_update_scaled(original, static_cast<double>(frame_rate()) / default_frame_rate,
+                            eases, cam, chr, world, dt);
 }
 
 }  // namespace bb::game

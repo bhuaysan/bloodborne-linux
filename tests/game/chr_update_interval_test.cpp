@@ -162,6 +162,7 @@ protected:
     void TearDown() override {
         captures_.reset();
         bb_chr_due_scale = 1;  // no image() here: a skipped test has none
+        bb_chr_due_rate = 30;
     }
 
     // Runs the check in memory now for a character at `index` with interval `interval` in frame
@@ -190,7 +191,7 @@ TEST_F(ChrUpdateIntervalTest, IsTheGamesCheckAt30) {
     for (std::uint32_t u : intervals) {
         for (std::int32_t index = 0; index < 40; ++index) {
             for (std::uint32_t counter : {0u, 1u, 4u, 29u, 30u, 61u, 899u, 0xffffffffu}) {
-                bb::game::set_chr_due_scale(1);
+                bb::game::set_chr_due_rate(30);
                 const DueRun stubbed = run(u, index, counter);
                 // The game's bytes: the stub's patch taken out for the call.
                 std::array once{registered(bb::game::chr_due_check)};
@@ -213,7 +214,7 @@ TEST_F(ChrUpdateIntervalTest, ChecksTwiceTheIntervalAt60AndKeepsIt) {
             for (std::uint32_t counter = 0; counter < 4 * u + 3; ++counter) {
                 const DueRun game = run(2 * u, index, counter);  // the game's bytes, 2u
                 bb::hook::apply(bb::game::image(), once);
-                bb::game::set_chr_due_scale(2);
+                bb::game::set_chr_due_rate(60);
                 const DueRun stubbed = run(u, index, counter);
                 bb::hook::remove(bb::game::image(), once);
                 ASSERT_EQ(stubbed.exit, game.exit) << u << " " << index << " " << counter;
@@ -240,7 +241,7 @@ TEST_F(ChrUpdateIntervalTest, IsDueOnceIn2uFramesAt60) {
         EXPECT_EQ(due, 6u) << "u " << u;
     }
     const Hooked<1> stub(std::array{registered(bb::game::chr_due_check)});
-    bb::game::set_chr_due_scale(2);
+    bb::game::set_chr_due_rate(60);
     for (std::uint32_t u : intervals) {
         for (std::int32_t index = 0; index < 40; ++index) {
             unsigned due = 0;
@@ -260,20 +261,62 @@ TEST_F(ChrUpdateIntervalTest, IsDueOnceIn2uFramesAt60) {
     }
 }
 
-// world_chr_update's original, recording the scale the check has when it runs.
+// At 144 (k = 4.8) a character with interval u is due 30 / u times a game second (144 frames),
+// whatever its index, 4.8 u frames apart on average, a whole number each, with the frames since
+// its last update as its step. The level of detail stays u.
+TEST_F(ChrUpdateIntervalTest, IsDueThirtyOverUTimesAGameSecondAt144) {
+    const Hooked<1> stub(std::array{registered(bb::game::chr_due_check)});
+    bb::game::set_chr_due_rate(144);
+    constexpr std::uint32_t frames = 144 * 30;  // 30 game seconds: whole turns of every pattern
+    for (std::uint32_t u : {1u, 2u, 5u, 30u}) {
+        for (std::int32_t index : {0, 1, 7, 39}) {
+            unsigned due = 0;
+            std::uint32_t steps = 0;
+            for (std::uint32_t counter = 1000; counter < 1000 + frames; ++counter) {
+                const DueRun r = run(u, index, counter);
+                ASSERT_TRUE(r.exit == 1 || r.exit == 2);
+                EXPECT_EQ(r.ecx, u);
+                if (r.exit != 1) {
+                    continue;
+                }
+                ++due;
+                EXPECT_EQ(r.slot, u);
+                float step;
+                std::memcpy(&step, &r.xmm0, sizeof step);
+                const auto n = static_cast<std::uint32_t>(step);
+                EXPECT_EQ(static_cast<float>(n), step);
+                EXPECT_TRUE(n * 10 / 48 == u || (n * 10 + 47) / 48 == u)
+                    << "u " << u << ": " << n << " frames";  // floor or ceil of 4.8 u
+                steps += n;
+            }
+            EXPECT_EQ(due, 900 / u) << "u " << u << " index " << index;
+            EXPECT_EQ(steps, frames) << "u " << u << " index " << index;
+        }
+    }
+    // Neighbouring indices are due on different frames, as at 30.
+    EXPECT_NE(run(1, 0, 1000).exit, run(1, 1, 1000).exit);
+    // A counter below the index and one about to wrap.
+    EXPECT_EQ(run(5, 39, 0).exit == 1, run(5, 39, 144 * 5).exit == 1);
+    bb::game::set_chr_due_rate(30);
+}
+
+// world_chr_update's original, recording the stub's values when it runs.
 std::int32_t scale_seen = 0;
+std::int32_t rate_seen = 0;
 void fake_update(float, void*) {
     scale_seen = bb_chr_due_scale;
+    rate_seen = bb_chr_due_rate;
 }
 
 TEST_F(ChrUpdateIntervalTest, TheWrapperSetsTheScaleForTheFrameRate) {
     const Hooked<2> both(
         std::array{registered(world_chr_update), registered(bb::game::chr_due_check)});
     EXPECT_EQ(registered(bb::game::chr_due_check).function, world_chr_update);
-    for (unsigned fps : {120u, 60u, 30u}) {
+    for (unsigned fps : {144u, 120u, 60u, 30u}) {
         bb::game::set_frame_rate(fps);
         bb::game::world_chr_update_with(&fake_update, 1.0f / static_cast<float>(fps), nullptr);
-        EXPECT_EQ(scale_seen, static_cast<std::int32_t>(fps / 30));
+        EXPECT_EQ(scale_seen, fps % 30 == 0 ? static_cast<std::int32_t>(fps / 30) : 0);
+        EXPECT_EQ(rate_seen, static_cast<std::int32_t>(fps));
         EXPECT_EQ(bb_chr_due_continue, bb::game::image().runtime(bb::game::chr_due_continue));
         EXPECT_EQ(bb_chr_due_not_due, bb::game::image().runtime(bb::game::chr_not_due_continue));
     }

@@ -202,7 +202,7 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             }
             if (rate == 0) {
                 throw std::invalid_argument(
-                    std::format("--frame-rate: \"{}\" is not 30, 60 or 120", fps));
+                    std::format("--frame-rate: \"{}\" is not 30, 60, 120 or 144", fps));
             }
             options.frame_rate = rate;
         } else if (arg == "--window-size") {

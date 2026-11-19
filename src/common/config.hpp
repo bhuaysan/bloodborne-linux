@@ -23,9 +23,10 @@ inline constexpr unsigned min_window_height = 360;
 inline constexpr unsigned max_window_side = 16384;
 inline constexpr float max_rcas_attenuation = 2.0f;
 
-// The target frame rates bb-run takes (docs/design/frame-rate.md, "Above 60 FPS"). Rates that
-// aren't whole multiples of 30, such as 144, wait for #673.
-inline constexpr unsigned frame_rates[] = {30, 60, 120};
+// The target frame rates bb-run takes (docs/design/frame-rate.md, "Above 60 FPS"). The sites the
+// game paces in 30 FPS frames run on a 30 Hz clock of game time (game::game_tick), so a rate need
+// not be a whole multiple of 30.
+inline constexpr unsigned frame_rates[] = {30, 60, 120, 144};
 inline constexpr bool valid_frame_rate(unsigned fps) {
     for (const unsigned rate : frame_rates) {
         if (fps == rate) {

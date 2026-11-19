@@ -41,11 +41,14 @@ inline constexpr std::uint64_t chr_not_due_continue = 0x01917a1b;  // mov [rbp-0
 // hook::apply jumps the stub back behind the patched bytes.
 static_assert(chr_due_continue == chr_due_check + chr_due_check_patched.size());
 
-// Sets the factor of the intervals in the due check's stub, frame_rate() / 30: with `scale` k a
-// character with interval u > 0 is due every k * u frames with k * u times the frame's step, which
-// at k frames a 30 FPS frame is every u frames and u steps of 30 FPS. The level of detail
-// ([rbp-0xc8], chr+0xe4) stays u. At k = 1 the stub does what the game's bytes do.
-void set_chr_due_scale(std::int32_t scale);
+// Sets the frame rate of the due check's stub, frame_rate(): at `fps` a character with interval
+// u > 0 is due when a 30 Hz clock of game time, shifted by its index, has ticked u times since its
+// last update, with the frames since then times the frame's step: 30 / u updates a game second of
+// u steps of 30 FPS on average. At fps = 30 k for a whole k that is every k * u frames with k * u
+// times the step (exactly u steps of 30 FPS); at 144 the frames between updates are 4.8 u on
+// average, a whole number each. The level of detail ([rbp-0xc8], chr+0xe4) stays u. At 30 the
+// stub does what the game's bytes do.
+void set_chr_due_rate(unsigned fps);
 
 // Sets the due check for frame_rate(), then runs `original`.
 void world_chr_update_with(WorldChrUpdate* original, float step, void* world);
@@ -56,11 +59,12 @@ void world_chr_update(float step, void* world);
 }  // namespace bb::game
 
 // The stub that replaces the due check (BB_PATCH), written in assembly for that place, and what it
-// reads: the scale and the absolute addresses of chr_due_continue and chr_not_due_continue, which
+// reads: the frame rate and the absolute addresses of chr_due_continue and chr_not_due_continue, which
 // hook::apply fills.
 extern "C" {
 void bb_chr_due_check_stub();
-extern std::int32_t bb_chr_due_scale;
+extern std::int32_t bb_chr_due_scale;  // fps / 30 when that is whole, else 0
+extern std::int32_t bb_chr_due_rate;   // fps
 extern std::uint64_t bb_chr_due_continue;
 extern std::uint64_t bb_chr_due_not_due;
 }

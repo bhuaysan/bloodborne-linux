@@ -5,6 +5,7 @@
 // its direction every 30 calls (#570); a test shows that, and that the wrapper keeps it.
 #include "game/ai/steering.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -343,6 +344,28 @@ TEST_F(EbootTest, AgentSteerKeepsItsDirectionAt60) {
     harness().restore();
 }
 
+// At 144 the hook runs the steering 4 or 5 calls apart with the game's 1/30, 30 times a game
+// second: for the lags 5, 20 and 29 the agent never steers at itself. Without the hook the lag of
+// 20 frames of 1/30 is 96 calls and the game's steering loses its direction.
+TEST_F(EbootTest, AgentSteerKeepsItsDirectionAt144) {
+    {
+        harness().restore();
+        const int lost =
+            lost_directions(std::get<0>(build(harness().arena(), cases[1], 0)), 144, 576);
+        EXPECT_GE(lost, 6) << "the game's steering at 144 without the wrapper";
+    }
+    const FrameRateGuard rate(144);
+    for (const Case& c : cases) {
+        harness().restore();
+        Scene* const s = std::get<0>(build(harness().arena(), c, 0));
+        const WrapperHook hook;
+        bb::game::forget_agent_steer_counts();
+        EXPECT_EQ(lost_directions(s, 144, 576), 0) << c.name;
+        EXPECT_EQ(at<float>(s->agent, 0x280), 1.0f / 30.0f) << c.name << ": the game's 1/30";
+    }
+    harness().restore();
+}
+
 // The registered wrapper of 0x01513c10 applies to the image (entry, prologue and overlap checks)
 // and comes off again; the function itself is not run.
 TEST_F(EbootTest, ChrAiControlUpdateWrapperApplies) {
@@ -401,62 +424,86 @@ struct Agent {
     }
 };
 
-// 'x' for a call that ran the stand-in with the step times `calls`, '.' for one that didn't.
-std::string pattern(unsigned calls, bb::game::SteerState& count, void* agent, int n,
+// 'x' for a call that ran the stand-in with the 30 Hz tick's step at `fps`, '.' for one that
+// didn't.
+std::string pattern(unsigned fps, bb::game::SteerState& count, void* agent, int n,
                     float frame_step = 1.0f / 60.0f) {
     const FD4TaskData task{nullptr, frame_step};
     std::string p;
     for (int i = 0; i < n; ++i) {
         stand_in_calls = 0;
         stand_in_step = 0.0f;
-        bb::game::agent_steer_every(&stand_in, calls, count, agent, &task);
+        bb::game::agent_steer_every(&stand_in, fps, count, agent, &task);
         const bool ran = stand_in_calls == 1;
-        const bool step = stand_in_step == task.delta_time * static_cast<float>(calls);
+        const bool step = stand_in_step == bb::game::game_tick_step(fps, task.delta_time);
         p += ran && step ? 'x' : (ran ? '?' : '.');
     }
     return p;
 }
 
+// At 60 and 120 the steering's step is twice or four times the frame's, the game's 1/30 bit for
+// bit; at 144 it is the game's 1/30 too, and a step of 0 (hit-stop) stays 0.
+TEST(AgentSteer, TheTicksStepIsTheGamesThirtieth) {
+    EXPECT_EQ(bb::game::game_tick_step(60, 1.0f / 60.0f), 2.0f * (1.0f / 60.0f));
+    EXPECT_EQ(bb::game::game_tick_step(120, 1.0f / 120.0f), 4.0f * (1.0f / 120.0f));
+    for (const unsigned fps : {30u, 60u, 120u, 144u}) {
+        EXPECT_EQ(bb::game::game_tick_step(fps, 1.0f / static_cast<float>(fps)), 1.0f / 30.0f);
+        EXPECT_EQ(bb::game::game_tick_step(fps, 0.0f), 0.0f);
+    }
+    EXPECT_EQ(bb::game::game_tick_step(60, 0.25f), 0.5f);
+}
+
+// At 144 the agent's steering runs 4 or 5 calls apart, 30 times in 144 calls.
+TEST(AgentSteer, RunsThirtyTimesAGameSecondAt144) {
+    Agent a;
+    bb::game::SteerState state;
+    const std::string p = pattern(144, state, a.agent.data(), 144, 1.0f / 144.0f);
+    EXPECT_EQ(std::count(p.begin(), p.end(), 'x'), 30);
+    EXPECT_EQ(std::count(p.begin(), p.end(), '?'), 0);
+    EXPECT_EQ(p.substr(0, 10), "x....x....");  // phase 0, 30, 60, 90, 120, then 6
+    EXPECT_EQ(state.phase, 0u);
+}
+
 TEST(AgentSteer, RunsTheGamesSteeringOnEveryCallsthCallOfTheAgent) {
     Agent a;
     bb::game::SteerState count;
-    EXPECT_EQ(pattern(1, count, a.agent.data(), 4), "xxxx");
-    EXPECT_EQ(count.count, 0u);
-    EXPECT_EQ(pattern(2, count, a.agent.data(), 5), "x.x.x");
-    EXPECT_EQ(count.count, 1u);
+    EXPECT_EQ(pattern(30, count, a.agent.data(), 4), "xxxx");
+    EXPECT_EQ(count.phase, 0u);
+    EXPECT_EQ(pattern(60, count, a.agent.data(), 5), "x.x.x");
+    EXPECT_EQ(count.phase, 30u);
     // At 30 a count left from 60 doesn't skip a call, and it is reset.
-    EXPECT_EQ(pattern(1, count, a.agent.data(), 2), "xx");
-    EXPECT_EQ(count.count, 0u);
+    EXPECT_EQ(pattern(30, count, a.agent.data(), 2), "xx");
+    EXPECT_EQ(count.phase, 0u);
 }
 
 // With `halve` false every call runs the original with the caller's step, and the count is 0.
 TEST(AgentSteer, WithoutHalvingEveryCallIsTheCallers) {
     Agent a;
-    bb::game::SteerState count{1, false};
+    bb::game::SteerState count{30, false};
     const FD4TaskData task{nullptr, 5.0f / 30.0f};
     for (int i = 0; i < 4; ++i) {
         stand_in_calls = 0;
         stand_in_step = 0.0f;
         const SteerPoint p =
-            bb::game::agent_steer_every(&stand_in, 2, count, a.agent.data(), &task, false);
+            bb::game::agent_steer_every(&stand_in, 60, count, a.agent.data(), &task, false);
         EXPECT_EQ(stand_in_calls, 1);
         EXPECT_EQ(stand_in_step, task.delta_time);
-        EXPECT_EQ(count.count, 0u);
+        EXPECT_EQ(count.phase, 0u);
         EXPECT_EQ(p.low, 1u);
     }
     // Back to halving: the first call runs, the next is skipped.
-    EXPECT_EQ(pattern(2, count, a.agent.data(), 3), "x.x");
+    EXPECT_EQ(pattern(60, count, a.agent.data(), 3), "x.x");
 }
 
 // A fresh agent (stored step 0.0f) runs whatever its count says, and the count goes on from there.
 TEST(AgentSteer, AFreshAgentRunsAndTheCountGoesOnFromThere) {
     Agent a;
     at<float>(a.agent.data(), 0x280) = 0.0f;
-    bb::game::SteerState count{1, false};  // would skip
-    EXPECT_EQ(pattern(2, count, a.agent.data(), 1), "x");
-    EXPECT_EQ(count.count, 1u);
+    bb::game::SteerState count{30, false};  // would skip
+    EXPECT_EQ(pattern(60, count, a.agent.data(), 1), "x");
+    EXPECT_EQ(count.phase, 30u);
     at<float>(a.agent.data(), 0x280) = 1.0f / 30.0f;  // the game's steering wrote its step
-    EXPECT_EQ(pattern(2, count, a.agent.data(), 2), ".x");
+    EXPECT_EQ(pattern(60, count, a.agent.data(), 2), ".x");
 }
 
 // A step of exactly 0 (full hit-stop) leaves 0.0f in the agent as a new agent has: it must not
@@ -464,17 +511,17 @@ TEST(AgentSteer, AFreshAgentRunsAndTheCountGoesOnFromThere) {
 TEST(AgentSteer, ARunWithStepZeroIsNotAFreshAgent) {
     Agent a;  // stepped before
     bb::game::SteerState state;
-    EXPECT_EQ(pattern(2, state, a.agent.data(), 6, 0.0f), "x.x.x.");
+    EXPECT_EQ(pattern(60, state, a.agent.data(), 6, 0.0f), "x.x.x.");
     EXPECT_EQ(at<float>(a.agent.data(), 0x280), 0.0f);
     // The hit-stop ends: the next run stores a step again and the count goes on.
-    EXPECT_EQ(pattern(2, state, a.agent.data(), 3), "x.x");
+    EXPECT_EQ(pattern(60, state, a.agent.data(), 3), "x.x");
 }
 
 TEST(AgentSteer, AFreshAgentWhoseFirstStepIsZeroStillRunsOnItsFirstCall) {
     Agent a;
     at<float>(a.agent.data(), 0x280) = 0.0f;
-    bb::game::SteerState state{1, false};  // stale count that would skip
-    EXPECT_EQ(pattern(2, state, a.agent.data(), 4, 0.0f), "x.x.");
+    bb::game::SteerState state{30, false};  // stale count that would skip
+    EXPECT_EQ(pattern(60, state, a.agent.data(), 4, 0.0f), "x.x.");
 }
 
 // The control update's note: set for the call, nested ones restore the outer, nothing noted after.
@@ -524,29 +571,29 @@ TEST(ChrAiControlUpdate, NotesTheCharactersIntervalForTheCallAndPassesTheArgumen
 TEST(AgentSteer, AnAgentWithoutCharacterRunsTheGamesSteeringOnEveryCall) {
     Agent a;
     at<void*>(a.agent.data(), 0x230) = nullptr;
-    bb::game::SteerState count{1, false};
+    bb::game::SteerState count{30, false};
     // The game's steering with the caller's step (a constant without a character).
     const FD4TaskData task{nullptr, 1.0f / 60.0f};
     for (int i = 0; i < 3; ++i) {
         stand_in_calls = 0;
-        bb::game::agent_steer_every(&stand_in, 2, count, a.agent.data(), &task);
+        bb::game::agent_steer_every(&stand_in, 60, count, a.agent.data(), &task);
         EXPECT_EQ(stand_in_calls, 1);
         EXPECT_EQ(stand_in_step, task.delta_time);
-        EXPECT_EQ(count.count, 0u);
+        EXPECT_EQ(count.phase, 0u);
     }
     // With a character the first call runs.
     at<void*>(a.agent.data(), 0x230) = a.character.data();
-    EXPECT_EQ(pattern(2, count, a.agent.data(), 3), "x.x");
+    EXPECT_EQ(pattern(60, count, a.agent.data(), 3), "x.x");
 }
 
 TEST(AgentSteer, SkippedCallsSteerFromTheStoredDirection) {
     Agent a;
     const FD4TaskData task{nullptr, 1.0f / 60.0f};
     stand_in_calls = 0;
-    bb::game::SteerState count{1, false};
-    const SteerPoint p = bb::game::agent_steer_every(&stand_in, 2, count, a.agent.data(), &task);
+    bb::game::SteerState count{30, false};
+    const SteerPoint p = bb::game::agent_steer_every(&stand_in, 60, count, a.agent.data(), &task);
     EXPECT_EQ(stand_in_calls, 0);
-    EXPECT_EQ(count.count, 0u);
+    EXPECT_EQ(count.phase, 0u);
     void* const agent_data = a.agent.data();
     void* const holder_data = a.holder.data();
     const std::array<float, 4> f = as_floats(p);

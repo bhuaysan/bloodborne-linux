@@ -10,8 +10,11 @@
 namespace bb::game {
 
 bool chr_validate_paced(ChrValidate* original, ValidateBudget* budget, void* chr,
-                        std::uint32_t frame, std::int32_t scale) {
-    if (scale <= 1 || budget->limit < 0 || frame % static_cast<std::uint32_t>(scale) == 0) {
+                        std::uint32_t frame, unsigned fps) {
+    // The 30 Hz clock ticks in the world frames whose phase, frame * 30 modulo fps, is below 30:
+    // every (fps / 30)-th frame at a whole multiple of 30, as game_tick counts calls.
+    if (fps <= default_frame_rate || budget->limit < 0 ||
+        std::uint64_t{frame} * default_frame_rate % fps < default_frame_rate) {
         return original(budget, chr);
     }
     ValidateBudget spent{0, budget->count};
@@ -32,9 +35,9 @@ std::uint32_t WorldFrames::frame(std::uint32_t counter, std::uint32_t main_loop_
 // 0x018b9890
 bool chr_validate(ValidateBudget* budget, void* chr) {
     auto* const original = reinterpret_cast<ChrValidate*>(hook::original(image(), 0x018b9890));
-    const auto scale = static_cast<std::int32_t>(frame_rate_scale());
+    const unsigned fps = frame_rate();
     const char* const world = global<const char*>(world_chr_man);
-    if (scale <= 1 || world == nullptr) {
+    if (fps <= default_frame_rate || world == nullptr) {
         return original(budget, chr);
     }
     // Only the game's main thread runs the gate (its callers run in WorldChrMan's step and the
@@ -42,7 +45,7 @@ bool chr_validate(ValidateBudget* budget, void* chr) {
     static WorldFrames frames;
     const std::uint32_t counter =
         *reinterpret_cast<const std::uint32_t*>(world + world_chr_man_frame);
-    return chr_validate_paced(original, budget, chr, frames.frame(counter, frame_count()), scale);
+    return chr_validate_paced(original, budget, chr, frames.frame(counter, frame_count()), fps);
 }
 
 }  // namespace bb::game

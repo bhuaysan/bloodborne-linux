@@ -12,7 +12,7 @@
 extern "C" {
 float bb_frame_step = 1.0f / static_cast<float>(bb::game::default_frame_rate);
 float bb_step_ratio = 1.0f;
-std::uint32_t bb_frame_scale = 1;
+std::uint32_t bb_frame_rate = bb::game::default_frame_rate;
 }
 
 namespace bb::game {
@@ -25,16 +25,26 @@ std::uint32_t frames = 0;
 
 void set_frame_rate(unsigned fps) {
     if (!common::valid_frame_rate(fps)) {
-        throw std::invalid_argument(std::format("frame rate {} is not 30, 60 or 120", fps));
+        throw std::invalid_argument(std::format("frame rate {} is not one bb-run takes", fps));
     }
     target_fps = fps;
     bb_frame_step = 1.0f / static_cast<float>(fps);
     bb_step_ratio = static_cast<float>(default_frame_rate) / static_cast<float>(fps);
-    bb_frame_scale = fps / default_frame_rate;
+    bb_frame_rate = fps;
 }
 
 unsigned frame_rate() {
     return target_fps;
+}
+
+float game_tick_step(unsigned fps, float delta_time) {
+    if (fps <= default_frame_rate) {
+        return delta_time;
+    }
+    if (delta_time == 1.0f / static_cast<float>(fps)) {
+        return 1.0f / static_cast<float>(default_frame_rate);
+    }
+    return static_cast<float>(static_cast<double>(delta_time) * fps / default_frame_rate);
 }
 
 float frame_step() {

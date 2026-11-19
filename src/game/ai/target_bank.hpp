@@ -20,14 +20,14 @@ inline constexpr std::array<std::uint8_t, 17> target_bank_scan_tick_prologue = {
     0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41,
     0x55, 0x41, 0x54, 0x53, 0x48, 0x83, 0xec, 0x28};
 
-// Runs `original` on `manager` on every `calls`-th call: when `count` is 0. Then moves `count` on
-// to the next call, modulo `calls`. With calls <= 1 every call runs `original`, whatever `count`
-// held, and `count` becomes 0.
-void target_bank_scan_tick_every(TargetBankScanTick* original, unsigned calls, unsigned& count,
+// Runs `original` on `manager` in the calls where the 30 Hz clock game_tick(fps, phase) ticks:
+// every (fps / 30)-th call at a whole multiple of 30, 30 calls a game second at any rate. At
+// fps <= 30 every call runs `original`, whatever `phase` held, and `phase` becomes 0.
+void target_bank_scan_tick_every(TargetBankScanTick* original, unsigned fps, unsigned& phase,
                                  void* manager);
 
-// 0x012a43b0, wrapped: the original on every (frame_rate() / 30)-th call, so the timer, the bank
-// and the ring move on at 30 steps a game second as at 30 FPS. At 30 FPS it is the original.
+// 0x012a43b0, wrapped: target_bank_scan_tick_every at frame_rate(), so the timer, the bank and the
+// ring move on at 30 steps a game second as at 30 FPS. At 30 FPS it is the original.
 void target_bank_scan_tick(void* manager);
 
 }  // namespace bb::game

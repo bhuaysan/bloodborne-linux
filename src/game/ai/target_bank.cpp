@@ -8,21 +8,20 @@
 
 namespace bb::game {
 
-void target_bank_scan_tick_every(TargetBankScanTick* original, unsigned calls, unsigned& count,
+void target_bank_scan_tick_every(TargetBankScanTick* original, unsigned fps, unsigned& phase,
                                  void* manager) {
-    if (calls <= 1 || count == 0) {
+    if (game_tick(fps, phase)) {
         original(manager);
     }
-    count = calls > 1 ? (count + 1) % calls : 0;
 }
 
 // 0x012a43b0
 void target_bank_scan_tick(void* manager) {
     // The game's task calls the tick once a frame, from one thread.
-    static unsigned count = 0;
+    static unsigned phase = 0;
     target_bank_scan_tick_every(
-        reinterpret_cast<TargetBankScanTick*>(hook::original(image(), 0x012a43b0)),
-        frame_rate_scale(), count, manager);
+        reinterpret_cast<TargetBankScanTick*>(hook::original(image(), 0x012a43b0)), frame_rate(),
+        phase, manager);
 }
 
 }  // namespace bb::game

@@ -12,15 +12,32 @@ namespace bb::game {
 // The game's own frame rate; bb-run offers bb::common::frame_rates.
 inline constexpr unsigned default_frame_rate = 30;
 
-// Sets the target frame rate (30, 60 or 120; anything else throws std::invalid_argument). Called
-// before the game runs; not thread-safe.
+// Sets the target frame rate (one of bb::common::frame_rates; anything else throws
+// std::invalid_argument). Called before the game runs; not thread-safe.
 void set_frame_rate(unsigned fps);
 unsigned frame_rate();
 
-// Frames per 30 FPS frame, frame_rate() / default_frame_rate: 1 at 30, 2 at 60, 4 at 120.
-inline unsigned frame_rate_scale() {
-    return frame_rate() / default_frame_rate;
+// A 30 Hz clock of game time read at `fps` calls a game second, for a site that the game runs once
+// a 30 FPS frame (docs/design/frame-rate.md, "Above 60 FPS"): returns whether the clock ticks in
+// this call, so the site runs 30 times a game second. `phase` is the clock's position at the call,
+// in 1/fps of a call: 0 to fps - 1, and a call moves it on by 30. The clock ticks in the calls
+// that start at a phase below 30: every (fps / 30)-th call when fps is a whole multiple of 30 (the
+// call at phase 0), 4 or 5 calls apart at 144. At fps <= 30 every call ticks and `phase` becomes 0.
+inline bool game_tick(unsigned fps, unsigned& phase) {
+    if (fps <= default_frame_rate) {
+        phase = 0;
+        return true;
+    }
+    const bool ticks = phase < default_frame_rate;
+    phase = (phase + default_frame_rate) % fps;
+    return ticks;
 }
+
+// The step of a site run once per tick of game_tick: `delta_time` (the frame's step) for the 30 Hz
+// tick's share of game time, fps / 30 times it. With the frame's normal step that is the game's
+// 1/30 (0x3d088889), at 60 and 120 bit for bit 2 or 4 times the step; with another step (0 in a
+// hit-stop) it is the step times fps / 30.
+float game_tick_step(unsigned fps, float delta_time);
 
 // 1 / frame_rate() seconds as a float: the pacer's frame time and the main loop's time step. At
 // 30 it is the game's own constant 0x3d088889.
@@ -108,10 +125,9 @@ std::uint8_t main_loop_tick();
 // frame_step()'s value, for the stubs patched into game code (BB_PATCH), which load it from memory.
 // Written only by set_frame_rate.
 // bb_step_ratio is 30 / frame_rate(), exactly 1 at 30, 0.5 at 60 and 0.25 at 120: the share of a
-// 30 FPS frame that a frame stands for. bb_frame_scale is frame_rate_scale(), 1 at 30, 2 at 60
-// and 4 at 120.
+// 30 FPS frame that a frame stands for. bb_frame_rate is frame_rate().
 extern "C" {
 extern float bb_frame_step;
 extern float bb_step_ratio;
-extern std::uint32_t bb_frame_scale;
+extern std::uint32_t bb_frame_rate;
 }

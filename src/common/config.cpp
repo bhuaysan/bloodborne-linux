@@ -187,7 +187,7 @@ ParsedConfig parse_config(std::string_view text, std::string_view source) {
         } else if (key == "frame_rate") {
             unsigned fps = 0;
             if (v.quoted || !whole_number(v.text, fps) || !valid_frame_rate(fps)) {
-                p.fail(std::format("frame_rate: \"{}\" is not 30, 60 or 120", v.text));
+                p.fail(std::format("frame_rate: \"{}\" is not 30, 60, 120 or 144", v.text));
             }
             c.frame_rate = fps;
         } else {

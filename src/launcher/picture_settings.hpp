@@ -18,7 +18,7 @@ using Size = std::pair<unsigned, unsigned>;
 struct PictureChoices {
     bool fullscreen = false;
     Size size{1280, 720};
-    unsigned frame_rate = 30;  // 30, 60 or 120
+    unsigned frame_rate = 30;  // 30, 60, 120 or 144
     Sharpness sharpness = Sharpness::normal;
     bool operator==(const PictureChoices&) const = default;
 };

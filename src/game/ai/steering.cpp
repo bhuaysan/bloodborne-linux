@@ -1,6 +1,6 @@
 // The AI agents' steering at the target frame rate (docs/design/frame-rate.md, "The steering
-// ring (#570)"): a wrapper that runs the game's steering on every (frame rate / 30)-th call of each
-// agent, as often a game second as at 30 FPS, and hands the agent its last direction in between.
+// ring (#570)"): a wrapper that runs the game's steering on the calls of each agent where a 30 Hz
+// clock of game time ticks, as often a game second as at 30 FPS, and hands the agent its last direction in between.
 // Only the agents of characters without an update interval need it (#603): the others are already
 // stepped as often as at 30 FPS by the character's own update (#573).
 #include "game/ai/steering.hpp"
@@ -61,17 +61,17 @@ void chr_ai_control_update_noting(ChrAiControlUpdate* original, float dt, void* 
 void chr_ai_control_update(float dt, void* control) {
     auto* const original =
         reinterpret_cast<ChrAiControlUpdate*>(hook::original(image(), 0x01513c10));
-    if (frame_rate_scale() == 1) {
+    if (frame_rate() <= default_frame_rate) {
         original(dt, control);  // nothing halves at 30: the note would not be read
         return;
     }
     chr_ai_control_update_noting(original, dt, control);
 }
 
-SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, SteerState& state, void* agent,
+SteerPoint agent_steer_every(AgentSteer* original, unsigned fps, SteerState& state, void* agent,
                              const FD4TaskData* task, bool halve) {
     void* const character = load<void*>(agent, 0x230);
-    if (calls <= 1 || !halve) {
+    if (fps <= default_frame_rate || !halve) {
         state = {0, character != nullptr && task->delta_time == 0.0f};
         return original(agent, task);
     }
@@ -81,17 +81,18 @@ SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, SteerState& s
     }
     // The game's steering has not run on the agent yet when its stored step is still the
     // constructor's 0.0f (0x01dbaf4b; the steering writes it at 0x01dbbd45): the count may come
-    // from a destroyed agent at the same address, so it runs now and the count goes on from there.
-    // But a run with a step of exactly 0 (all of a full hit-stop, 0x01a38430) stores 0.0f too, so
-    // the state remembers whether the last run through here passed 0: then 0.0f is not fresh and
-    // the count rules. An agent at a reused address whose predecessor last ran with step 0 just
-    // follows the inherited count.
+    // from a destroyed agent at the same address, so it runs now and the clock goes on from phase
+    // 0. But a run with a step of exactly 0 (all of a full hit-stop, 0x01a38430) stores 0.0f too,
+    // so the state remembers whether the last run through here passed 0: then 0.0f is not fresh
+    // and the clock rules. An agent at a reused address whose predecessor last ran with step 0
+    // just follows the inherited phase.
     const bool fresh = load<float>(agent, 0x280) == 0.0f && !state.ran_zero_step;
-    const bool runs = state.count == 0 || fresh;
-    state.count = (runs ? 1 : state.count + 1) % calls;
-    if (runs) {
-        // calls * the frame's step: 2 * 1/60 is the game's 1/30 bit for bit.
-        const FD4TaskData step{task->vtable, task->delta_time * static_cast<float>(calls)};
+    if (fresh) {
+        state.phase = 0;
+    }
+    if (game_tick(fps, state.phase)) {
+        // The 30 Hz tick's step: 2 * 1/60 and 4 * 1/120 are the game's 1/30 bit for bit.
+        const FD4TaskData step{task->vtable, game_tick_step(fps, task->delta_time)};
         state.ran_zero_step = step.delta_time == 0.0f;
         return original(agent, &step);
     }
@@ -110,8 +111,8 @@ SteerPoint agent_steer_every(AgentSteer* original, unsigned calls, SteerState& s
 // 0x01dbbd00
 SteerPoint agent_steer(void* agent, const FD4TaskData* task) {
     auto* const original = reinterpret_cast<AgentSteer*>(hook::original(image(), 0x01dbbd00));
-    const unsigned calls = frame_rate_scale();
-    if (calls <= 1) {
+    const unsigned fps = frame_rate();
+    if (fps <= default_frame_rate) {
         return original(agent, task);
     }
     // Outside a character update, or for a character without an interval, halve; an interval
@@ -125,7 +126,7 @@ SteerPoint agent_steer(void* agent, const FD4TaskData* task) {
             state = it->second;
         }
     }
-    const SteerPoint point = agent_steer_every(original, calls, state, agent, task, halve);
+    const SteerPoint point = agent_steer_every(original, fps, state, agent, task, halve);
     {
         const std::lock_guard lock(counts_lock);
         if (counts.size() >= max_agents && !counts.contains(agent)) {
