@@ -1,0 +1,50 @@
+# Recording Vulkan commands off the GPU thread (#676)
+
+At `--frame-rate 120` the clinic's `play-stand` segment misses 120 FPS because the GPU command thread (`shadPS4:GpuComm`) needs about 9.25 ms per frame, against a budget of 8.33 ms. #678 and #679 took the low-hanging cuts. What remains is spread across all 1716 draws of a frame at about 5.4 µs each: resource binding, the pipeline lookup, the driver's draw calls, vertex binding and render pass setup, none above a fifth of the thread. Further cuts of 2–3 % each were mostly within run-to-run noise. This note decides how to move the recording of Vulkan commands to a thread of its own.
+
+## What can move
+
+The GPU thread does two kinds of work per draw:
+
+- **Resolving guest state into host objects.** PM4 parsing, `BindResources` (texture and buffer lookups, uploads of CPU-written pages, write tracking), the pipeline key and lookup, image layout tracking. This reads and changes the buffer cache, the texture cache and the page manager. It has to run in command order, and those caches belong to the GPU thread (#629). It stays.
+- **Recording the result.** `vkCmd*` calls into radv: bind pipeline, push descriptors, push constants, vertex and index buffers, dynamic state, begin and end rendering, barriers, copies, draws and dispatches. This takes resolved handles and values and changes nothing the resolving side reads. It can move.
+
+A perf run of `play-stand` and `play-walk` at 120 (local run during #679, before the color write masks were baked) puts 21 % of the GPU thread's samples in `libvulkan_radeon.so`, plus about 1 % in our own recording code (`Scheduler::BeginRendering`, `DynamicState::Commit`). #679 cut radv's draw cost, so about 19 % of 9.25 ms, roughly 1.75 ms, moves. The copies into the stream and staging buffers (`memmove`, about 12 % of the thread) are CPU writes on the resolving side and stay.
+
+Moving recording adds cost on the GPU thread: every command's arguments are written into a buffer instead of being passed to radv. At about 8 commands and 0.6–1 KB of arguments per draw (descriptor writes and push data are the bulk), that is about 14 000 small records and 1–1.7 MB per frame, estimated at 0.3–0.4 ms. **Expected result: `play-stand` at about 7.8–8.0 ms**, under 8.33 ms with a margin of about 0.4 ms. The cheaper `Matches` check on the pipeline lookup's repeat path (0.3–0.6 ms, #676 handoff) adds to that margin and is independent of this change.
+
+## Decisions
+
+**One recording thread, not several.** After the split the GPU thread is again the bound, at about 8 ms of resolving, and the recording thread runs at about a quarter of a core. More recording threads would only help if recording were the bound. They would also need secondary command buffers per render pass, which add driver cost, and an order across threads for barriers that the caches insert between draws. Parallel resolving would need thread-safe caches, which is a rewrite of the buffer and texture caches and is not planned.
+
+**A deferred command buffer with the same interface, not a lambda per call site.** `Scheduler::CommandBuffer()` and `UploadCommandBuffer()` return a `DeferredCommandBuffer` instead of a `vk::CommandBuffer`. It has the methods of the subset the renderer uses (about 35: `bindPipeline`, `draw*`, `dispatch*`, `pushDescriptorSetKHR`, `pushConstants`, `bindVertexBuffers*`, `bindIndexBuffer*`, `setVertexInputEXT`, the dynamic state setters, `beginRendering`, `endRendering`, `pipelineBarrier*`, the copy, fill, update, clear and resolve commands). Each method writes an opcode and a copy of its arguments into the current chunk. Pointers and spans (descriptor writes with their buffer and image infos, push data, `updateBuffer` data, copy regions, barriers, rendering attachments) are copied by value. The about 80 recording sites in `vk_rasterizer.cpp`, `vk_runtime.cpp`, `vk_pipeline_common.cpp`, `blit_helper.cpp`, `tile_manager.cpp`, the host passes and the presenter's draw path keep their code, so the change stays reviewable. A wrapper per call site with captured lambdas would touch every site and give the compiler less to check. A record that cannot be copied by value fails to compile, so no pointer into GPU-thread state can reach the recording thread.
+
+**Chunks are handed over while the frame is built.** The GPU thread flushes once per frame (`submit_done` in `Liverpool::Process`), so handing over only at a flush would start the GPU a whole replay later. Chunks of 64 KiB go to the recording thread as soon as they are full and at every `EndRendering`. The recording thread replays them into the current `VkCommandBuffer`. A flush appends a submit record that carries the `SubmitInfo` and the tick. The recording thread ends the command buffers, submits under `Scheduler::submit_mutex` (the queue is shared with the presenter's schedulers) and starts the next ones. The recording thread is idle when there is no chunk and does not spin.
+
+**Ticks stay where they are.** The GPU thread still assigns the timeline value at its flush (`CurrentTick()`, `NextTick()`), and every lifetime rule keeps working on it:
+
+- Destruction is already deferred by tick: images and their views (`TextureCache::DeleteImage`), the blit helper's views, buffer cache writes, staging and stream buffer reuse (`StreamBuffer::WaitPendingOperations`, `StagingBufferPool`) and command pool reuse all wait until the GPU has passed the tick of their last use. A tick the GPU has passed was submitted, and so was every record before it. So no handle in a chunk not yet replayed can be destroyed. This is the invariant the change rests on: **a Vulkan handle the GPU thread records may only be destroyed through `DeferOperation` or another tick check.** A run with `--validation` reports a violation as the use of a destroyed handle.
+- `IsFree(tick)` asks the GPU's semaphore, which cannot be past a tick the recording thread has not submitted. It stays conservative.
+- `Wait(tick)` makes sure the tick is flushed (as today) and waits on the timeline semaphore. Vulkan allows a host wait before the signal is submitted, and the recording thread never waits for the GPU thread, so this cannot deadlock.
+
+**Command pools belong to the recording thread.** Vulkan requires external synchronization of a pool, and only the recording thread allocates, begins and ends command buffers. The upload command buffer stays a separate stream that is submitted before the primary one in the same submit, as now.
+
+**The synchronous paths get slower by the queue's length.** `Finish()` flushes and waits, so it now also waits for the recording thread to replay what is queued, up to one frame's records in the worst case. The callers are the GDS read at an end-of-pipe event (`liverpool.cpp`), a write fault on GPU-written memory (`BufferCache::FlushGpuModified`, #537), synchronous downloads and the texture cache's garbage collector. They are rare in the measured scenarios, and the rig measures them (below). If one of them shows, the recording thread can replay ahead of the hand-over (taking a partly filled chunk) on a `Finish`.
+
+**A switch for comparison runs.** `bb-run --sync-recording` replays each chunk on the GPU thread at hand-over and submits there, as `--sync-pipelines` does for pipeline builds (#521). It rules the thread out when a run draws wrongly or hangs.
+
+**30 and 60 FPS keep their behaviour.** The commands, their order and the submits are the same. Only the thread that calls radv changes. The GPU starts a frame's work slightly later, by the time it takes to replay the last chunk.
+
+## Steps
+
+1. **The deferred command buffer, replayed synchronously** (Core). `DeferredCommandBuffer`, its records and replay, `Scheduler` returning it, replay at hand-over on the GPU thread. Nothing moves to another thread yet. Unit tests replay recorded streams against lavapipe and compare the results with direct recording. Measured: the record cost on the GPU thread (a `frame_profile` part `record`). **Gate:** if it costs more than 0.5 ms per frame in `play-stand` at 120, stop and rethink before step 2.
+2. **The recording thread** (Core). Chunk hand-over, submit records, the thread, pool ownership, `--sync-recording`. Tests: `Finish`, `Wait` and deferred destruction across the thread boundary, a submit with no records, shutdown with queued chunks.
+3. **Measurement** (in step 2's PR). `rig.py perf clinic-fight --frame-rate 120`, three runs per side: the issue's check. 30 and 60 against `main` (`compare main-menu`, `perf clinic-fight` at 60). Fault paths: the `fault` part of `frame_profile` and the p99 of `yharnam-route` at 60.
+
+Each step is one PR under the 800-line limit.
+
+## Alternatives
+
+- **More per-draw cuts.** Each is 2–3 % or less, and most tried in #678 and #679 were within noise. Not enough for 8.33 ms with room to spare. The `Matches` cut is still worth taking on its own.
+- **Several recording threads with secondary command buffers.** See above: recording is not the bound after the split, and barriers between draws need one order.
+- **Native render hooks** (engine render functions calling Vulkan directly, `AGENTS.md`). They remove the resolving cost for the passes they replace, but each pass is its own decompilation work. They stay the later step for passes whose measurement justifies them, not a way to the 120 FPS of the whole frame.
