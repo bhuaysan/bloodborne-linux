@@ -153,11 +153,13 @@ void Scheduler::Wait(u64 tick) {
 }
 
 void Scheduler::WaitSubmitted(u64 tick) {
-    if (recording != Recording::Threaded || submitted_tick.load(std::memory_order_acquire) >= tick) {
+    if (recording != Recording::Threaded ||
+        submitted_tick.load(std::memory_order_acquire) >= tick) {
         return;
     }
     // Called from another thread, so it can't flush: the tick has to be flushed already.
-    ASSERT_MSG(tick < work_semaphore.CurrentTick(), "waiting for tick {} that is not flushed", tick);
+    ASSERT_MSG(tick < work_semaphore.CurrentTick(), "waiting for tick {} that is not flushed",
+               tick);
     std::unique_lock lk{submitted_mutex};
     submitted_cv.wait(lk, [&] { return submitted_tick.load(std::memory_order_acquire) >= tick; });
 }
@@ -294,7 +296,7 @@ void Scheduler::Process(Work& work) {
 }
 
 void Scheduler::RecordingLoop() {
-    Common::SetCurrentThreadName("shadPS4:GpuRecord");
+    Common::SetCurrentThreadName("shadPS4:GpuRec");
     std::unique_lock lk{work_mutex};
     while (true) {
         work_cv.wait(lk, [this] { return stop || !work_queue.empty(); });

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/imgui/renderer/imgui_core.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-18
+// Changed for bloodborne-linux, 2026-11-18; 2026-11-19: wait for idle under submit_mutex
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -143,7 +143,11 @@ void OnResize() {
 }
 
 void Shutdown(const vk::Device& device) {
-    auto result = device.waitIdle();
+    // Under submit_mutex: the draw scheduler's recording thread may submit (#676).
+    auto result = [&] {
+        std::scoped_lock lk{::Vulkan::Scheduler::submit_mutex};
+        return device.waitIdle();
+    }();
     if (result != vk::Result::eSuccess) {
         LOG_WARNING(ImGui, "Failed to wait for Vulkan device idle on shutdown: {}",
                     vk::to_string(result));

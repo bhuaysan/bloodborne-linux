@@ -567,7 +567,8 @@ TEST(CommandRecorder, HandsChunksOverForReplayElsewhere) {
     trace = &out;
     std::vector<Vulkan::RecordedChunk> chunks;
     Vulkan::CommandRecorder recorder{true};
-    recorder.SetHandOver([&](Vulkan::RecordedChunk&& chunk) { chunks.push_back(std::move(chunk)); });
+    recorder.SetHandOver(
+        [&](Vulkan::RecordedChunk&& chunk) { chunks.push_back(std::move(chunk)); });
     const Vulkan::DeferredCommandBuffer cmd{&recorder};
     for (uint32_t round = 0; round < 200; ++round) {
         Script(cmd, round);

@@ -249,10 +249,10 @@ TEST(VideoCore, PendingOperationsPollOnlyWhenOneWaits) {
     liverpool.reset();
 }
 
-// A deferred scheduler (#676), with or without a recording thread, gives the same results on the device as a direct one: buffer fills,
-// updates from a source that changes after each call, copies, barriers, a render pass that only
-// clears and an image readback, over two submits and with enough records to hand over chunks in
-// the middle of a command buffer.
+// A deferred scheduler (#676), with or without a recording thread, gives the same results on the
+// device as a direct one: buffer fills, updates from a source that changes after each call,
+// copies, barriers, a render pass that only clears and an image readback, over two submits and
+// with enough records to hand over chunks in the middle of a command buffer.
 TEST(VideoCore, DeferredRecordingMatchesDirectOnTheDevice) {
     if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
         GTEST_SKIP() << reason;
@@ -449,8 +449,13 @@ TEST(VideoCore, RecordingThreadSubmitsInOrderAndOnShutdown) {
         cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &barrier});
     };
     Vulkan::Semaphore outside{instance};
+    const auto counter = [&] {
+        return instance.GetDevice().getSemaphoreCounterValue(outside.Handle()).value;
+    };
     {
-        Vulkan::Scheduler scheduler{instance, Vulkan::Recording::Threaded};
+        auto scheduler_owner =
+            std::make_unique<Vulkan::Scheduler>(instance, Vulkan::Recording::Threaded);
+        Vulkan::Scheduler& scheduler = *scheduler_owner;
 
         // Submits with no records.
         scheduler.Flush();
@@ -500,15 +505,27 @@ TEST(VideoCore, RecordingThreadSubmitsInOrderAndOnShutdown) {
         EXPECT_EQ(ran, 1);
         EXPECT_EQ(words[0], 0xABCDu);
 
-        // Destroyed with a chunk and a submit queued: both still reach the queue.
-        cmdbuf = scheduler.CommandBuffer();
-        cmdbuf.fillBuffer(buffer, 4, 4, 0x5678u);
-        host_barrier(cmdbuf);
-        Vulkan::SubmitInfo info{};
-        info.AddSignal(outside.Handle(), 1);
-        scheduler.Flush(info);
+        // Destroyed with a chunk and a submit queued: both still reach the queue. The recording
+        // thread is held on submit_mutex behind an earlier submit, so the later chunk and
+        // submit are still queued when the destructor starts.
+        std::thread destroy;
+        {
+            std::scoped_lock hold{Vulkan::Scheduler::submit_mutex};
+            scheduler.Flush();
+            cmdbuf = scheduler.CommandBuffer();
+            cmdbuf.fillBuffer(buffer, 4, 4, 0x5678u);
+            host_barrier(cmdbuf);
+            Vulkan::SubmitInfo info{};
+            info.AddSignal(outside.Handle(), 1);
+            scheduler.Flush(info);
+            destroy = std::thread([&] { scheduler_owner.reset(); });
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            EXPECT_EQ(counter(), 0u);
+        }
+        destroy.join();
     }
-    outside.Wait(1);
+    // The destructor waited for its last tick, so the signal is there without a wait.
+    EXPECT_EQ(counter(), 1u);
     EXPECT_EQ(words[1], 0x5678u);
     vmaDestroyBuffer(allocator, buffer, buffer_allocation);
     liverpool.reset();

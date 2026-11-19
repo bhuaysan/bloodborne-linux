@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_presenter.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12; 2026-11-17: ReleaseFrame
+// Changed for bloodborne-linux, 2026-11-12; 2026-11-17: ReleaseFrame; 2026-11-19: recording thread waits
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -86,6 +86,7 @@ private:
     Frame* GetRenderFrame();
 
     void WaitFrameSubmitted(const Frame* frame);
+    void CoverFrameWork(Frame* frame);
 
     void RecreateFrame(Frame* frame, u32 width, u32 height);
 

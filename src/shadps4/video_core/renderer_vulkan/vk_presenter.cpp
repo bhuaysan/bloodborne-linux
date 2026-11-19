@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_presenter.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12; 2026-11-17: FSR and RCAS from RendererOptions; ReleaseFrame; 2026-11-19: deferred recording of the draw scheduler
+// Changed for bloodborne-linux, 2026-11-12; 2026-11-17: FSR and RCAS from RendererOptions; ReleaseFrame; 2026-11-19: deferred recording of the draw scheduler, its recording thread
 // License texts: third_party/shadps4/LICENSES/
 
 #include "core/display_state.h"
@@ -75,7 +75,8 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
                      const RendererOptions& options)
     : window{window_}, liverpool{liverpool_},
       instance{window, options.gpu_id, options.validation},
-      draw_scheduler{instance, threaded_recording ? Recording::Threaded : Recording::Deferred}, present_scheduler{instance}, flip_scheduler{instance},
+      draw_scheduler{instance, threaded_recording ? Recording::Threaded : Recording::Deferred},
+      present_scheduler{instance}, flip_scheduler{instance},
       swapchain{instance, window, options.present_mode}, runtime{instance, draw_scheduler},
       rasterizer{std::make_unique<Rasterizer>(instance, draw_scheduler, runtime, liverpool)},
       texture_cache{rasterizer->GetTextureCache()} {
@@ -420,6 +421,11 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         if (!swapchain.AcquireNextImage()) {
             // User resizes the window too fast and GPU can't keep up. Skip this frame.
             LOG_WARNING(Render_Vulkan, "Skipping frame!");
+            if (!is_reusing_frame) {
+                // The frame goes back to the free queue, where GetRenderFrame may recreate its
+                // image: its fence has to cover the draw work PrepareFrame recorded for it.
+                CoverFrameWork(frame);
+            }
             free_frame();
             return;
         }
@@ -555,12 +561,14 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     info.AddSignal(frame->present_done);
     scheduler.Flush(info);
 
-    // Present to swapchain.
+    // Present to swapchain. Recreate waits for the device to go idle, which takes submit_mutex.
+    bool presented;
     {
         std::scoped_lock submit_lock{Scheduler::submit_mutex};
-        if (!swapchain.Present()) {
-            swapchain.Recreate(window.GetWidth(), window.GetHeight());
-        }
+        presented = swapchain.Present();
+    }
+    if (!presented) {
+        swapchain.Recreate(window.GetWidth(), window.GetHeight());
     }
 
     free_frame();
@@ -578,6 +586,15 @@ void Presenter::ReleaseFrame(Frame* frame) {
     if (frame == nullptr) {
         return;
     }
+    CoverFrameWork(frame);
+    std::scoped_lock fl{free_mutex};
+    free_queue.push(frame);
+    free_cv.notify_one();
+}
+
+// Resets the frame's present fence and submits an empty batch that waits for the frame's ready
+// tick and signals the fence, so the fence covers the draw work of the frame. Present thread.
+void Presenter::CoverFrameWork(Frame* frame) {
     const auto reset_result = instance.GetDevice().resetFences(frame->present_done);
     ASSERT_MSG(reset_result == vk::Result::eSuccess,
                "Unexpected error resetting present done fence: {}", vk::to_string(reset_result));
@@ -586,9 +603,6 @@ void Presenter::ReleaseFrame(Frame* frame) {
     info.AddWait(frame->ready_semaphore, frame->ready_tick);
     info.AddSignal(frame->present_done);
     present_scheduler.Flush(info);
-    std::scoped_lock fl{free_mutex};
-    free_queue.push(frame);
-    free_cv.notify_one();
 }
 
 // The draw scheduler's recording thread may not have submitted the frame's ready tick yet. A
