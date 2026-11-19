@@ -452,6 +452,20 @@ The clock is not tied to the main loop's frame count: each site keeps its own ph
 
 `bb-run --frame-rate`, the config's `frame_rate` and the launcher take 144 since this change.
 
+**Check (`aiwait`, the method of #573).** A local build with the AI probe of #554 (not committed), three runs each at 30, 120 and 144 on the `yharnam-enemies` save (`--window`, warm cache; load average 1.4 to 3.4, one unit-test build during the first 120 run). All nine ended in `end,scenario finished`. Each agent's distance walked in the 10 s of game time after it starts, against its range over the three runs at 30:
+
+- 13 of 17 agents are within 0.1 m of 30 at 144, and 14 of 17 at 120.
+- At 144 the agents appear and start walking at the same game times as at 120, to the 0.1 s of the probe. Both are within 0.1 s of 30, apart from (−214.8, 104.5), which starts 0.2 s later at both rates and still walks the same 8.5 m.
+- The agents off by more than 0.2 m are the contact group of "The character update interval (#573)":
+  - (−231.8, 43.3): +0.5 m at 144, +0.6 m at 120.
+  - (−234.0, 38.2): −0.4 m at 144, −0.2 m at 120.
+  - (−235.3, 36.6): −0.4 m in one run at 144, the other two within 0.1 m.
+  - (−215.3, 79.1), a pair in the north group: −0.3 m at 144, −0.2 m at 120, against a range of 8.8 to 9.5 m at 30.
+
+  120 runs main's code bit for bit, so this residue comes with the rates above 60, not with the clock. #573 resolved it at 60 (#648), but not above 60. It is a follow-up issue.
+
+Before this change 144 paced the five sites as at 120, 36 runs a game second. The unit tests show that: the steering at 144 without the wrapper steers at itself with a lag of 20, and the due check, the budget, the target bank and the hold now count 30 a game second.
+
 ## Open questions
 
 - Ints that `param_blend_int` eases upward only rise while (target − current) · t ≥ 1, so they stop short of a higher target by fewer than 2/t: up to 15 at 30 and 30 at 60. Such a parameter can settle at a different value at 60 than at 30 (for example 0 → 20 settles at 6 at 30 and stays 0 at 60). Not seen to matter yet (#598).
