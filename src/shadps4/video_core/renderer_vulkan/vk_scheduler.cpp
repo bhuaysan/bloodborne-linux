@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_scheduler.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-18
+// Changed for bloodborne-linux, 2026-11-19
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/assert.h"
@@ -377,12 +377,6 @@ void DynamicState::Commit(const Instance& instance, const vk::CommandBuffer& cmd
     if (dirty_state.blend_constants) {
         dirty_state.blend_constants = false;
         cmdbuf.setBlendConstants(blend_constants.data());
-    }
-    if (dirty_state.color_write_masks) {
-        dirty_state.color_write_masks = false;
-        if (instance.IsDynamicColorWriteMaskSupported()) {
-            cmdbuf.setColorWriteMaskEXT(0, color_write_masks);
-        }
     }
     if (dirty_state.line_width) {
         dirty_state.line_width = false;

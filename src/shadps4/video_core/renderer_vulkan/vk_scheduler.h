@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_scheduler.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-19
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -79,7 +79,6 @@ struct SubmitInfo {
 
 using Viewports = boost::container::static_vector<vk::Viewport, AmdGpu::NUM_VIEWPORTS>;
 using Scissors = boost::container::static_vector<vk::Rect2D, AmdGpu::NUM_VIEWPORTS>;
-using ColorWriteMasks = std::array<vk::ColorComponentFlags, AmdGpu::NUM_COLOR_BUFFERS>;
 struct StencilOps {
     vk::StencilOp fail_op{};
     vk::StencilOp pass_op{};
@@ -122,7 +121,6 @@ struct DynamicState {
         bool front_face : 1;
 
         bool blend_constants : 1;
-        bool color_write_masks : 1;
         bool line_width : 1;
         bool feedback_loop_enabled : 1;
     } dirty_state{};
@@ -159,7 +157,6 @@ struct DynamicState {
     vk::FrontFace front_face{};
 
     std::array<float, 4> blend_constants{};
-    ColorWriteMasks color_write_masks{};
     float line_width{};
     bool feedback_loop_enabled{};
 
@@ -321,13 +318,6 @@ struct DynamicState {
         if (rasterizer_discard_enable != enabled) {
             rasterizer_discard_enable = enabled;
             dirty_state.rasterizer_discard_enable = true;
-        }
-    }
-
-    void SetColorWriteMasks(const ColorWriteMasks& color_write_masks_) {
-        if (!std::ranges::equal(color_write_masks, color_write_masks_)) {
-            color_write_masks = color_write_masks_;
-            dirty_state.color_write_masks = true;
         }
     }
 

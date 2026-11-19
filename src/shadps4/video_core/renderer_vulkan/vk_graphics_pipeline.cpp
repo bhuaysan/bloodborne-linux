@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-14
+// Changed for bloodborne-linux, 2026-11-19
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -186,9 +186,10 @@ void GraphicsPipeline::Create(const SerializationSupport& sdata,
         dynamic_states.push_back(vk::DynamicState::eDepthBoundsTestEnable);
         dynamic_states.push_back(vk::DynamicState::eDepthBounds);
     }
-    if (instance.IsDynamicColorWriteMaskSupported()) {
-        dynamic_states.push_back(vk::DynamicState::eColorWriteMaskEXT);
-    }
+    // The color write masks are part of the pipeline key, so they are baked in rather than set
+    // as dynamic state: with a dynamic write mask radv builds a fragment epilog key and
+    // re-emits the color state on every draw, about 0.35 ms of the GPU thread's frame at 120
+    // FPS in the clinic (#676).
     if (instance.IsVertexInputDynamicState()) {
         dynamic_states.push_back(vk::DynamicState::eVertexInputEXT);
     } else if (!sdata.vertex_bindings.empty()) {
@@ -335,11 +336,7 @@ void GraphicsPipeline::Create(const SerializationSupport& sdata,
             .srcAlphaBlendFactor = src_alpha,
             .dstAlphaBlendFactor = dst_alpha,
             .alphaBlendOp = alpha_blend,
-            .colorWriteMask =
-                instance.IsDynamicColorWriteMaskSupported()
-                    ? vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-                          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
-                    : key.write_masks[i],
+            .colorWriteMask = key.write_masks[i],
         };
 
         // The shader squares its color output for this attachment (see PsColorBuffer), so the
