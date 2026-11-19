@@ -6,7 +6,9 @@
 // bytes: a thunk jumps to their first byte, and a landing patched right behind them returns.
 #include "game/frame/step_literals.hpp"
 
+#include <algorithm>
 #include <array>
+#include <iterator>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -355,14 +357,15 @@ TEST_F(StepLiteralsTest, ChrFadeTakesASecondAt60) {
 
 // bb_test_run_bytes(entry, object) saves the callee-saved registers and the stack pointer, sets rax
 // and r12 to `object` and jumps to `entry`. bb_test_land, patched in behind the bytes under test,
-// stores xmm0 and xmm4 and returns from bb_test_run_bytes.
+// stores all 16 bytes of xmm0 and xmm4 (the game reads the step as a vector later) and returns from
+// bb_test_run_bytes.
 extern "C" {
 void bb_test_run_bytes(std::uint64_t entry, void* object);
 void bb_test_land();
 std::uint64_t bb_test_saved_rsp = 0;
 std::uint64_t bb_test_land_continue = 0;  // filled by apply, unused
-float bb_test_xmm0 = 0.0f;
-float bb_test_xmm4 = 0.0f;
+alignas(16) std::uint32_t bb_test_xmm0[4] = {};
+alignas(16) std::uint32_t bb_test_xmm4[4] = {};
 }
 
 asm(R"(
@@ -386,8 +389,8 @@ bb_test_run_bytes:
     .globl bb_test_land
     .type bb_test_land, @function
 bb_test_land:
-    vmovss dword ptr [rip + bb_test_xmm0], xmm0
-    vmovss dword ptr [rip + bb_test_xmm4], xmm4
+    vmovups xmmword ptr [rip + bb_test_xmm0], xmm0
+    vmovups xmmword ptr [rip + bb_test_xmm4], xmm4
     mov rsp, qword ptr [rip + bb_test_saved_rsp]
     pop r15
     pop r14
@@ -430,13 +433,14 @@ void run_bytes(std::uint64_t function, std::uint64_t entry, std::uint64_t land,
     if (patched) {
         patch.emplace(std::array{registered(entry)});
     }
-    bb_test_xmm0 = -1.0f;
-    bb_test_xmm4 = -1.0f;
+    std::fill(std::begin(bb_test_xmm0), std::end(bb_test_xmm0), 0xdeadbeefu);
+    std::fill(std::begin(bb_test_xmm4), std::end(bb_test_xmm4), 0xdeadbeefu);
     bb_test_run_bytes(bb::game::image().runtime(entry), object);
 }
 
 // The light step, from a graphics object whose present_interval (+0x100) is `interval`: xmm4 at
-// 0x02315d79 for the main path, xmm0 at 0x02313dbf for the empty one.
+// 0x02315d79 for the main path, xmm0 at 0x02313dbf for the empty one. Lanes 1 to 3 are 0 on both
+// paths, with the game's bytes and with the stubs; the test fails here otherwise.
 std::uint32_t light_step(bool empty, bool patched, std::int32_t interval) {
     alignas(16) std::array<std::byte, 0x200> graphics{};
     at<std::int32_t>(graphics.data(), 0x100) = interval;
@@ -444,11 +448,13 @@ std::uint32_t light_step(bool empty, bool patched, std::int32_t interval) {
         run_bytes(bb::game::effect_light_gather, bb::game::light_step_empty_load,
                   bb::game::light_step_empty_continue, light_empty_land_bytes, patched,
                   graphics.data());
-        return float_bits(bb_test_xmm0);
+        EXPECT_EQ(bb_test_xmm0[1] | bb_test_xmm0[2] | bb_test_xmm0[3], 0u);
+        return bb_test_xmm0[0];
     }
     run_bytes(bb::game::effect_light_gather, bb::game::light_step_load,
               bb::game::light_step_target, light_land_bytes, patched, graphics.data());
-    return float_bits(bb_test_xmm4);
+    EXPECT_EQ(bb_test_xmm4[1] | bb_test_xmm4[2] | bb_test_xmm4[3], 0u);
+    return bb_test_xmm4[0];
 }
 
 TEST_F(StepLiteralsTest, LightStepIsTheGamesAt30) {

@@ -88,7 +88,7 @@ bb_light_step_empty_stub:
     .type bb_hold_count_stub, @function
 bb_hold_count_stub:
     cmp byte ptr [r12 + 0x4d], 0
-    je 2f
+    je 4f
     cmp dword ptr [r12 + 0x50], 0
     je 1f
     mov eax, dword ptr [rip + bb_hold_phase]
@@ -102,6 +102,7 @@ bb_hold_count_stub:
     jmp 2f
 1:
     mov byte ptr [r12 + 0x4d], 0
+4:
     mov dword ptr [rip + bb_hold_phase], 0
 2:
     jmp qword ptr [rip + bb_hold_continue]

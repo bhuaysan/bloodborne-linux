@@ -96,8 +96,8 @@ inline constexpr std::array<std::uint8_t, 27> light_step_empty_patched = {
 // clears +0x4d at 0; 0x02313870 gives the lights a step of 0 meanwhile. The pacer's request_0x274
 // and SprjScaleform (0x01cf4fda) set +0x50 to 60: two seconds at 30 FPS. The patch counts +0x50
 // down once every bb_frame_scale calls, so the hold lasts 60 game frames at any rate. The phase
-// of that count starts at 0 when a hold ends; a hold armed again while one runs keeps the phase, up
-// to bb_frame_scale - 1 calls short. At 0x0231750a, with
+// of that count is 0 in every call without a running hold, so a hold armed from outside starts at
+// 0; one armed again while a hold runs keeps the phase, up to bb_frame_scale - 1 calls short. At 0x0231750a, with
 // r12 = the object:
 //   cmp byte [r12+0x4d], 0; je 0x0231752a; mov eax, [r12+0x50]; test eax, eax; je 0x02317524
 //   dec eax; mov [r12+0x50], eax; jmp 0x0231752a; 0x02317524: mov byte [r12+0x4d], 0
