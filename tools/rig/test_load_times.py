@@ -137,6 +137,25 @@ class LoadTests(unittest.TestCase):
         self.assertEqual(load.name, "travel")
         self.assertAlmostEqual(load.seconds, 9.5)
 
+    def test_travel_whose_hud_is_gone_by_the_first_picture(self) -> None:
+        r = self.run
+        r.shot(0, False)  # the question, which hides the HUD
+        r.event(0.5, "mark", "travel")
+        r.event(0.5, "step", "40: tap A")
+        r.shot(1, False)
+        r.shot(8, False)
+        r.shot(9, True)
+        (load,) = load_times.loads(r.finish())
+        self.assertAlmostEqual(load.seconds, 8.0)
+
+    def test_continue_without_the_load_line_is_left_out(self) -> None:
+        r = self.run
+        r.event(1, "mark", "menu")
+        r.event(1, "step", "11: tap A")
+        r.shot(2, False)
+        r.shot(3, True)
+        self.assertEqual(load_times.loads(r.finish()), [])
+
     def test_a_load_that_never_ends_is_left_out(self) -> None:
         r = self.run
         r.event(0, "mark", "travel")
@@ -155,6 +174,38 @@ class LoadTests(unittest.TestCase):
         with redirect_stdout(out):
             load_times.main([str(r.finish(finished=False))])
         self.assertIn("(scenario not finished)", out.getvalue())
+        self.assertNotIn("median", out.getvalue())
+
+    def test_runs_are_summed_per_load_and_a_broken_run_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as other:
+            runs = []
+            for root, end in ((self.run.dir, 2), (Path(other), 4)):
+                r = self.run if root == self.run.dir else Run(root)
+                r.event(0, "mark", "travel")
+                r.event(0, "step", "40: tap A")
+                r.shot(1, False)
+                r.shot(end, True)
+                runs.append(str(r.finish()))
+            broken = Path(other) / "broken"
+            broken.mkdir()
+            out = io.StringIO()
+            with redirect_stdout(out):
+                load_times.main([*runs, str(broken)])
+        self.assertIn("broken: unreadable run", out.getvalue())
+        self.assertIn("travel   median   2.0 s, spread  1.0 s, runs 2: 1.5 2.5", out.getvalue())
+
+    def test_a_run_the_rig_marked_failed_is_not_summed(self) -> None:
+        r = self.run
+        r.event(0, "mark", "travel")
+        r.event(0, "step", "40: tap A")
+        r.shot(1, False)
+        r.shot(2, True)
+        r.finish()
+        (r.dir / "summary.json").write_text(json.dumps(
+            {"target": "bb-run", "scenario": "x", "scenario_ok": False}))
+        out = io.StringIO()
+        with redirect_stdout(out):
+            load_times.main([str(r.dir)])
         self.assertNotIn("median", out.getvalue())
 
 

@@ -80,15 +80,18 @@ def hud_pictures(run: Path, events: list[dict]) -> list[tuple[int, bool]]:
 
 
 def _change(pictures: list[tuple[int, bool]], after: int, shown: bool) -> tuple[float, float] | None:
-    """(midpoint ns, half gap ns) of the first change to `shown` among the pictures after `after`."""
+    """(midpoint ns, half gap ns) of the first change to `shown` after `after`. The last picture
+    at or before `after` is the state it changes from."""
     previous = None
     for t, hud in pictures:
-        if t <= after:
-            continue
-        if hud == shown and previous is not None and previous[1] != shown:
+        if t > after and hud == shown and previous is not None and previous[1] != shown:
             return (previous[0] + t) / 2, (t - previous[0]) / 2
         previous = (t, hud)
     return None
+
+
+def _first(pictures: list[tuple[int, bool]], after: int, shown: bool) -> int | None:
+    return next((t for t, hud in pictures if t > after and hud == shown), None)
 
 
 def _mark(events: list[dict], name: str) -> int | None:
@@ -127,8 +130,10 @@ def loads(run: Path) -> list[Load]:
         taps = _taps(events, travel)
         if taps:
             start = int(taps[0]["mono_ns"])
-            gone = _change(pictures, start, False)
-            end = gone and _change(pictures, int(gone[0]), True)
+            # The question hides the HUD and closing it may show it again for a moment, so the
+            # load ends at the HUD after the first picture without it that follows the press.
+            gone = _first(pictures, start, False)
+            end = gone is not None and _change(pictures, gone - 1, True)
             if end:
                 found.append(Load("travel", (end[0] - start) / 1e9, end[1] / 1e9))
     return found
@@ -140,9 +145,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     groups: dict[tuple[str, str, str], list[float]] = {}
     for run in args.runs:
-        summary = json.loads((run / "summary.json").read_text())
-        finished = (run / "events.csv").read_text().rstrip().endswith("end,scenario finished")
-        found = loads(run)
+        try:
+            summary = json.loads((run / "summary.json").read_text())
+            finished = (summary.get("scenario_ok", True) and (run / "events.csv").read_text()
+                        .rstrip().endswith("end,scenario finished"))
+            found = loads(run)
+        except (OSError, ValueError, KeyError) as e:
+            print(f"{run.name}: unreadable run ({e})")
+            continue
         text = ", ".join(f"{x.name} {x.seconds:.1f} s (±{x.uncertainty:.1f})" for x in found)
         print(f"{run.name}: {text or 'no load found'}{'' if finished else ' (scenario not finished)'}")
         if finished:
