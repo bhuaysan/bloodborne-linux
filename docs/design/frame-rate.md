@@ -355,24 +355,24 @@ Some events differ in distance by more than this: the dodges and punches in the 
 
 Every site of "What is left at 60 FPS", every `BB_REPLACE`, `BB_WRAP` and `BB_PATCH` in `src/game/`, and the open questions that touch the step, checked for 120 FPS (k = F / 30 = 4) and 144 FPS (k = 4.8). Verdicts: **works** as built, **change** needed (with its issue), **run** (needs a check by run, named in the row).
 
-**The common cause at 144.** Five wrappers take the frame rate as `frame_rate_scale()` = `frame_rate() / 30` in unsigned ints, which is 4 at 144. They then pace their sites as if the game ran at 120: 36 runs a game second where the game counts 30. Each of them counts whole calls or whole frames (the k-th call, the k-th frame, k · u frames), so a ratio of 4.8 can't be set by fixing the division alone: the site has to run on the frames where a 30 Hz clock of game time ticks, which gives 4 or 5 frames between runs. At 120 all of them are exact: 4 × 1/120 is the game's 1/30 bit for bit (a power of two times the float), as 2 × 1/60 is.
+**The common cause at 144** (fixed by #673, see "Rates that aren't multiples of 30"). Five wrappers took the frame rate as `frame_rate_scale()` = `frame_rate() / 30` in unsigned ints, which is 4 at 144. They then pace their sites as if the game ran at 120: 36 runs a game second where the game counts 30. Each of them counts whole calls or whole frames (the k-th call, the k-th frame, k · u frames), so a ratio of 4.8 can't be set by fixing the division alone: the site has to run on the frames where a 30 Hz clock of game time ticks, which gives 4 or 5 frames between runs. At 120 all of them are exact: 4 × 1/120 is the game's 1/30 bit for bit (a power of two times the float), as 2 × 1/60 is.
 
 | Site | What depends on the rate | 120 | 144 |
 |---|---|---|---|
 | `main_loop_tick` 0x2018d20 (`BB_REPLACE`) | step 1/F in the task data | works | works |
 | `flipper_wait_frame` 0x2034770 (`BB_REPLACE`) | frame time 1/F for modes 3 and 4; the sleep ends 2 ms before it (#656) | works: the sleep ends 6.3 ms into 8.33 | works: 4.9 ms into 6.94 |
-| the same, `request_0x274` (60 at +0x50 of the object at 0x5540e00) | arms a hold of 60 calls of `effect_object_update` (0x23174e0, once a frame), which counts +0x50 down once a call; set on the pacer's first tick, on a state change (0x1733fa0) and with `SprjScaleform` (0x1cf4c70) | works: since #672 the count goes down once every k calls (`BB_PATCH`, see "The effect lights") | **change** (#673): k = 4, 1.7 s instead of 2 s at 144 |
+| the same, `request_0x274` (60 at +0x50 of the object at 0x5540e00) | arms a hold of 60 calls of `effect_object_update` (0x23174e0, once a frame), which counts +0x50 down once a call; set on the pacer's first tick, on a state change (0x1733fa0) and with `SprjScaleform` (0x1cf4c70) | works: since #672 the count goes down once every k calls (`BB_PATCH`, see "The effect lights") | works since #673: counted on the 30 Hz clock, 2 s |
 | `swap_chain_present` 0x21b2fb0 (game code) | waits `present_interval` 60 Hz periods since its last present, behind its own timing flag | works: on by default (+0x8 = 1, 0x21b2f17), its period is the refresh rate video out reports (0x26d5d50, compared with 60); in `clinic-fight` at 120 the fight segments presented at a median of 8.33 ms, so it does not hold the presents back | works by the same run; not run at 144 |
 | video out vblank grid (#657) | period 1/F | works | works |
 | `havok_world_step` 0x17f99d0 (`BB_REPLACE`, #553) | world step 1/F | works; ragdoll rest positions shift as at 60 (chaos of the pile, see "The ragdolls") | works, same |
 | `chr_physics_pose_sync` 0x1515ec0 (`BB_REPLACE`, #567) | step 1/F to the three ragdoll updates; the spaced update's u · 1/30 | works: the spacing is game time, and since #573 a character's update is u 30 FPS frames apart | works: the accumulator counts game time, whatever the frames between updates |
 | ragdoll impulse 0x180e0af and root pull 0x180f15e (`BB_PATCH`) | `bb_step_ratio` = 30 / F per frame | works (0.25) | works (0.2083) |
 | `ai_world_step` 0x1dcdad0 (`BB_WRAP`, #554) | `frame_step()` for the Havok AI world | works; the section sweep of 30 calls takes 0.25 s | works (0.21 s) |
-| `target_bank_scan_tick` 0x12a43b0 (`BB_WRAP`, #555) | the game's tick on every k-th call | works | **change** (#673): 36 ticks a game second, the ring slots stand for 1/36 s |
-| `agent_steer` 0x1dbbd00 and `chr_ai_control_update` 0x1513c10 (`BB_WRAP`, #570, #603) | the steering on every k-th call of an agent, with k × the step | works | **change** (#673): runs 36 times a game second with a step of 1/36, so the read index lags 1.2 times the lag in calls and reaches the ring's 30 slots from a lag of 25: the empty ring of #570 comes back for slow walkers |
-| `world_chr_update` 0x19173b0 (`BB_WRAP`) and the due check 0x1917909 (`BB_PATCH`, #573) | a character with interval u is due every k · u frames with a step of k · u frames | works (k · u ≤ 120 fits) | **change** (#673): due every 4u frames, 36/u updates a game second; 4.8 · u is not a whole number of frames |
-| `chr_validate` 0x18b9890 (`BB_WRAP`, #573) | the setup budget on every k-th world frame | works | **change** (#673): 36 setups a game second |
-| `chase_cam_update` 0x143ac60 (`BB_WRAP`, #557) | the per-call filters scaled for c = k calls | run: the approximations of the eased factors and the input weight (within 1/5 of the error at 60 in the unit test) are sampled four times a step; the check runs below | **change** (#673): c is `frame_rate_scale()`, 4; the formulas take a fractional c, so `frame_rate() / 30.0` is enough |
+| `target_bank_scan_tick` 0x12a43b0 (`BB_WRAP`, #555) | the game's tick on every k-th call | works | works since #673: 30 ticks a game second on the 30 Hz clock |
+| `agent_steer` 0x1dbbd00 and `chr_ai_control_update` 0x1513c10 (`BB_WRAP`, #570, #603) | the steering on every k-th call of an agent, with k × the step | works | works since #673: 30 runs a game second with the game's 1/30 (it was 36 with 1/36, which brought the empty ring of #570 back from a lag of 25) |
+| `world_chr_update` 0x19173b0 (`BB_WRAP`) and the due check 0x1917909 (`BB_PATCH`, #573) | a character with interval u is due every k · u frames with a step of k · u frames | works (k · u ≤ 120 fits) | works since #673: 30/u updates a game second, 4u or 5u frames apart with that many frames as the step |
+| `chr_validate` 0x18b9890 (`BB_WRAP`, #573) | the setup budget on every k-th world frame | works | works since #673: 30 setups a game second |
+| `chase_cam_update` 0x143ac60 (`BB_WRAP`, #557) | the per-call filters scaled for c = k calls | run: the approximations of the eased factors and the input weight (within 1/5 of the error at 60 in the unit test) are sampled four times a step; the check runs below | works since #673: c = `frame_rate() / 30.0` = 4.8 |
 | `sfx_frame_update`, `shop_tab_refresh`, `chr_list_fade_step` (`BB_PATCH`, #556) | `bb_frame_step` = 1/F | works (the fade reaches 1 in 121 calls, one more than 120 from float rounding: 8 ms) | works (145 calls) |
 | the other `update(1/30)` sites of #556 (0x18bc4f7, 0x1044943, 0x15dc1f7) | one step at creation or per message | works | works |
 | 0x2277780 (0x227784b, 0x2277874), the effect system | `0xebbda0` adds the literal to an emitter's age per call. 0x2277780 runs once a frame in the street, but the call with the literal never ran (see "The effect lights") | works: not reached in play | works, same |
@@ -387,7 +387,7 @@ Every site of "What is left at 60 FPS", every `BB_REPLACE`, `BB_WRAP` and `BB_PA
 | vblank counts as time | none (#657): the game sees vblanks only through completed flips | works | works |
 | `text_starts_with`, `utf16_range_equals`, `hash_bytes_backward`, `hash_char_range` (`BB_REPLACE`) | no time | works | works |
 
-**Conclusion.** 120 needs no change before #664 lets the option take it; the chase camera and the cloth are for the runs below and #664's checks. 144 needs the five wrappers of #673 first, and #664 should accept it only once that issue is merged. Whole multiples of 30 (90, 150) would work like 120 for the wrappers, 90 with k = 3.
+**Conclusion.** 120 needs no change before #664 lets the option take it; the chase camera and the cloth are for the runs below and #664's checks. 144 needed the five wrappers of #673 first; since then the option takes it. Whole multiples of 30 (90, 150) would work like 120 for the wrappers, 90 with k = 3.
 
 **Check runs at 120.** A local `bb-run` (not committed) that lets `--frame-rate` take 120, with the vblank grid of #657, ran `clinic-fight` and `yharnam-fight` once each (`--window`, warm cache; load average about 5 from other sessions). Both ended in `end,scenario finished`. The game made 82 to 120 frames a second: 114 to 120 in the clinic's fight segments, about 82 in the street. The pacer never catches up on a late frame, so the game ran at 0.7 of real speed in the street.
 
@@ -400,7 +400,7 @@ Pictures can't show the pacing sites of #673 or the residues of the chase camera
 
 ## 120 FPS (#664)
 
-`bb-run --frame-rate`, the config's `frame_rate` and the launcher's choice take 30, 60 and 120 (`bb::common::frame_rates`); `set_frame_rate` takes the same. 144 waits for #673, and 90 is left out until a run checks it. At 120 the sites above need no change, so the option is all there is to it: k = 4, the step 1/120, the vblank grid at 120 Hz.
+`bb-run --frame-rate`, the config's `frame_rate` and the launcher's choice take 30, 60 and 120 (`bb::common::frame_rates`); `set_frame_rate` takes the same. 144 came with #673, and 90 is left out until a run checks it. At 120 the sites above need no change, so the option is all there is to it: k = 4, the step 1/120, the vblank grid at 120 Hz.
 
 **Durations at 120 against 30.** The probe of "The final check" (a local build, not committed), with every hold 4N frames, on a quiet machine (load 1.2 to 3.6, no compiler). The routes counted ended in `end,scenario finished`; the probe's `shot ALLON`/`ALLOFF` markers make the rig report missing shots, as in #514. Three runs at 120 after one to warm the cache, against the three 30 FPS runs of #514 and one fresh run at 30 of this branch, which repeats them to the step.
 
@@ -436,7 +436,21 @@ The fight segments hold 120. Where the view takes in the whole room, the GPU com
 
 **Probe** (gdb hit counts per frame and register logs, `clinic-fight` and `yharnam-fight` at 30 and 60, unpatched): `effect_object_update` and 0x22c53e0 ran once a frame from the logos on. `effect_light_gather` ran once a frame in the clinic and 2 to 4 times a frame in the street (one model each), always through the 1/60 load at 0x2313d8d: the 1/30 loads (0x2315d71, 0x2313db7) and the empty-handle path never ran, nor did 0x227784b. The lights' step at 0x2315d79 was 0x3c888889 (1/60) in every call at 30 and at 60, so the fades ran twice as fast at 60; with the patch it was 0x3c088889 (1/120) at 60 (10,076 calls) and still 1/60 at 30 (13,456 calls). The hold was never armed in these routes: +0x4d stayed 0, with +0x50 at 60, in every frame of the three logged runs, so only the unit test shows its length (61 calls at 30, 121 at 60).
 
-**At 144.** The step follows `bb_frame_step`, so the lights work at any rate; the hold counts k = 4 calls and lasts 1.7 s instead of 2 (#673).
+**At 144.** The step follows `bb_frame_step`, so the lights work at any rate; since #673 the hold counts on the 30 Hz clock (`bb_hold_phase` in 1/F of a call), 288 calls and one that clears it, 2 s.
+
+## Rates that aren't multiples of 30 (#673)
+
+**Decision.** The sites that the game paces in 30 FPS frames run on a 30 Hz clock of game time read at F frames a second (`game_tick` in `src/game/frame/frame.hpp`): a phase in 1/F of a call moves on by 30 a call, and the clock ticks in the calls that start at a phase below 30. At F = 30 k for a whole k that is every k-th call, so 30, 60 and 120 keep their behaviour bit for bit (the existing differential tests); at 144 the ticks are 4 or 5 calls apart, 30 a game second. Each site:
+
+- the target bank's tick and the effect object's hold: one phase each, as above;
+- the steering: one phase per agent, and the game's 1/30 as its step (`game_tick_step`: the frame's step times F / 30, exactly 1/30 at the normal step, 0 in a hit-stop);
+- the setup budget: stateless on WorldChrMan's counter, the frames where counter · 30 mod F is below 30;
+- the update interval's due check: at a whole k the stub's old path (k · u); otherwise a character is due where (counter − index) · 30 mod u · F is below 30, with the frames since its last due frame, (p + u · F) / 30, as its step. A character with interval u is then due 30/u times a game second, 4.8 u frames apart on average and a whole number each time, whatever its index;
+- the chase camera: c = F / 30.0, which its formulas already took.
+
+The clock is not tied to the main loop's frame count: each site keeps its own phase or uses the counter it used before, so a site that skips frames (an agent not stepped, a world that stands still) is paced by its own calls, as at 60.
+
+`bb-run --frame-rate`, the config's `frame_rate` and the launcher take 144 since this change.
 
 ## Open questions
 
