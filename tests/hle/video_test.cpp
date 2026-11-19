@@ -812,7 +812,8 @@ TEST(HleVideo, FlipsCompleteOnePerVblank) {
 }
 
 // Above 60 FPS the vblanks follow the target frame rate (#657): at 120 nine flips queued at once
-// complete in eight 8.3 ms periods, half the time they take at 60 Hz.
+// complete in eight 8.3 ms periods, half the time they take at 60 Hz. This checks that
+// set_vblank_rate reaches the present thread; vblank_grid_test.cpp checks the grid at 120 and 144.
 TEST(HleVideo, VblanksFollowAFrameRateAbove60) {
     struct Rate {
         Rate() { set_vblank_rate(120); }

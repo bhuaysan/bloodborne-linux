@@ -390,11 +390,14 @@ private:
         VblankTiming timing = vblank_timing(rate);
         VblankGrid grid{Clock::now(), timing.period, timing.grace, timing.margin};
         for (;;) {
-            // A new rate starts a new grid now, with its count from 0.
+            // A new timing starts a new grid now, with its count from 0. A new rate with the same
+            // timing (30 and 60) keeps the grid.
             if (const unsigned new_rate = vblank_rate.load(); new_rate != rate) {
                 rate = new_rate;
-                timing = vblank_timing(rate);
-                grid = VblankGrid{Clock::now(), timing.period, timing.grace, timing.margin};
+                if (const VblankTiming new_timing = vblank_timing(rate); new_timing != timing) {
+                    timing = new_timing;
+                    grid = VblankGrid{Clock::now(), timing.period, timing.grace, timing.margin};
+                }
             }
             const VblankGrid::Vblank vblank = grid.pass(Clock::now());
             std::optional<Request> request;
