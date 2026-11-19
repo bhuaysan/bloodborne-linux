@@ -60,7 +60,7 @@ The search goes first because "where did I put the dump" is the most common plac
 
 The settings read as a sentence with choices in it, not as a form:
 
-> I play in **[a window | fullscreen]** at **[1280 × 720 | 1920 × 1080 | 2560 × 1440 | …]**, at **[30 | 60]** frames per second, with a **[normal | sharpened | extra sharp]** picture.
+> I play in **[a window | fullscreen]** at **[1280 × 720 | 1920 × 1080 | 2560 × 1440 | …]**, at **[30 | 60 | 120]** frames per second, with a **[normal | sharpened | extra sharp]** picture.
 
 The sentence says what the player gets, without technical terms. The mapping onto the config file from #577 (and so onto `bb-run`'s options):
 
@@ -68,7 +68,7 @@ The sentence says what the player gets, without technical terms. The mapping ont
 |---|---|
 | a window / fullscreen | `--fullscreen` (borderless, at the display's size) |
 | resolution | `--window-size WxH`. The list holds the common 16:9 sizes up to the display's size. With fullscreen the sentence reads "at your screen's size" instead of a choice |
-| 30 / 60 | `--frame-rate` |
+| 30 / 60 / 120 | `--frame-rate` (the rates of `bb::common::frame_rates`) |
 | normal | no FSR |
 | sharpened | `--fsr`, RCAS at its default attenuation (0.25) |
 | extra sharp | `--fsr --rcas-attenuation 0` |

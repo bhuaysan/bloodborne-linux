@@ -75,7 +75,7 @@ A first check without tracked code (#509) wrote the flip mode fallback and the t
 
 ## The option (#514)
 
-`bb-run --frame-rate 30|60` (default 30) sets the target frame rate F; `rig.py run` and `rig.py perf` pass it on (`--frame-rate`, to `bb-run` only). Two game functions are replaced, in `src/game/frame/`, and are hooked at every frame rate:
+`bb-run --frame-rate 30|60|120` (default 30) sets the target frame rate F (120 since #664; see "Above 60 FPS" and "120 FPS (#664)"); `rig.py run` and `rig.py perf` pass it on (`--frame-rate`, to `bb-run` only). Two game functions are replaced, in `src/game/frame/`, and are hooked at every frame rate:
 
 1. **`flipper_wait_frame` (0x2034770, 0x84c bytes by its FDE).** The same logic, with `bb::game::frame_step()` = 1/F as the frame time of modes 3 and 4 (the default and the online one) and of the forced default mode. Modes 0 and 1 keep 1/30 (their present interval of 2 caps them at 30 anyway) and mode 2 keeps its 1/60 and its `tearing` = 1, so the game's own 60 FPS mode is not what the option selects. The foreground wait sleeps first (#656): for the time left until 2 ms before the end the game computes, on `CLOCK_MONOTONIC` (`clock_nanosleep`), then it spins on `gettimeofday` as the game does. The sleep lasts the time from a fresh read of `CLOCK_REALTIME` to that point, at most a frame. A step of the wall clock, which `gettimeofday` reads, cannot stall it: an absolute sleep on `CLOCK_REALTIME` would follow a backward step, where the game's loop ends at once. As long as the wake-up comes within the margin, the wait still ends with the first read past the frame time, so the frame times stay those of the busy wait, and the main thread no longer burns a core while it waits. With a test clock installed the sleep returns at once, so the differential tests see the game's reads. The 2 ms margin was measured in #656: `clinic-fight` and `yharnam-route` at 30 and 60, three runs each, kept the p95 and p99 of every segment within the spread of the busy wait, and `game main` spends its work plus the margin per frame, about 4 to 6 ms instead of the whole frame.
 2. **`main_loop_tick` (0x2018d20, 0x1e0 bytes by its FDE).** The same calls, with `delta_time` = 1/F in the task data it hands to the task manager, so every task and the global task data (0x54b7e08) get the step.
@@ -397,6 +397,35 @@ Every site of "What is left at 60 FPS", every `BB_REPLACE`, `BB_WRAP` and `BB_PA
 Pictures can't show the pacing sites of #673 or the residues of the chase camera at 120. Those need #664's checks with holds of 4N frames and a game that keeps up with 120.
 
 **Also found.** The game's own 0x2313870 takes a literal step a call and a hold of 60 calls (rows above), a 60 FPS site that the 1/30 survey missed; #672 patched it (see "The effect lights").
+
+## 120 FPS (#664)
+
+`bb-run --frame-rate`, the config's `frame_rate` and the launcher's choice take 30, 60 and 120 (`bb::common::frame_rates`); `set_frame_rate` takes the same. 144 waits for #673, and 90 is left out until a run checks it. At 120 the sites above need no change, so the option is all there is to it: k = 4, the step 1/120, the vblank grid at 120 Hz.
+
+**Durations at 120 against 30.** The probe of "The final check" (a local build, not committed), with every hold 4N frames, on a quiet machine (load 1.2 to 3.6, no compiler). The routes counted ended in `end,scenario finished`; the probe's `shot ALLON`/`ALLOFF` markers make the rig report missing shots, as in #514. Three runs at 120 after one to warm the cache, against the three 30 FPS runs of #514 and one fresh run at 30 of this branch, which repeats them to the step.
+
+- Walking: 7.29 m in a 2 s walk at 120, 7.09 m at 30. Motion starts 25 to 33 ms earlier: the two frames of input latency (see "The input latency") are 17 ms at 120 and 67 ms at 30, and the 50 ms difference at 4 m/s is the 0.2 m. The time in motion is the same.
+- Back step: 1258 to 1267 ms from the press to the end of motion against 1333 ms; start to end is the same to the step (1167 ms), the start comes 67 to 75 ms earlier, which is the latency again. Distance 2.24 m against 2.30 m (2.26 m at 60).
+- Charged attack: 1400 to 1408 ms against 1400 ms, 0.31 m at both.
+- Pause menu: 167 ms to open at both rates; closing 158 to 175 ms against 133 ms at 30, within its 33 ms resolution at 30 (as at 60). The menu pictures change every fourth step.
+- Side dodges and punches meet the clinic's wall after the back steps, as in #514, and where they meet it differs with the 0.2 m of the walks. So a second scenario left the back steps out and dodged and punched in the open (three runs at each rate). There the free side dodge covers 3.08 m at 30 and 3.10 m at 120, and the hunter's speed per 1/30 s of game time, of the dodges, the punches and the charged attacks, is the same at both rates from the first fast frame to the last moving one, within one 30 FPS frame. The remaining differences in that scenario are the ends of slow drifts under 0.1 m/s, where the motion threshold of the probe lands, not motions.
+
+Every duration matches 30 within one 30 FPS frame once the latency is taken out, as at 60.
+
+**Frame times at 120.** `clinic-fight`, three runs with `--perf`:
+
+| Segment | p50 | p95 | p99 | presents/s | `shadPS4:GpuComm` CPU |
+|---|---|---|---|---|---|
+| continue | 9.07 | 17.8 | 17.88 | 84 | 97 % |
+| play-stand | 9.38 | 17.8 | 17.87 | 84 | 98 % |
+| play-walk | 8.34 | 17.76 | 17.82 | 103 | 90 % |
+| play-camera | 8.34 | 16.79 | 17.78 | 108 | 83 % |
+| play-dodge | 8.33 | 8.35 | 8.36 | 120 | 66 % |
+| play-attack | 8.33 | 8.35 | 8.38 | 120 | 64 % |
+| play-lockon | 8.33 | 8.36 | 8.38 | 120 | 60 % |
+| play-walk-again | 8.33 | 8.35 | 8.37 | 120 | 75 % |
+
+The fight segments hold 120. Where the view takes in the whole room, the GPU command thread is busy for the whole frame and the game makes 84 to 108 frames a second; the game's main thread uses 38 to 55 % of a core. A late frame is not caught up by the pacer, so there the game runs slower than real time (0.7 at 84 FPS) while the durations in game time stay right. The GPU thread's cost is #676 (#657 measured 11.5 ms a clinic frame, 6.4 ms of it in write-tracking faults). One run each at 30 and 60 of this branch gives medians of 33.33 and 16.67 ms in every segment, p99 at most 35.3 and 16.9 ms, as in "The final check".
 
 ## The effect lights (#672)
 **Decision.** `effect_light_gather` (0x2313870) gets its step times `bb_step_ratio`, and `effect_object_update` (0x23174e0) counts its hold down once every k = F / 30 calls, both by `BB_PATCH` (`src/game/frame/step_literals.cpp`). At 30 FPS the patched bytes give the game's values bit for bit (the differential tests run the game's bytes and the stubs from the same registers).
