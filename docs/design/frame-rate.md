@@ -462,7 +462,7 @@ The clock is not tied to the main loop's frame count: each site keeps its own ph
   - (−235.3, 36.6): −0.4 m in one run at 144, the other two within 0.1 m.
   - (−215.3, 79.1), a pair in the north group: −0.3 m at 144, −0.2 m at 120, against a range of 8.8 to 9.5 m at 30.
 
-  120 runs main's code bit for bit, so this residue comes with the rates above 60, not with the clock. #573 resolved it at 60 (#648), but not above 60. It is a follow-up issue.
+  120 runs main's code bit for bit, so this residue comes with the rates above 60, not with the clock. #573 resolved it at 60 (#648), but not above 60. It is followed up in #680.
 
 Before this change 144 paced the five sites as at 120, 36 runs a game second. The unit tests show that: the steering at 144 without the wrapper steers at itself with a lag of 20, and the due check, the budget, the target bank and the hold now count 30 a game second.
 
