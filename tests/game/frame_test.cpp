@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <format>
 #include <functional>
 #include <limits>
@@ -323,6 +324,30 @@ TEST_F(EbootTest, FlipperWaitFrameAt60) {
         EXPECT_EQ(f->now_time_us - f->prev_time_us, e.waited_us);
         EXPECT_EQ(f->late, 0);
     }
+}
+
+// On the host clock the foreground wait sleeps until shortly before its end (#656): it still
+// waits the whole frame time, but the thread spends only a small part of it on the CPU.
+TEST_F(EbootTest, FlipperWaitFrameSleepsOnTheHostClock) {
+    const FrameRateGuard rate(60);
+    SprjFlipper* f = std::get<0>(pacer_inputs({"host clock", {}})(harness().arena()));
+    bb::game::flipper_wait_frame(f);  // the fake start lies in the past: no wait
+    const auto thread_cpu_ns = [] {
+        timespec t{};
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+        return static_cast<std::int64_t>(t.tv_sec) * 1'000'000'000 + t.tv_nsec;
+    };
+    const std::int64_t cpu_before = thread_cpu_ns();
+    const std::uint64_t first = f->now_time_us;
+    constexpr int frames = 10;
+    for (int i = 0; i < frames; ++i) {
+        bb::game::flipper_wait_frame(f);
+        EXPECT_GE(f->now_time_us - f->prev_time_us, 16666U) << "frame " << i;
+    }
+    const std::int64_t cpu_us = (thread_cpu_ns() - cpu_before) / 1000;
+    const auto wall_us = static_cast<std::int64_t>(f->now_time_us - first);
+    // Spinning all along costs the whole wall time; the margin is 2 ms of 16.7.
+    EXPECT_LT(cpu_us, wall_us / 2) << "wall " << wall_us << " us";
 }
 
 int observed_frames = 0;

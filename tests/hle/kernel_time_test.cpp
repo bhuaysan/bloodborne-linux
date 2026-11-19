@@ -312,6 +312,33 @@ TEST(KernelTime, WallClockReplacesTheHostClock) {
     EXPECT_GT(tv.tv_sec, 1234);
 }
 
+std::uint64_t realtime_us() {
+    timespec t{};
+    clock_gettime(CLOCK_REALTIME, &t);
+    return static_cast<std::uint64_t>(t.tv_sec) * 1'000'000 +
+           static_cast<std::uint64_t>(t.tv_nsec) / 1000;
+}
+
+TEST(KernelTime, SleepsUntilTheWallClockDeadline) {
+    const std::uint64_t start = realtime_us();
+    sleep_until_wall_clock(start + 20'000);
+    EXPECT_GE(realtime_us(), start + 20'000);
+
+    // A deadline already past returns at once.
+    const auto before = std::chrono::steady_clock::now();
+    sleep_until_wall_clock(start);
+    sleep_until_wall_clock(0);
+    EXPECT_LT(std::chrono::steady_clock::now() - before, 1s);
+}
+
+TEST(KernelTime, SleepReturnsAtOnceWithATestClock) {
+    EXPECT_EQ(set_wall_clock(&fixed_time), nullptr);
+    const auto before = std::chrono::steady_clock::now();
+    sleep_until_wall_clock(realtime_us() + 60'000'000);
+    EXPECT_LT(std::chrono::steady_clock::now() - before, 1s);
+    EXPECT_EQ(set_wall_clock(nullptr), &fixed_time);
+}
+
 TEST(KernelTime, EveryTimeImportIsImplemented) {
     const std::pair<const char*, const char*> imports[] = {
         {"libkernel", "lLMT9vJAck0"}, {"libkernel", "yS8U2TGCe1A"}, {"libkernel", "hHlZQUnlxSM"},

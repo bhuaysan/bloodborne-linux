@@ -98,6 +98,18 @@ WallClock set_wall_clock(WallClock clock) {
     return wall_clock.exchange(clock, std::memory_order_acq_rel);
 }
 
+void sleep_until_wall_clock(std::uint64_t deadline_us) {
+    if (wall_clock.load(std::memory_order_acquire) != nullptr) {
+        return;
+    }
+    const timespec deadline{static_cast<time_t>(deadline_us / 1'000'000),
+                            static_cast<long>(deadline_us % 1'000'000) * 1000};
+    // Absolute on CLOCK_REALTIME, the clock gettimeofday reads, so a step of the clock moves the
+    // deadline with it, and a signal only restarts the sleep.
+    while (clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &deadline, nullptr) == EINTR) {
+    }
+}
+
 int guest_clock_gettime(std::int32_t clock, GuestTimespec* out) {
     const auto host = host_clock(clock);
     if (!host) {

@@ -8,12 +8,18 @@
 #include "game/frame/frame.hpp"
 #include "game/image.hpp"
 #include "hle/hle.hpp"
+#include "hle/kernel/time.hpp"
 #include "hook/hook.hpp"
 
 namespace bb::game {
 namespace {
 
 std::atomic<FrameObserver> frame_observer{nullptr};
+
+// The foreground wait sleeps until this long before its end and spins only the rest (#656), so
+// the end of the wait keeps the precision of the spin: the sleep's wake-up latency (the timer
+// slack of 50 us and the scheduler) stays inside the margin. Measured in #656.
+constexpr float spin_margin_s = 0.002f;
 
 struct Timeval {
     std::int64_t sec;
@@ -155,11 +161,16 @@ void flipper_wait_frame(SprjFlipper* self) {
         const float wait = static_cast<float>(wait_us) / 1000000.0f;
         float remaining = wait - static_cast<float>(now - self->prev_time_us) / 1000000.0f;
         // Busy wait in the foreground; in the background sleep while more than 5 ms remain.
+        // Unlike the game, the foreground sleeps first, until spin_margin_s before the end the
+        // game computes, and spins from there on.
         if (!(0.0f > remaining)) {
             for (;;) {
                 const float left = min_ss(wait, remaining);
                 if (!(left > 0.0f)) {
                     break;
+                }
+                if (const float sleep = left - spin_margin_s; foreground && sleep > 0.0f) {
+                    hle::kernel::sleep_until_wall_clock(now + to_us(sleep));
                 }
                 if (!foreground && left > 0.001f && left > 0.005f) {
                     const std::int32_t us =
