@@ -30,6 +30,15 @@ void CommandRecorder::SetTarget(vk::CommandBuffer cmdbuf) {
 
 std::size_t CommandRecorder::Reserve(std::size_t bytes) {
     const std::size_t aligned = AlignUp(bytes, Align);
+    if (!data && hand_over) {
+        // The last chunk was handed over: continue in storage the recording thread gave back.
+        std::scoped_lock lk{spares_mutex};
+        if (!spares.empty()) {
+            data = std::move(spares.back().data);
+            capacity = spares.back().capacity;
+            spares.pop_back();
+        }
+    }
     if (size + aligned > capacity) {
         const std::size_t grown = std::max({capacity * 2, size + aligned, 2 * HandOverBytes});
         auto bigger = std::make_unique_for_overwrite<std::byte[]>(grown);
@@ -58,7 +67,19 @@ void CommandRecorder::End(std::size_t rec) {
     std::memcpy(data.get() + rec + offsetof(Header, bytes), &bytes, sizeof(bytes));
     ++records;
     if (size >= HandOverBytes) {
-        Replay();
+        HandOver();
+    }
+}
+
+void CommandRecorder::ReplayRecords(vk::CommandBuffer cmdbuf, std::byte* record,
+                                    std::size_t bytes) {
+    bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::replay);
+    std::byte* const end = record + bytes;
+    while (record < end) {
+        Header header;
+        std::memcpy(&header, record, sizeof(header));
+        header.fn(cmdbuf, record);
+        record += header.bytes;
     }
 }
 
@@ -66,17 +87,39 @@ void CommandRecorder::Replay() {
     if (size == 0) {
         return;
     }
-    bb::common::frame_profile::Scope profile(bb::common::frame_profile::Part::replay);
-    std::byte* record = data.get();
-    std::byte* const end = record + size;
-    while (record < end) {
-        Header header;
-        std::memcpy(&header, record, sizeof(header));
-        header.fn(target, record);
-        record += header.bytes;
-    }
+    ReplayRecords(target, data.get(), size);
     size = 0;
     records = 0;
+}
+
+void CommandRecorder::HandOver() {
+    if (size == 0) {
+        return;
+    }
+    if (!hand_over) {
+        Replay();
+        return;
+    }
+    RecordedChunk chunk;
+    chunk.data = std::move(data);
+    chunk.size = size;
+    chunk.capacity = capacity;
+    capacity = 0;
+    size = 0;
+    records = 0;
+    hand_over(std::move(chunk));
+}
+
+void CommandRecorder::ReplayChunk(vk::CommandBuffer cmdbuf, const RecordedChunk& chunk) {
+    ReplayRecords(cmdbuf, chunk.data.get(), chunk.size);
+}
+
+void CommandRecorder::Recycle(RecordedChunk&& chunk) {
+    std::scoped_lock lk{spares_mutex};
+    if (chunk.data && spares.size() < MaxSpares) {
+        chunk.size = 0;
+        spares.push_back(std::move(chunk));
+    }
 }
 
 vk::CommandBuffer DeferredCommandBuffer::Direct() const {

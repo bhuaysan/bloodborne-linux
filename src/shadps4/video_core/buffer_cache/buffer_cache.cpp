@@ -588,6 +588,11 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     };
 
     info.AddWait(signal_sema, signal_tick);
+    // The submit callback runs outside submit_mutex, and the draw scheduler's recording thread
+    // submits to the same queue (docs/design/command-recording.md). The bind reaches the queue
+    // before queued commands of earlier flushes; that is safe while binds only add pages that no
+    // queued command uses.
+    std::scoped_lock lk{Vulkan::Scheduler::submit_mutex};
     auto submit_result = instance.GetGraphicsQueue().bindSparse(sparse_info);
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 

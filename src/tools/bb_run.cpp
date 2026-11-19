@@ -67,6 +67,7 @@
 #include "hle/kernel/vmem.hpp"
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "shadps4_host/fault_handler.hpp"
 #endif
 #ifdef BB_HAVE_WINDOW
@@ -253,6 +254,7 @@ void open_display(const bb::tools::RunOptions& options) {
     }
     Storage::pipeline_cache_enabled = options.pipeline_cache;
     Vulkan::async_pipeline_builds = options.async_pipelines;
+    Vulkan::threaded_recording = options.threaded_recording;
     Vulkan::RendererOptions renderer{*gpu_id, validation, Vulkan::PresentMode::Mailbox,
                                      options.fsr, options.rcas, options.rcas_attenuation};
     const char* present_mode_name = "mailbox";

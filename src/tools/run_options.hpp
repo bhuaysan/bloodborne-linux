@@ -21,8 +21,9 @@ inline constexpr std::string_view run_usage =
     "              [--log SPEC] [--no-log-file] [--headless] [--device NAME]\n"
     "              [--validation] [--validation-sync] [--validation-gpu]\n"
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
-    "              [--sync-pipelines] [--pad-input PATH] [--frame-rate 30|60|120|144]\n"
-    "              [--window-size WIDTHxHEIGHT] [--fullscreen] [--fsr] [--no-rcas]\n"
+    "              [--sync-pipelines] [--sync-recording] [--pad-input PATH]\n"
+    "              [--frame-rate 30|60|120|144] [--window-size WIDTHxHEIGHT] [--fullscreen]\n"
+    "              [--fsr] [--no-rcas]\n"
     "              [--rcas-attenuation STOPS] [--resolution WIDTHxHEIGHT]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
@@ -48,6 +49,8 @@ inline constexpr std::string_view run_usage =
     "                       every pipeline built again, for comparison runs\n"
     "  --sync-pipelines     create every new pipeline on the GPU thread, so no draw is skipped\n"
     "                       while its pipeline is created on a worker thread (the default)\n"
+    "  --sync-recording     record and submit Vulkan commands on the GPU thread instead of a\n"
+    "                       recording thread of their own (the default)\n"
     "  --pad-input PATH     read pad states from the file or FIFO PATH and give them to the game\n"
     "                       through a gamepad that exists only in this process (docs/test-rig.md);\n"
     "                       needs a window; other controllers are then ignored\n"
@@ -97,6 +100,7 @@ struct RunOptions {
     PresentMode present_mode = PresentMode::mailbox;  // --present-mode
     bool pipeline_cache = true;  // false with --no-pipeline-cache
     bool async_pipelines = true;  // false with --sync-pipelines
+    bool threaded_recording = true;  // false with --sync-recording
     std::optional<std::filesystem::path> pad_input;  // --pad-input
     unsigned frame_rate = 30;  // --frame-rate: 30, 60, 120 or 144
     unsigned window_width = 1280;  // --window-size

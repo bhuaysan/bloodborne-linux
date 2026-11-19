@@ -78,6 +78,11 @@ TEST(RunOptions, SyncPipelinesBuildsOnTheGpuThread) {
     EXPECT_TRUE(o.pipeline_cache);
 }
 
+TEST(RunOptions, SyncRecordingRecordsOnTheGpuThread) {
+    EXPECT_TRUE(parse({}).threaded_recording);
+    EXPECT_FALSE(parse({"--sync-recording"}).threaded_recording);
+}
+
 TEST(RunOptions, ParsesEveryOption) {
     const RunOptions o = parse({"--game-dir", "/games/bb", "--profile", "test_1-a", "--timeout",
                                 "10", "--stop-at-main-loop", "--log", "hle=trace,warn",

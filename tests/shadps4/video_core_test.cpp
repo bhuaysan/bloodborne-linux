@@ -5,7 +5,9 @@
 #include <dlfcn.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -13,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -246,7 +249,7 @@ TEST(VideoCore, PendingOperationsPollOnlyWhenOneWaits) {
     liverpool.reset();
 }
 
-// A deferred scheduler (#676) gives the same results on the device as a direct one: buffer fills,
+// A deferred scheduler (#676), with or without a recording thread, gives the same results on the device as a direct one: buffer fills,
 // updates from a source that changes after each call, copies, barriers, a render pass that only
 // clears and an image readback, over two submits and with enough records to hand over chunks in
 // the middle of a command buffer.
@@ -266,8 +269,8 @@ TEST(VideoCore, DeferredRecordingMatchesDirectOnTheDevice) {
     constexpr u32 image_size = 8;
     constexpr u32 image_at = 40960;
 
-    const auto run = [&](bool deferred) {
-        Vulkan::Scheduler scheduler{instance, deferred};
+    const auto run = [&](Vulkan::Recording recording) {
+        Vulkan::Scheduler scheduler{instance, recording};
         // C structs: value-initialised, then set, so no field goes without an initialiser.
         VkBufferCreateInfo buffer_ci{};
         buffer_ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -387,8 +390,9 @@ TEST(VideoCore, DeferredRecordingMatchesDirectOnTheDevice) {
         return result;
     };
 
-    const std::vector<u32> direct = run(false);
-    const std::vector<u32> deferred = run(true);
+    const std::vector<u32> direct = run(Vulkan::Recording::Direct);
+    const std::vector<u32> deferred = run(Vulkan::Recording::Deferred);
+    const std::vector<u32> threaded = run(Vulkan::Recording::Threaded);
     EXPECT_EQ(direct[0], 0x11111111u);
     EXPECT_EQ(direct[1023], 0x11111111u);
     for (u32 i = 0; i < updates; i += 997) {
@@ -399,6 +403,114 @@ TEST(VideoCore, DeferredRecordingMatchesDirectOnTheDevice) {
     EXPECT_EQ(direct[image_at / 4], 7u);
     EXPECT_EQ(direct[image_at / 4 + image_size * image_size - 1], 7u);
     EXPECT_TRUE(deferred == direct);
+    EXPECT_TRUE(threaded == direct);
+    liverpool.reset();
+}
+
+// The recording thread (#676) across the GPU thread's waits: a submit with no records, Finish
+// after chunks handed over mid-buffer, a deferred operation that runs only once its tick passed,
+// the present thread's wait for a tick the recording thread has not submitted yet (held back on
+// submit_mutex), and a scheduler destroyed with a chunk and a submit still queued.
+TEST(VideoCore, RecordingThreadSubmitsInOrderAndOnShutdown) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    Core::MemoryManager memory;
+    auto liverpool = std::make_unique<AmdGpu::Liverpool>(memory);
+    Frontend::WindowSDL window;
+    Vulkan::Instance instance{window, -1};
+    start_imgui(instance);
+    const VmaAllocator allocator = instance.GetAllocator();
+    constexpr u32 buffer_bytes = 64 * 1024;
+    constexpr u32 updates = 6000; // about 3 hand-overs of 64 KiB
+
+    VkBufferCreateInfo buffer_ci{};
+    buffer_ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buffer_ci.size = buffer_bytes;
+    buffer_ci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VmaAllocationCreateInfo buffer_alloc{};
+    buffer_alloc.flags =
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    buffer_alloc.usage = VMA_MEMORY_USAGE_AUTO;
+    buffer_alloc.requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    VkBuffer raw_buffer{};
+    VmaAllocation buffer_allocation{};
+    VmaAllocationInfo buffer_info{};
+    ASSERT_EQ(vmaCreateBuffer(allocator, &buffer_ci, &buffer_alloc, &raw_buffer,
+                              &buffer_allocation, &buffer_info),
+              VK_SUCCESS);
+    const vk::Buffer buffer{raw_buffer};
+    const auto* words = static_cast<const volatile u32*>(buffer_info.pMappedData);
+    const auto host_barrier = [&](const Vulkan::DeferredCommandBuffer& cmdbuf) {
+        const vk::MemoryBarrier2 barrier{.srcStageMask = vk::PipelineStageFlagBits2::eAllTransfer,
+                                         .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+                                         .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+                                         .dstAccessMask = vk::AccessFlagBits2::eHostRead};
+        cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &barrier});
+    };
+    Vulkan::Semaphore outside{instance};
+    {
+        Vulkan::Scheduler scheduler{instance, Vulkan::Recording::Threaded};
+
+        // Submits with no records.
+        scheduler.Flush();
+        scheduler.Flush();
+        scheduler.Finish();
+        EXPECT_TRUE(scheduler.IsFree(scheduler.CurrentTick() - 1));
+
+        // Finish waits for chunks handed over in the middle of the command buffer.
+        auto cmdbuf = scheduler.CommandBuffer();
+        for (u32 i = 0; i < updates; ++i) {
+            const u32 value = i + 1;
+            cmdbuf.updateBuffer(buffer, 4 * (i % (buffer_bytes / 4)), sizeof(value), &value);
+        }
+        host_barrier(cmdbuf);
+        scheduler.Finish();
+        EXPECT_EQ(words[0], 1u);
+        EXPECT_EQ(words[updates - 1], updates);
+
+        // A deferred operation runs only once its tick passed.
+        int ran = 0;
+        cmdbuf = scheduler.CommandBuffer();
+        cmdbuf.fillBuffer(buffer, 0, 4, 0xABCDu);
+        host_barrier(cmdbuf);
+        scheduler.DeferOperation([&] { ++ran; });
+        const u64 tick = scheduler.CurrentTick();
+        scheduler.PopPendingOperations();
+        EXPECT_EQ(ran, 0);
+
+        // The present thread's wait: the recording thread can't submit while the test holds
+        // submit_mutex, so WaitSubmitted blocks until it lets go.
+        std::atomic<bool> submitted{false};
+        std::thread present;
+        {
+            std::scoped_lock hold{Vulkan::Scheduler::submit_mutex};
+            scheduler.Flush();
+            present = std::thread([&] {
+                scheduler.WaitSubmitted(tick);
+                submitted = true;
+            });
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            EXPECT_FALSE(submitted.load());
+        }
+        present.join();
+        EXPECT_TRUE(submitted.load());
+        scheduler.Wait(tick);
+        scheduler.PopPendingOperations();
+        EXPECT_EQ(ran, 1);
+        EXPECT_EQ(words[0], 0xABCDu);
+
+        // Destroyed with a chunk and a submit queued: both still reach the queue.
+        cmdbuf = scheduler.CommandBuffer();
+        cmdbuf.fillBuffer(buffer, 4, 4, 0x5678u);
+        host_barrier(cmdbuf);
+        Vulkan::SubmitInfo info{};
+        info.AddSignal(outside.Handle(), 1);
+        scheduler.Flush(info);
+    }
+    outside.Wait(1);
+    EXPECT_EQ(words[1], 0x5678u);
+    vmaDestroyBuffer(allocator, buffer, buffer_allocation);
     liverpool.reset();
 }
 

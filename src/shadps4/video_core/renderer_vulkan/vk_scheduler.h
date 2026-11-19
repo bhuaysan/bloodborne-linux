@@ -6,7 +6,9 @@
 
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <mutex>
 #include <thread>
 #include <queue>
@@ -340,12 +342,19 @@ struct DynamicState {
 using SessionFunc = Common::UniqueFunction<void>;
 using SubmitFunc = Common::UniqueFunction<void, SubmitInfo&>;
 
+/// How a scheduler records (docs/design/command-recording.md, #676).
+enum class Recording {
+    Direct,   ///< calls the command buffer at once
+    Deferred, ///< records into chunks and replays them on the calling thread at each hand-over
+    Threaded, ///< hands the chunks and submits to a recording thread of its own
+};
+
+/// Whether the draw scheduler gets a recording thread; bb-run --sync-recording turns it off.
+extern bool threaded_recording;
+
 class Scheduler {
 public:
-    /// A deferred scheduler records its commands into a CommandRecorder and replays them into
-    /// the Vulkan command buffer at each hand-over (docs/design/command-recording.md); a direct
-    /// one calls the command buffer at once.
-    explicit Scheduler(const Instance& instance, bool deferred_recording = false);
+    explicit Scheduler(const Instance& instance, Recording recording = Recording::Direct);
     ~Scheduler();
 
     /// Sends the current execution context to the GPU
@@ -362,6 +371,10 @@ public:
     /// Waits for the given tick to trigger on the GPU.
     void Wait(u64 tick);
 
+    /// Waits until the submit that signals tick is on the queue. A queue submit on another
+    /// scheduler that waits for tick calls this first, outside submit_mutex.
+    void WaitSubmitted(u64 tick);
+
     /// Attempts to execute operations whose tick the GPU has caught up with.
     void PopPendingOperations();
 
@@ -370,12 +383,6 @@ public:
 
     /// Ends current rendering scope.
     void EndRendering();
-
-    /// Starts a new session.
-    void BeginSession();
-
-    /// Returns the current command buffer used for uploads.
-    vk::CommandBuffer UploadCommandBuffer();
 
     /// Sets a function to be called on every session finalization.
     void SetSessionCallback(SessionFunc&& on_session) {
@@ -404,6 +411,9 @@ public:
 
     /// Resets the current command buffer after its recorded commands have been replayed.
     void ResetCommandBuffer();
+
+    /// Returns once the recording thread has processed everything handed to it.
+    void Drain();
 
     /// Returns the current command buffer tick.
     [[nodiscard]] u64 CurrentTick() const noexcept {
@@ -434,23 +444,32 @@ public:
     static std::mutex submit_mutex;
 
 private:
-    void EndSession();
+    // Work for the recording thread, in the order the GPU thread handed it over.
+    struct Work {
+        RecordedChunk chunk{};     // records to replay, or none
+        bool submit = false;       // then ends the command buffer and submits it
+        SubmitInfo info{};
+        u64 signal_value = 0;
+    };
 
     void SubmitExecution(SubmitInfo& info);
+    void Enqueue(Work&& work);
+    void Process(Work& work);
+    void RecordingLoop();
+    void BeginPrimary();
 
 private:
     const Instance& instance;
+    const Recording recording;
     CommandRecorder recorder;
     Semaphore work_semaphore;
     CommandPool command_pool;
     DynamicState dynamic_state;
     SessionFunc on_session{};
     SubmitFunc on_submit{};
-    struct Session {
-        vk::CommandBuffer upload{};
-        vk::CommandBuffer primary{};
-    };
-    std::vector<Session> sessions;
+    // The command buffer replay records into. With a recording thread only that thread touches
+    // it and command_pool (a pool needs external synchronization).
+    vk::CommandBuffer primary{};
     std::condition_variable_any event_cv;
     struct PendingOp {
         Common::UniqueFunction<void> callback;
@@ -460,6 +479,17 @@ private:
     std::recursive_mutex pending_ops_mutex;
     RenderState render_state;
     bool is_rendering = false;
+
+    std::mutex work_mutex;
+    std::condition_variable work_cv;  // work queued or stop
+    std::condition_variable idle_cv;  // the queue ran empty
+    std::deque<Work> work_queue;
+    bool working = false;
+    bool stop = false;
+    std::mutex submitted_mutex;
+    std::condition_variable submitted_cv;
+    std::atomic<u64> submitted_tick{0}; // the last signal value on the queue
+    std::thread recording_thread;
 };
 
 } // namespace Vulkan

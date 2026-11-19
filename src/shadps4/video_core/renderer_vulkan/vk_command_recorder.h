@@ -18,16 +18,29 @@
 #include <tuple>
 #include <type_traits>
 
+#include <mutex>
+#include <vector>
+
 #include "common/types.h"
+#include "common/unique_function.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
 namespace Vulkan {
 
+/// Records taken out of a recorder at a hand-over, to be replayed on the recording thread.
+struct RecordedChunk {
+    std::unique_ptr<std::byte[]> data;
+    std::size_t size = 0;
+    std::size_t capacity = 0;
+};
+
 class CommandRecorder {
 public:
-    // Chunk size at which the recorded commands are handed over (replayed). Step 2 hands chunks
-    // to the recording thread at this size, so the GPU starts before the frame is complete.
+    // Chunk size at which the recorded commands are handed over, so the recording thread and the
+    // GPU start before the frame is complete.
     static constexpr std::size_t HandOverBytes = 64 * 1024;
+
+    using HandOverFn = Common::UniqueFunction<void, RecordedChunk&&>;
 
     explicit CommandRecorder(bool deferred);
     ~CommandRecorder();
@@ -46,6 +59,20 @@ public:
 
     /// Replays every pending record into the target in recording order and empties the chunk.
     void Replay();
+
+    /// Where a hand-over sends the chunk. Without one, a hand-over replays into the target.
+    void SetHandOver(HandOverFn&& fn) {
+        hand_over = std::move(fn);
+    }
+
+    /// Hands the pending records over: to the hand-over function, or replays them.
+    void HandOver();
+
+    /// Replays a chunk taken at a hand-over into cmdbuf. Any thread.
+    static void ReplayChunk(vk::CommandBuffer cmdbuf, const RecordedChunk& chunk);
+
+    /// Gives a replayed chunk's storage back for reuse. Any thread.
+    void Recycle(RecordedChunk&& chunk);
 
     [[nodiscard]] std::size_t PendingBytes() const noexcept {
         return size;
@@ -175,12 +202,20 @@ private:
     // Grows the chunk by bytes, rounded up to Align, and returns the offset of the new space.
     std::size_t Reserve(std::size_t bytes);
 
+    static void ReplayRecords(vk::CommandBuffer cmdbuf, std::byte* records, std::size_t bytes);
+
+    // Spare chunk storage the recording thread gave back.
+    static constexpr std::size_t MaxSpares = 8;
+
     bool deferred;
     vk::CommandBuffer target{};
     std::unique_ptr<std::byte[]> data;
     std::size_t size = 0;
     std::size_t capacity = 0;
     std::size_t records = 0;
+    HandOverFn hand_over{};
+    std::mutex spares_mutex;
+    std::vector<RecordedChunk> spares;
 };
 
 #define BB_VK_FORWARD(name) [](vk::CommandBuffer c, const auto&... a) { c.name(a...); }

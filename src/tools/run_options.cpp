@@ -192,6 +192,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             options.pipeline_cache = false;
         } else if (arg == "--sync-pipelines") {
             options.async_pipelines = false;
+        } else if (arg == "--sync-recording") {
+            options.threaded_recording = false;
         } else if (arg == "--pad-input") {
             options.pad_input = std::filesystem::path(value());
         } else if (arg == "--frame-rate") {

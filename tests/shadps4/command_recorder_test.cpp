@@ -555,6 +555,47 @@ TEST(CommandRecorder, GrowingTheChunkKeepsItsRecords) {
     dispatcher = saved;
 }
 
+// With a hand-over function the recorder gives full chunks away instead of replaying them; the
+// chunks replayed in order elsewhere give the direct trace, and recycled storage is reused.
+TEST(CommandRecorder, HandsChunksOverForReplayElsewhere) {
+    vk::detail::DispatchLoaderDynamic& dispatcher = VULKAN_HPP_DEFAULT_DISPATCHER;
+    const vk::detail::DispatchLoaderDynamic saved = dispatcher;
+    InstallFakes(dispatcher);
+    const std::string direct = Record(false, 200, nullptr);
+
+    std::string out;
+    trace = &out;
+    std::vector<Vulkan::RecordedChunk> chunks;
+    Vulkan::CommandRecorder recorder{true};
+    recorder.SetHandOver([&](Vulkan::RecordedChunk&& chunk) { chunks.push_back(std::move(chunk)); });
+    const Vulkan::DeferredCommandBuffer cmd{&recorder};
+    for (uint32_t round = 0; round < 200; ++round) {
+        Script(cmd, round);
+    }
+    recorder.HandOver();
+    EXPECT_EQ(recorder.PendingBytes(), 0u);
+    EXPECT_TRUE(out.empty());
+    ASSERT_GT(chunks.size(), 2u);
+    for (const auto& chunk : chunks) {
+        EXPECT_LE(chunk.size, chunk.capacity);
+        Vulkan::CommandRecorder::ReplayChunk(Handle<vk::CommandBuffer>(0xC0FFEE), chunk);
+    }
+    EXPECT_TRUE(out == direct);
+
+    // A recycled chunk's storage backs the next records.
+    const std::byte* storage = chunks.back().data.get();
+    recorder.Recycle(std::move(chunks.back()));
+    chunks.clear();
+    recorder.HandOver(); // nothing pending: no chunk
+    EXPECT_TRUE(chunks.empty());
+    cmd.draw(1, 2, 3, 4);
+    recorder.HandOver();
+    ASSERT_EQ(chunks.size(), 1u);
+    EXPECT_EQ(chunks[0].data.get(), storage);
+    trace = nullptr;
+    dispatcher = saved;
+}
+
 // A recorder with nothing pending accepts a new target; a direct one never holds records.
 TEST(CommandRecorder, DirectRecorderHoldsNothing) {
     vk::detail::DispatchLoaderDynamic& dispatcher = VULKAN_HPP_DEFAULT_DISPATCHER;

@@ -5,6 +5,7 @@
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/assert.h"
+#include "common/thread.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "common/frame_profile.hpp"
@@ -12,14 +13,37 @@
 namespace Vulkan {
 
 std::mutex Scheduler::submit_mutex;
+bool threaded_recording = true;
 
-Scheduler::Scheduler(const Instance& instance, bool deferred_recording)
-    : instance{instance}, recorder{deferred_recording}, work_semaphore{instance},
-      command_pool{instance, &work_semaphore} {
-    BeginSession();
+Scheduler::Scheduler(const Instance& instance, Recording recording_)
+    : instance{instance}, recording{recording_}, recorder{recording_ != Recording::Direct},
+      work_semaphore{instance}, command_pool{instance, &work_semaphore} {
+    BeginPrimary();
+    dynamic_state.Invalidate();
+    if (recording == Recording::Threaded) {
+        recorder.SetHandOver([this](RecordedChunk&& chunk) {
+            Work work{};
+            work.chunk = std::move(chunk);
+            Enqueue(std::move(work));
+        });
+        recording_thread = std::thread([this] { RecordingLoop(); });
+    }
 }
 
-Scheduler::~Scheduler() = default;
+// The recording thread replays and submits what is queued before it stops, so every tick handed
+// to it reaches the queue and a wait on it returns.
+Scheduler::~Scheduler() {
+    if (recording_thread.joinable()) {
+        {
+            std::scoped_lock lk{work_mutex};
+            stop = true;
+        }
+        work_cv.notify_one();
+        recording_thread.join();
+        // The pool goes with the scheduler: its command buffers must be done.
+        work_semaphore.Wait(work_semaphore.CurrentTick() - 1);
+    }
+}
 
 void Scheduler::BeginRendering(const RenderState& new_state) {
     if (is_rendering && render_state == new_state) {
@@ -83,25 +107,21 @@ void Scheduler::EndRendering() {
     is_rendering = false;
     CommandBuffer().endRendering();
     // The end of a render pass is a hand-over point (docs/design/command-recording.md).
-    recorder.Replay();
+    recorder.HandOver();
 }
 
 void Scheduler::ResetCommandBuffer() {
-    recorder.Replay();
-    Check(recorder.Target().reset());
+    recorder.HandOver();
+    Drain();
+    Check(primary.reset());
 }
 
-vk::CommandBuffer Scheduler::UploadCommandBuffer() {
-    auto& upload_cmdbuf = sessions.back().upload;
-    if (upload_cmdbuf) {
-        return upload_cmdbuf;
+void Scheduler::Drain() {
+    if (recording != Recording::Threaded) {
+        return;
     }
-    const vk::CommandBufferBeginInfo begin_info = {
-        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
-    };
-    upload_cmdbuf = command_pool.Commit();
-    Check(upload_cmdbuf.begin(begin_info));
-    return upload_cmdbuf;
+    std::unique_lock lk{work_mutex};
+    idle_cv.wait(lk, [this] { return work_queue.empty() && !working; });
 }
 
 void Scheduler::Flush(SubmitInfo& info) {
@@ -132,6 +152,16 @@ void Scheduler::Wait(u64 tick) {
     work_semaphore.Wait(tick);
 }
 
+void Scheduler::WaitSubmitted(u64 tick) {
+    if (recording != Recording::Threaded || submitted_tick.load(std::memory_order_acquire) >= tick) {
+        return;
+    }
+    // Called from another thread, so it can't flush: the tick has to be flushed already.
+    ASSERT_MSG(tick < work_semaphore.CurrentTick(), "waiting for tick {} that is not flushed", tick);
+    std::unique_lock lk{submitted_mutex};
+    submitted_cv.wait(lk, [&] { return submitted_tick.load(std::memory_order_acquire) >= tick; });
+}
+
 void Scheduler::PopPendingOperations() {
     // Every draw and dispatch calls this. The semaphore query is an ioctl, so it is made only when
     // the first operation was submitted and the last known GPU tick doesn't free it yet, and at
@@ -156,68 +186,74 @@ void Scheduler::PopPendingOperations() {
     }
 }
 
-void Scheduler::BeginSession() {
-    EndSession();
-
-    auto& session = sessions.emplace_back();
-
+void Scheduler::BeginPrimary() {
     const vk::CommandBufferBeginInfo begin_info = {
         .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
     };
-    session.primary = command_pool.Commit();
-    Check(session.primary.begin(begin_info));
-    recorder.SetTarget(session.primary);
-
-    // Invalidate dynamic state so it gets applied to the new command buffer.
-    dynamic_state.Invalidate();
-}
-
-void Scheduler::EndSession() {
-    if (sessions.empty()) {
-        return;
+    primary = command_pool.Commit();
+    Check(primary.begin(begin_info));
+    if (recording != Recording::Threaded) {
+        recorder.SetTarget(primary);
     }
-
-    if (on_session) {
-        on_session();
-    }
-
-    const auto& session = sessions.back();
-    if (session.upload) {
-        Check(session.upload.end());
-    }
-
-    EndRendering();
-    recorder.Replay();
-    Check(session.primary.end());
 }
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
-    // Replayed before the lock the present thread also takes; EndSession replays what on_submit
-    // and the end of the session add.
-    recorder.Replay();
-    std::scoped_lock lk{submit_mutex};
-    const u64 signal_value = work_semaphore.NextTick();
-
+    // The callbacks read and change GPU-thread state, so they run here and not on the recording
+    // thread. The submit callback's sparse binds take submit_mutex themselves.
     if (on_submit) {
         on_submit(info);
     }
-
-    EndSession();
-
-    std::vector<vk::CommandBuffer> cmd_buffers;
-    cmd_buffers.reserve(sessions.size() * 2);
-
-    for (const auto& session : sessions) {
-        if (session.upload) {
-            cmd_buffers.push_back(session.upload);
-        }
-        cmd_buffers.push_back(session.primary);
+    if (on_session) {
+        on_session();
     }
-    sessions.clear();
+    EndRendering();
+    recorder.HandOver();
 
-    const vk::Semaphore timeline = work_semaphore.Handle();
-    info.AddSignal(timeline, signal_value);
+    // The tick is assigned here: the GPU thread's lifetime rules (DeferOperation, IsFree) keep
+    // working on it whether the submit happens now or on the recording thread.
+    const u64 signal_value = work_semaphore.NextTick();
+    info.AddSignal(work_semaphore.Handle(), signal_value);
+    Work work{};
+    work.submit = true;
+    work.info = info;
+    work.signal_value = signal_value;
+    if (recording == Recording::Threaded) {
+        Enqueue(std::move(work));
+    } else {
+        Process(work);
+    }
 
+    // Dynamic state goes into the next command buffer anew.
+    dynamic_state.Invalidate();
+
+    // Apply pending operations
+    PopPendingOperations();
+}
+
+void Scheduler::Enqueue(Work&& work) {
+    {
+        std::scoped_lock lk{work_mutex};
+        work_queue.push_back(std::move(work));
+    }
+    work_cv.notify_one();
+}
+
+// Replays a chunk into the primary command buffer, or ends and submits it and begins the next.
+// On the recording thread, or on the GPU thread without one.
+void Scheduler::Process(Work& work) {
+    if (work.chunk.data) {
+        CommandRecorder::ReplayChunk(primary, work.chunk);
+        recorder.Recycle(std::move(work.chunk));
+    }
+    if (!work.submit) {
+        return;
+    }
+    if (recording != Recording::Threaded) {
+        recorder.Replay();
+    }
+    Check(primary.end());
+
+    SubmitInfo& info = work.info;
     std::array<vk::PipelineStageFlags, std::tuple_size_v<decltype(info.wait_semas)>>
         wait_stage_masks;
     wait_stage_masks.fill(vk::PipelineStageFlagBits::eAllCommands);
@@ -234,20 +270,48 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         .waitSemaphoreCount = info.num_wait_semas,
         .pWaitSemaphores = info.wait_semas.data(),
         .pWaitDstStageMask = wait_stage_masks.data(),
-        .commandBufferCount = static_cast<u32>(cmd_buffers.size()),
-        .pCommandBuffers = cmd_buffers.data(),
+        .commandBufferCount = 1u,
+        .pCommandBuffers = &primary,
         .signalSemaphoreCount = info.num_signal_semas,
         .pSignalSemaphores = info.signal_semas.data(),
     };
 
-    auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
-    ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    {
+        std::scoped_lock lk{submit_mutex};
+        auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+        ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    }
+    if (recording == Recording::Threaded) {
+        {
+            std::scoped_lock lk{submitted_mutex};
+            submitted_tick.store(work.signal_value, std::memory_order_release);
+        }
+        submitted_cv.notify_all();
+    }
 
     work_semaphore.Refresh();
-    BeginSession();
+    BeginPrimary();
+}
 
-    // Apply pending operations
-    PopPendingOperations();
+void Scheduler::RecordingLoop() {
+    Common::SetCurrentThreadName("shadPS4:GpuRecord");
+    std::unique_lock lk{work_mutex};
+    while (true) {
+        work_cv.wait(lk, [this] { return stop || !work_queue.empty(); });
+        if (work_queue.empty()) {
+            return; // stop, with everything processed
+        }
+        Work work = std::move(work_queue.front());
+        work_queue.pop_front();
+        working = true;
+        lk.unlock();
+        Process(work);
+        lk.lock();
+        working = false;
+        if (work_queue.empty()) {
+            idle_cv.notify_all();
+        }
+    }
 }
 
 void DynamicState::Commit(const Instance& instance, const DeferredCommandBuffer& cmdbuf) {

@@ -75,7 +75,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
                      const RendererOptions& options)
     : window{window_}, liverpool{liverpool_},
       instance{window, options.gpu_id, options.validation},
-      draw_scheduler{instance, true}, present_scheduler{instance}, flip_scheduler{instance},
+      draw_scheduler{instance, threaded_recording ? Recording::Threaded : Recording::Deferred}, present_scheduler{instance}, flip_scheduler{instance},
       swapchain{instance, window, options.present_mode}, runtime{instance, draw_scheduler},
       rasterizer{std::make_unique<Rasterizer>(instance, draw_scheduler, runtime, liverpool)},
       texture_cache{rasterizer->GetTextureCache()} {
@@ -547,6 +547,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     });
 
     // Flush vulkan commands.
+    WaitFrameSubmitted(frame);
     SubmitInfo info{};
     info.AddWait(swapchain.GetImageAcquiredSemaphore());
     info.AddWait(frame->ready_semaphore, frame->ready_tick);
@@ -580,6 +581,7 @@ void Presenter::ReleaseFrame(Frame* frame) {
     const auto reset_result = instance.GetDevice().resetFences(frame->present_done);
     ASSERT_MSG(reset_result == vk::Result::eSuccess,
                "Unexpected error resetting present done fence: {}", vk::to_string(reset_result));
+    WaitFrameSubmitted(frame);
     SubmitInfo info{};
     info.AddWait(frame->ready_semaphore, frame->ready_tick);
     info.AddSignal(frame->present_done);
@@ -587,6 +589,16 @@ void Presenter::ReleaseFrame(Frame* frame) {
     std::scoped_lock fl{free_mutex};
     free_queue.push(frame);
     free_cv.notify_one();
+}
+
+// The draw scheduler's recording thread may not have submitted the frame's ready tick yet. A
+// queue wait for a timeline value whose signal is not submitted makes radv hold the submit back
+// in its own submission thread, so the present thread waits for the submit on the host first
+// (docs/design/command-recording.md). Outside submit_mutex: the recording thread takes it.
+void Presenter::WaitFrameSubmitted(const Frame* frame) {
+    if (frame->ready_semaphore == draw_scheduler.GetWorkSemaphore()->Handle()) {
+        draw_scheduler.WaitSubmitted(frame->ready_tick);
+    }
 }
 
 Frame* Presenter::GetRenderFrame() {

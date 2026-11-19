@@ -85,6 +85,8 @@ public:
 private:
     Frame* GetRenderFrame();
 
+    void WaitFrameSubmitted(const Frame* frame);
+
     void RecreateFrame(Frame* frame, u32 width, u32 height);
 
     void SetExpectedGameSize(s32 width, s32 height);
