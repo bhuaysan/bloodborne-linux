@@ -4,8 +4,8 @@
 // @11557f2eb60b3b00712c8887c30852de7615d6df
 // Changed for bloodborne-linux, 2026-11-11: the driver and the eight exports the game imports on
 // our runtime. Flip events go to our EventQueue, the presenter and Liverpool calls through
-// FlipPresenter (none when headless), times from our libkernel. Vblanks on a fixed 60 Hz grid with
-// sleep_until instead of AccurateTimer, and a flip waits for the first vblank after it was queued,
+// FlipPresenter (none when headless), times from our libkernel. Vblanks on a grid of 60 Hz, or of
+// the target frame rate above 60 (#657), with sleep_until instead of AccurateTimer, and a flip waits for the first vblank after it was queued,
 // or takes the one just before when it was queued up to flip_grace late (vblank_grid.hpp, #528).
 // A flip still in flight when the port closes is presented but leaves the port alone. Negative
 // indices and counts, flip rates other than 0..2 and an unknown handle fail instead of being used.
@@ -69,6 +69,9 @@ struct Port : VideoOutPort {
     std::atomic<int> flip_rate{0};
     std::atomic<bool> is_open{false};
 };
+
+// The target frame rate that the vblank grid follows (vblank_timing).
+std::atomic<unsigned> vblank_rate{60};
 
 class Driver {
 public:
@@ -382,8 +385,16 @@ private:
     // closed, or the last frame again when ImGui has to keep drawing.
     [[noreturn]] void present_thread() {
         common::set_thread_name("video-present");
-        VblankGrid grid{Clock::now(), vblank_period, flip_grace, flip_margin};
+        unsigned rate = vblank_rate.load();
+        VblankTiming timing = vblank_timing(rate);
+        VblankGrid grid{Clock::now(), timing.period, timing.grace, timing.margin};
         for (;;) {
+            // A new rate starts a new grid now, with its count from 0.
+            if (const unsigned new_rate = vblank_rate.load(); new_rate != rate) {
+                rate = new_rate;
+                timing = vblank_timing(rate);
+                grid = VblankGrid{Clock::now(), timing.period, timing.grace, timing.margin};
+            }
             const VblankGrid::Vblank vblank = grid.pass(Clock::now());
             std::optional<Request> request;
             std::vector<Request> skipped;
@@ -429,6 +440,10 @@ Driver& driver() {
 }
 
 }  // namespace
+
+void set_vblank_rate(unsigned frame_rate) {
+    vblank_rate = frame_rate;
+}
 
 void start_video_out(FlipPresenter* presenter) {
     driver().set_presenter(presenter);

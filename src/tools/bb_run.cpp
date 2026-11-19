@@ -448,7 +448,10 @@ int start(const bb::tools::RunOptions& options) {
     main_loop = new MainLoop{bb::tools::MainLoopProbe(), options.stop_at_main_loop, start_time};
     bb::game::set_frame_observer(&observe_frame);
     bb::game::set_frame_rate(options.frame_rate);
-    bb::common::log(LogLevel::info, channel, "target frame rate {} FPS", options.frame_rate);
+    bb::hle::video::set_vblank_rate(options.frame_rate);
+    bb::common::log(LogLevel::info, channel, "target frame rate {} FPS, vblank period {} ns",
+                    options.frame_rate,
+                    bb::hle::video::vblank_timing(options.frame_rate).period.count());
 #ifdef BB_HAVE_WINDOW
     if (!options.headless) {
         open_display(options);

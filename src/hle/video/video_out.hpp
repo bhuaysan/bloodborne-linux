@@ -84,11 +84,39 @@ static_assert(sizeof(FlipStatus) == 64);
 inline constexpr std::chrono::nanoseconds vblank_period{16'666'667};
 
 // A flip queued up to flip_grace after a vblank still takes it, and the grid follows it and
-// flip_margin (vblank_grid.hpp). The grace is a quarter of a period: more than the jitter of a
-// game frame, and still a flip that is shown 4 ms late at most instead of 16.7 ms. The margin
+// flip_margin (vblank_grid.hpp). The grace is about a quarter of a period: more than the jitter of
+// a game frame, and still a flip that is shown 4 ms late at most instead of 16.7 ms. The margin
 // is the jitter that the following frames get before their vblank.
 inline constexpr std::chrono::nanoseconds flip_grace{4'000'000};
 inline constexpr std::chrono::nanoseconds flip_margin{2'000'000};
+
+// The vblank grid's timing at a target frame rate (#657).
+struct VblankTiming {
+    std::chrono::nanoseconds period;
+    std::chrono::nanoseconds grace;
+    std::chrono::nanoseconds margin;
+    friend constexpr bool operator==(const VblankTiming&, const VblankTiming&) = default;
+};
+
+// 60 Hz (vblank_period, flip_grace, flip_margin) up to 60 FPS, where the game flips at most once a
+// vblank. Above 60 the period is 1/frame_rate s rounded up to whole nanoseconds, so that the game
+// can flip at every frame, and the grace and the margin keep their share of a period: 6/25 and
+// 3/25, which are flip_grace and flip_margin at 60 Hz. frame_rate 0 counts as 60.
+constexpr VblankTiming vblank_timing(unsigned frame_rate) {
+    if (frame_rate <= 60) {
+        return {vblank_period, flip_grace, flip_margin};
+    }
+    const std::int64_t rate = frame_rate;
+    const std::chrono::nanoseconds period{(1'000'000'000 + rate - 1) / rate};
+    return {period, period * 6 / 25, period * 3 / 25};
+}
+static_assert(vblank_timing(60).grace == vblank_period * 6 / 25 &&
+              vblank_timing(60).margin == vblank_period * 3 / 25);
+
+// Sets the vblank grid for `frame_rate` (vblank_timing). bb-run calls it with its target frame
+// rate before start_video_out; the present thread takes a new timing at its next vblank and starts
+// a new grid there. Thread-safe.
+void set_vblank_rate(unsigned frame_rate);
 
 // What presents the flips: video_core's presenter on Liverpool's GPU thread in bb-run's window
 // (video_core_presenter.hpp), a fake in the tests. The calls are upstream's presenter and

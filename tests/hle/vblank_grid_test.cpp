@@ -13,7 +13,9 @@ namespace {
 using bb::hle::video::flip_grace;
 using bb::hle::video::flip_margin;
 using bb::hle::video::vblank_period;
+using bb::hle::video::vblank_timing;
 using bb::hle::video::VblankGrid;
+using bb::hle::video::VblankTiming;
 using Clock = VblankGrid::Clock;
 using namespace std::chrono_literals;
 
@@ -61,14 +63,17 @@ TEST(VblankGrid, FollowsAFlipTakenInTheGraceAndTheMargin) {
 struct Flips {
     std::vector<Clock::duration> intervals;  // between flips
     Clock::duration latest{};                // the longest a request waited for its flip
-    std::size_t late = 0;                    // intervals over 1.5 frames
+    std::size_t late = 0;                    // intervals of 1.5 frames and over
     std::size_t off_grid = 0;                // intervals of one frame and over 0.2 ms
 };
 
+// `period` is the grid's; `late` and `off_grid` count against `frame`, the game's frame time.
 Flips simulate(const std::vector<Clock::time_point>& arrivals, Clock::time_point grid_start,
                std::chrono::nanoseconds grace, int flip_rate = 0,
-               std::chrono::nanoseconds margin = flip_margin) {
-    VblankGrid grid{grid_start, vblank_period, grace, grace == 0ns ? 0ns : margin};
+               std::chrono::nanoseconds margin = flip_margin,
+               std::chrono::nanoseconds period = vblank_period,
+               std::chrono::nanoseconds frame = 2 * vblank_period) {
+    VblankGrid grid{grid_start, period, grace, grace == 0ns ? 0ns : margin};
     Flips result;
     std::vector<Clock::time_point> flips;
     std::size_t next = 0;
@@ -92,13 +97,13 @@ Flips simulate(const std::vector<Clock::time_point>& arrivals, Clock::time_point
     for (std::size_t i = 1; i < flips.size(); ++i) {
         result.intervals.push_back(flips[i] - flips[i - 1]);
         const auto interval = flips[i] - flips[i - 1];
-        result.late += interval > 50ms;
-        result.off_grid += interval > 2 * vblank_period + 200us && interval < 40ms;
+        result.late += interval >= frame * 3 / 2;
+        result.off_grid += interval > frame + 200us && interval < frame * 6 / 5;
     }
     return result;
 }
 
-// Frames every 33.333 ms with a jitter of +-1.5 ms, from a deterministic generator.
+// Frames every 33.333 ms (or `cadence`) with a jitter of +-1.5 ms, from a deterministic generator.
 std::vector<Clock::time_point> frames_at(Clock::time_point first, int count,
                                          std::chrono::nanoseconds cadence = 2 * vblank_period) {
     std::vector<Clock::time_point> arrivals;
@@ -172,6 +177,65 @@ TEST(VblankGrid, FlipRateStillSpacesTheFlips) {
     ASSERT_FALSE(flips.intervals.empty());
     for (const auto interval : flips.intervals) {
         EXPECT_GE(interval, 2 * vblank_period);
+    }
+}
+
+// Up to 60 FPS the grid stays at 60 Hz; above it the period is the frame time, and the grace and
+// the margin keep their share of a period (#657).
+TEST(VblankTiming, SixtyHertzUpToSixtyAndTheFrameRateAbove) {
+    const VblankTiming sixty{vblank_period, flip_grace, flip_margin};
+    EXPECT_EQ(vblank_timing(0), sixty);
+    EXPECT_EQ(vblank_timing(30), sixty);
+    EXPECT_EQ(vblank_timing(60), sixty);
+    EXPECT_EQ(vblank_timing(120), (VblankTiming{8'333'334ns, 2'000'000ns, 1'000'000ns}));
+    EXPECT_EQ(vblank_timing(144), (VblankTiming{6'944'445ns, 1'666'666ns, 833'333ns}));
+    for (const unsigned fps : {61u, 90u, 120u, 144u, 165u, 240u}) {
+        const VblankTiming t = vblank_timing(fps);
+        // Rounded up: fps periods last a second or a few nanoseconds more, never less.
+        EXPECT_GE(t.period * fps, 1s);
+        EXPECT_LT(t.period * fps, 1s + std::chrono::nanoseconds{fps});
+        EXPECT_EQ(t.grace, t.period * 6 / 25);
+        EXPECT_EQ(t.margin, t.period * 3 / 25);
+    }
+}
+
+// The vblanks of the grid at 120 and 144 Hz come one period apart.
+TEST(VblankTiming, GridRunsAtTheFrameRate) {
+    for (const unsigned fps : {120u, 144u}) {
+        const VblankTiming t = vblank_timing(fps);
+        VblankGrid grid{t0, t.period, t.grace, t.margin};
+        for (std::uint64_t i = 0; i < 2 * fps; ++i) {
+            const auto vblank = grid.pass(grid.next());
+            EXPECT_EQ(vblank.count, i);
+        }
+        // fps vblanks a second: 2 s later the grid is at most a few nanoseconds behind.
+        EXPECT_GE(grid.next(), t0 + 2s);
+        EXPECT_LT(grid.next(), t0 + 2s + 1us);
+        const auto vblank = grid.pass(grid.next());
+        EXPECT_EQ(grid.grace_end(vblank), vblank.time + t.grace);
+        grid.follow(vblank, vblank.time + 500us);
+        EXPECT_EQ(grid.next(), vblank.time + 500us + t.period + t.margin);
+    }
+}
+
+// A game that paces itself at 120 or 144 FPS, with the jitter of a frame, gets a flip at every
+// vblank: no frame waits for a second vblank, and no frame comes sooner than a period after the
+// one before.
+TEST(VblankTiming, FramesAtTheFrameRateTakeEveryVblank) {
+    for (const unsigned fps : {120u, 144u}) {
+        const VblankTiming t = vblank_timing(fps);
+        // A little slower than the grid, as the pacer waits at least its frame time.
+        const auto cadence = t.period + 10us;
+        const auto arrivals = frames_at(t0 + 2s, 15 * static_cast<int>(fps), cadence);
+        const Flips followed = simulate(arrivals, t0 + 2s, t.grace, 0, t.margin, t.period, cadence);
+        const Flips fixed = simulate(arrivals, t0 + 2s, 0ns, 0, 0ns, t.period, cadence);
+        EXPECT_EQ(followed.late, 0u) << fps;
+        EXPECT_GT(fixed.late, followed.late) << fps;
+        for (const auto interval : followed.intervals) {
+            EXPECT_GE(interval, t.period) << fps;
+        }
+        // The grid's own frame: a flip never waits a whole period.
+        EXPECT_LT(followed.latest, t.period) << fps;
     }
 }
 

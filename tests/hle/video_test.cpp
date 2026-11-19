@@ -811,6 +811,30 @@ TEST(HleVideo, FlipsCompleteOnePerVblank) {
     EXPECT_EQ(flip_count(port.handle), 3u);
 }
 
+// Above 60 FPS the vblanks follow the target frame rate (#657): at 120 nine flips queued at once
+// complete in eight 8.3 ms periods, half the time they take at 60 Hz.
+TEST(HleVideo, VblanksFollowAFrameRateAbove60) {
+    struct Rate {
+        Rate() { set_vblank_rate(120); }
+        ~Rate() { set_vblank_rate(60); }
+    } rate;
+    const Port port;
+    // The present thread takes the new rate at its next vblank.
+    std::this_thread::sleep_for(2 * vblank_period);
+    const auto start = std::chrono::steady_clock::now();
+    constexpr int flips = 9;
+    for (int i = 0; i < flips; ++i) {
+        EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, i % 2, 1, 0), 0);
+    }
+    while (flip_count(port.handle) < flips) {
+        ASSERT_EQ(wait_for(port.queue, nullptr).result, 0);
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    EXPECT_GE(elapsed, (flips - 1) * vblank_timing(120).period);
+    // At 60 Hz they take 133 ms; the room is for a loaded machine.
+    EXPECT_LT(elapsed, (flips - 1) * vblank_period);
+}
+
 // With flip rate 1 the present thread takes a flip at every second vblank.
 TEST(HleVideo, FlipRateSkipsVblanks) {
     const Port port;
