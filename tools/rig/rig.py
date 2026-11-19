@@ -752,7 +752,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--audio", action="store_true",
                      help="record the sound with SDL's disk driver and report its level")
     run.add_argument("--log", help="bb-run: log filter, e.g. profile=debug for the frame counters")
-    run.add_argument("--frame-rate", type=int, choices=[30, 60, 120], help="bb-run: target frame rate")
+    run.add_argument("--frame-rate", type=int, choices=[30, 60, 120],
+                     help="bb-run: target frame rate")
     run.add_argument("--bb-run-config", type=Path,
                      help="bb-run: take every setting from this config file (--config), with no "
                           "--game-dir and no --profile; BB_GAME_DIR is removed from the environment")
