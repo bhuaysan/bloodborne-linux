@@ -27,7 +27,7 @@ Moving recording adds cost on the GPU thread: every command's arguments are writ
 - `IsFree(tick)` asks the GPU's semaphore, which cannot be past a tick the recording thread has not submitted. It stays conservative.
 - `Wait(tick)` makes sure the tick is flushed (as today) and waits on the timeline semaphore. Vulkan allows a host wait before the signal is submitted, and the recording thread never waits for the GPU thread, so this cannot deadlock.
 
-**Command pools belong to the recording thread.** Vulkan requires external synchronization of a pool, and only the recording thread allocates, begins and ends command buffers. The upload command buffer stays a separate stream that is submitted before the primary one in the same submit, as now.
+**Command pools belong to the recording thread.** Vulkan requires external synchronization of a pool, and only the recording thread allocates, begins and ends command buffers. The upload command buffer had no callers left and went in step 2, so a submit carries one command buffer. A scheduler that is destroyed lets its recording thread replay and submit what is queued, then waits for the last tick before the pool goes.
 
 **Only the draw scheduler defers.** The presenter owns three schedulers (`vk_presenter.cpp`): `draw_scheduler`, which the rasterizer and the frame's post-processing use on the GPU thread, and `present_scheduler` and `flip_scheduler`, which record a few commands a frame on the present thread. Only `draw_scheduler` gets a recording thread. The other two keep recording directly, so a `Scheduler` takes its mode at construction. Calls on the returned buffer that are not commands, such as `reset()` in `~Presenter`, become `Scheduler` methods that run after the recording thread has drained.
 
