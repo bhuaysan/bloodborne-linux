@@ -1579,6 +1579,63 @@ TEST(GuestMemory, GuestWritesDuringAMergeAreNotLost) {
     }
 }
 
+// A GPU clear keeps the image it wrote when a guest write to a neighbour on the image's first page
+// came between the tracking and the clear (#689). That write untracks only the shared page and
+// marks nothing, so the clear's dirty bits go, and the next UpdateImage leaves the image alone. A
+// write to the image's own bytes after that is found by TrackImage's hash of the page.
+TEST(GuestMemory, ANeighbourWriteKeepsAGpuClear) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        Libraries::VideoOut::BufferAttributeGroup group{};
+        group.is_occupied = true;
+        group.attrib.pixel_format = Libraries::VideoOut::PixelFormat::A8R8G8B8Srgb;
+        group.attrib.tiling_mode = Libraries::VideoOut::TilingMode::Linear;
+        group.attrib.width = group.attrib.height = group.attrib.pitch_in_pixel = 64;
+        constexpr u64 image_size = 64 * 64 * 4;
+        constexpr u64 neighbour = 256;  // bytes before the image on its first page
+        Direct d((neighbour + image_size + page_size - 1) / page_size + 1);
+        const std::uintptr_t start = addr(d.address);
+        auto* const bytes = static_cast<u8*>(d.address);
+        std::memset(bytes + neighbour, 0x11, image_size);
+        const vk::ClearValue clear{.color = {.uint32 = std::array<u32, 4>{0, 0, 0, 0}}};
+
+        gpu.liverpool->SendCommand<true>([&] {
+            VideoCore::TextureCache::ImageDesc desc{group, start + neighbour};
+            const VideoCore::ImageId id = textures.FindImage(desc);
+            VideoCore::Image& image = textures.GetImage(id);
+            textures.TrackImage(id);
+            ASSERT_TRUE(True(image.flags & VideoCore::ImageFlagBits::Dirty));
+            std::atomic_ref<u8>(bytes[0]).store(0x22, std::memory_order_relaxed);
+            {
+                std::scoped_lock lk{image.mutex};
+                EXPECT_FALSE(image.IsUntracked());
+                EXPECT_FALSE(image.IsFullyTracked());  // the neighbour's page is untracked
+            }
+            gpu.runtime.ClearImage(&image, {.extent = image.info.resources}, clear);
+            EXPECT_TRUE(False(image.flags & VideoCore::ImageFlagBits::Dirty));
+            textures.UpdateImage(id);
+            const std::vector<u8> cleared = read_back(gpu, image);
+            EXPECT_TRUE(std::all_of(cleared.begin(), cleared.begin() + image_size,
+                                    [](u8 b) { return b == 0; }));
+
+            // Again, and after the clear the guest writes the image's own bytes on the untracked
+            // page: no fault, the edge hash finds them.
+            std::atomic_ref<u8>(bytes[0]).store(0x44, std::memory_order_relaxed);
+            gpu.runtime.ClearImage(&image, {.extent = image.info.resources}, clear);
+            std::atomic_ref<u8>(bytes[neighbour]).store(0x33, std::memory_order_relaxed);
+            textures.UpdateImage(id);
+            const std::vector<u8> written = read_back(gpu, image);
+            EXPECT_EQ(std::memcmp(written.data(), bytes + neighbour, image_size), 0);
+            gpu.rasterizer.Finish();
+        });
+        d.unmap();
+    }
+}
+
 // A rasterizer unregisters from the guest memory when it is destroyed (#629; upstream's never
 // does): the maps, unmaps, releases and writes that follow reach no rasterizer.
 TEST(GuestMemory, ADestroyedRasterizerHearsOfNothing) {

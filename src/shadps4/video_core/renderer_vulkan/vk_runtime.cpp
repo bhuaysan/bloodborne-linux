@@ -229,7 +229,7 @@ void Runtime::DownloadImage(VideoCore::Image* src, const VideoCore::Buffer* dst,
 
 void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
     // Ours (#689): upstream clears the dirty bits at the end. They are cleared before the copy is
-    // recorded and only while the image is fully tracked, so a write fault after that keeps its
+    // recorded and only while the image is still tracked, so a write fault after that keeps its
     // CpuDirty. The caller tracks the destination first.
     dst->ClearDirtyIfTracked();
     const u32 num_mips = std::min(src->info.resources.levels, dst->info.resources.levels);

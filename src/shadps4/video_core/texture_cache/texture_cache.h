@@ -388,7 +388,6 @@ private:
     /// Unregister image from the page table
     void UnregisterImage(ImageId image);
 
-
     /// Stop tracking CPU reads and writes for image
     void UntrackImage(ImageId image_id);
     void UntrackImageHead(ImageId image_id);

@@ -362,8 +362,8 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         auto& new_image = slot_images[new_image_id];
         new_image.usage = cache_image.usage;
         // Ours (#689): tracked before the upload and the copy, as ExpandImage does, and the dirty
-        // bits cleared only while every page is still write protected. Upstream uploads the
-        // untracked image and clears them, so a guest write in between was lost.
+        // bits cleared only while it is still tracked. Upstream uploads the untracked image and
+        // clears them, so a guest write in between was lost.
         TrackImage(new_image_id);
         if (new_info.num_samples == 1 &&
             (new_info.resources.layers > cache_image.info.resources.layers ||
