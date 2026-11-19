@@ -351,12 +351,59 @@ Some events differ in distance by more than this: the dodges and punches in the 
 
 **Nothing changes at 30.** `rig.py compare` of `main-menu` at 30, with two runs of a `bb-run` built before the 60 FPS work (e2f1cf6^) as the noise floor and current `main` as ours: ratio 1.029 and 1.018 for two runs, time to the menu 19.83 and 20.54 s against 19.81 and 19.82 s (`time_ok`). Against two shadPS4 reference runs, current `main` gives 1.045 and 1.032 and the old build 0.997 and 1.007.
 
+## Above 60 FPS (#663)
+
+Every site of "What is left at 60 FPS", every `BB_REPLACE`, `BB_WRAP` and `BB_PATCH` in `src/game/`, and the open questions that touch the step, checked for 120 FPS (k = F / 30 = 4) and 144 FPS (k = 4.8). Verdicts: **works** as built, **change** needed (with its issue), **run** (needs a check by run, named in the row).
+
+**The common cause at 144.** Five wrappers take the frame rate as `frame_rate_scale()` = `frame_rate() / 30` in unsigned ints, which is 4 at 144. They then pace their sites as if the game ran at 120: 36 runs a game second where the game counts 30. Each of them counts whole calls or whole frames (the k-th call, the k-th frame, k · u frames), so a ratio of 4.8 can't be set by fixing the division alone: the site has to run on the frames where a 30 Hz clock of game time ticks, which gives 4 or 5 frames between runs. At 120 all of them are exact: 4 × 1/120 is the game's 1/30 bit for bit (a power of two times the float), as 2 × 1/60 is.
+
+| Site | What depends on the rate | 120 | 144 |
+|---|---|---|---|
+| `main_loop_tick` 0x2018d20 (`BB_REPLACE`) | step 1/F in the task data | works | works |
+| `flipper_wait_frame` 0x2034770 (`BB_REPLACE`) | frame time 1/F for modes 3 and 4; the sleep ends 2 ms before it (#656) | works: the sleep ends 6.3 ms into 8.33 | works: 4.9 ms into 6.94 |
+| the same, `request_0x274` (60 at +0x50 of the object at 0x5540e00) | arms a hold of 60 calls of 0x23174e0, which counts +0x50 down once a call, not by time; set on the pacer's first tick, on a state change (0x1733fa0) and with `SprjScaleform` (0x1cf4c70) | **run** (#672): 2 s at 30, 1 s at 60, 0.5 s at 120 if the update runs once a frame | **run** (#672): 0.42 s |
+| `swap_chain_present` 0x21b2fb0 (game code) | waits `present_interval` 60 Hz periods since its last present, behind its own timing flag | works: on by default (+0x8 = 1, 0x21b2f17), its period is the refresh rate video out reports (0x26d5d50, compared with 60); in `clinic-fight` at 120 the fight segments presented at a median of 8.33 ms, so it does not hold the presents back | works by the same run; not run at 144 |
+| video out vblank grid (#657) | period 1/F | works | works |
+| `havok_world_step` 0x17f99d0 (`BB_REPLACE`, #553) | world step 1/F | works; ragdoll rest positions shift as at 60 (chaos of the pile, see "The ragdolls") | works, same |
+| `chr_physics_pose_sync` 0x1515ec0 (`BB_REPLACE`, #567) | step 1/F to the three ragdoll updates; the spaced update's u · 1/30 | works: the spacing is game time, and since #573 a character's update is u 30 FPS frames apart | works: the accumulator counts game time, whatever the frames between updates |
+| ragdoll impulse 0x180e0af and root pull 0x180f15e (`BB_PATCH`) | `bb_step_ratio` = 30 / F per frame | works (0.25) | works (0.2083) |
+| `ai_world_step` 0x1dcdad0 (`BB_WRAP`, #554) | `frame_step()` for the Havok AI world | works; the section sweep of 30 calls takes 0.25 s | works (0.21 s) |
+| `target_bank_scan_tick` 0x12a43b0 (`BB_WRAP`, #555) | the game's tick on every k-th call | works | **change** (#673): 36 ticks a game second, the ring slots stand for 1/36 s |
+| `agent_steer` 0x1dbbd00 and `chr_ai_control_update` 0x1513c10 (`BB_WRAP`, #570, #603) | the steering on every k-th call of an agent, with k × the step | works | **change** (#673): runs 36 times a game second with a step of 1/36, so the read index lags 1.2 times the lag in calls and reaches the ring's 30 slots from a lag of 25: the empty ring of #570 comes back for slow walkers |
+| `world_chr_update` 0x19173b0 (`BB_WRAP`) and the due check 0x1917909 (`BB_PATCH`, #573) | a character with interval u is due every k · u frames with a step of k · u frames | works (k · u ≤ 120 fits; the stub's comment "k is 1 or 2" needs updating with #664) | **change** (#673): due every 4u frames, 36/u updates a game second; 4.8 · u is not a whole number of frames |
+| `chr_validate` 0x18b9890 (`BB_WRAP`, #573) | the setup budget on every k-th world frame | works | **change** (#673): 36 setups a game second |
+| `chase_cam_update` 0x143ac60 (`BB_WRAP`, #557) | the per-call filters scaled for c = k calls | run: the approximations of the eased factors and the input weight (within 1/5 of the error at 60 in the unit test) are sampled four times a step; the check runs below | **change** (#673): c is `frame_rate_scale()`, 4; the formulas take a fractional c, so `frame_rate() / 30.0` is enough |
+| `sfx_frame_update`, `shop_tab_refresh`, `chr_list_fade_step` (`BB_PATCH`, #556) | `bb_frame_step` = 1/F | works (the fade reaches 1 in 121 calls, one more than 120 from float rounding: 8 ms) | works (145 calls) |
+| the other `update(1/30)` sites of #556 (0x18bc4f7, 0x1044943, 0x15dc1f7) | one step at creation or per message | works | works |
+| 0x2277780 (0x227784b, 0x2277874), the effect system | `0xebbda0` adds the literal to an emitter's age per call. +0x2977 is set to 1 by the effect system's init (0x22c4fd0), so the path is open in play; whether its caller 0x22c53e0 (a virtual) runs once a frame is open, and the #556 probe saw no hits | **run** (#672) | **run** (#672) |
+| 0x2313870 (game code, found here), a per-entity update called from 0x1d24a3d and 0x1d6fde8 that consumes the hold above | a literal 1/30 (0x4929e74) as its step per call (0x2315d71), 0 while the hold runs | **run** (#672): if it runs once a frame it is a 60 FPS site too, twice as fast at 60 | **run** (#672) |
+| `param_blend_int` 0x29262f0 (`BB_REPLACE`, #598) | t = 2 · step; an entry equal to the current value keeps it | works for the fault of #598. Ints that rise stop short of their target by up to 1/t: 60 at 120 (30 at 60, 15 at 30), not seen to matter (see "Open questions") | works, up to 72 |
+| `chr_pad_step` 0x1572900 | literal 1/30, a debug free camera | unchanged (4.8 times as fast at 144), low priority | the same |
+| input latency (#558) | two frames from the pad read to motion | kept: 17 ms at 120, 14 ms at 144 | kept |
+| menus (#556, "The final check") | the menu pictures changed every second step at 60: the menus animate at 30 Hz by game time | works: a picture every 4th step | run: 4.8 steps per picture gives an uneven 4 or 5; a cosmetic judder in the menus at most |
+| Havok behaviour (animation) | where its step comes from was open; the motion durations of the final check matched within a 60 FPS frame at 60, so it follows the task data's step | works by the 60 FPS evidence; #664's duration check at 120 confirms it | the same |
+| cloth | its step is unknown; nothing was seen at 60 | run: the hunter's coat in the check runs | run |
+| the step machines with task data of 1/30 (0x1aa3fc0 and others) | once, when a state is entered, mostly the online flow | works: as at 60, a single step | works |
+| vblank counts as time | none (#657): the game sees vblanks only through completed flips | works | works |
+| `text_starts_with`, `utf16_range_equals`, `hash_bytes_backward`, `hash_char_range` (`BB_REPLACE`) | no time | works | works |
+
+**Conclusion.** 120 needs no change before #664 lets the option take it; the chase camera and the cloth are for the runs below and #664's checks. 144 needs the five wrappers of #673 first, and #664 should accept it only once that issue is merged. Whole multiples of 30 (90, 150) would work like 120 for the wrappers, 90 with k = 3.
+
+**Check runs at 120.** A local `bb-run` (not committed) that lets `--frame-rate` take 120, with the vblank grid of #657, ran `clinic-fight` and `yharnam-fight` once each (`--window`, warm cache; load average about 5 from other sessions). Both ended in `end,scenario finished`. The game made 82 to 120 frames a second: 114 to 120 in the clinic's fight segments, about 82 in the street. The pacer never catches up on a late frame, so the game ran at 0.7 of real speed in the street.
+
+- `clinic-fight`: the fight segments presented at a median of 8.33 ms (p95 8.35 to 10.2 ms). Walking, the camera, the lock-on, the attacks and the corner by the door look as at 30 and 60, including the camera close behind the hunter in the last shot, which the runs at 30 and 60 show too. No site misbehaved visibly.
+- `yharnam-fight`: the hunter died in the first fight (shot 03), where runs at 30 and 60 fight on from the arch. That is the route, not a site: its holds are wall-clock seconds, and at 0.7 of real speed the 3 s walk ended well short of where it ends at 30 (shot 01), the enemies had not come as far, and the backing off did not reach the arch. The walk, the enemies' approach and the camera look normal up to there.
+
+Pictures can't show the pacing sites of #673 or the residues of the chase camera at 120. Those need #664's checks with holds of 4N frames and a game that keeps up with 120.
+
+**Also found.** The game's own 0x2313870 takes a literal 1/30 a call and a hold of 60 calls (rows above), so it may be a 60 FPS site that the 1/30 survey missed (#672).
+
 ## Open questions
 
 - Ints that `param_blend_int` eases upward only rise while (target − current) · t ≥ 1, so they stop short of a higher target by fewer than 2/t: up to 15 at 30 and 30 at 60. Such a parameter can settle at a different value at 60 than at 30 (for example 0 → 20 settles at 6 at 30 and stays 0 at 60). Not seen to matter yet (#598).
 - Mode 2's `tearing` = 1: where `graphics +0x104`, 0x513ac84 and the render list's byte at +8 end up (presumably the hsync flip when late).
-- Whether the Havok behaviour and cloth updates take the task data's step.
+- Whether the cloth update takes the task data's step. The Havok behaviour does: motion durations match at 60 ("The final check").
 - Whether the step-machine functions with task data of 1/30 read `delta_time`.
-- `skip_wait` (+0x273, set by 0x1cf4c70 with `SprjScaleform`) and `request_0x274` (sets +0x4c, +0x4d and 60 at +0x50 of the object at 0x5540e00): what state skips the wait.
+- `skip_wait` (+0x273, set by 0x1cf4c70 with `SprjScaleform`): what state skips the wait. `request_0x274` arms a hold of 60 calls (see "Above 60 FPS", #672).
 - The remaining uses of 1/30 and 30.0f that the survey did not classify.
-- 0x2277780's step (0x227784b, 0x2277874): what sets the effect system's +0x2977, and whether 0xebbda0 then runs once a frame.
+- 0x2277780's step (0x227784b, 0x2277874): +0x2977 is set at the effect system's init; whether 0xebbda0 then runs once a frame is #672.
