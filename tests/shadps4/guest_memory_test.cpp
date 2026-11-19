@@ -1615,7 +1615,7 @@ TEST(GuestMemory, ANeighbourWriteKeepsAGpuClear) {
                 EXPECT_FALSE(image.IsUntracked());
                 EXPECT_FALSE(image.IsFullyTracked());  // the neighbour's page is untracked
             }
-            gpu.runtime.ClearImage(&image, {.extent = image.info.resources}, clear);
+            gpu.runtime.ClearImage(&image, {.base = {}, .extent = image.info.resources}, clear);
             EXPECT_TRUE(False(image.flags & VideoCore::ImageFlagBits::Dirty));
             textures.UpdateImage(id);
             const std::vector<u8> cleared = read_back(gpu, image);
@@ -1625,7 +1625,7 @@ TEST(GuestMemory, ANeighbourWriteKeepsAGpuClear) {
             // Again, and after the clear the guest writes the image's own bytes on the untracked
             // page: no fault, the edge hash finds them.
             std::atomic_ref<u8>(bytes[0]).store(0x44, std::memory_order_relaxed);
-            gpu.runtime.ClearImage(&image, {.extent = image.info.resources}, clear);
+            gpu.runtime.ClearImage(&image, {.base = {}, .extent = image.info.resources}, clear);
             std::atomic_ref<u8>(bytes[neighbour]).store(0x33, std::memory_order_relaxed);
             textures.UpdateImage(id);
             const std::vector<u8> written = read_back(gpu, image);
