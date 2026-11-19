@@ -790,8 +790,17 @@ TEST(HleVideo, FlipClearsTheLabelOfThePreviousBuffer) {
     EXPECT_EQ(vo->buffer_labels[1], 1u);
     EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, 0, 1, 0), 0);
     ASSERT_EQ(wait_for(port.queue, nullptr).result, 0);
-    EXPECT_EQ(vo->buffer_labels[0], 1u);
-    EXPECT_EQ(vo->buffer_labels[1], 0u);  // shown before the flip to buffer 0
+    // The label is cleared after the flip events, as shadPS4 does it, so wait for it.
+    const auto label = [vo](int index) {
+        const std::scoped_lock lock{vo->vo_mutex};
+        return vo->buffer_labels[index];
+    };
+    const auto until = std::chrono::steady_clock::now() + 5s;
+    while (label(1) != 0 && std::chrono::steady_clock::now() < until) {
+        std::this_thread::sleep_for(1ms);
+    }
+    EXPECT_EQ(label(0), 1u);
+    EXPECT_EQ(label(1), 0u);  // shown before the flip to buffer 0
 }
 
 TEST(HleVideo, FlipsCompleteOnePerVblank) {
