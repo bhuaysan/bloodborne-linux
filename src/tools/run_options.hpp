@@ -113,7 +113,7 @@ struct RunOptions {
 // Parses the arguments after argv[0]. Throws std::invalid_argument, naming the argument, for an
 // unknown option, a missing value, a profile name that valid_profile_name refuses, a timeout that
 // isn't a whole number from 1 to 86400, a log spec that LogFilter::parse refuses, a --present-mode
-// that is none of fifo, mailbox and immediate, a --frame-rate other than 30, 60 and 120, a
+// that is none of fifo, mailbox and immediate, a --frame-rate other than 30, 60, 120 and 144, a
 // --window-size that isn't WIDTHxHEIGHT in range, a --resolution that isn't one of the sizes above,
 // an --rcas-attenuation that isn't a number from 0 to 2, --validation-sync or --validation-gpu
 // without --validation, and --no-rcas or --rcas-attenuation without --fsr.

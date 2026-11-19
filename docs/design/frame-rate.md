@@ -400,7 +400,7 @@ Pictures can't show the pacing sites of #673 or the residues of the chase camera
 
 ## 120 FPS (#664)
 
-`bb-run --frame-rate`, the config's `frame_rate` and the launcher's choice take 30, 60 and 120 (`bb::common::frame_rates`); `set_frame_rate` takes the same. 144 came with #673, and 90 is left out until a run checks it. At 120 the sites above need no change, so the option is all there is to it: k = 4, the step 1/120, the vblank grid at 120 Hz.
+`bb-run --frame-rate`, the config's `frame_rate` and the launcher's choice take 30, 60, 120 and 144 (`bb::common::frame_rates`); `set_frame_rate` takes the same. 144 came with #673, and 90 is left out until a run checks it. At 120 the sites above need no change, so the option is all there is to it: k = 4, the step 1/120, the vblank grid at 120 Hz.
 
 **Durations at 120 against 30.** The probe of "The final check" (a local build, not committed), with every hold 4N frames, on a quiet machine (load 1.2 to 3.6, no compiler). The routes counted ended in `end,scenario finished`; the probe's `shot ALLON`/`ALLOFF` markers make the rig report missing shots, as in #514. Three runs at 120 after one to warm the cache, against the three 30 FPS runs of #514 and one fresh run at 30 of this branch, which repeats them to the step.
 

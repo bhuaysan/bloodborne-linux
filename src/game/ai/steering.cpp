@@ -1,6 +1,7 @@
 // The AI agents' steering at the target frame rate (docs/design/frame-rate.md, "The steering
 // ring (#570)"): a wrapper that runs the game's steering on the calls of each agent where a 30 Hz
-// clock of game time ticks, as often a game second as at 30 FPS, and hands the agent its last direction in between.
+// clock of game time ticks, as often a game second as at 30 FPS, and hands the agent its last
+// direction in between.
 // Only the agents of characters without an update interval need it (#603): the others are already
 // stepped as often as at 30 FPS by the character's own update (#573).
 #include "game/ai/steering.hpp"

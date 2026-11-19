@@ -295,8 +295,12 @@ TEST_F(ChrUpdateIntervalTest, IsDueThirtyOverUTimesAGameSecondAt144) {
     }
     // Neighbouring indices are due on different frames, as at 30.
     EXPECT_NE(run(1, 0, 1000).exit, run(1, 1, 1000).exit);
-    // A counter below the index and one about to wrap.
+    // A counter below the index gives the same as one a period (u * 144 frames) later.
     EXPECT_EQ(run(5, 39, 0).exit == 1, run(5, 39, 144 * 5).exit == 1);
+    // The counter is read as unsigned, as the game's div reads it: 0xffffffff * 30 mod 144 is 18
+    // (due), 0xfffffff7 gives 66 (not due); read as -1 and -9 they would give 114 and 18.
+    EXPECT_EQ(run(1, 0, 0xffffffffu).exit, 1u);
+    EXPECT_EQ(run(1, 0, 0xfffffff7u).exit, 2u);
     bb::game::set_chr_due_rate(30);
 }
 

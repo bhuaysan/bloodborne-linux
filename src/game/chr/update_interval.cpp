@@ -3,6 +3,8 @@
 // above 30 FPS the stub counts it in ticks of a 30 Hz clock of game time.
 #include "game/chr/update_interval.hpp"
 
+#include <cassert>
+
 #include "game/frame/frame.hpp"
 #include "game/image.hpp"
 #include "hook/hook.hpp"
@@ -94,6 +96,7 @@ constexpr hook::JumpTarget chr_due_targets[] = {{chr_not_due_continue, &bb_chr_d
 }  // namespace
 
 void set_chr_due_rate(unsigned fps) {
+    assert(fps >= default_frame_rate);  // set_frame_rate takes no lower rate; 0 would divide by 0
     bb_chr_due_rate = static_cast<std::int32_t>(fps);
     bb_chr_due_scale =
         fps % default_frame_rate == 0 ? static_cast<std::int32_t>(fps / default_frame_rate) : 0;

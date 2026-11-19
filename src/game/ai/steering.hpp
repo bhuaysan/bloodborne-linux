@@ -74,8 +74,8 @@ struct SteerState {
 // where its 30 Hz clock game_tick(fps, state.phase) ticks (the path follower doesn't step every
 // agent every frame): every (fps / 30)-th call at a whole multiple of 30, 4 or 5 calls apart at
 // 144, with game_tick_step of the task data's step (the game's 1/30 at the normal step). On the
-// agent's other calls, if it has a
-// Havok AI character, its ring, state and step stay as they are: it gets two of the writes the
+// agent's other calls, if it has a Havok AI character, its ring, state and step stay as they are:
+// it gets two of the writes the
 // game's steering does on every call (+0x28c = 1 and the character's +0x64 copied to +0x1c of the
 // object at [[agent+0x238]+0x58]) and the point the game returns, from the character's position
 // now and the direction stored at +0x20. The third, clearing the requests at +0x289 and +0x28a,

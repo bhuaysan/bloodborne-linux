@@ -59,8 +59,8 @@ void world_chr_update(float step, void* world);
 }  // namespace bb::game
 
 // The stub that replaces the due check (BB_PATCH), written in assembly for that place, and what it
-// reads: the frame rate and the absolute addresses of chr_due_continue and chr_not_due_continue, which
-// hook::apply fills.
+// reads: the scale, the frame rate and the absolute addresses of chr_due_continue and
+// chr_not_due_continue, which hook::apply fills.
 extern "C" {
 void bb_chr_due_check_stub();
 extern std::int32_t bb_chr_due_scale;  // fps / 30 when that is whole, else 0
