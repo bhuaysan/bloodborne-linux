@@ -627,14 +627,16 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     // copying it would overwrite the fresh upload with old data.
     const bool src_has_gpu_data = src_image.HasGpuValidData();
 
+    // Ours (#631): tracked before the upload, as UpdateImage does, so that RefreshImage clears the
+    // dirty bits only while a guest write still faults. Upstream tracks after the upload and then
+    // clears them, which loses a write in between.
+    TrackImage(new_image_id);
     RefreshImage(new_image);
 
     if (src_image.binding.is_bound || src_image.binding.is_target) {
         src_image.binding.needs_rebind = 1u;
     }
 
-    TrackImage(new_image_id);
-    new_image.flags &= ~ImageFlagBits::Dirty;
     if (src_has_gpu_data) {
         runtime.CopyImage(&src_image, &new_image);
     }
