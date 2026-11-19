@@ -169,8 +169,8 @@ void flipper_wait_frame(SprjFlipper* self) {
                 if (!(left > 0.0f)) {
                     break;
                 }
-                if (const float sleep = left - spin_margin_s; foreground && sleep > 0.0f) {
-                    hle::kernel::sleep_until_wall_clock(now + to_us(sleep));
+                if (const float sleep_s = left - spin_margin_s; foreground && sleep_s > 0.0f) {
+                    hle::kernel::sleep_until_wall_clock(now + to_us(sleep_s));
                 }
                 if (!foreground && left > 0.001f && left > 0.005f) {
                     const std::int32_t us =

@@ -20,8 +20,9 @@ using WallClock = GuestTimeval (*)();
 // Installs `clock` (nullptr restores the host's) and returns the one it replaces.
 WallClock set_wall_clock(WallClock clock);
 
-// Sleeps until the wall clock that gettimeofday reads shows `deadline_us` (microseconds since the
-// epoch), or returns at once when it already does. Host code that waits on the guest's wall
+// Sleeps for the time from now until the wall clock that gettimeofday reads shows `deadline_us`
+// (microseconds since the epoch), or returns at once when it already does. A step of the wall
+// clock during the sleep doesn't move its end. Host code that waits on the guest's wall
 // clock sleeps with it (the frame pacer, #656). With a test clock installed it returns at once:
 // a test clock has no host time to sleep against, and its reads stay the caller's.
 void sleep_until_wall_clock(std::uint64_t deadline_us);

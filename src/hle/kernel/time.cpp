@@ -102,11 +102,25 @@ void sleep_until_wall_clock(std::uint64_t deadline_us) {
     if (wall_clock.load(std::memory_order_acquire) != nullptr) {
         return;
     }
-    const timespec deadline{static_cast<time_t>(deadline_us / 1'000'000),
-                            static_cast<long>(deadline_us % 1'000'000) * 1000};
-    // Absolute on CLOCK_REALTIME, the clock gettimeofday reads, so a step of the clock moves the
-    // deadline with it, and a signal only restarts the sleep.
-    while (clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &deadline, nullptr) == EINTR) {
+    // The time left on the wall clock now, slept on CLOCK_MONOTONIC: the sleep never lasts longer
+    // than that. An absolute sleep on CLOCK_REALTIME would follow a backward step of the clock
+    // and stall the caller for its size, where a loop on gettimeofday ends at once (the read
+    // lies before its start). A signal only restarts the sleep.
+    const timespec wall = now(CLOCK_REALTIME);
+    const std::uint64_t wall_us = static_cast<std::uint64_t>(wall.tv_sec) * 1'000'000 +
+                                  static_cast<std::uint64_t>(wall.tv_nsec) / 1000;
+    if (deadline_us <= wall_us) {
+        return;
+    }
+    // At most a day, which keeps the nanoseconds in range for any deadline.
+    constexpr std::uint64_t max_left_us = 86'400'000'000;
+    const std::uint64_t left_us = deadline_us - wall_us;
+    const std::uint64_t left_ns = (left_us < max_left_us ? left_us : max_left_us) * 1000;
+    timespec until = now(CLOCK_MONOTONIC);
+    const std::uint64_t ns = static_cast<std::uint64_t>(until.tv_nsec) + left_ns % 1'000'000'000;
+    until.tv_sec += static_cast<time_t>(left_ns / 1'000'000'000 + ns / 1'000'000'000);
+    until.tv_nsec = static_cast<long>(ns % 1'000'000'000);
+    while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &until, nullptr) == EINTR) {
     }
 }
 
