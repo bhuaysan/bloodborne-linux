@@ -267,7 +267,8 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     const bool is_written = True(flags & ObtainBufferFlags::IsWritten);
     const bool is_texel_buffer = True(flags & ObtainBufferFlags::IsTexelBuffer);
     const bool skip_stream_buffer = True(flags & ObtainBufferFlags::IgnoreStreamBuffer);
-    // For read-only buffers use device local stream buffer to reduce renderpass breaks.
+    // For read-only buffers use the stream buffer to reduce renderpass breaks (ours: in cached
+    // host memory, see the constructor).
     if (!is_written && !skip_stream_buffer && size <= STREAM_THRESHOLD &&
         !IsRegionGpuModified(device_addr, size)) {
         const auto [data, offset] = stream_buffer.Map(size, instance.UniformMinAlignment());

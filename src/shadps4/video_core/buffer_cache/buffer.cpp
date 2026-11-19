@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/buffer.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-19
 // License texts: third_party/shadps4/LICENSES/
 
 #include <numeric>
@@ -239,10 +239,12 @@ std::pair<u8*, u64> StreamBuffer::Map(u64 size, u64 alignment, bool allow_wait) 
 }
 
 void StreamBuffer::Commit() {
+    // Ours: the buffer cache's stream buffer is HostCached and written by the CPU (#676), so a
+    // HostCached buffer is flushed too, not only invalidated as upstream's read-back staging. Both
+    // are no-ops on coherent memory.
+    Flush(offset, mapped_size);
     if (mem_type == MemoryType::HostCached) {
         Invalidate(offset, mapped_size);
-    } else {
-        Flush(offset, mapped_size);
     }
     AdvanceAndWatch();
 }
