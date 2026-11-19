@@ -238,8 +238,8 @@ class InterpreterTests(unittest.TestCase):
         self.assertEqual(clock.ticks, 3)
 
     def test_frames_ends_within_a_frame_of_its_count(self) -> None:
-        # Presents every 1/60 s from 0.005 s on; a hold of N frames at 30 or 60 FPS (#562).
-        for rate in (30, 60):
+        # Presents every 1/60 s from 0.005 s on; a hold of N frames at 30, 60 or 120 FPS (#562).
+        for rate in (30, 60, 120):
             for count in (1, 15, 30, 90, 600):
                 clock = FakeClock()
                 target = TimedFrames(clock, 1 / rate)

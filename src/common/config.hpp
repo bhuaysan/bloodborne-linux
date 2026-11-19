@@ -23,6 +23,18 @@ inline constexpr unsigned min_window_height = 360;
 inline constexpr unsigned max_window_side = 16384;
 inline constexpr float max_rcas_attenuation = 2.0f;
 
+// The target frame rates bb-run takes (docs/design/frame-rate.md, "Above 60 FPS"). Rates that
+// aren't whole multiples of 30, such as 144, wait for #673.
+inline constexpr unsigned frame_rates[] = {30, 60, 120};
+inline constexpr bool valid_frame_rate(unsigned fps) {
+    for (const unsigned rate : frame_rates) {
+        if (fps == rate) {
+            return true;
+        }
+    }
+    return false;
+}
+
 struct Config {
     std::optional<std::filesystem::path> game_dir;  // game_dir: absolute, or "~/..." for $HOME
     std::optional<std::string> profile;             // profile: valid_profile_name
@@ -31,7 +43,7 @@ struct Config {
     std::optional<bool> fsr;                        // fsr
     std::optional<bool> rcas;                       // rcas
     std::optional<float> rcas_attenuation;          // rcas_attenuation: 0 to 2 stops
-    std::optional<unsigned> frame_rate;             // frame_rate: 30 or 60
+    std::optional<unsigned> frame_rate;             // frame_rate: valid_frame_rate
 
     bool operator==(const Config&) const = default;
 };

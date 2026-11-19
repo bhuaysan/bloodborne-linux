@@ -129,9 +129,14 @@ public:
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(t.rate_lead);
         ImGui::SameLine();
-        int rate = now_.frame_rate == 60 ? 1 : 0;
-        if (choice("##rate", {"30", "60"}, rate, s)) {
-            now_.frame_rate = rate == 1 ? 60 : 30;
+        int rate = 0;
+        std::vector<std::string> rates;
+        for (const unsigned r : common::frame_rates) {
+            rate = r == now_.frame_rate ? static_cast<int>(rates.size()) : rate;
+            rates.push_back(std::to_string(r));
+        }
+        if (choice("##rate", rates, rate, s)) {
+            now_.frame_rate = common::frame_rates[static_cast<size_t>(rate)];
         }
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();

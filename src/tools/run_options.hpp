@@ -21,7 +21,7 @@ inline constexpr std::string_view run_usage =
     "              [--log SPEC] [--no-log-file] [--headless] [--device NAME]\n"
     "              [--validation] [--validation-sync] [--validation-gpu]\n"
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
-    "              [--sync-pipelines] [--pad-input PATH] [--frame-rate 30|60]\n"
+    "              [--sync-pipelines] [--pad-input PATH] [--frame-rate 30|60|120]\n"
     "              [--window-size WIDTHxHEIGHT] [--fullscreen] [--fsr] [--no-rcas]\n"
     "              [--rcas-attenuation STOPS] [--resolution WIDTHxHEIGHT]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
@@ -98,7 +98,7 @@ struct RunOptions {
     bool pipeline_cache = true;  // false with --no-pipeline-cache
     bool async_pipelines = true;  // false with --sync-pipelines
     std::optional<std::filesystem::path> pad_input;  // --pad-input
-    unsigned frame_rate = 30;  // --frame-rate: 30 or 60
+    unsigned frame_rate = 30;  // --frame-rate: 30, 60 or 120
     unsigned window_width = 1280;  // --window-size
     unsigned window_height = 720;
     bool fullscreen = false;  // --fullscreen

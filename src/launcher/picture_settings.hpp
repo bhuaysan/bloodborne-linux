@@ -18,7 +18,7 @@ using Size = std::pair<unsigned, unsigned>;
 struct PictureChoices {
     bool fullscreen = false;
     Size size{1280, 720};
-    unsigned frame_rate = 30;  // 30 or 60
+    unsigned frame_rate = 30;  // 30, 60 or 120
     Sharpness sharpness = Sharpness::normal;
     bool operator==(const PictureChoices&) const = default;
 };
@@ -31,7 +31,8 @@ inline PictureChoices choices_from_config(const common::Config& config) {
     if (config.window_size) {
         c.size = *config.window_size;
     }
-    c.frame_rate = config.frame_rate.value_or(30) == 60 ? 60 : 30;
+    const unsigned rate = config.frame_rate.value_or(30);
+    c.frame_rate = common::valid_frame_rate(rate) ? rate : 30;
     if (config.fsr.value_or(false) && config.rcas.value_or(true)) {
         c.sharpness = config.rcas_attenuation && *config.rcas_attenuation == 0.0f
                           ? Sharpness::extra_sharp

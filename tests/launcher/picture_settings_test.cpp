@@ -17,7 +17,7 @@ TEST(PictureSettings, AnEmptyConfigShowsBbRunsDefaults) {
 
 TEST(PictureSettings, ChoicesGoToTheConfigAndComeBack) {
     for (const bool fullscreen : {false, true}) {
-        for (const unsigned rate : {30u, 60u}) {
+        for (const unsigned rate : {30u, 60u, 120u}) {
             for (const Sharpness sharp :
                  {Sharpness::normal, Sharpness::sharpened, Sharpness::extra_sharp}) {
                 const PictureChoices want{fullscreen, {1920, 1080}, rate, sharp};

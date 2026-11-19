@@ -12,12 +12,12 @@ namespace bb::game {
 // The frame rates bb-run offers: the game's own 30 and 60.
 inline constexpr unsigned default_frame_rate = 30;
 
-// Sets the target frame rate (30 or 60; anything else throws std::invalid_argument). Called
+// Sets the target frame rate (30, 60 or 120; anything else throws std::invalid_argument). Called
 // before the game runs; not thread-safe.
 void set_frame_rate(unsigned fps);
 unsigned frame_rate();
 
-// Frames per 30 FPS frame, frame_rate() / default_frame_rate: 1 at 30, 2 at 60.
+// Frames per 30 FPS frame, frame_rate() / default_frame_rate: 1 at 30, 2 at 60, 4 at 120.
 inline unsigned frame_rate_scale() {
     return frame_rate() / default_frame_rate;
 }
@@ -107,8 +107,8 @@ std::uint8_t main_loop_tick();
 
 // frame_step()'s value, for the stubs patched into game code (BB_PATCH), which load it from memory.
 // Written only by set_frame_rate.
-// bb_step_ratio is 30 / frame_rate(), exactly 1 at 30 and 0.5 at 60: the share of a 30 FPS frame
-// that a frame stands for. bb_frame_scale is frame_rate_scale(), 1 at 30 and 2 at 60.
+// bb_step_ratio is 30 / frame_rate(), exactly 1 at 30, 0.5 at 60 and 0.25 at 120: the share of a 30 FPS frame
+// that a frame stands for. bb_frame_scale is frame_rate_scale(), 1 at 30, 2 at 60 and 4 at 120.
 extern "C" {
 extern float bb_frame_step;
 extern float bb_step_ratio;

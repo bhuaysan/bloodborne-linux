@@ -3,6 +3,7 @@
 #include <unistd.h>
 
 #include <cstdlib>
+#include <format>
 #include <fstream>
 #include <string>
 
@@ -56,6 +57,12 @@ TEST(Config, ParsesEverySetting) {
     EXPECT_TRUE(parsed.unknown_keys.empty());
 }
 
+TEST(Config, TakesEachFrameRate) {
+    for (const unsigned rate : bb::common::frame_rates) {
+        EXPECT_EQ(parse_config(std::format("frame_rate = {}", rate), "c").config.frame_rate, rate);
+    }
+}
+
 TEST(Config, ExpandsTheHomeDirectoryInGameDir) {
     const char* old = std::getenv("HOME");
     const std::string saved = old ? old : "";
@@ -80,9 +87,10 @@ TEST(Config, BadValuesNameFileLineAndKey) {
     EXPECT_EQ(error_of("fsr = true\nfullscreen = yes\n"),
               "c.toml:2: fullscreen: \"yes\" is not true or false");
     EXPECT_NE(error_of("fsr = \"true\"").find("not true or false"), std::string::npos);
-    EXPECT_NE(error_of("frame_rate = 45").find("c.toml:1: frame_rate: \"45\" is not 30 or 60"),
+    EXPECT_NE(error_of("frame_rate = 45").find("c.toml:1: frame_rate: \"45\" is not 30, 60 or 120"),
               std::string::npos);
     EXPECT_NE(error_of("frame_rate = \"60\"").find("frame_rate"), std::string::npos);
+    EXPECT_NE(error_of("frame_rate = 144").find("frame_rate"), std::string::npos);
     EXPECT_NE(error_of("window_size = \"100x100\"").find("window_size"), std::string::npos);
     EXPECT_NE(error_of("window_size = \"1280\"").find("window_size"), std::string::npos);
     EXPECT_NE(error_of("window_size = 1280x720").find("double quotes"), std::string::npos);

@@ -23,8 +23,8 @@ std::uint32_t frames = 0;
 }  // namespace
 
 void set_frame_rate(unsigned fps) {
-    if (fps != 30 && fps != 60) {
-        throw std::invalid_argument(std::format("frame rate {} is not 30 or 60", fps));
+    if (fps != 30 && fps != 60 && fps != 120) {
+        throw std::invalid_argument(std::format("frame rate {} is not 30, 60 or 120", fps));
     }
     target_fps = fps;
     bb_frame_step = 1.0f / static_cast<float>(fps);

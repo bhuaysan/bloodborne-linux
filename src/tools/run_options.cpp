@@ -3,6 +3,7 @@
 #include <charconv>
 #include <format>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 
 #include "common/config.hpp"
@@ -195,11 +196,15 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             options.pad_input = std::filesystem::path(value());
         } else if (arg == "--frame-rate") {
             const std::string_view fps = value();
-            if (fps != "30" && fps != "60") {
-                throw std::invalid_argument(
-                    std::format("--frame-rate: \"{}\" is not 30 or 60", fps));
+            unsigned rate = 0;
+            for (const unsigned r : common::frame_rates) {
+                rate = fps == std::to_string(r) ? r : rate;
             }
-            options.frame_rate = fps == "30" ? 30 : 60;
+            if (rate == 0) {
+                throw std::invalid_argument(
+                    std::format("--frame-rate: \"{}\" is not 30, 60 or 120", fps));
+            }
+            options.frame_rate = rate;
         } else if (arg == "--window-size") {
             parse_window_size(value(), options);
         } else if (arg == "--resolution") {

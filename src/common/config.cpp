@@ -186,8 +186,8 @@ ParsedConfig parse_config(std::string_view text, std::string_view source) {
             c.rcas_attenuation = stops;
         } else if (key == "frame_rate") {
             unsigned fps = 0;
-            if (v.quoted || !whole_number(v.text, fps) || (fps != 30 && fps != 60)) {
-                p.fail(std::format("frame_rate: \"{}\" is not 30 or 60", v.text));
+            if (v.quoted || !whole_number(v.text, fps) || !valid_frame_rate(fps)) {
+                p.fail(std::format("frame_rate: \"{}\" is not 30, 60 or 120", v.text));
             }
             c.frame_rate = fps;
         } else {

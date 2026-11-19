@@ -20,8 +20,8 @@ std::uint64_t bb_chr_due_not_due = 0;
 // divisions and the conversion, and keeps u in ecx and [rbp-0xc8]. It changes eax, edx, esi and,
 // when due, xmm0, as the game's bytes do; the code at both continuations writes eax and esi before
 // it reads them, and edx only after a call, at 0x019178ee. rcx is pushed for the divisions and
-// popped before either jump. k is 1 or 2 (set_frame_rate allows 30 and 60) and the game's
-// intervals are at most 30, so k * u does not overflow.
+// popped before either jump. k is 1, 2 or 4 (set_frame_rate allows 30, 60 and 120) and the
+// game's intervals are at most 30, so k * u does not overflow.
 asm(R"(
     .pushsection .text
     .globl bb_chr_due_check_stub

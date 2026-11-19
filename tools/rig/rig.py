@@ -243,7 +243,7 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
     if not window:
         argv.append("--headless")
     if frame_rate:
-        # The game's target frame rate, 30 or 60 (docs/design/frame-rate.md).
+        # The game's target frame rate, 30, 60 or 120 (docs/design/frame-rate.md).
         argv += ["--frame-rate", str(frame_rate)]
     if log:
         # A log filter, e.g. profile=debug for the frame counters (docs/test-rig.md, "Profiling").
@@ -752,7 +752,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--audio", action="store_true",
                      help="record the sound with SDL's disk driver and report its level")
     run.add_argument("--log", help="bb-run: log filter, e.g. profile=debug for the frame counters")
-    run.add_argument("--frame-rate", type=int, choices=[30, 60], help="bb-run: target frame rate")
+    run.add_argument("--frame-rate", type=int, choices=[30, 60, 120], help="bb-run: target frame rate")
     run.add_argument("--bb-run-config", type=Path,
                      help="bb-run: take every setting from this config file (--config), with no "
                           "--game-dir and no --profile; BB_GAME_DIR is removed from the environment")
@@ -782,7 +782,7 @@ def main(argv: list[str] | None = None) -> int:
     perf.add_argument("--preset", default="relwithdebinfo", help="bb-run build preset")
     perf.add_argument("--time", type=int, help="time limit of each run in seconds")
     perf.add_argument("--only", default="*", help="glob: only the segments with a matching name")
-    perf.add_argument("--frame-rate", type=int, choices=[30, 60],
+    perf.add_argument("--frame-rate", type=int, choices=[30, 60, 120],
                       help="bb-run runs (branch and main): target frame rate")
     for column in report.PERF_COLUMNS:
         perf.add_argument(f"--{column}", nargs="+", type=Path, default=[], metavar="RUN",
