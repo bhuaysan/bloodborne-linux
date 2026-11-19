@@ -1,7 +1,7 @@
 //  SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 //  SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/host_passes/fsr_pass.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-19
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/assert.h"
@@ -130,7 +130,7 @@ void FsrPass::Create(vk::Device device, VmaAllocator allocator, u32 num_images) 
     }
 }
 
-vk::ImageView FsrPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView input,
+vk::ImageView FsrPass::Render(DeferredCommandBuffer cmdbuf, vk::ImageView input,
                               vk::Extent2D input_size, vk::Extent2D output_size,
                               Settings settings) {
     if (!settings.enable) {

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_presenter.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12; 2026-11-17: FSR and RCAS from RendererOptions; ReleaseFrame
+// Changed for bloodborne-linux, 2026-11-12; 2026-11-17: FSR and RCAS from RendererOptions; ReleaseFrame; 2026-11-19: deferred recording of the draw scheduler
 // License texts: third_party/shadps4/LICENSES/
 
 #include "core/display_state.h"
@@ -75,7 +75,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
                      const RendererOptions& options)
     : window{window_}, liverpool{liverpool_},
       instance{window, options.gpu_id, options.validation},
-      draw_scheduler{instance}, present_scheduler{instance}, flip_scheduler{instance},
+      draw_scheduler{instance, true}, present_scheduler{instance}, flip_scheduler{instance},
       swapchain{instance, window, options.present_mode}, runtime{instance, draw_scheduler},
       rasterizer{std::make_unique<Rasterizer>(instance, draw_scheduler, runtime, liverpool)},
       texture_cache{rasterizer->GetTextureCache()} {
@@ -105,9 +105,9 @@ Presenter::~Presenter() {
     draw_scheduler.Finish();
     present_scheduler.Finish();
     flip_scheduler.Finish();
-    Check(draw_scheduler.CommandBuffer().reset());
-    Check(present_scheduler.CommandBuffer().reset());
-    Check(flip_scheduler.CommandBuffer().reset());
+    draw_scheduler.ResetCommandBuffer();
+    present_scheduler.ResetCommandBuffer();
+    flip_scheduler.ResetCommandBuffer();
 
     const vk::Device device = instance.GetDevice();
     for (auto& frame : present_frames) {
@@ -523,7 +523,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
             .pImageMemoryBarriers = &to_attachment,
         });
         ImGui::Core::NewFrame(is_reusing_frame);
-        ImGui::Core::Render(cmdbuf, swapchain.ImageView(), extent);
+        ImGui::Core::Render(cmdbuf.Direct(), swapchain.ImageView(), extent);
         swapchain_layout = vk::ImageLayout::eColorAttachmentOptimal;
         swapchain_stage = vk::PipelineStageFlagBits2::eColorAttachmentOutput;
         swapchain_access = vk::AccessFlagBits2::eColorAttachmentWrite;

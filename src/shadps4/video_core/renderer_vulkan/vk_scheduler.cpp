@@ -13,8 +13,9 @@ namespace Vulkan {
 
 std::mutex Scheduler::submit_mutex;
 
-Scheduler::Scheduler(const Instance& instance)
-    : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
+Scheduler::Scheduler(const Instance& instance, bool deferred_recording)
+    : instance{instance}, recorder{deferred_recording}, work_semaphore{instance},
+      command_pool{instance, &work_semaphore} {
     BeginSession();
 }
 
@@ -81,6 +82,13 @@ void Scheduler::EndRendering() {
     }
     is_rendering = false;
     CommandBuffer().endRendering();
+    // The end of a render pass is a hand-over point (docs/design/command-recording.md).
+    recorder.Replay();
+}
+
+void Scheduler::ResetCommandBuffer() {
+    recorder.Replay();
+    Check(recorder.Target().reset());
 }
 
 vk::CommandBuffer Scheduler::UploadCommandBuffer() {
@@ -158,6 +166,7 @@ void Scheduler::BeginSession() {
     };
     session.primary = command_pool.Commit();
     Check(session.primary.begin(begin_info));
+    recorder.SetTarget(session.primary);
 
     // Invalidate dynamic state so it gets applied to the new command buffer.
     dynamic_state.Invalidate();
@@ -178,6 +187,7 @@ void Scheduler::EndSession() {
     }
 
     EndRendering();
+    recorder.Replay();
     Check(session.primary.end());
 }
 
@@ -237,7 +247,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     PopPendingOperations();
 }
 
-void DynamicState::Commit(const Instance& instance, const vk::CommandBuffer& cmdbuf) {
+void DynamicState::Commit(const Instance& instance, const DeferredCommandBuffer& cmdbuf) {
     if (dirty_state.viewports) {
         dirty_state.viewports = false;
         cmdbuf.setViewportWithCount(viewports);

@@ -44,6 +44,7 @@ enum class Part : unsigned {
     queue,     // callbacks other threads queued for the GPU thread
     submit,    // end-of-frame housekeeping of the rasterizer
     wait,      // the scheduler waiting for the GPU
+    replay,    // replaying recorded Vulkan commands into a command buffer (#676)
     present,   // the presenter thread's present call
     flip_wait, // a flip request waiting from its queueing to the vblank that took it
     count,

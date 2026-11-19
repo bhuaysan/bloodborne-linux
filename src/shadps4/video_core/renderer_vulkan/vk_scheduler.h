@@ -15,6 +15,7 @@
 #include "common/unique_function.h"
 #include "video_core/amdgpu/regs_color.h"
 #include "video_core/amdgpu/regs_primitive.h"
+#include "video_core/renderer_vulkan/vk_command_recorder.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 #include "vulkan/vulkan.hpp"
@@ -161,7 +162,7 @@ struct DynamicState {
     bool feedback_loop_enabled{};
 
     /// Commits the dynamic state to the provided command buffer.
-    void Commit(const Instance& instance, const vk::CommandBuffer& cmdbuf);
+    void Commit(const Instance& instance, const DeferredCommandBuffer& cmdbuf);
 
     /// Invalidates all dynamic state to be flushed into the next command buffer.
     void Invalidate() {
@@ -341,7 +342,10 @@ using SubmitFunc = Common::UniqueFunction<void, SubmitInfo&>;
 
 class Scheduler {
 public:
-    explicit Scheduler(const Instance& instance);
+    /// A deferred scheduler records its commands into a CommandRecorder and replays them into
+    /// the Vulkan command buffer at each hand-over (docs/design/command-recording.md); a direct
+    /// one calls the command buffer at once.
+    explicit Scheduler(const Instance& instance, bool deferred_recording = false);
     ~Scheduler();
 
     /// Sends the current execution context to the GPU
@@ -394,9 +398,12 @@ public:
     }
 
     /// Returns the current command buffer.
-    vk::CommandBuffer CommandBuffer() const {
-        return sessions.back().primary;
+    DeferredCommandBuffer CommandBuffer() {
+        return DeferredCommandBuffer{&recorder};
     }
+
+    /// Resets the current command buffer after its recorded commands have been replayed.
+    void ResetCommandBuffer();
 
     /// Returns the current command buffer tick.
     [[nodiscard]] u64 CurrentTick() const noexcept {
@@ -433,6 +440,7 @@ private:
 
 private:
     const Instance& instance;
+    CommandRecorder recorder;
     Semaphore work_semaphore;
     CommandPool command_pool;
     DynamicState dynamic_state;

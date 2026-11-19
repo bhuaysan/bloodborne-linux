@@ -1,12 +1,13 @@
 //  SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 //  SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/host_passes/pp_pass.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-19
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
 
 #include "common/types.h"
+#include "video_core/renderer_vulkan/vk_command_recorder.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
 namespace Vulkan {
@@ -24,7 +25,7 @@ public:
 
     void Create(vk::Device device, vk::Format surface_format);
 
-    void Render(vk::CommandBuffer cmdbuf, vk::ImageView input, vk::Extent2D input_size,
+    void Render(DeferredCommandBuffer cmdbuf, vk::ImageView input, vk::Extent2D input_size,
                 Frame& output, Settings settings);
 
 private:
