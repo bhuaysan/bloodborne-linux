@@ -268,17 +268,16 @@ TEST(VideoCore, DeferredRecordingMatchesDirectOnTheDevice) {
 
     const auto run = [&](bool deferred) {
         Vulkan::Scheduler scheduler{instance, deferred};
-        const VkBufferCreateInfo buffer_ci{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .size = buffer_bytes,
-            .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        };
-        const VmaAllocationCreateInfo buffer_alloc{
-            .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                     VMA_ALLOCATION_CREATE_MAPPED_BIT,
-            .usage = VMA_MEMORY_USAGE_AUTO,
-            .requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        };
+        // C structs: value-initialised, then set, so no field goes without an initialiser.
+        VkBufferCreateInfo buffer_ci{};
+        buffer_ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffer_ci.size = buffer_bytes;
+        buffer_ci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        VmaAllocationCreateInfo buffer_alloc{};
+        buffer_alloc.flags =
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        buffer_alloc.usage = VMA_MEMORY_USAGE_AUTO;
+        buffer_alloc.requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
         VkBuffer raw_buffer{};
         VmaAllocation buffer_allocation{};
         VmaAllocationInfo buffer_info{};
@@ -287,18 +286,18 @@ TEST(VideoCore, DeferredRecordingMatchesDirectOnTheDevice) {
                   VK_SUCCESS);
         const vk::Buffer buffer{raw_buffer};
 
-        const VkImageCreateInfo image_ci{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-            .imageType = VK_IMAGE_TYPE_2D,
-            .format = VK_FORMAT_R32_UINT,
-            .extent = {image_size, image_size, 1},
-            .mipLevels = 1,
-            .arrayLayers = 1,
-            .samples = VK_SAMPLE_COUNT_1_BIT,
-            .tiling = VK_IMAGE_TILING_OPTIMAL,
-            .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-        };
-        const VmaAllocationCreateInfo image_alloc{.usage = VMA_MEMORY_USAGE_AUTO};
+        VkImageCreateInfo image_ci{};
+        image_ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        image_ci.imageType = VK_IMAGE_TYPE_2D;
+        image_ci.format = VK_FORMAT_R32_UINT;
+        image_ci.extent = {image_size, image_size, 1};
+        image_ci.mipLevels = 1;
+        image_ci.arrayLayers = 1;
+        image_ci.samples = VK_SAMPLE_COUNT_1_BIT;
+        image_ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+        image_ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        VmaAllocationCreateInfo image_alloc{};
+        image_alloc.usage = VMA_MEMORY_USAGE_AUTO;
         VkImage raw_image{};
         VmaAllocation image_allocation{};
         EXPECT_EQ(vmaCreateImage(allocator, &image_ci, &image_alloc, &raw_image,
