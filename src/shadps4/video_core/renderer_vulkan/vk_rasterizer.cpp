@@ -703,6 +703,9 @@ bool Rasterizer::IsComputeImageCopy(const Pipeline* pipeline) {
     // Perform image copy
     VideoCore::Image& src_image = desc0.is_written ? image1 : image0;
     VideoCore::Image& dst_image = desc0.is_written ? image0 : image1;
+    // Ours (#689): tracked first, so that the copy clears the dirty bits only while a guest write
+    // still faults.
+    texture_cache.TrackImage(desc0.is_written ? image0_id : image1_id);
     runtime.CopyColorAndDepth(&src_image, &dst_image);
     return true;
 }
@@ -765,6 +768,7 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
             },
         .extent = image1.info.resources,
     };
+    texture_cache.TrackImage(image1_id);  // ours (#689), see IsComputeImageCopy
     runtime.ClearImage(&image1, range, clear);
     return true;
 }
@@ -1185,8 +1189,10 @@ void Rasterizer::Resolve() {
     VideoCore::TextureCache::ImageDesc mrt0_desc{liverpool->regs.color_buffers[0], mrt0_hint};
     VideoCore::TextureCache::ImageDesc mrt1_desc{liverpool->regs.color_buffers[1], mrt1_hint};
     auto& mrt0_image = texture_cache.GetImage(texture_cache.FindImage(mrt0_desc, true));
-    auto& mrt1_image = texture_cache.GetImage(texture_cache.FindImage(mrt1_desc, true));
+    const auto mrt1_id = texture_cache.FindImage(mrt1_desc, true);
+    auto& mrt1_image = texture_cache.GetImage(mrt1_id);
 
+    texture_cache.TrackImage(mrt1_id);  // ours (#689), see IsComputeImageCopy
     runtime.ResolveImage(&mrt0_image, &mrt1_image, mrt0_desc.view_info.range,
                          mrt1_desc.view_info.range);
 }
@@ -1211,6 +1217,7 @@ void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
     sub_range.base.layer = liverpool->regs.depth_view.slice_start;
     sub_range.extent.layers = liverpool->regs.depth_view.NumSlices() - sub_range.base.layer;
 
+    texture_cache.TrackImage(write_id);  // ours (#689), see IsComputeImageCopy
     runtime.CopyDepthStencil(&read_image, &write_image, sub_range);
 }
 

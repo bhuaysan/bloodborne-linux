@@ -228,6 +228,10 @@ void Runtime::DownloadImage(VideoCore::Image* src, const VideoCore::Buffer* dst,
 }
 
 void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
+    // Ours (#689): upstream clears the dirty bits at the end. They are cleared before the copy is
+    // recorded and only while the image is fully tracked, so a write fault after that keeps its
+    // CpuDirty. The caller tracks the destination first.
+    dst->ClearDirtyIfTracked();
     const u32 num_mips = std::min(src->info.resources.levels, dst->info.resources.levels);
 
     // Format mismatch warning (safe but useful)
@@ -322,11 +326,11 @@ void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
                      vk::ImageLayout::eTransferDstOptimal, regions);
 
     dst->flags |= (src->flags & VideoCore::ImageFlagBits::GpuModified);
-    dst->flags &= ~VideoCore::ImageFlagBits::Dirty;
 }
 
 void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
                                   const VideoCore::Buffer* buffer, u64 offset) {
+    dst->ClearDirtyIfTracked();  // ours (#689), see CopyImage
     const u32 num_mips = std::min(src->info.resources.levels, dst->info.resources.levels);
     const u32 num_layers = std::min(src->info.resources.layers, dst->info.resources.layers);
 
@@ -396,10 +400,10 @@ void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
                              vk::ImageLayout::eTransferDstOptimal, buffer_copies);
 
     dst->flags |= (src->flags & VideoCore::ImageFlagBits::GpuModified);
-    dst->flags &= ~VideoCore::ImageFlagBits::Dirty;
 }
 
 void Runtime::CopyMip(VideoCore::Image* src, VideoCore::Image* dst, u32 mip, u32 slice) {
+    dst->ClearDirtyIfTracked();  // ours (#689), see CopyImage
     const auto dst_dim = dst->info.props.is_block ? 2 : 0;
     const auto mip_block_w = std::max(dst->info.size.width >> (mip + dst_dim), 1u);
     const auto mip_block_h = std::max(dst->info.size.height >> (mip + dst_dim), 1u);
@@ -448,7 +452,6 @@ void Runtime::CopyMip(VideoCore::Image* src, VideoCore::Image* dst, u32 mip, u32
                      vk::ImageLayout::eTransferDstOptimal, image_copy);
 
     dst->flags |= (src->flags & VideoCore::ImageFlagBits::GpuModified);
-    dst->flags &= ~VideoCore::ImageFlagBits::Dirty;
 }
 
 void Runtime::CopyColorAndDepth(VideoCore::Image* src, VideoCore::Image* dst) {
@@ -488,6 +491,7 @@ void Runtime::CopyColorAndDepth(VideoCore::Image* src, VideoCore::Image* dst) {
 
 void Runtime::CopyDepthStencil(VideoCore::Image* src, VideoCore::Image* dst,
                                const VideoCore::SubresourceRange& sub_range) {
+    dst->ClearDirtyIfTracked();  // ours (#689), see CopyImage
     scheduler.EndRendering();
 
     bool needs_flush =
@@ -524,12 +528,12 @@ void Runtime::CopyDepthStencil(VideoCore::Image* src, VideoCore::Image* dst,
                      vk::ImageLayout::eTransferDstOptimal, region);
 
     dst->flags |= VideoCore::ImageFlagBits::GpuModified;
-    dst->flags &= ~VideoCore::ImageFlagBits::Dirty;
 }
 
 void Runtime::ResolveImage(VideoCore::Image* src, VideoCore::Image* dst,
                            const VideoCore::SubresourceRange& src_range,
                            const VideoCore::SubresourceRange& dst_range) {
+    dst->ClearDirtyIfTracked();  // ours (#689), see CopyImage
     SetBackingSamples(dst, 1, false);
     scheduler.EndRendering();
 
@@ -590,11 +594,11 @@ void Runtime::ResolveImage(VideoCore::Image* src, VideoCore::Image* dst,
     }
 
     dst->flags |= VideoCore::ImageFlagBits::GpuModified;
-    dst->flags &= ~VideoCore::ImageFlagBits::Dirty;
 }
 
 void Runtime::ClearImage(VideoCore::Image* dst, const VideoCore::SubresourceRange& range,
                          const vk::ClearValue& clear_value) {
+    dst->ClearDirtyIfTracked();  // ours (#689), see CopyImage
     scheduler.EndRendering();
 
     const bool needs_flush =
@@ -616,7 +620,6 @@ void Runtime::ClearImage(VideoCore::Image* dst, const VideoCore::SubresourceRang
                            vk_range);
 
     dst->flags |= VideoCore::ImageFlagBits::GpuModified;
-    dst->flags &= ~VideoCore::ImageFlagBits::Dirty;
 }
 
 void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool copy_backing) {

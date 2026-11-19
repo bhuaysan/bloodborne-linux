@@ -361,12 +361,16 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         // Inherit image usage
         auto& new_image = slot_images[new_image_id];
         new_image.usage = cache_image.usage;
+        // Ours (#689): tracked before the upload and the copy, as ExpandImage does, and the dirty
+        // bits cleared only while every page is still write protected. Upstream uploads the
+        // untracked image and clears them, so a guest write in between was lost.
+        TrackImage(new_image_id);
         if (new_info.num_samples == 1 &&
             (new_info.resources.layers > cache_image.info.resources.layers ||
              new_info.resources.levels > cache_image.info.resources.levels)) {
             RefreshImage(new_image);
         }
-        new_image.flags &= ~ImageFlagBits::Dirty;
+        new_image.ClearDirtyIfTracked();
         // When creating a depth buffer through overlap resolution don't clear it on first use.
         new_image.info.meta_info.htile_clear_mask = 0;
         runtime.CopyColorAndDepth(&cache_image, &new_image);
@@ -602,9 +606,14 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
                     merged_image_id =
                         slot_images.Insert(instance, runtime, slot_image_views, image_info);
                     RegisterImage(merged_image_id);
-                    RefreshImage(slot_images[merged_image_id]);
-                    TrackImage(merged_image_id);
                 }
+                // Ours (#689): tracked before the upload, so that RefreshImage and CopyMip clear
+                // the dirty bits only while a guest write still faults. Upstream uploads the new
+                // image untracked and tracks it after, which loses a write in between for the
+                // mips the copy does not cover. A merged image found earlier gets the guest's
+                // writes it still lacks before the copy, where upstream drops them.
+                TrackImage(merged_image_id);
+                RefreshImage(slot_images[merged_image_id]);
                 auto& merged_image = slot_images[merged_image_id];
                 runtime.CopyMip(&cache_image, &merged_image, mip, slice);
                 FreeImage(cache_image_id);
@@ -633,7 +642,7 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     TrackImage(new_image_id);
     RefreshImage(new_image);
     if (new_image.info.num_samples > 1) {
-        new_image.flags &= ~ImageFlagBits::Dirty;  // RefreshImage leaves those, upstream clears
+        new_image.ClearDirtyIfTracked();  // RefreshImage leaves those, upstream clears
     }
 
     if (src_image.binding.is_bound || src_image.binding.is_target) {

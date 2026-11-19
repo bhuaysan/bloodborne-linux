@@ -141,6 +141,18 @@ struct Image : public Common::LRUNode<> {
                track_addr_end == info.guest_address + info.guest_size;
     }
 
+    /// Ours (#689): before a GPU write that makes the image what it should hold. Clears the dirty
+    /// bits only while every page is still write protected, under the mutex a write fault takes:
+    /// a fault that came since the image was tracked keeps its CpuDirty, so the next UpdateImage
+    /// uploads the guest's write instead of leaving the image stale and untracked. A multisampled
+    /// image is never uploaded from guest memory, so its bits are always cleared, as upstream does.
+    void ClearDirtyIfTracked() {
+        std::scoped_lock lk{mutex};
+        if (IsFullyTracked() || info.num_samples > 1) {
+            flags &= ~ImageFlagBits::Dirty;
+        }
+    }
+
     bool HasGpuValidData() const {
         return True(flags & ImageFlagBits::GpuModified) && False(flags & ImageFlagBits::Dirty);
     }

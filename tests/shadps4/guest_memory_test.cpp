@@ -1497,6 +1497,88 @@ TEST(GuestMemory, GuestWritesDuringUploadsAreNotLost) {
     }
 }
 
+// The same for a merge (#689): a texture whose second layer the cache holds as an image of its own
+// is made as a new image, uploaded from guest memory, and the old image is copied into its second
+// layer. Upstream uploads the new image before it tracks it and clears its dirty bits after the
+// copy, so a guest write to the first layer in between was lost and the texture stayed stale. Guest
+// threads write the first layer while the GPU thread merges, and once they stop, one UpdateImage
+// has to make that layer equal to its guest memory.
+TEST(GuestMemory, GuestWritesDuringAMergeAreNotLost) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        Libraries::VideoOut::BufferAttributeGroup group{};
+        group.is_occupied = true;
+        group.attrib.pixel_format = Libraries::VideoOut::PixelFormat::A8R8G8B8Srgb;
+        group.attrib.tiling_mode = Libraries::VideoOut::TilingMode::Linear;
+        group.attrib.width = group.attrib.height = group.attrib.pitch_in_pixel = 64;
+        constexpr u64 image_size = 64 * 64 * 4;
+        constexpr u64 image_words = image_size / sizeof(u64);
+        constexpr int rounds = 40;
+        // Each round merges at a fresh place: the texture's two layers, rounded up to pages.
+        const u64 stride = (2 * image_size + page_size - 1) / page_size * page_size;
+        Direct d(rounds * stride / page_size);
+        const std::uintptr_t start = addr(d.address);
+
+        const std::uint64_t claimed = bb::shadps4::claimed_faults();
+        u64 merged = 0;
+        u64 stale = 0;
+        for (int round = 0; round < rounds; ++round) {
+            const std::uintptr_t texture = start + round * stride;
+            auto* const words = reinterpret_cast<u64*>(texture);
+            VideoCore::TextureCache::ImageDesc layer1{group, texture + image_size};
+            gpu.liverpool->SendCommand<true>(
+                [&] { textures.UpdateImage(textures.FindImage(layer1)); });
+
+            std::atomic<bool> stop{false};
+            std::atomic<int> started{0};
+            std::vector<std::thread> threads;
+            for (int t = 0; t < 4; ++t) {
+                threads.emplace_back([&, t] {
+                    std::mt19937_64 writer(round * 16 + t + 1);
+                    started.fetch_add(1);
+                    for (u64 n = 0; !stop.load(std::memory_order_relaxed); ++n) {
+                        std::atomic_ref<u64>(words[writer() % image_words])
+                            .store((u64(t) << 56) | n, std::memory_order_relaxed);
+                        for (u64 spin = writer() % 256; spin > 0; --spin) {
+                            asm volatile("" ::: "memory");
+                        }
+                    }
+                });
+            }
+            while (started.load() < 4) {
+                std::this_thread::yield();
+            }
+            VideoCore::ImageId id{};
+            gpu.liverpool->SendCommand<true>([&] {
+                VideoCore::TextureCache::ImageDesc both{group, texture};
+                both.info.resources.layers = 2;
+                both.info.UpdateSize();
+                id = textures.FindImage(both);
+                merged += textures.GetImage(id).info.resources.layers == 2 ? 1 : 0;
+            });
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            stop.store(true);
+            for (auto& thread : threads) {
+                thread.join();
+            }
+            gpu.liverpool->SendCommand<true>([&] {
+                textures.UpdateImage(id);
+                const std::vector<u8> bytes = read_back(gpu, textures.GetImage(id));
+                stale += std::memcmp(bytes.data(), words, image_size) != 0 ? 1 : 0;
+            });
+        }
+        EXPECT_EQ(stale, 0u);
+        EXPECT_EQ(merged, u64(rounds));
+        EXPECT_GE(bb::shadps4::claimed_faults() - claimed, u64(rounds));
+        gpu.liverpool->SendCommand<true>([&] { gpu.rasterizer.Finish(); });
+        d.unmap();
+    }
+}
+
 // A rasterizer unregisters from the guest memory when it is destroyed (#629; upstream's never
 // does): the maps, unmaps, releases and writes that follow reach no rasterizer.
 TEST(GuestMemory, ADestroyedRasterizerHearsOfNothing) {

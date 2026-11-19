@@ -162,6 +162,11 @@ public:
     /// Links the stencil plane of a depth surface to its depth image.
     void AssociateStencil(ImageId depth_id, const ImageInfo& depth_info);
 
+    /// Track CPU reads and writes for image. Ours (#689): public, since the rasterizer tracks the
+    /// destination of a GPU copy, clear or resolve before it, so that the write's
+    /// Image::ClearDirtyIfTracked clears the dirty bits.
+    void TrackImage(ImageId image_id);
+
     /// Updates image contents if it was modified by CPU.
     void UpdateImage(ImageId image_id) {
         Image& image = slot_images[image_id];
@@ -383,8 +388,6 @@ private:
     /// Unregister image from the page table
     void UnregisterImage(ImageId image);
 
-    /// Track CPU reads and writes for image
-    void TrackImage(ImageId image_id);
 
     /// Stop tracking CPU reads and writes for image
     void UntrackImage(ImageId image_id);
