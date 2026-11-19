@@ -31,7 +31,11 @@ Each step is a GitHub milestone, and tasks are tracked as issues.
 | Milestone | Goal | Done when |
 |---|---|---|
 | **R7 Playthrough** | The complete game is playable | The game can be played from the start to an ending on the reference machine, without a crash or a rendering fault that blocks play. The work goes area by area, and every fault found gets an issue |
+| **R10 Performance** | The game runs faster than the 60 FPS of R8 and loads quickly | `bb-run --frame-rate 120` runs at normal speed, every duration of the final check of R8.3 matching 30 FPS within one 30 FPS frame. 60 FPS holds a 16.67 ms median and a p99 of at most 18.8 ms in the heaviest areas measured, on the reference machine. Loads take no longer than the reference's. The frame pacer no longer keeps a core busy |
+| **R11 Image quality** | The picture can be made better than the PS4's | Anisotropic filtering, post-processing switches (motion blur, chromatic aberration), field of view, 21:9 and 32:9, larger shadow maps and longer draw distances are options of `bb-run` and the launcher's picture settings. Each one is checked by shots of the clinic and Central Yharnam routes against the default, with its frame-time cost measured, and the defaults leave the picture as it is |
 | **Decomp** (continuous, as needed) | Replace game code where that helps | No end state of its own. A function is decompiled when an issue needs it for a bug, a crash, a bottleneck or a limit such as the frame rate. It passes its differential test and is hooked in. Progress is tracked in `symbols/functions.csv` |
+
+R10 and R11 run alongside R7, which keeps priority: a fault that blocks play comes before any option (maintainer decision, 2026-11-19). Both start with research issues that find the engine's own parameters (vblank rate, frame-rate assumptions, post-processing, camera, shadows, draw distance); the options build on what they find. Each option keeps the game's own behaviour as the default, so 30 FPS and 1x stay as they are on `main`.
 
 R8 ran in four parts, each a GitHub milestone: R8.1 (shader and pipeline cache), R8.2 (frame times), R8.3 (frame rate) and R8.4 (resolution). Render hooks get issues only when a measurement finds a bottleneck that the renderer can't fix.
 
