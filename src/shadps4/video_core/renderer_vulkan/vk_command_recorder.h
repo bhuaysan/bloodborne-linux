@@ -4,7 +4,9 @@
 // vk::CommandBuffer subset the renderer records; each one copies its arguments by value into the
 // recorder's chunk, so no pointer into the caller's state outlives the call. Replay calls the
 // same vk::CommandBuffer methods in the same order. A recorder made direct records nothing and
-// calls the command buffer at once: the present and flip schedulers stay on that path.
+// calls the command buffer at once: the present and flip schedulers stay on that path. Commands
+// whose replay rebuilds a Vulkan struct call the command buffer directly on that path, so the
+// tests' direct trace is an independent reference for the rebuild.
 
 #pragma once
 
@@ -221,6 +223,10 @@ public:
     void bindVertexBuffers2(u32 first, u32 count, const vk::Buffer* buffers,
                             const vk::DeviceSize* offsets, const vk::DeviceSize* sizes,
                             const vk::DeviceSize* strides) const {
+        if (!rec->Deferred()) {
+            rec->Target().bindVertexBuffers2(first, count, buffers, offsets, sizes, strides);
+            return;
+        }
         rec->Emit<[](vk::CommandBuffer c, u32 f, vk::ArrayProxy<const vk::Buffer> b,
                      vk::ArrayProxy<const vk::DeviceSize> o, vk::ArrayProxy<const vk::DeviceSize> s,
                      vk::ArrayProxy<const vk::DeviceSize> st) {

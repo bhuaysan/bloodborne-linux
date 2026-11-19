@@ -89,6 +89,28 @@ namespace {
 // Which pointer of a descriptor write its copied infos go to.
 enum class InfoKind : u32 { None, Image, Buffer, TexelView };
 
+// The array Vulkan reads for a descriptor type; None for a type the recorder can't copy.
+InfoKind InfoKindOf(vk::DescriptorType type) {
+    switch (type) {
+    case vk::DescriptorType::eSampler:
+    case vk::DescriptorType::eCombinedImageSampler:
+    case vk::DescriptorType::eSampledImage:
+    case vk::DescriptorType::eStorageImage:
+    case vk::DescriptorType::eInputAttachment:
+        return InfoKind::Image;
+    case vk::DescriptorType::eUniformBuffer:
+    case vk::DescriptorType::eStorageBuffer:
+    case vk::DescriptorType::eUniformBufferDynamic:
+    case vk::DescriptorType::eStorageBufferDynamic:
+        return InfoKind::Buffer;
+    case vk::DescriptorType::eUniformTexelBuffer:
+    case vk::DescriptorType::eStorageTexelBuffer:
+        return InfoKind::TexelView;
+    default:
+        return InfoKind::None;
+    }
+}
+
 struct InfoRef {
     u32 offset;
     InfoKind kind;
@@ -109,6 +131,9 @@ void ReplayPushDescriptors(vk::CommandBuffer cmdbuf, std::byte* record) {
     // The chunk is replayed once, so the copied writes are pointed at the copied infos in place.
     for (u32 i = 0; i < p.writes.count; ++i) {
         std::byte* const at = record + infos[i].offset;
+        writes[i].pImageInfo = nullptr;
+        writes[i].pBufferInfo = nullptr;
+        writes[i].pTexelBufferView = nullptr;
         switch (infos[i].kind) {
         case InfoKind::Image:
             writes[i].pImageInfo = std::launder(reinterpret_cast<vk::DescriptorImageInfo*>(at));
@@ -128,6 +153,12 @@ void ReplayPushDescriptors(vk::CommandBuffer cmdbuf, std::byte* record) {
         vk::ArrayProxy<const vk::WriteDescriptorSet>(p.writes.count, writes));
 }
 
+// Records copy structs by value, so a pNext chain would point into the caller's memory.
+template <typename T>
+bool NoChains(vk::ArrayProxy<const T> items) {
+    return std::ranges::all_of(items, [](const T& item) { return item.pNext == nullptr; });
+}
+
 } // namespace
 
 void DeferredCommandBuffer::pushDescriptorSetKHR(
@@ -137,6 +168,12 @@ void DeferredCommandBuffer::pushDescriptorSetKHR(
         rec->Target().pushDescriptorSetKHR(bind_point, layout, set, writes);
         return;
     }
+    // Checked before the record starts, so a failed check leaves no half-written record.
+    for (const vk::WriteDescriptorSet& write : writes) {
+        ASSERT_MSG(write.pNext == nullptr, "descriptor write with a pNext chain");
+        ASSERT_MSG(InfoKindOf(write.descriptorType) != InfoKind::None,
+                   "descriptor type {} can't be recorded", vk::to_string(write.descriptorType));
+    }
     const std::size_t at = rec->Begin(&ReplayPushDescriptors, sizeof(PushDescriptors),
                                       alignof(PushDescriptors));
     const u32 count = writes.size();
@@ -145,17 +182,19 @@ void DeferredCommandBuffer::pushDescriptorSetKHR(
     const auto stored_infos = rec->AppendSpace<InfoRef>(at, count);
     for (u32 i = 0; i < count; ++i) {
         const vk::WriteDescriptorSet& write = writes.data()[i];
-        ASSERT_MSG(write.pNext == nullptr, "descriptor write with a pNext chain");
-        InfoRef ref{0, InfoKind::None};
-        if (write.pImageInfo != nullptr) {
-            ref = {rec->Append(at, write.pImageInfo, write.descriptorCount).offset,
-                   InfoKind::Image};
-        } else if (write.pBufferInfo != nullptr) {
-            ref = {rec->Append(at, write.pBufferInfo, write.descriptorCount).offset,
-                   InfoKind::Buffer};
-        } else if (write.pTexelBufferView != nullptr) {
-            ref = {rec->Append(at, write.pTexelBufferView, write.descriptorCount).offset,
-                   InfoKind::TexelView};
+        InfoRef ref{0, InfoKindOf(write.descriptorType)};
+        switch (ref.kind) {
+        case InfoKind::Image:
+            ref.offset = rec->Append(at, write.pImageInfo, write.descriptorCount).offset;
+            break;
+        case InfoKind::Buffer:
+            ref.offset = rec->Append(at, write.pBufferInfo, write.descriptorCount).offset;
+            break;
+        case InfoKind::TexelView:
+            ref.offset = rec->Append(at, write.pTexelBufferView, write.descriptorCount).offset;
+            break;
+        case InfoKind::None:
+            break;
         }
         std::memcpy(rec->RecordAt(at) + stored_infos.offset + sizeof(InfoRef) * i, &ref,
                     sizeof(ref));
@@ -173,8 +212,7 @@ void DeferredCommandBuffer::pushDescriptorSetKHR(
 void DeferredCommandBuffer::setVertexInputEXT(
     vk::ArrayProxy<const vk::VertexInputBindingDescription2EXT> bindings,
     vk::ArrayProxy<const vk::VertexInputAttributeDescription2EXT> attributes) const {
-    DEBUG_ASSERT(std::ranges::all_of(bindings, [](const auto& b) { return !b.pNext; }) &&
-                 std::ranges::all_of(attributes, [](const auto& a) { return !a.pNext; }));
+    ASSERT_MSG(NoChains(bindings) && NoChains(attributes), "vertex input with a pNext chain");
     rec->Emit<[](vk::CommandBuffer c, vk::ArrayProxy<const vk::VertexInputBindingDescription2EXT> b,
                  vk::ArrayProxy<const vk::VertexInputAttributeDescription2EXT> a) {
         c.setVertexInputEXT(b, a);
@@ -182,7 +220,16 @@ void DeferredCommandBuffer::setVertexInputEXT(
 }
 
 void DeferredCommandBuffer::beginRendering(const vk::RenderingInfo& info) const {
-    ASSERT_MSG(info.pNext == nullptr, "rendering info with a pNext chain");
+    ASSERT_MSG(info.pNext == nullptr &&
+                   NoChains(vk::ArrayProxy<const vk::RenderingAttachmentInfo>(
+                       info.colorAttachmentCount, info.pColorAttachments)) &&
+                   (!info.pDepthAttachment || !info.pDepthAttachment->pNext) &&
+                   (!info.pStencilAttachment || !info.pStencilAttachment->pNext),
+               "rendering info with a pNext chain");
+    if (!rec->Deferred()) {
+        rec->Target().beginRendering(info);
+        return;
+    }
     // Depth and stencil go by value; an absent one is marked by an empty view and a zero mask.
     std::array<vk::RenderingAttachmentInfo, 2> depth_stencil{};
     u32 present = 0;
@@ -214,7 +261,18 @@ void DeferredCommandBuffer::beginRendering(const vk::RenderingInfo& info) const 
 }
 
 void DeferredCommandBuffer::pipelineBarrier2(const vk::DependencyInfo& info) const {
-    ASSERT_MSG(info.pNext == nullptr, "dependency info with a pNext chain");
+    ASSERT_MSG(info.pNext == nullptr &&
+                   NoChains(vk::ArrayProxy<const vk::MemoryBarrier2>(info.memoryBarrierCount,
+                                                                     info.pMemoryBarriers)) &&
+                   NoChains(vk::ArrayProxy<const vk::BufferMemoryBarrier2>(
+                       info.bufferMemoryBarrierCount, info.pBufferMemoryBarriers)) &&
+                   NoChains(vk::ArrayProxy<const vk::ImageMemoryBarrier2>(
+                       info.imageMemoryBarrierCount, info.pImageMemoryBarriers)),
+               "dependency info with a pNext chain");
+    if (!rec->Deferred()) {
+        rec->Target().pipelineBarrier2(info);
+        return;
+    }
     rec->Emit<[](vk::CommandBuffer c, vk::DependencyFlags flags,
                  vk::ArrayProxy<const vk::MemoryBarrier2> memory,
                  vk::ArrayProxy<const vk::BufferMemoryBarrier2> buffers,

@@ -192,6 +192,9 @@ void Scheduler::EndSession() {
 }
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
+    // Replayed before the lock the present thread also takes; EndSession replays what on_submit
+    // and the end of the session add.
+    recorder.Replay();
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
 

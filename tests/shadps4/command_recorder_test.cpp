@@ -288,9 +288,13 @@ void Script(const Vulkan::DeferredCommandBuffer& cmd, uint32_t round) {
             writes[i].pBufferInfo = nullptr;
             writes[i].pTexelBufferView = nullptr;
         }
+        writes[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
         writes[0].descriptorCount = 3, writes[0].pImageInfo = images.data();
+        writes[1].descriptorType = vk::DescriptorType::eStorageBuffer;
         writes[1].descriptorCount = 2, writes[1].pBufferInfo = buffers.data();
+        writes[2].descriptorType = vk::DescriptorType::eUniformTexelBuffer;
         writes[2].descriptorCount = 4, writes[2].pTexelBufferView = views.data();
+        writes[3].descriptorType = vk::DescriptorType::eUniformBuffer;
         writes[3].descriptorCount = 1, writes[3].pBufferInfo = buffers.data() + 1;
         cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, layout, 0, writes);
         Clobber(images), Clobber(buffers), Clobber(views), Clobber(writes);
@@ -480,6 +484,57 @@ TEST(CommandRecorder, ReplaysEveryCommandAsADirectCallWould) {
     ASSERT_EQ(deferred.size(), direct.size());
     EXPECT_TRUE(deferred == direct);
 
+    dispatcher = saved;
+}
+
+// A record that doesn't fit the chunk's capacity moves the records before it: they and the large
+// one still replay as recorded. 63 KiB of small records stay under the hand-over size; an 80 KB
+// vertex buffer binding then grows the 128 KiB chunk.
+TEST(CommandRecorder, GrowingTheChunkKeepsItsRecords) {
+    vk::detail::DispatchLoaderDynamic& dispatcher = VULKAN_HPP_DEFAULT_DISPATCHER;
+    const vk::detail::DispatchLoaderDynamic saved = dispatcher;
+    InstallFakes(dispatcher);
+    const auto script = [](const Vulkan::DeferredCommandBuffer& cmd,
+                           Vulkan::CommandRecorder& recorder) {
+        uint32_t i = 0;
+        while (recorder.Deferred() ? recorder.PendingBytes() < 63 * 1024 : i < 2000) {
+            auto data = Pattern<std::array<char, 24>>(i);
+            cmd.updateBuffer(Handle<vk::Buffer>(0x10), 4 * i, 24, data.data());
+            Clobber(data);
+            ++i;
+        }
+        auto buffers = Patterns<vk::Buffer>(7, 5000);
+        auto offsets = Patterns<vk::DeviceSize>(8, 5000);
+        cmd.bindVertexBuffers(0, 5000, buffers.data(), offsets.data());
+        Clobber(buffers), Clobber(offsets);
+        return i;
+    };
+    std::string direct_trace, deferred_trace;
+    uint32_t small = 0;
+    {
+        trace = &deferred_trace;
+        Vulkan::CommandRecorder recorder{true};
+        recorder.SetTarget(Handle<vk::CommandBuffer>(3));
+        small = script(Vulkan::DeferredCommandBuffer{&recorder}, recorder);
+        // The large record pushed the chunk over the hand-over size: all of it replayed.
+        EXPECT_EQ(recorder.PendingBytes(), 0u);
+    }
+    {
+        trace = &direct_trace;
+        Vulkan::CommandRecorder recorder{false};
+        recorder.SetTarget(Handle<vk::CommandBuffer>(3));
+        const Vulkan::DeferredCommandBuffer cmd{&recorder};
+        for (uint32_t i = 0; i < small; ++i) {
+            auto data = Pattern<std::array<char, 24>>(i);
+            cmd.updateBuffer(Handle<vk::Buffer>(0x10), 4 * i, 24, data.data());
+        }
+        auto buffers = Patterns<vk::Buffer>(7, 5000);
+        auto offsets = Patterns<vk::DeviceSize>(8, 5000);
+        cmd.bindVertexBuffers(0, 5000, buffers.data(), offsets.data());
+    }
+    EXPECT_GT(small, 1000u);
+    EXPECT_TRUE(deferred_trace == direct_trace);
+    trace = nullptr;
     dispatcher = saved;
 }
 
