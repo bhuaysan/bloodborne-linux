@@ -33,6 +33,7 @@ address,name,signature,status,file
 0x015af4f0,anim_update_all,,named,
 0x015b2910,anim_update_entry,,named,
 0x01734510,shop_tab_refresh,void shop_tab_refresh(void * shop),replaced,src/game/frame/step_literals.cpp
+0x0176d3c0,now_loading_request_close,,named,
 0x017f99d0,havok_world_step,void havok_world_step(void * self),replaced,src/game/havok/world.cpp
 0x0180df90,ragdoll_update,,replaced,src/game/chr/ragdoll.cpp
 0x0180f5e0,chr_list_fade_step,,replaced,src/game/frame/step_literals.cpp
@@ -43,6 +44,9 @@ address,name,signature,status,file
 0x018bd320,chr_state_step,"void chr_state_step(float step, void * chr, ValidateBudget * budget)",named,
 0x01915320,world_chr_frame_update,"void world_chr_frame_update(float step, void * world, void * task)",named,
 0x019173b0,world_chr_update,"void world_chr_update(float step, void * world)",replaced,src/game/chr/update_interval.cpp
+0x019386e0,move_map_step_update,,named,
+0x01938870,move_map_step_load_start,"void move_map_step_load_start(void * step)",replaced,src/game/load/load_hold.cpp
+0x0193a3e0,move_map_step_end_load,,named,
 0x019a6860,hkai_test_module_step,,named,
 0x019baa40,navmesh_test_module_step,,named,
 0x01a0f910,ai_pad_step,"void ai_pad_step(void * pad, FD4TaskData * task)",named,

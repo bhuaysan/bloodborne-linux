@@ -22,7 +22,8 @@ inline constexpr std::string_view run_usage =
     "              [--validation] [--validation-sync] [--validation-gpu]\n"
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
     "              [--sync-pipelines] [--sync-recording] [--pad-input PATH]\n"
-    "              [--frame-rate 30|60|120|144] [--window-size WIDTHxHEIGHT] [--fullscreen]\n"
+    "              [--frame-rate 30|60|120|144] [--load-hold SECONDS]\n"
+    "              [--window-size WIDTHxHEIGHT] [--fullscreen]\n"
     "              [--fsr] [--no-rcas]\n"
     "              [--rcas-attenuation STOPS] [--resolution WIDTHxHEIGHT]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
@@ -56,6 +57,9 @@ inline constexpr std::string_view run_usage =
     "                       needs a window; other controllers are then ignored\n"
     "  --frame-rate FPS     the game's target frame rate, 30 (the game's own, default) or 60; the\n"
     "                       simulation steps 1/FPS seconds a frame (docs/design/frame-rate.md)\n"
+    "  --load-hold SECONDS  the least time the loading page of a death's reload stays up, 0 to 12\n"
+    "                       (default 12, the game's); the page still waits for the area to be\n"
+    "                       ready\n"
     "  --window-size WxH    the window's size, from 640x360 to 16384x16384 (default 1280x720)\n"
     "  --fullscreen         a borderless window covering its display, at the display's size\n"
     "  --fsr                upscale the game's frame with AMD FSR 1 when the window is larger\n"
@@ -82,6 +86,10 @@ inline constexpr unsigned max_resolution_width = 3840;
 inline constexpr unsigned max_resolution_height = 2160;
 inline constexpr unsigned resolution_width_step = 64;
 
+// --load-hold: the game's minimum time of a death's loading page, and the most the option takes
+// (bb::game::game_load_hold, #684).
+inline constexpr float max_load_hold = 12.0f;
+
 // --present-mode. Same order and meaning as Vulkan::PresentMode, which bb-run maps it to.
 enum class PresentMode { fifo, mailbox, immediate };
 
@@ -103,6 +111,7 @@ struct RunOptions {
     bool threaded_recording = true;  // false with --sync-recording
     std::optional<std::filesystem::path> pad_input;  // --pad-input
     unsigned frame_rate = 30;  // --frame-rate: 30, 60, 120 or 144
+    float load_hold = max_load_hold;  // --load-hold: 0 to 12 seconds
     unsigned window_width = 1280;  // --window-size
     unsigned window_height = 720;
     bool fullscreen = false;  // --fullscreen
@@ -118,8 +127,8 @@ struct RunOptions {
 // unknown option, a missing value, a profile name that valid_profile_name refuses, a timeout that
 // isn't a whole number from 1 to 86400, a log spec that LogFilter::parse refuses, a --present-mode
 // that is none of fifo, mailbox and immediate, a --frame-rate other than 30, 60, 120 and 144, a
-// --window-size that isn't WIDTHxHEIGHT in range, a --resolution that isn't one of the sizes above,
-// an --rcas-attenuation that isn't a number from 0 to 2, --validation-sync or --validation-gpu
+// --load-hold that isn't a number from 0 to 12, a --window-size that isn't WIDTHxHEIGHT in range, a
+// --resolution that isn't one of the sizes above, an --rcas-attenuation that isn't a number from 0 to 2, --validation-sync or --validation-gpu
 // without --validation, and --no-rcas or --rcas-attenuation without --fsr.
 RunOptions parse_run_options(std::span<const std::string_view> args);
 

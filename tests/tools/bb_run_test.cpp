@@ -193,6 +193,19 @@ TEST(RunOptions, ParsesTheResolution) {
     }
 }
 
+TEST(RunOptions, ParsesLoadHold) {
+    EXPECT_FLOAT_EQ(parse({}).load_hold, 12.0f);
+    EXPECT_FLOAT_EQ(parse({"--load-hold", "0"}).load_hold, 0.0f);
+    EXPECT_FLOAT_EQ(parse({"--load-hold", "2.5"}).load_hold, 2.5f);
+    EXPECT_FLOAT_EQ(parse({"--load-hold", "12"}).load_hold, 12.0f);
+    EXPECT_EQ(parse_error({"--load-hold"}), "--load-hold needs a value");
+    for (std::string_view seconds : {"-0.1", "12.01", "nan", "inf", "1,5", "2s", "", " 1"}) {
+        EXPECT_EQ(parse_error({"--load-hold", seconds}),
+                  std::format("--load-hold: \"{}\" is not a number of seconds from 0 to 12",
+                              seconds));
+    }
+}
+
 TEST(RunOptions, ParsesFsrAndRcas) {
     const RunOptions d = parse({});
     EXPECT_FALSE(d.fsr);

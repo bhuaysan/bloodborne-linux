@@ -86,6 +86,18 @@ float parse_rcas_attenuation(std::string_view value) {
     return stops;
 }
 
+float parse_load_hold(std::string_view value) {
+    float seconds = 0;
+    const char* end = value.data() + value.size();
+    const auto [ptr, ec] = std::from_chars(value.data(), end, seconds);
+    // The negated test also refuses NaN.
+    if (ec != std::errc{} || ptr != end || !(seconds >= 0.0f && seconds <= max_load_hold)) {
+        throw std::invalid_argument(std::format(
+            "--load-hold: \"{}\" is not a number of seconds from 0 to {}", value, max_load_hold));
+    }
+    return seconds;
+}
+
 }  // namespace
 
 RunOptions options_from_config(const common::Config& config) {
@@ -207,6 +219,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
                     std::format("--frame-rate: \"{}\" is not 30, 60, 120 or 144", fps));
             }
             options.frame_rate = rate;
+        } else if (arg == "--load-hold") {
+            options.load_hold = parse_load_hold(value());
         } else if (arg == "--window-size") {
             parse_window_size(value(), options);
         } else if (arg == "--resolution") {

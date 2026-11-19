@@ -46,6 +46,7 @@
 #include "game/frame/step_literals.hpp"
 #include "game/gfx/frame_buffer.hpp"
 #include "game/image.hpp"
+#include "game/load/load_hold.hpp"
 #include "hle/kernel/paths.hpp"
 #include "hle/kernel/thread.hpp"
 #include "hle/kernel/time.hpp"
@@ -450,6 +451,11 @@ int start(const bb::tools::RunOptions& options) {
     main_loop = new MainLoop{bb::tools::MainLoopProbe(), options.stop_at_main_loop, start_time};
     bb::game::set_frame_observer(&observe_frame);
     bb::game::set_frame_rate(options.frame_rate);
+    bb::game::set_load_hold(options.load_hold);
+    if (options.load_hold != bb::game::game_load_hold) {
+        bb::common::log(LogLevel::info, channel, "loading page hold {} s (the game's: {} s)",
+                        options.load_hold, bb::game::game_load_hold);
+    }
     bb::hle::video::set_vblank_rate(options.frame_rate);
     bb::common::log(LogLevel::info, channel, "target frame rate {} FPS, vblank period {} ns",
                     options.frame_rate,

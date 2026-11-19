@@ -123,6 +123,20 @@ Every run of either target landed in the same one-second slot, so no load of `bb
 
 Per second (from the death picture): seconds 0–4 are YOU DIED over the world, at the normal frame's CPU. The load's work falls in seconds 5–8, about 4 s with `Core.Res.PostProcess` at 25 to 65 % of a core. Seconds 9–15 are the loading page at about 30 % of one core in all, with no file or decompression work. In seconds 16–17 the area starts (another decompression burst), and the HUD is back at 18. So about 7 s of the 18 s is the loading page waiting with nothing to load, and the reference takes the same time. Shorter loads would mean changing what the game waits for there (#684), not faster file or decompression code.
 
+### The death's loading hold (#684)
+
+The wait is a minimum time the game gives the loading page of a death's reload, not work. MoveMapStep, the step that loads an area and enters it, sets a hold of 12 s when the load starts if the load's request asks for one, counts it down by the frame's step and closes the loading page only once the hold is over and the area is ready (addresses in `src/game/load/load_hold.hpp`). A gdb breakpoint on the hold's setter showed the request flag set on the death's reload only, and the page closing 12.0 s after the hold started; Continue and the lantern travel have no hold, so their 6.9 s and 9.5 s are the game's own work and fades.
+
+`bb-run --load-hold SECONDS` (0 to 12, default 12, the game's) sets the hold. With `--load-hold 0` the page closes as soon as the area is ready. Measured on 2026-11-19 with `load-death-travel`, the same build with and without the option, interleaved, on a machine with other sessions' builds running (load average 3 to 7):
+
+| load | default | `--load-hold 0` |
+|---|---|---|
+| Death to control at the lantern | 18.0 s (2 runs, spread 0) | 11.0 s (3 runs: 11.0, 11.0, 10.0) |
+| Continue | 6.9 s (spread 0) | 6.9 s (8.0, 6.9, 6.9) |
+| Lantern travel | 9.5 s (spread 0) | 9.5 s (spread 0) |
+
+The death load is 7 s shorter. Continue and travel don't change (one Continue read a picture late on the loaded machine; the option doesn't touch that load). The first pictures of the area after the death load show the same scene with and without the option, with nothing appearing later.
+
 ## Profiling `bb-run` (#513)
 
 Tracy is gone, so a slow frame is found with three tools: `perf` for where the threads spend CPU time, frame counters for how much each part of the GPU thread's frame took, and the thread times of every run for what each thread costs per frame.
