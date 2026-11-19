@@ -1,0 +1,58 @@
+# Load times of a death and of a lantern travel (#655). Continue from the `yharnam-enemies` save
+# (as yharnam-death does), walk to the enemies and stand until they kill the hunter; the game
+# loads and puts him back at the lantern. Then walk four steps to the lantern, touch it, answer
+# "Return to the Hunter's Dream?" with YES and load the Dream. A picture every second throughout;
+# `tools/rig/load_times.py RUN...` reads the times of the three loads (Continue, death, travel).
+limit time=420
+
+log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
+sleep 1
+tap A                   # the notice about an unclean end of the last session, when there is one
+mark logos
+stable seconds=6 delta=1 timeout=120
+dpad D                  # Play Offline
+tap A
+mark menu
+repeat 6                # notices, then Continue
+tap A
+sleep 0.8
+shot t{i}a
+sleep 0.8
+shot t{i}b
+sleep 0.8
+shot t{i}c
+end
+repeat 20
+sleep 0.8
+shot w{i}
+end
+
+mark death
+stick LY -32767         # walk out to the enemies
+sleep 4
+neutral
+repeat 60               # YOU DIED hides the HUD; the load ends at the lantern with the HUD back
+sleep 0.8
+shot d{i}
+end
+sleep 3
+
+mark lantern            # the lantern is four steps ahead, hidden behind the hunter
+repeat 4
+stick LY -32767
+sleep 0.4
+neutral
+sleep 0.4
+tap A                   # the fourth press opens the question, NO selected
+sleep 1
+shot p{i}
+end
+dpad L                  # YES
+sleep 0.5
+shot question
+mark travel
+tap A
+repeat 40
+sleep 0.8
+shot m{i}
+end

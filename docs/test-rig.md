@@ -90,6 +90,39 @@ Per segment and column the report gives the median over the runs of the p50, p95
 
 `yharnam-death.scn` continues from the same save, walks 4 s toward the enemies and stands until they kill the hunter. YOU DIED, the load and the respawn at the lantern follow, and the shots after it show the hunter from behind. The scenario has no check step of its own: its shots are compared by eye against a reference run, the hunter and his weapon whole and no large flat polygon of one colour anywhere (#537).
 
+## Load times (#655)
+
+```
+tools/rig/rig.py run bb-run load-continue --window --user-from USER --cache-home DIR
+tools/rig/rig.py run reference load-death-travel --window --user-from analysis/rig/manual/yharnam-enemies/work/user
+tools/rig/load_times.py RUN...
+```
+
+`load-continue.scn` goes from the title through Play Offline to Continue. `load-death-travel.scn` continues from the `yharnam-enemies` save, lets the enemies kill the hunter, then walks four steps to the lantern he wakes at and answers "Return to the Hunter's Dream?" with YES. Both take a picture every second through the loads. `load_times.py` reads the runs and prints each load and, per target, scenario and load, the median and the spread over the finished runs.
+
+**A load ends at the first picture with the HUD.** The game hides the HUD on the title menus, the loading pages and YOU DIED, and shows it in the first picture of the world. The test is the stamina bar's green pixels in a fixed box (0.38 of the box in play, 0 without the HUD). A Continue load starts at the A press after which the game starts loading: both targets log a PlayGo call there (`scePlayGoSetInstallSpeed`, and bb-run its NID `4AAcTU9R3XM`), and the notices before Continue come in different numbers. A death starts at the first picture without the HUD, which is YOU DIED. A travel starts at the YES press. At one picture a second each end is known to ±0.5 s and is reported as the midpoint. The pictures come at fixed times after the press, so two runs whose loads differ by less than a picture gap get the same value.
+
+Measured on 2026-11-19 on a quiet machine (load average under 3, no builds, no difftest), with three runs of each after one warm-up run: bb-run at `1b2afa9`, a warm `--cache-home` and no pipeline builds in the measured runs; the reference with its default configuration (no pipeline cache) and the warm Mesa shader cache of earlier runs. Both targets loaded the same saves: the clinic's from a reference `clinic-fight` run, `yharnam-play` (`yharnam-route`'s) and `yharnam-enemies`.
+
+| load | from → to | bb-run | reference |
+|---|---|---|---|
+| Continue, clinic | press → HUD | 6.9 s (6.4–7.5), spread 0 | 6.9 s, spread 0 |
+| Continue, Central Yharnam (`yharnam-play`) | press → HUD | 6.9 s, spread 0 | 6.9 s, spread 0 |
+| Continue, Central Yharnam (`yharnam-enemies`) | press → HUD | 6.9 s, spread 0 | 6.9 s, spread 0 |
+| Death, Central Yharnam | YOU DIED → HUD at the lantern | 18.0 s (±1.0), spread 0 | 18.0 s, spread 0 |
+| Lantern travel, Central Yharnam → Hunter's Dream | YES → HUD in the Dream | 9.5 s (±0.5), spread 0 | 9.5 s, spread 0 |
+
+Every run of either target landed in the same one-second slot, so no load of `bb-run` is longer than the reference's by more than its spread, and none needed a follow-up issue. The loads are as long as the game makes them, not as long as the work takes:
+
+**`perf` profile of the longest load (the death, `--perf`, 18.0 s as without it).** CPU time per thread over the 18 s, from `threads.csv`: `Core.Res.PostProcess` 2.9 s, `game main` 2.6 s, `shadPS4:GpuComm` 2.6 s, `GXWorker` 1.8 s, Havok 0.6 s, FMOD 0.4 s; 12.7 s in all, 1.8 s of it system time. The parts asked for:
+- **File reads:** `Core.Res.CacheableFileLoader`, the thread that opens and reads the game's files, used 0.12 s of CPU, 0.08 s of it in the kernel.
+- **Decompression:** `Core.Res.PostProcess` runs the guest's own decompression of the `.dcx` files: 25 % of the `cpu-clock:u` samples, nearly all in one guest function around 0x2622354, 2.9 s of CPU.
+- **The game's own threads:** `game main` is mostly the frame pacer and the present (`flipper_wait_frame`, `gettimeofday` in the vDSO). The `GXWorker`s, Havok and FMOD keep running at their normal rate.
+- **Shader and pipeline builds:** none. The log has no `Pipeline build` or `Pipeline wait` line in the run.
+- **Texture uploads:** in `shadPS4:GpuComm`'s 2.6 s, which is the loading page's and YOU DIED's frames at the usual cost per frame. There is no burst.
+
+Per second (from the death picture): seconds 0–4 are YOU DIED over the world, at the normal frame's CPU. The load's work falls in seconds 5–8, about 4 s with `Core.Res.PostProcess` at 25 to 65 % of a core. Seconds 9–15 are the loading page at about 30 % of one core in all, with no file or decompression work. In seconds 16–17 the area starts (another decompression burst), and the HUD is back at 18. So about 7 s of the 18 s is the loading page waiting with nothing to load, and the reference takes the same time. Shorter loads would mean changing what the game waits for there (#684), not faster file or decompression code.
+
 ## Profiling `bb-run` (#513)
 
 Tracy is gone, so a slow frame is found with three tools: `perf` for where the threads spend CPU time, frame counters for how much each part of the GPU thread's frame took, and the thread times of every run for what each thread costs per frame.
