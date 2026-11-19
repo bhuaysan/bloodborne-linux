@@ -239,6 +239,35 @@ TEST_F(ChaseCam, FourCallsAt120MatchOneAt30) {
     }
 }
 
+// At 144 c = 4.8 is not a whole number of calls: 24 calls at 144 are 5 at 30 and 20 at 120, one
+// sixth of a game second. The filters with a constant factor, the eases and the weight match 30;
+// follow_value and lag_value keep the residue of the sub-calls (see above), as at 120.
+TEST_F(ChaseCam, TwentyFourCallsAt144MatchFiveAt30) {
+    Camera at30 = make_camera(), at120 = make_camera(), at144 = make_camera();
+    Camera unscaled = make_camera();
+    for (int i = 0; i < 5; ++i) {
+        chase_cam_update_scaled(&stand_in, 1.0, true, &at30, nullptr, nullptr, 1.0f / 30);
+    }
+    for (int i = 0; i < 20; ++i) {
+        chase_cam_update_scaled(&stand_in, 4.0, true, &at120, nullptr, nullptr, 1.0f / 120);
+    }
+    for (int i = 0; i < 24; ++i) {
+        chase_cam_update_scaled(&stand_in, 144.0 / 30, true, &at144, nullptr, nullptr,
+                                1.0f / 144);
+        stand_in(&unscaled, nullptr, nullptr, 1.0f / 144);
+    }
+    for (std::uint32_t offset : {value, stick_turn, follow_rate, lag_rate, input_weight}) {
+        EXPECT_NEAR(at144.get(offset), at30.get(offset), 1e-5) << offset;
+    }
+    for (std::uint32_t offset : {follow_value, lag_value}) {
+        // 0.013 and 0.035 at 144, 0.012 and 0.034 at 120; 1.6 and 0.17 unscaled.
+        const float error = std::abs(at144.get(offset) - at30.get(offset));
+        EXPECT_LT(error, 0.05f) << offset;
+        EXPECT_LT(error, 1.1f * std::abs(at120.get(offset) - at30.get(offset))) << offset;
+        EXPECT_LT(error * 4, std::abs(unscaled.get(offset) - at30.get(offset))) << offset;
+    }
+}
+
 TEST_F(ChaseCam, LeavesFactorsOutsideZeroToOne) {
     Camera cam = make_camera();
     cam.set(0x240, 1.5f);
