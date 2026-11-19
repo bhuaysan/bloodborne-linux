@@ -38,16 +38,23 @@ void Name(const char* name) {
     trace->push_back('\0');
 }
 
-// A descriptor write without its pointers, then what they point to.
+// A descriptor write field by field without its pointers, then what they point to.
 void PutWrite(const VkWriteDescriptorSet& write) {
-    VkWriteDescriptorSet copy = write;
-    copy.pImageInfo = nullptr;
-    copy.pBufferInfo = nullptr;
-    copy.pTexelBufferView = nullptr;
-    Put(copy);
+    Put(write.sType), Put(write.pNext), Put(write.dstSet), Put(write.dstBinding),
+        Put(write.dstArrayElement), Put(write.descriptorCount), Put(write.descriptorType);
     PutN(write.pImageInfo, write.pImageInfo ? write.descriptorCount : 0);
     PutN(write.pBufferInfo, write.pBufferInfo ? write.descriptorCount : 0);
     PutN(write.pTexelBufferView, write.pTexelBufferView ? write.descriptorCount : 0);
+}
+
+// An attachment the record holds by value, field by field: its padding is not part of the value.
+void PutAttachment(const VkRenderingAttachmentInfo* a) {
+    Put(a != nullptr);
+    if (a != nullptr) {
+        Put(a->sType), Put(a->pNext), Put(a->imageView), Put(a->imageLayout), Put(a->resolveMode),
+            Put(a->resolveImageView), Put(a->resolveImageLayout), Put(a->loadOp), Put(a->storeOp),
+            Put(a->clearValue);
+    }
 }
 
 void InstallFakes(vk::detail::DispatchLoaderDynamic& d) {
@@ -150,8 +157,8 @@ void InstallFakes(vk::detail::DispatchLoaderDynamic& d) {
         Name("beginRendering"), Put(r->pNext), Put(r->flags), Put(r->renderArea),
             Put(r->layerCount), Put(r->viewMask), PutN(r->pColorAttachments,
                                                        r->colorAttachmentCount);
-        PutN(r->pDepthAttachment, r->pDepthAttachment ? 1 : 0);
-        PutN(r->pStencilAttachment, r->pStencilAttachment ? 1 : 0);
+        PutAttachment(r->pDepthAttachment);
+        PutAttachment(r->pStencilAttachment);
     };
     d.vkCmdEndRendering = [](VkCommandBuffer) { Name("endRendering"); };
     d.vkCmdPipelineBarrier2 = [](VkCommandBuffer, const VkDependencyInfo* i) {
@@ -254,19 +261,28 @@ void Clobber(std::vector<T>& values) {
     }
 }
 
+// Writes the pattern into an object's storage, padding included. Padding is not copied reliably
+// when a struct is copied or assigned, so array elements are filled in place: a direct call and a
+// record then see the same bytes.
 template <typename T>
-std::vector<T> Patterns(uint32_t seed, uint32_t count) {
-    std::vector<T> out;
-    for (uint32_t i = 0; i < count; ++i) {
-        out.push_back(Pattern<T>(seed + i));
-    }
-    return out;
+void Fill(T& target, uint32_t seed) {
+    const auto bytes = std::bit_cast<std::array<unsigned char, sizeof(T)>>(Pattern<T>(seed));
+    std::memcpy(static_cast<void*>(&target), bytes.data(), sizeof(T));
 }
 
 template <typename T>
-T NoNext(T value) {
-    value.pNext = nullptr;
-    return value;
+void FillNoNext(T& target, uint32_t seed) {
+    Fill(target, seed);
+    target.pNext = nullptr;
+}
+
+template <typename T>
+std::vector<T> Patterns(uint32_t seed, uint32_t count) {
+    std::vector<T> out(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        Fill(out[i], seed + i);
+    }
+    return out;
 }
 
 // Every command of DeferredCommandBuffer, round times, with fresh sources per call.
@@ -283,7 +299,7 @@ void Script(const Vulkan::DeferredCommandBuffer& cmd, uint32_t round) {
         auto views = Patterns<vk::BufferView>(s + 3, 4);
         std::vector<vk::WriteDescriptorSet> writes(4);
         for (uint32_t i = 0; i < 4; ++i) {
-            writes[i] = NoNext(Pattern<vk::WriteDescriptorSet>(s + 10 + i));
+            FillNoNext(writes[i], s + 10 + i);
             writes[i].pImageInfo = nullptr;
             writes[i].pBufferInfo = nullptr;
             writes[i].pTexelBufferView = nullptr;
@@ -326,10 +342,10 @@ void Script(const Vulkan::DeferredCommandBuffer& cmd, uint32_t round) {
         std::vector<vk::VertexInputBindingDescription2EXT> b(3);
         std::vector<vk::VertexInputAttributeDescription2EXT> a(5);
         for (uint32_t i = 0; i < 3; ++i) {
-            b[i] = NoNext(Pattern<vk::VertexInputBindingDescription2EXT>(s + 50 + i));
+            FillNoNext(b[i], s + 50 + i);
         }
         for (uint32_t i = 0; i < 5; ++i) {
-            a[i] = NoNext(Pattern<vk::VertexInputAttributeDescription2EXT>(s + 60 + i));
+            FillNoNext(a[i], s + 60 + i);
         }
         cmd.setVertexInputEXT(b, a);
         Clobber(b), Clobber(a);
@@ -371,10 +387,11 @@ void Script(const Vulkan::DeferredCommandBuffer& cmd, uint32_t round) {
     {
         std::vector<vk::RenderingAttachmentInfo> colors(round % 4 + 1);
         for (uint32_t i = 0; i < colors.size(); ++i) {
-            colors[i] = NoNext(Pattern<vk::RenderingAttachmentInfo>(s + 80 + i));
+            FillNoNext(colors[i], s + 80 + i);
         }
-        auto depth = NoNext(Pattern<vk::RenderingAttachmentInfo>(s + 90));
-        auto stencil = NoNext(Pattern<vk::RenderingAttachmentInfo>(s + 91));
+        vk::RenderingAttachmentInfo depth, stencil;
+        FillNoNext(depth, s + 90);
+        FillNoNext(stencil, s + 91);
         vk::RenderingInfo info{
             .renderArea = Pattern<vk::Rect2D>(s + 92),
             .layerCount = 2,
@@ -397,9 +414,9 @@ void Script(const Vulkan::DeferredCommandBuffer& cmd, uint32_t round) {
         std::vector<vk::MemoryBarrier2> m(1);
         std::vector<vk::BufferMemoryBarrier2> b(2);
         std::vector<vk::ImageMemoryBarrier2> i(round % 3);
-        for (auto& x : m) x = NoNext(Pattern<vk::MemoryBarrier2>(s + 100));
-        for (auto& x : b) x = NoNext(Pattern<vk::BufferMemoryBarrier2>(s + 101));
-        for (auto& x : i) x = NoNext(Pattern<vk::ImageMemoryBarrier2>(s + 102));
+        for (auto& x : m) FillNoNext(x, s + 100);
+        for (auto& x : b) FillNoNext(x, s + 101);
+        for (auto& x : i) FillNoNext(x, s + 102);
         vk::DependencyInfo info{
             .dependencyFlags = vk::DependencyFlagBits::eByRegion,
             .memoryBarrierCount = 1,
