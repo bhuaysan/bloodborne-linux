@@ -26,6 +26,8 @@ inline constexpr std::string_view run_usage =
     "              [--window-size WIDTHxHEIGHT] [--fullscreen]\n"
     "              [--fsr] [--no-rcas]\n"
     "              [--rcas-attenuation STOPS] [--resolution WIDTHxHEIGHT]\n"
+    "              [--no-motion-blur] [--motion-blur-strength S]\n"
+    "              [--no-chromatic-aberration] [--chromatic-aberration-strength S]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
@@ -72,7 +74,15 @@ inline constexpr std::string_view run_usage =
     "                       (default 0.25)\n"
     "  --resolution WxH     the size the game renders at: 16:9, the width a multiple of 64, from\n"
     "                       1920x1080 to 3840x2160 (default 1920x1080); the window shows it\n"
-    "                       scaled to the window's size\n";
+    "                       scaled to the window's size\n"
+    "  --no-motion-blur     switch the game's motion blur off\n"
+    "  --motion-blur-strength S\n"
+    "                       scale the motion blur by S, 0 to 1 (default 1, the game's)\n"
+    "  --no-chromatic-aberration\n"
+    "                       switch the game's chromatic aberration (colour fringes towards the\n"
+    "                       screen edges) off\n"
+    "  --chromatic-aberration-strength S\n"
+    "                       scale the chromatic aberration by S, 0 to 1 (default 1, the game's)\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
@@ -121,6 +131,10 @@ struct RunOptions {
     float rcas_attenuation = 0.25f;  // --rcas-attenuation, only with --fsr
     unsigned resolution_width = default_resolution_width;  // --resolution
     unsigned resolution_height = default_resolution_height;
+    bool motion_blur = true;  // false with --no-motion-blur
+    float motion_blur_strength = 1.0f;  // --motion-blur-strength: 0 to 1
+    bool chromatic_aberration = true;  // false with --no-chromatic-aberration
+    float chromatic_aberration_strength = 1.0f;  // --chromatic-aberration-strength: 0 to 1
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 

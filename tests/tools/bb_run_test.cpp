@@ -206,6 +206,26 @@ TEST(RunOptions, ParsesLoadHold) {
     }
 }
 
+TEST(RunOptions, ParsesPostEffects) {
+    const RunOptions d = parse({});
+    EXPECT_TRUE(d.motion_blur);
+    EXPECT_FLOAT_EQ(d.motion_blur_strength, 1.0f);
+    EXPECT_TRUE(d.chromatic_aberration);
+    EXPECT_FLOAT_EQ(d.chromatic_aberration_strength, 1.0f);
+    EXPECT_FALSE(parse({"--no-motion-blur"}).motion_blur);
+    EXPECT_FALSE(parse({"--no-chromatic-aberration"}).chromatic_aberration);
+    EXPECT_FLOAT_EQ(parse({"--motion-blur-strength", "0.5"}).motion_blur_strength, 0.5f);
+    EXPECT_FLOAT_EQ(
+        parse({"--chromatic-aberration-strength", "0"}).chromatic_aberration_strength, 0.0f);
+    for (std::string_view option : {"--motion-blur-strength", "--chromatic-aberration-strength"}) {
+        EXPECT_EQ(parse_error({option}), std::format("{} needs a value", option));
+        for (std::string_view s : {"-0.1", "1.01", "nan", "inf", "", "0,5"}) {
+            EXPECT_EQ(parse_error({option, s}),
+                      std::format("{}: \"{}\" is not a number from 0 to 1", option, s));
+        }
+    }
+}
+
 TEST(RunOptions, ParsesFsrAndRcas) {
     const RunOptions d = parse({});
     EXPECT_FALSE(d.fsr);
@@ -326,6 +346,10 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     c.rcas = false;
     c.rcas_attenuation = 0.5f;
     c.frame_rate = 60;
+    c.motion_blur = false;
+    c.motion_blur_strength = 0.5f;
+    c.chromatic_aberration = false;
+    c.chromatic_aberration_strength = 0.25f;
     const RunOptions o = with_config(c, {});
     EXPECT_EQ(o.game_dir, std::filesystem::path("/g"));
     EXPECT_EQ(o.profile, "cfg");
@@ -336,6 +360,10 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     EXPECT_FALSE(o.rcas);
     EXPECT_EQ(o.rcas_attenuation, 0.5f);
     EXPECT_EQ(o.frame_rate, 60u);
+    EXPECT_FALSE(o.motion_blur);
+    EXPECT_EQ(o.motion_blur_strength, 0.5f);
+    EXPECT_FALSE(o.chromatic_aberration);
+    EXPECT_EQ(o.chromatic_aberration_strength, 0.25f);
 }
 
 TEST(RunOptionsConfig, EmptyConfigKeepsTheDefaults) {

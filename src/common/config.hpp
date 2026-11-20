@@ -22,6 +22,8 @@ inline constexpr unsigned min_window_width = 640;  // the window's minimum size 
 inline constexpr unsigned min_window_height = 360;
 inline constexpr unsigned max_window_side = 16384;
 inline constexpr float max_rcas_attenuation = 2.0f;
+// The post effect strengths (game::PostEffects): a factor on the game's own value.
+inline constexpr float max_post_effect_strength = 1.0f;
 
 // The target frame rates bb-run takes (docs/design/frame-rate.md, "Above 60 FPS"). The sites the
 // game paces in 30 FPS frames run on a 30 Hz clock of game time (game::game_tick), so a rate need
@@ -45,6 +47,10 @@ struct Config {
     std::optional<bool> rcas;                       // rcas
     std::optional<float> rcas_attenuation;          // rcas_attenuation: 0 to 2 stops
     std::optional<unsigned> frame_rate;             // frame_rate: valid_frame_rate
+    std::optional<bool> motion_blur;                // motion_blur
+    std::optional<float> motion_blur_strength;      // motion_blur_strength: 0 to 1
+    std::optional<bool> chromatic_aberration;       // chromatic_aberration
+    std::optional<float> chromatic_aberration_strength;  // chromatic_aberration_strength: 0 to 1
 
     bool operator==(const Config&) const = default;
 };

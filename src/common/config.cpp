@@ -138,6 +138,17 @@ ParsedConfig parse_config(std::string_view text, std::string_view source) {
             }
             return v.text;
         };
+        // A decimal number from 0 to `max`.
+        const auto want_number = [&](float max) {
+            float number = 0;
+            const char* end = v.text.data() + v.text.size();
+            const auto [ptr, ec] = std::from_chars(v.text.data(), end, number);
+            // The negated test also refuses NaN.
+            if (v.quoted || ec != std::errc{} || ptr != end || !(number >= 0.0f && number <= max)) {
+                p.fail(std::format("{}: \"{}\" is not a number from 0 to {}", key, v.text, max));
+            }
+            return number;
+        };
         if (key == "game_dir") {
             std::string dir = want_string();
             const char* home = std::getenv("HOME");
@@ -174,22 +185,21 @@ ParsedConfig parse_config(std::string_view text, std::string_view source) {
         } else if (key == "rcas") {
             c.rcas = want_bool();
         } else if (key == "rcas_attenuation") {
-            float stops = 0;
-            const char* end = v.text.data() + v.text.size();
-            const auto [ptr, ec] = std::from_chars(v.text.data(), end, stops);
-            // The negated test also refuses NaN.
-            if (v.quoted || ec != std::errc{} || ptr != end ||
-                !(stops >= 0.0f && stops <= max_rcas_attenuation)) {
-                p.fail(std::format("rcas_attenuation: \"{}\" is not a number from 0 to {}", v.text,
-                                   max_rcas_attenuation));
-            }
-            c.rcas_attenuation = stops;
+            c.rcas_attenuation = want_number(max_rcas_attenuation);
         } else if (key == "frame_rate") {
             unsigned fps = 0;
             if (v.quoted || !whole_number(v.text, fps) || !valid_frame_rate(fps)) {
                 p.fail(std::format("frame_rate: \"{}\" is not 30, 60, 120 or 144", v.text));
             }
             c.frame_rate = fps;
+        } else if (key == "motion_blur") {
+            c.motion_blur = want_bool();
+        } else if (key == "motion_blur_strength") {
+            c.motion_blur_strength = want_number(max_post_effect_strength);
+        } else if (key == "chromatic_aberration") {
+            c.chromatic_aberration = want_bool();
+        } else if (key == "chromatic_aberration_strength") {
+            c.chromatic_aberration_strength = want_number(max_post_effect_strength);
         } else {
             result.unknown_keys.push_back(key);
         }
@@ -249,6 +259,15 @@ std::string format_config(const Config& c) {
     }
     if (c.frame_rate) {
         out += std::format("frame_rate = {}\n", *c.frame_rate);
+    }
+    flag("motion_blur", c.motion_blur);
+    if (c.motion_blur_strength) {
+        out += std::format("motion_blur_strength = {}\n", *c.motion_blur_strength);
+    }
+    flag("chromatic_aberration", c.chromatic_aberration);
+    if (c.chromatic_aberration_strength) {
+        out += std::format("chromatic_aberration_strength = {}\n",
+                           *c.chromatic_aberration_strength);
     }
     return out;
 }

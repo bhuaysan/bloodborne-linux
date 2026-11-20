@@ -45,6 +45,7 @@
 #include "game/frame/frame.hpp"
 #include "game/frame/step_literals.hpp"
 #include "game/gfx/frame_buffer.hpp"
+#include "game/gfx/post_effects.hpp"
 #include "game/image.hpp"
 #include "game/load/load_hold.hpp"
 #include "hle/kernel/paths.hpp"
@@ -457,6 +458,17 @@ int start(const bb::tools::RunOptions& options) {
     if (options.load_hold != bb::game::game_load_hold) {
         bb::common::log(LogLevel::info, channel, "loading page hold {} s (the game's: {} s)",
                         options.load_hold, bb::game::game_load_hold);
+    }
+    static_assert(bb::common::max_post_effect_strength == bb::game::max_post_effect_strength);
+    bb::game::set_post_effects({options.motion_blur, options.motion_blur_strength,
+                                options.chromatic_aberration,
+                                options.chromatic_aberration_strength});
+    if (bb::game::post_effects() != bb::game::PostEffects{}) {
+        bb::common::log(LogLevel::info, channel,
+                        "motion blur {} (strength {}), chromatic aberration {} (strength {})",
+                        options.motion_blur ? "on" : "off", options.motion_blur_strength,
+                        options.chromatic_aberration ? "on" : "off",
+                        options.chromatic_aberration_strength);
     }
     bb::hle::video::set_vblank_rate(options.frame_rate);
     bb::common::log(LogLevel::info, channel, "target frame rate {} FPS, vblank period {} ns",

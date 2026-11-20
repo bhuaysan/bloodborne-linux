@@ -86,6 +86,19 @@ float parse_rcas_attenuation(std::string_view value) {
     return stops;
 }
 
+float parse_strength(std::string_view option, std::string_view value) {
+    float strength = 0;
+    const char* end = value.data() + value.size();
+    const auto [ptr, ec] = std::from_chars(value.data(), end, strength);
+    // The negated test also refuses NaN.
+    if (ec != std::errc{} || ptr != end ||
+        !(strength >= 0.0f && strength <= common::max_post_effect_strength)) {
+        throw std::invalid_argument(std::format("{}: \"{}\" is not a number from 0 to {}", option,
+                                                value, common::max_post_effect_strength));
+    }
+    return strength;
+}
+
 float parse_load_hold(std::string_view value) {
     float seconds = 0;
     const char* end = value.data() + value.size();
@@ -115,6 +128,13 @@ RunOptions options_from_config(const common::Config& config) {
     options.rcas = config.rcas.value_or(options.rcas);
     options.rcas_attenuation = config.rcas_attenuation.value_or(options.rcas_attenuation);
     options.frame_rate = config.frame_rate.value_or(options.frame_rate);
+    options.motion_blur = config.motion_blur.value_or(options.motion_blur);
+    options.motion_blur_strength =
+        config.motion_blur_strength.value_or(options.motion_blur_strength);
+    options.chromatic_aberration =
+        config.chromatic_aberration.value_or(options.chromatic_aberration);
+    options.chromatic_aberration_strength =
+        config.chromatic_aberration_strength.value_or(options.chromatic_aberration_strength);
     return options;
 }
 
@@ -225,6 +245,14 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             parse_window_size(value(), options);
         } else if (arg == "--resolution") {
             parse_resolution(value(), options);
+        } else if (arg == "--no-motion-blur") {
+            options.motion_blur = false;
+        } else if (arg == "--motion-blur-strength") {
+            options.motion_blur_strength = parse_strength(arg, value());
+        } else if (arg == "--no-chromatic-aberration") {
+            options.chromatic_aberration = false;
+        } else if (arg == "--chromatic-aberration-strength") {
+            options.chromatic_aberration_strength = parse_strength(arg, value());
         } else if (arg == "--fullscreen") {
             options.fullscreen = true;
         } else if (arg == "--fsr") {
