@@ -88,6 +88,10 @@ void pfx_apply_edited(PfxApply* original, void* self, void* context, std::uint32
         original(self, context, block);
         return;
     }
+    // The blocks seen in the clinic and Central Yharnam are the frame's copies in its command
+    // buffer (docs/design/image-quality.md), which no other thread writes during the call. Were
+    // it the live global block, a write of the game thread between the edit and the restore would
+    // be undone for one frame; the values are plain scalars, so nothing worse.
     const PostEffectEdit edit = edit_post_effects(effects, block);
     original(self, context, block);
     restore_post_effects(edit, block);

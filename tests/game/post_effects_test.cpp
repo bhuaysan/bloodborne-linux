@@ -214,8 +214,9 @@ TEST_F(PostEffectsGame, ThePrologueIsTheEboots) {
     EXPECT_TRUE(holds(bb::game::pfx_apply_link, bb::game::pfx_apply_prologue));
 }
 
-// rbx and r15 hold the block (pfx_apply's third argument) at these places, see
-// docs/design/image-quality.md.
+// rbx and r15 hold the block (pfx_apply's third argument) at these places: rbx is set from it
+// at 0x021d6842 and r15 from rbx at 0x021d7e45. The tests check the reads and the calls; that
+// register link is traced in docs/design/image-quality.md, not checked here.
 TEST_F(PostEffectsGame, ChromaticAberrationReadsItsFields) {
     // cmpl $0, 0xac(%rbx); setne al; movzbl esi, al; mov rdi, r14; call SetChromaticAberrationEnable
     static_assert(bb::game::pfx_chromatic_aberration_enable * 4 == 0xac);
