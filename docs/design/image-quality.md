@@ -145,7 +145,7 @@ The block holds the same values for these fields in the clinic and in Central Yh
 - **Where.** A wrap of the render camera copy 0x01d16690 (`src/game/camera/aspect.cpp`): after the game's copy, a render camera aspect `+0x64` that holds the game's 16:9 constant becomes width / height. Every game camera passes this copy (chase, lock-on, cutscenes), so the projection, culling, the shadow cascades and YEBIS follow, as #660's probe showed. Other aspects stay: the character editor's square preview (1) and the render camera's own width / height (0). At 16:9 sizes the wrap changes nothing, also at sizes where width / height does not round to the game's constant. The render camera's width and height fields keep the game's 1920×1080. The projection takes the aspect from them only when the aspect is 0. It also uses them for a pixel offset row, which stays in 1080p pixels, as at the 16:9 sizes above 1080p.
 - **Sizes.** Only the three sizes checked. The width 3440 is not a multiple of 64 like the 16:9 sizes'; the half and quarter targets still have whole sides (1720, 860).
 - **Markers in the world.** The lock-on reticle and the enemy health bars come from three projections with the game camera's own 16:9 aspect (0x016439b0, 0x016448f0, 0x01644cf0). That aspect is what the HUD's 16:9 stage needs, so the wrap leaves them alone. But they scale to the frame buffer's pixels, which the HUD reads as stage coordinates, so above 1080p (16:9 or wide) the markers sat off their target. Since #713 these loads, and the checks of their readers against the size (0x01654d80, 0x016b3320, 0x01bfb2a0), read the stage's 1920x1080 at any other size (`src/game/gfx/hud_stage.hpp`). Giving the camera the screen's aspect for the three calls did not help: the stage is 16:9, centred on a wider screen, and needs the 16:9 projection. At a wide size a marker beyond the stage's sides counts as off screen, as on the PS4.
-- **HUD and menus.** They need nothing: the game's HUD keeps its 16:9 layout in the centre (#660, "The HUD"), and Scaleform fits its 16:9 stage into the frame. The logos, the full-screen menus and the loading screens keep grey sides (#711). They are not the Scaleform letterbox: a local try that set each movie's viewport to the centred 16:9 area (after 0x01f58360) left them unchanged.
+- **HUD and menus.** They need nothing: the game's HUD keeps its 16:9 layout in the centre (#660, "The HUD"), and Scaleform fits its 16:9 stage into the frame. The sides beside the full-screen menus are black since #711 (below).
 - **Tests.** `tests/game/aspect_test.cpp`: the aspect for 16:9 and wide sizes, the replacement of 16:9 only, and against the eboot the game's copy under the wrap with the constructors' constant.
 - **Check.** Runs on 2026-11-20, `rig.py run bb-run --window` (1280×720 window, so a wide frame is a band across it):
 
@@ -155,13 +155,29 @@ The block holds the same values for these fields in the clinic and in Central Yh
   | clinic at 5120x1440 | the same at 32:9 |
   | clinic at 5120x1440 with `--fov 65` (about 132° horizontal) | strongly stretched at the sides as any projection this wide, but no streaks and nothing missing at the edges |
   | lock-on in Central Yharnam (local scenario on the `yharnam-fight` save) at 1920x1080, 2560x1440, 2560x1080 and 5120x1440 | before #713 the reticle and the enemy bar sat on the target only at 1920x1080; with the stage loads they sit on it at all four sizes |
-  | `main-menu` at 2560x1080 and 3440x1440 | logos and title menu 16:9 in the centre, not stretched, with grey sides (#711); the title menu takes input as at 16:9 |
+  | `main-menu` at 2560x1080 and 3440x1440 | logos and title menu 16:9 in the centre, not stretched, with grey sides (black since #711); the title menu takes input as at 16:9 |
   | `yharnam-route` at 2560x1080 and 3440x1440 | the street wider, the carriage and the statues whole at the edges, the HUD in the centre; peak memory 4.0 and 4.0 GB |
   | `clinic-fight` at 3440x1440, two runs (30 FPS) | every segment p50 33.33 ms and p95 33.35 to 33.36 ms (35.4 in `play-camera`), no stutters after the logos, peak memory 3.2 GB; no crash or GPU fault |
   | `clinic-fight` at 3440x1440 with `--validation` | finished; the validation layer reports only the two kinds a 1920x1080 run of 2026-11-20 (`clinic-floor`) reports too: `VUID-RuntimeSpirv-OpEntryPoint-08743` (22) and `VUID-VkBufferCreateInfo-size-06409` (the 4 GiB buffer at start) |
   | `rig.py compare main-menu` at 1920x1080, against the two reference runs | 0.997 of the noise floor (`main` 1.007): 16:9 unchanged |
 
   At a wide frame `clinic-fight` reaches the title menu but sends its menu inputs too early: the first logo changes over a smaller share of the shot, so `stable delta=1` already holds on it. The runs above used a local copy with 14 s more before that wait; the game's logos take no longer than at 16:9.
+
+### Black sides beside the menus (#711)
+
+At a wide frame buffer the logos, the title menu and the loading page sat in the centre with grey sides. Two sources, found with a local pass probe at 2560x1080 and a log of the movies the engine creates:
+
+- **The device clear colour.** Every frame starts with a compute clear of the 2D target (2560x1080 RGBA8, the target the menus, the HUD and the world's tone-mapped picture are drawn into) to (0.5, 0.5, 0.5, 1). `graphics_init` (0x01d969f0) copies that colour from a 16-byte constant at 0x04914f00 into its device description (0x01d96afb, the constant's only reader). The logos and the title menu draw nothing over the sides, so the grey stays. At a size other than 16:9 bb-run writes (0, 0, 0, 1) there before the entry point (`set_device_clear_color`, `src/game/gfx/frame_buffer.cpp`). At 16:9 the colour stays the game's: the full-screen movies cover all of it, and the world draws over it in play.
+- **The loading page.** While a map loads the engine keeps rendering the world under the loading page (the movie `NowLoading2`): grey while the map is still empty, then the room. The engine's movie holder (0x01f58360) gives every movie a viewport of the whole frame buffer and a transparent background colour (vcall `+0x108`, Scaleform's 0xAARRGGBB). A movie with an opaque background clears its whole viewport first, so a wrap of the holder sets opaque black for `NowLoading2` alone, at sizes other than 16:9 (`src/game/gfx/loading_page.cpp`). The other movies keep their transparent background: the HUD and the in-game menus show the world under them on purpose. That #667's viewport try changed nothing fits: the grey was never Scaleform's border.
+- **Side effect.** At 16:9 the loading page fades out over the world. With the backdrop, at a wide size, it fades to black and the world then appears at once, a cut of a few frames instead of a cross-fade. The page is not drawn once it is gone, so the backdrop never covers play.
+- **Tests.** `tests/game/loading_page_test.cpp`: which movie gets the backdrop at which aspect, the clear colour for each size, and against the eboot the holder's prologue and background call, `graphics_init`'s read of the constant, and the write of the constant with the segment staying read-only.
+- **Check.** Runs on 2026-11-20, `rig.py run bb-run --window` (1280×720 window), a local scenario through the logos, the title menu, Continue and the loading page into the clinic. Every run ended `scenario finished`.
+
+  | Run | Result |
+  |---|---|
+  | 2560x1080, 3440x1440 and 5120x1440 | the logos, the title menu and the loading page (shots at 2 s and 5 s) with black sides (the brightest side pixel 0), the centre as before; the clinic after the load fills the width |
+  | 2560x1080, a shot every 0.3 s through the end of the load | the page fades to black, the clinic follows a shot later; before, the page faded out over the clinic already showing at the sides |
+  | `rig.py compare main-menu` at 1920x1080, against two runs of `main` | 0.977 of the noise floor: 16:9 unchanged |
 
 ## Camera and aspect ratio (#660)
 
@@ -176,7 +192,7 @@ Where the engine sets the field of view and the aspect ratio of its projection, 
 | Projection | 0x021aa290 builds it from the render camera: y scale cot(fov / 2), x scale y scale / aspect. The vertical angle is fixed, so a wider aspect shows more at the sides (Hor+) |
 | Culling | no object missing at the screen edges at 56° and 77° or at 64:27: the same render camera feeds the projection, the shadow cascade fits and the other users below |
 | Cutscenes | in-engine, the same cameras, 16:9, no letterbox of their own. At 2560×1080 with the aspect fixed they fill the frame |
-| HUD and menus | at 2560×1080 the HUD keeps its 16:9 size and sits in the centred 16:9 area; full-screen menus, logos and loading screens are 16:9 with grey (128, 128, 128) bars at the sides |
+| HUD and menus | at 2560×1080 the HUD keeps its 16:9 size and sits in the centred 16:9 area; full-screen menus, logos and loading screens are 16:9 with grey (128, 128, 128) bars at the sides (black since #711) |
 
 ### The game cameras
 
