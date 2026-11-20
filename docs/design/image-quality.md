@@ -91,9 +91,23 @@ Each run ended `scenario finished`. `clinic` is the title, Continue from the `r5
 
 The block holds the same values for these fields in the clinic and in Central Yharnam. Shots stay local (`analysis/issue-659/`).
 
-## For #665
+## The switches (#665)
 
-- Hook `pfx_apply` (0x021d5f80, a wrapper with the prologue `push rbp; mov rbp, rsp; push r15–rbx; and rsp, -0x20`, 20 bytes) and write the chosen fields into its third argument before calling the original. Every frame passes through it; one write before the game starts or to 0x055406e0 does not hold.
-- `--no-motion-blur`: `0x77` = 0. `--no-chromatic-aberration`: `0x2b` = 0, with a strength through `0x2d`. Both clean.
+`bb-run` takes `--no-motion-blur`, `--motion-blur-strength S`, `--no-chromatic-aberration` and `--chromatic-aberration-strength S` (S from 0 to 1, a factor on the game's value), and the config keys `motion_blur`, `motion_blur_strength`, `chromatic_aberration` and `chromatic_aberration_strength`. The defaults leave the block as the game sets it.
+
+- **Where.** A wrap of `pfx_apply` (0x021d5f80, `src/game/gfx/post_effects.cpp`) writes the fields into the block it receives, every call, and writes the game's values back after the original returns. One write before the game starts or to the global block does not hold (above). The write-back keeps the block the game's own: a strength scales the game's value and never the result of an earlier call, also if a block were handed over twice.
+- **Fields.** Off: `0x77` = 0 and `0x2b` = 0. Motion blur strength scales `0x79`, the blur time ratio, which YEBIS gets through 0x00bb38f0; the maximum length (`0x7a` × `0xd4`) stays the game's. Chromatic aberration strength scales the four dispersions `0x2d` to `0x30`, which 0x00bb37d0 passes on.
+- **Tests.** `tests/game/post_effects_test.cpp` checks that each switch writes only its fields and that the wrap hands the edited block on and restores it, and, against the eboot, that `pfx_apply` reads exactly these fields for the effect's setters (the `cmp` and `vmovss` at 0x021d7178, 0x021d7193, 0x021d7d2e and 0x021d7f5f, and their calls) and that the wrap's prologue is the function's.
+- **Check.** Runs on 2026-11-20, `rig.py run bb-run --window`, the clinic scenario of #659 and the first part of `yharnam-route` with a shot during the camera turn (local scenarios), each switch next to the default:
+  | Shot | Default | Motion blur off | Chromatic aberration off | Half strength |
+  |---|---|---|---|---|
+  | clinic `01-clinic`, sharpness | 168.0 (168.7 in a second run) | 169.6 | 215.1 | aberration 182.8 |
+  | clinic `02-turning`, sharpness | 109.1 (109.0) | 152.6, the smear of the turn gone, the picture otherwise the same | wall variant, not compared | blur: wall variant |
+  | Yharnam `00-start`, red-to-blue offset at the edges | 3 px | 3 px | 0 px, sharpness 509 → 862 | |
+  | Yharnam `02-turning`, sharpness | 260.3 | 389.8 | 317.2 | blur: MBH |
+  With motion blur off every still shot stays within the run-to-run noise (mean difference 0.1 to 0.4 of 255, 1.05 on the clinic's `03-turned`, where the camera settles differently each run). `rig.py compare main-menu` at the default: MAINMENU.
+
+## Not switched yet
+
 - Bloom (`0x37` = 0, or scaled) and depth of field (`0x6b` = 0) are clean as well. Depth of field changes nothing on the two routes, so it needs a check in a place with a far view before it becomes an option.
 - The vignette is off on both routes; film grain and lens distortion are never drawn.
