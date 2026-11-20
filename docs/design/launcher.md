@@ -20,7 +20,7 @@ Everything the launcher and `bb-run` write goes to `user/` (`docs/design/m3-core
 
 A folder that can't be written (copied to `/usr/bin`, say) gets a status line that says so and asks to unpack the game into a folder of its own.
 
-What we can't control: the folder dialog runs through xdg-desktop-portal, which may add the chosen folder to the desktop's "recently used" list (dragging the folder onto the window doesn't); a crash may leave a core dump with systemd-coredump; a graphics driver that ignores the cache variables writes its cache where it likes.
+What we can't control: the folder dialog runs through xdg-desktop-portal, which may add the chosen folder to the desktop's "recently used" list (dragging the folder onto the window doesn't); a crash may leave a core dump with systemd-coredump; a graphics driver that ignores the cache variables writes its cache where it likes; and a file manager that "Open folder" starts fresh inherits the launcher's redirected `XDG_CACHE_HOME`, so its own caches may land in `user/cache/system` (one that is already running keeps its own).
 
 ## Layout: one window in the style of a late-90s autorun menu
 
