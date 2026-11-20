@@ -64,6 +64,8 @@ Decompiled functions are compiled into the runtime. At startup, `bb::hook::apply
 - `BB_WRAP`: the same, and the replacement can still call the original through a trampoline built from the function's first instructions (`bb::hook::original`).
 - `BB_PATCH`: a few instructions inside a function jump to an assembly stub that does their work and jumps back. R8.3 uses it where only a literal 1/30 in a function has to change (`docs/design/frame-rate.md`).
 
+Some changes are plain data or instruction bytes written into the mapped eboot before it runs (`bb::game::write_image_bytes`): the graphics heap size (R8.4), the HUD's frame-buffer size loads and the device clear colour at wide sizes (R11). The R11 writes refuse to run when the bytes hold neither the game's original nor their own value.
+
 Replacements call other game functions through their original addresses. Only functions that serve playability, performance or quality are replaced, and the rest of the game keeps running as original machine code.
 
 ### Differential test harness
