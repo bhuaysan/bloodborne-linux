@@ -2164,6 +2164,61 @@ TEST(GuestMemory, ADepthImageRecreatedNarrowerTakesACopyWithinItsBounds) {
     }
 }
 
+// The same through CopyImage: a depth target of 2 layers, narrower than the depth image of 1 layer
+// at its address, is recreated (more layers) and the old depth image copied into it, clamped to
+// the new image's width (#699). The validation layer reports upstream's copy, as above.
+TEST(GuestMemory, ADepthImageRecreatedNarrowerFromDepthCopiesWithinItsBounds) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    const bool validate = validation_layer_present();
+    {
+        Gpu gpu{Vulkan::ValidationOptions{.enable = validate}};
+        std::unique_ptr<ValidationErrors> errors;
+        if (validate) {
+            errors = std::make_unique<ValidationErrors>(gpu.instance.GetInstance());
+        }
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        constexpr u64 slice_size = 64 * 64 * 4;
+        Direct d((2 * slice_size + page_size - 1) / page_size);
+        const std::uintptr_t start = addr(d.address);
+        ASSERT_EQ(start % 256, 0u);
+        ASSERT_LT(start >> 8, u64(1) << 32);
+        fill_floats(static_cast<u8*>(d.address), 2 * slice_size, 0.375f);
+        const AmdGpu::DepthBuffer depth = depth_buffer(start, start);
+        AmdGpu::DepthView two_layers{};
+        two_layers.slice_max = 1;
+        AmdGpu::CbDbExtent narrow{};
+        narrow.width = 32;
+        narrow.height = 64;
+
+        gpu.liverpool->SendCommand<true>([&] {
+            VideoCore::TextureCache::ImageDesc wide_desc{depth, {}, {}, 0, {}, false};
+            const auto wide_id = textures.FindImage(wide_desc);
+            textures.UpdateImage(wide_id);
+            ASSERT_EQ(textures.GetImage(wide_id).info.size.width, 64u);
+
+            VideoCore::TextureCache::ImageDesc narrow_desc{depth, two_layers, {}, 0, narrow, false};
+            const auto id = textures.FindImage(narrow_desc);
+            ASSERT_NE(id, wide_id);
+            VideoCore::Image& image = textures.GetImage(id);
+            ASSERT_EQ(image.info.size.width, 32u);
+            ASSERT_EQ(image.info.resources.layers, 2u);
+            textures.UpdateImage(id);
+            for (u32 layer = 0; layer < 2; ++layer) {
+                const std::vector<u8> held =
+                    read_back(gpu, image, layer, vk::ImageAspectFlagBits::eDepth);
+                EXPECT_TRUE(all_floats(held, 32 * 64 * 4, 0.375f)) << "layer " << layer;
+            }
+            gpu.rasterizer.Finish();
+        });
+        d.unmap();
+        if (errors != nullptr) {
+            EXPECT_EQ(errors->count.load(), 0u);
+        }
+    }
+}
+
 // An image found as one layer of a larger image requested later is copied into it
 // (TextureCache::ResolveOverlap, left overlap) after the larger image's upload. The layer is
 // brought up to date first (#696); upstream copies it stale over the fresh upload.
