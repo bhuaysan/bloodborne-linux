@@ -148,8 +148,8 @@ struct RunOptions {
 // isn't a whole number from 1 to 86400, a log spec that LogFilter::parse refuses, a --present-mode
 // that is none of fifo, mailbox and immediate, a --frame-rate other than 30, 60, 120 and 144, a
 // --load-hold that isn't a number from 0 to 12, a --window-size that isn't WIDTHxHEIGHT in range, a
-// --resolution that isn't one of the sizes above, an --rcas-attenuation that isn't a number from 0 to 2, an --anisotropy other than game, 1, 2, 4,
-// 8 and 16, --validation-sync or --validation-gpu
+// --resolution that isn't one of the sizes above, an --rcas-attenuation that isn't a number from 0
+// to 2, an --anisotropy other than game, 1, 2, 4, 8 and 16, --validation-sync or --validation-gpu
 // without --validation, and --no-rcas or --rcas-attenuation without --fsr.
 RunOptions parse_run_options(std::span<const std::string_view> args);
 
