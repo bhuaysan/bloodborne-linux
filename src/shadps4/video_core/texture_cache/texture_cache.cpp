@@ -625,6 +625,9 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
                 TrackImage(merged_image_id);
                 RefreshImage(slot_images[merged_image_id]);
                 auto& merged_image = slot_images[merged_image_id];
+                // Ours (#696): the copied image is brought up to date first. Upstream copies it
+                // stale over the fresh upload, and the guest's write to it is lost.
+                UpdateImage(cache_image_id);
                 runtime.CopyMip(&cache_image, &merged_image, mip, slice);
                 FreeImage(cache_image_id);
             }

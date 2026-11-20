@@ -1937,6 +1937,108 @@ TEST(GuestMemory, ADepthImageRecreatedWiderHoldsTheGuestData) {
     }
 }
 
+// The color image a recreated depth image is copied from is brought up to date first (#696):
+// here it is as wide as the depth image, so the copy covers all of it and nothing else uploads it.
+TEST(GuestMemory, ADepthImageRecreatedTakesAGuestWriteToTheOldImage) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        constexpr u64 image_size = 64 * 64 * 4;
+        Direct d((image_size + page_size - 1) / page_size);
+        const std::uintptr_t start = addr(d.address);
+        ASSERT_EQ(start % 256, 0u);
+        ASSERT_LT(start >> 8, u64(1) << 32);
+        auto* const bytes = static_cast<u8*>(d.address);
+        fill_floats(bytes, image_size, 0.375f);
+        AmdGpu::ColorBuffer color = linear_color_buffer(start, 0);
+        color.info.format = u32(AmdGpu::DataFormat::Format32);
+        color.info.number_type = u32(AmdGpu::NumberFormat::Float);
+        const AmdGpu::DepthBuffer depth = depth_buffer(start, start);
+
+        VideoCore::ImageId color_id{};
+        gpu.liverpool->SendCommand<true>([&] {
+            VideoCore::TextureCache::ImageDesc color_desc{color, {}};
+            color_id = textures.FindImage(color_desc);
+            textures.UpdateImage(color_id);
+            ASSERT_TRUE(False(textures.GetImage(color_id).flags & VideoCore::ImageFlagBits::Dirty));
+            gpu.rasterizer.Finish();
+        });
+
+        // The guest writes the tracked color image: it faults and marks it.
+        for (u64 i = 0; i < image_size; i += sizeof(float)) {
+            constexpr float value = 0.625f;
+            u32 word;
+            std::memcpy(&word, &value, sizeof(word));
+            std::atomic_ref<u32>(*reinterpret_cast<u32*>(bytes + i))
+                .store(word, std::memory_order_relaxed);
+        }
+        gpu.liverpool->SendCommand<true>([&] {
+            VideoCore::TextureCache::ImageDesc depth_desc{depth, {}, {}, 0, {}, false};
+            const auto id = textures.FindImage(depth_desc);
+            ASSERT_NE(id, color_id);
+            VideoCore::Image& image = textures.GetImage(id);
+            ASSERT_TRUE(image.info.props.is_depth);
+            textures.UpdateImage(id);
+            const std::vector<u8> held = read_back(gpu, image, 0, vk::ImageAspectFlagBits::eDepth);
+            EXPECT_TRUE(all_floats(held, image_size, 0.625f));
+            gpu.rasterizer.Finish();
+        });
+        d.unmap();
+    }
+}
+
+// An image found as one layer of a larger image requested later is copied into it
+// (TextureCache::ResolveOverlap, left overlap) after the larger image's upload. The layer is
+// brought up to date first (#696); upstream copies it stale over the fresh upload.
+TEST(GuestMemory, AMergedLayerTakesAGuestWriteToIt) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        constexpr u64 layer_size = 64 * 64 * 4;
+        Direct d((2 * layer_size + page_size - 1) / page_size);
+        const std::uintptr_t start = addr(d.address);
+        ASSERT_EQ(start % 256, 0u);
+        ASSERT_LT(start >> 8, u64(1) << 32);
+        auto* const bytes = static_cast<u8*>(d.address);
+        std::memset(bytes, 0x11, 2 * layer_size);
+        const AmdGpu::ColorBuffer layer = linear_color_buffer(start + layer_size, 0);
+        const AmdGpu::ColorBuffer both = linear_color_buffer(start, 1);
+
+        VideoCore::ImageId layer_id{};
+        gpu.liverpool->SendCommand<true>([&] {
+            VideoCore::TextureCache::ImageDesc layer_desc{layer, {}};
+            layer_id = textures.FindImage(layer_desc);
+            textures.UpdateImage(layer_id);
+            ASSERT_TRUE(False(textures.GetImage(layer_id).flags & VideoCore::ImageFlagBits::Dirty));
+            gpu.rasterizer.Finish();
+        });
+
+        // The guest writes the tracked layer image: it faults and marks it.
+        for (u64 i = 0; i < layer_size; ++i) {
+            std::atomic_ref<u8>(bytes[layer_size + i]).store(0x77, std::memory_order_relaxed);
+        }
+        gpu.liverpool->SendCommand<true>([&] {
+            VideoCore::TextureCache::ImageDesc both_desc{both, {}};
+            const auto id = textures.FindImage(both_desc);
+            ASSERT_NE(id, layer_id);
+            VideoCore::Image& image = textures.GetImage(id);
+            ASSERT_EQ(image.info.resources.layers, 2u);
+            textures.UpdateImage(id);
+            const std::vector<u8> layer1 = read_back(gpu, image, 1);
+            EXPECT_TRUE(std::all_of(layer1.begin(), layer1.begin() + layer_size,
+                                    [](u8 b) { return b == 0x77; }));
+            gpu.rasterizer.Finish();
+        });
+        d.unmap();
+    }
+}
+
 // A rasterizer unregisters from the guest memory when it is destroyed (#629; upstream's never
 // does): the maps, unmaps, releases and writes that follow reach no rasterizer.
 TEST(GuestMemory, ADestroyedRasterizerHearsOfNothing) {
