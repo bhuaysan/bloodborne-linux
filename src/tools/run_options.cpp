@@ -70,11 +70,17 @@ void parse_resolution(std::string_view value, RunOptions& options) {
         return r.width == width && r.height == height;
     });
     if (!parsed || !(sixteen_nine || wide)) {
+        std::string sizes;
+        for (std::size_t i = 0; i < std::size(wide_resolutions); ++i) {
+            const char* sep = i == 0 ? "" : i + 1 == std::size(wide_resolutions) ? " or " : ", ";
+            sizes += std::format("{}{}x{}", sep, wide_resolutions[i].width,
+                                 wide_resolutions[i].height);
+        }
         throw std::invalid_argument(std::format(
             "--resolution: \"{}\" is not a 16:9 WIDTHxHEIGHT from {}x{} to {}x{} with a width "
-            "that is a multiple of {}, nor 2560x1080, 3440x1440 or 5120x1440",
+            "that is a multiple of {}, nor {}",
             value, default_resolution_width, default_resolution_height, max_resolution_width,
-            max_resolution_height, resolution_width_step));
+            max_resolution_height, resolution_width_step, sizes));
     }
     options.resolution_width = width;
     options.resolution_height = height;
