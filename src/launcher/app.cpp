@@ -81,9 +81,11 @@ struct SearchBox {
 };
 
 fs::path own_directory() {
-    std::error_code ec;
-    const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
-    return ec ? fs::path(".") : exe.parent_path();
+    try {
+        return common::executable_dir();
+    } catch (const std::exception&) {
+        return ".";
+    }
 }
 
 ImGuiKey gamepad_key(PadButton b) {
@@ -185,6 +187,9 @@ private:
         }
         try {
             dirs->ensure(dirs->root());
+            if (::access(dirs->root().c_str(), W_OK) != 0) {
+                throw std::runtime_error("read-only");  // an existing user/ without write access
+            }
         } catch (const std::exception&) {
             // Copied to /usr/bin, say: everything the game writes belongs in its own folder.
             notice_ = "This folder can't be written. Unpack the game into a folder of its own.";

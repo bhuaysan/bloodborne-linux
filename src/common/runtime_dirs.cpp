@@ -14,8 +14,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
-// An absolute path from the environment variable `key`. Unset, empty and relative values count
-// as unset.
+// An absolute path from the environment variable `key`, nothing when it is unset or empty.
+// A relative value throws: ignoring it would silently write somewhere else.
 std::optional<fs::path> absolute_env(const char* key) {
     const char* value = std::getenv(key);
     if (!value || !*value) {
@@ -23,7 +23,7 @@ std::optional<fs::path> absolute_env(const char* key) {
     }
     fs::path path(value);
     if (!path.is_absolute()) {
-        return std::nullopt;
+        throw std::runtime_error(std::string(key) + " must be an absolute path: " + value);
     }
     return path;
 }
@@ -103,7 +103,9 @@ RuntimeDirs RuntimeDirs::from_environment(std::string_view profile,
     dirs.data_ = dirs.root_;
     dirs.config_ = dirs.root_;
     dirs.state_ = dirs.root_;
-    dirs.cache_ = cache_dir ? real(*cache_dir) : dirs.root_ / "cache";
+    // Resolved like the root: a user/cache symlink into the game directory is caught by the overlap
+    // check below, since shadPS4's cache and the drivers create their folders without ensure().
+    dirs.cache_ = real(cache_dir ? *cache_dir : dirs.root_ / "cache");
 
     std::vector<fs::path> refused = forbidden;
     refused.push_back(source_dir());

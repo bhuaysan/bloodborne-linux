@@ -115,8 +115,8 @@ TEST_F(RuntimeDirsTest, CacheDirOverridesOnlyTheCache) {
 TEST_F(RuntimeDirsTest, WithoutUserDirTheFolderIsNextToTheBinary) {
     std::error_code ec;
     EXPECT_EQ(bb::common::executable_dir(), fs::read_symlink("/proc/self/exe", ec).parent_path());
-    // Empty and relative values count as unset.
-    for (const std::string value : {"", "relative/user"}) {
+    // Empty values count as unset.
+    for (const std::string value : {""}) {
         set("BB_USER_DIR", value);
         set("BB_CACHE_DIR", value);
         const fs::path expected = fs::weakly_canonical(bb::common::executable_dir() / "user");
@@ -173,6 +173,26 @@ TEST_F(RuntimeDirsTest, RefusesDirectoriesInsideTheGameDirectory) {
     set("BB_USER_DIR", (tmp_ / "folder/user").string());
     EXPECT_NO_THROW(make("default", {tmp_ / "folder/game"}));
     EXPECT_FALSE(fs::exists(tmp_ / "game-data"));
+    EXPECT_TRUE(fs::is_empty(game));
+}
+
+TEST_F(RuntimeDirsTest, RefusesRelativeVariables) {
+    // Ignoring them would silently put the folder somewhere else.
+    set("BB_USER_DIR", "relative/user");
+    EXPECT_THROW(make(), std::runtime_error);
+    set("BB_USER_DIR", (tmp_ / "u").string());
+    set("BB_CACHE_DIR", "relative/cache");
+    EXPECT_THROW(make(), std::runtime_error);
+}
+
+TEST_F(RuntimeDirsTest, RefusesACacheSymlinkIntoTheGameDirectory) {
+    // shadPS4's pipeline cache and the drivers create their folders without ensure(), so the
+    // overlap check has to see through a user/cache symlink.
+    fs::path game = tmp_ / "game";
+    fs::create_directory(game);
+    fs::create_directories(tmp_ / "home/user");
+    fs::create_directory_symlink(game, tmp_ / "home/user/cache");
+    EXPECT_THROW(make("default", {game}), std::runtime_error);
     EXPECT_TRUE(fs::is_empty(game));
 }
 

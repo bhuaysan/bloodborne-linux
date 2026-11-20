@@ -228,7 +228,7 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
     env = {"BB_USER_DIR": str(work_root / "user")}
     if cache_home:
         # The shader and pipeline cache of an earlier run, or of several runs in a row (--cache-home).
-        env["BB_CACHE_DIR"] = str(cache_home)
+        env["BB_CACHE_DIR"] = str(cache_home.resolve())  # bb-run refuses a relative path
     # As for the reference: the pad's events count while the window has no focus.
     env["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = "1"
     if config:
@@ -651,8 +651,9 @@ def run_target(args: argparse.Namespace) -> int:
         failure = failure or "could not read the kernel log"
     changes = report.tree_changes(before, report.tree_state(game_dir))
     if work_root:
-        if (work_root / "state").exists():
-            shutil.copytree(work_root / "state", run / "target-state", dirs_exist_ok=True)
+        if (work_root / "user" / "logs").exists():
+            shutil.copytree(work_root / "user" / "logs", run / "target-state" / "logs",
+                            dirs_exist_ok=True)
         if bb_run_profile_data(work_root).exists():
             # The save data of the run, for `--user-from` in a later one.
             shutil.copytree(bb_run_profile_data(work_root), run / "user")

@@ -27,11 +27,12 @@ public:
     // The root is BB_USER_DIR when that is set to an absolute path (development, tests, the rig),
     // else user/ in executable_dir(). config(), data() and state() are the root, cache() is
     // root/cache, or BB_CACHE_DIR when that is set to an absolute path (the rig keeps a warm cache
-    // apart from the per-run root). Empty and relative values count as unset. XDG variables and
-    // HOME are not read. Nothing is created here.
+    // apart from the per-run root). Empty values count as unset. XDG variables and HOME are not
+    // read. Nothing is created here.
     //
-    // Throws std::invalid_argument for an invalid profile name, and std::runtime_error when the
-    // executable's directory is needed but can't be read, or when one of the four directories and
+    // Throws std::invalid_argument for an invalid profile name, and std::runtime_error for a
+    // relative BB_USER_DIR or BB_CACHE_DIR, when the executable's directory is needed but can't be
+    // read, or when one of the four directories and
     // one of `forbidden` (the game directory) or source_dir() lie inside one another.
     static RuntimeDirs from_environment(std::string_view profile,
                                         const std::vector<std::filesystem::path>& forbidden);

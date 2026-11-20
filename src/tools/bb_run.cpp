@@ -397,7 +397,9 @@ int start(const bb::tools::RunOptions& options) {
     game_dir = fs::absolute(*game_dir);
     const bb::common::RuntimeDirs dirs =
         bb::common::RuntimeDirs::from_environment(options.profile, {*game_dir});
-    bb::common::redirect_library_caches(dirs);  // before SDL and the Vulkan loader
+    // Before SDL and the Vulkan loader. The signal thread is running, but it only waits in sigwait
+    // and never reads the environment.
+    bb::common::redirect_library_caches(dirs);
     if (options.log_file) {
         const fs::path log = bb::common::open_log_file(dirs);
         bb::common::log(LogLevel::info, channel, "log file {}", log.string());

@@ -151,7 +151,8 @@ TEST(LauncherRunGame, TheDumpFolderIsWrittenToTheConfig) {
     const fs::path config = dir.path() / "user/config.toml";
     ASSERT_TRUE(fs::exists(config));
     EXPECT_NE(slurp(config).find(fs::canonical(game).string()), std::string::npos);
-    EXPECT_FALSE(fs::exists(dir.path() / "data"));
+    // Nothing outside the user folder: the launcher's own caches went there too.
+    EXPECT_TRUE(!fs::exists(dir.path() / "home") || fs::is_empty(dir.path() / "home"));
 }
 
 // The first-start search: a folder of another game under $HOME is no hit, the search ends and

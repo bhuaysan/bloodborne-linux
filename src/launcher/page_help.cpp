@@ -13,6 +13,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include "common/runtime_dirs.hpp"
 #include "launcher/gpu_probe.hpp"
 #include "launcher/help_report.hpp"
 #include "launcher/page.hpp"
@@ -176,10 +177,12 @@ std::string collect_problem_report(const Context& ctx) {
     ReportInput in;
     in.launcher_version = BB_LAUNCHER_VERSION;
     std::error_code ec;
-    char self[4096];
-    const ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
-    in.bb_run = n > 0 && fs::exists(fs::path(std::string(self, static_cast<std::size_t>(n)))
-                                            .parent_path() / "bb-run", ec)
+    fs::path self_dir;
+    try {
+        self_dir = common::executable_dir();
+    } catch (const std::exception&) {
+    }
+    in.bb_run = !self_dir.empty() && fs::exists(self_dir / "bb-run", ec)
                     ? "found next to the launcher, built with it"
                     : "missing next to the launcher";
     in.distribution = os_pretty_name();
