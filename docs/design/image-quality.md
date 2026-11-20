@@ -290,3 +290,48 @@ A local probe build (not committed) wrapped 0x021aa290 and 0x021aa950: `BB_CAMLO
 | title, 2560×1080 | menus | the logos run longer, so a scenario must wait for them by picture, not by a fixed step; the menus then take input as at 16:9 |
 
 Shots stay local (`analysis/issue-660/`).
+
+## Draw distance (#662)
+
+What limits how far the game draws and in how much detail, for a draw-distance option. Addresses as above.
+
+### Result
+
+| Parameter | Where | Value | Larger |
+|---|---|---|---|
+| Model LOD distances | LOD_BANK rows (game parameters), picked per model in `0x01d42ef0` | d01 / d12 pairs seen in Central Yharnam: 5 / 10, 10 / 15, 10 / 20, 15 / 30, 40 / 1000, 1000 / 2000, with 1 to 2 of hysteresis | 1.5× and 2× run without a fault. More models keep a finer mesh (below), but the shots match the default within the run-to-run spread, and the cost is within the spread too. Option: #720, low priority |
+| LOD scale | view `+0x150`, written every frame by `0x02291c30` | tan(fov / 2) / tan(27.5°) × 720 / 1080: 0.504 at 43°, 0.785 at `--fov 63` | the knob for the option: the distance is multiplied by it, so dividing it lengthens every LOD distance at once |
+| LOD bias | global 0x05587d20, copied every frame by `0x01d41d60` from the render manager's `+0x530` | 0 in these runs (not logged; read from the code) | added to every model's level before the 0..2 clamp; −1 would draw one level finer everywhere. Not tried |
+| Far plane | game camera `+0x5c`, render camera `+0x58` (#660) | 3000 m | 2× changes nothing in `yharnam-route`: nothing there is that far. No option |
+| Character update interval | WorldChrManDbg (0x0553e880) `+0x2c`, read in WorldChrMan's frame update `0x01915320` | 40 m: beyond it from the player a character updates every 30 frames, within it every 5, the nearest every frame (counts `+0x24` = 10, `+0x28` = 20) | 80 m ran without a fault but showed nothing in the shots (no enemy near the route). The interval is also a level of detail the characters' own code tests (`docs/design/frame-rate.md`), so a longer distance changes behaviour, not only looks. No option |
+| Shadow distance | the shadow group (#661): cascade slices end at 25 to 40 m | see "Shadows (#661)" | not tried here |
+| Grass and effect fades | no global distance found. Central Yharnam's weeds are map models with LOD_BANK rows; effects carry their own distance curves (`FXEvaluatableDistanceFromCamera`) | — | not tried |
+
+Nothing in this path hides a model by distance: the three levels are three meshes, and the lowest still draws. If the game hides models by distance anywhere, it is outside this path; this issue found no such distance.
+
+### The code
+
+- **Entries.** `CSLod` (singleton 0x05540080, update `0x01d41d60` from `0x01d924c0` every frame) holds a 0x90-byte entry per model draw entity: the level at `+0`, the LOD_BANK row at `+8` (four floats: d01, its hysteresis, d12, its hysteresis), an oriented box at `+0x10` to `+0x5f`. `0x01d42440` allocates one and `0x01d42aa0` looks up the row by id in the LOD_BANK parameter (registered with `LodBankMan`, singleton 0x055402d8, at `0x01f112d0`). Three FLVER draw entities make entries: `0x01d1a150` and `0x01d232b0` (likely map models, from their callers and debug names; the id is a byte at `+0x1b` of their part data; start at level 0) and `0x01d20b40` (the draw entity of a `CSModelIns`, a model instance; id at `+1`; starts at level 2). Which entity draws which kind of model was not checked at run time.
+- **Selection.** `0x01d42ef0` takes the distance from the camera position (view `+0x80`) to the entry's box, times the view's `+0x150`. From level 0 it moves to 1 beyond d01 + h01 and to 2 beyond d12; from 1 back to 0 below d01 − h01 and on to 2 beyond d12 + h12; from 2 back to 0 below d01, else to 1 below d12 − h12. At the 0.504 scale a row's distances are about twice as far in metres. `CSLod` also sorts the entries into distance buckets that it updates at different rates (`0x01d43c60`, `0x01d43f10`).
+- **Use.** The draw submits read the level, add the bias and clamp to 0..2: `0x01d181c0` (at 0x01d1875f), `0x01d24660` (0x01d2487e) and `0x01d6f9d0` (0x01d6fc09, where level 2 takes another resource set). The callback at `+0x60` of an entry is called on a change but never set.
+- **The scale.** `0x02291c30` builds the view from the render camera: `+0x150` = tan(fov × 0.5) / tan(0.47995) / (`+0x114` / 720), with `+0x114` the view's height in pixels, 1080 at 1920×1080 and still 1080 at `--resolution 2560x1440` (the logged scale stayed 0.504; the render camera keeps 1920×1080, #667). So a higher resolution does not lengthen the LOD distances, and a wider `--fov` shortens them.
+
+### The probe and the runs
+
+A local probe build (not committed): a wrap of `0x01d42ef0` counted the levels once a second and logged each new LOD_BANK row and the scale (`BB_LODLOG`); `BB_LODK=k` divided view `+0x150` by k for the call; `BB_FARK=k` multiplied the render camera's far plane in the wrap of `0x01d16690`; `BB_CHRDIST=k` multiplied WorldChrManDbg `+0x2c` once. Runs on 2026-11-20, `rig.py run bb-run --window` (1280×720 window, 1920×1080 frame), `yharnam-route` and its first part up to `01-street`. Every run ended `scenario finished`, with no crash or GPU fault.
+
+| Runs | Default | 1.5× | 2× |
+|---|---|---|---|
+| Level updates a second, mean over the route (3 + 2 + 3 runs): level 0 / 1 / 2 | 730 to 802 / 415 to 423 / 1275 to 1305 | 4663 to 4695 / 3854 to 3863 / 882 to 885 | 7961 to 8104 / 7857 to 8013 / 660 to 669 |
+| Shot difference against the first default run, mean of 255, `00-start` / `02-camera` | 0.32 to 0.53 / 0.11 to 0.19 | 0.52 to 0.53 / 0.09 to 0.12 | 0.33 to 0.43 / 0.18 to 0.19 (one run's `02-camera` landed elsewhere: 7.8) |
+| Frame time at 144 (3 + 3, first part), p50 `play-stand` / `play-walk` | 6.96 to 7.27 / 7.28 to 7.51 ms | — | 6.98 to 7.01 / 7.11 to 7.36 ms |
+| CPU per frame of the GX workers in `play-walk` (`thread_cpu.py`) | 8.36 to 8.61 ms | — | 8.44 to 8.54 ms |
+
+- The later shots of `yharnam-route` (`01-street`, `03` to `06`) differ by 0.2 to 38 between two runs, defaults included: the walk ends in one of two places (#591). Only `00-start` and, in most runs, `02-camera` land in the same place.
+- More updates a second at 1.5× and 2× because entries move into the nearer, more often updated buckets; it costs no measurable CPU.
+- Forcing the coarsest level (`BB_LODK=0.02`) shows what the levels are: the carriage beside the start loses its gold trim and wheel detail, `00-start` differs by 4.3 (against 0.3 to 0.5 between defaults).
+- `--fov 63` logged a scale of 0.785, `--resolution 2560x1440` 0.504.
+- `BB_FARK=2` and `BB_CHRDIST=2`: `00-start` 0.44 and 0.39 against the default, within the spread.
+- The 144 runs had a load average of 3 to 6 from other programs; they bound the cost, they don't resolve it.
+
+Shots stay local (`analysis/issue-662/`).
