@@ -121,6 +121,23 @@ The block holds the same values for these fields in the clinic and in Central Yh
 - Bloom (`0x37` = 0, or scaled) and depth of field (`0x6b` = 0) are clean as well. Depth of field changes nothing on the two routes, so it needs a check in a place with a far view before it becomes an option.
 - The vignette is off on both routes; film grain and lens distortion are never drawn.
 
+## Field of view (#666)
+
+`bb-run --fov DEGREES` and the config key `fov` set the vertical field of view of the player's camera, from 30 to 65 degrees, in place of the game's 43. 63 is about 95 degrees horizontal at 16:9. The default leaves the camera as the game sets it.
+
+- **Where.** In the wrap of the chase camera's update (0x0143ac60, `src/game/camera/chase_cam.cpp`, `field_of_view.cpp`). After each update the chase camera's `+0x50` gets the game's value plus the option's difference to 43 degrees; before the next update the game's value goes back. So the update's ease toward the parameter row, its collision and its framing (the reads at 0x0143af5e, 0x0143bbb0 and 0x0143bf04) see the game's angle, and the widening never adds up. A value that something else writes between updates is kept as the game's. The camera manager copies `+0x50` right after the update (0x01436c05, the blend at 0x01436e38) and passes it to the render camera, so the projection, the culling, the shadow cascades and YEBIS see the wider angle. Lock-on uses the same camera. Cutscenes use cameras of their own and keep their angles.
+- **Range.** Rows other than the default (38 to 48 degrees) keep their difference to 43, so at 65 a 48-degree row shows 70. The runs below checked 70 with no fault; #660 saw streaks over the top of the picture at 77.
+- **Tests.** `tests/game/field_of_view_test.cpp` runs the widener around a stand-in for the update that eases `+0x50` as the game does: the update always sees the game's angle, the field holds it widened, a value written between updates and a new camera are taken as the game's. Against the eboot it checks the constructor's 43 degrees and the update's own load and store of `+0x50`.
+- **Check.** Runs on 2026-11-20, `rig.py run bb-run --window`:
+  | Run | Result |
+  |---|---|
+  | `clinic-fight` at 63, against the default | more of the room on every side in `00-clinic`, `01-attack` and `02-lockon` (the lock-on view is wider too), no object missing at the edges, the HUD unchanged |
+  | `clinic-fight` at 70 (the most a 48-degree row reaches at 65) | wider still, no streaks and nothing missing at the edges |
+  | `yharnam-route` at 63, against the default | `00-start` and `01-street` show more of the street, the carriage whole, the HUD unchanged |
+  | new game and intro (the #660 local scenario) at 63, against the #660 default run | the seven cutscene shots keep their framing (mean difference 0.2 to 2.5 of 255, timing); the clinic after the cutscene is wider (7.5) |
+  | `rig.py compare main-menu` at the default, against the two reference runs | 1.007 of the noise floor, `main` 0.997 |
+  | `clinic-fight`, three runs each at the default and at 63 (30 FPS) | every play segment p50 33.33 ms and p95 33.36 to 33.48 ms on both sides: the cap hides the cost. CPU per frame of the render threads (`thread_cpu.py`) rises at 63 by 0.4 to 0.7 ms for the GX workers and 0.3 to 0.5 ms for the GPU thread in the moving segments, above the spread of 0.03 to 0.7 ms; the game thread by about 0.2 ms. The machine had a load average of 2.3 to 2.7 from other sessions |
+
 ## Camera and aspect ratio (#660)
 
 Where the engine sets the field of view and the aspect ratio of its projection, and how the HUD and menus are placed, for the field-of-view option (#666) and the wide frame buffer (#667). Addresses as above; `SprjPersCam` is the game's own class name (its runtime class is registered at 0x01d16e60).
@@ -169,7 +186,7 @@ At 2560×1080 the shots show the HUD bars and counters at their 1080p pixel size
 
 ### What the options need
 
-- **Field of view (#666).** Scale `+0x50` of the render camera that 0x01d16690 writes, when its source has the chase camera's vtable (0x0536b7c0), so cutscenes keep their framing. Scaling the chase camera's own `+0x50` does not hold: the update eases it back toward the parameter row and clamps the target to 38°–48°. Writing the render camera reaches the projection, the shadow cascades and YEBIS together.
+- **Field of view (#666).** #660 proposed scaling `+0x50` of the render camera that 0x01d16690 writes when its source is the chase camera. That source is never the chase camera: the camera manager copies the chase camera into a `SprjPersCam` (vtable 0x0539ffb0) first, as it does with the other cameras, so at 0x01d16690 they look the same. #666 widens the chase camera itself instead (below).
 - **Wide frame buffer (#667).** `--resolution` with a width / height other than 16:9 (the global write works as at 16:9), plus `+0x64` of every render camera that 0x01d16690 writes set to width / height; without it the picture is the 16:9 projection stretched to the width. The HUD and the menus need nothing to keep their 16:9 size; the grey side bars of the full-screen menus and loading screens are the open question (black, or the menus' background widened).
 
 ### The probe
