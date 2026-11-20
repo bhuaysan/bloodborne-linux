@@ -478,6 +478,8 @@ int start(const bb::tools::RunOptions& options) {
     }
     static_assert(bb::common::min_fov == bb::game::min_fov &&
                   bb::common::max_fov == bb::game::max_fov);
+    static_assert(bb::common::game_fov == bb::game::game_fov,
+                  "--fov's default must be the game's angle");
     bb::game::set_field_of_view(options.fov);
     if (options.fov != bb::game::game_fov) {
         bb::common::log(LogLevel::info, channel, "field of view {} degrees (the game's: {})",

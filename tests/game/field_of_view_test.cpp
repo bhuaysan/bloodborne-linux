@@ -57,7 +57,7 @@ struct FovGuard {
 
 TEST(FieldOfView, RefusesAnglesOutOfRange) {
     FovGuard guard;
-    for (float bad : {29.9f, 70.1f, -43.0f, std::numeric_limits<float>::quiet_NaN(),
+    for (float bad : {29.9f, 65.1f, -43.0f, std::numeric_limits<float>::quiet_NaN(),
                       std::numeric_limits<float>::infinity()}) {
         EXPECT_THROW(bb::game::set_field_of_view(bad), std::invalid_argument) << bad;
     }

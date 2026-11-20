@@ -16,8 +16,10 @@ inline constexpr std::uint32_t chase_cam_fov = 0x50;
 // The chase camera's angle in its default parameter row and its constructor, in degrees. --fov
 // names the angle that takes its place; other rows keep their difference to it.
 inline constexpr float game_fov = 43.0f;
+// The range of --fov. The game's rows go up to 48 degrees, so 65 shows at most 70, the most the
+// #666 runs checked; #660 saw streaks over the picture at 77.
 inline constexpr float min_fov = 30.0f;
-inline constexpr float max_fov = 70.0f;
+inline constexpr float max_fov = 65.0f;
 
 // Sets the field of view in degrees, min_fov to max_fov (NaN or outside throws
 // std::invalid_argument). game_fov leaves the game's angles alone. Called before the game runs;

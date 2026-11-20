@@ -89,19 +89,19 @@ TEST(Config, RefusesPostEffectStrengthsOutOfRange) {
 }
 
 TEST(Config, RefusesAFieldOfViewOutOfRange) {
-    for (const char* value : {"29.9", "70.5", "0", "nan", "\"60\"", "x"}) {
+    for (const char* value : {"29.9", "65.5", "0", "nan", "\"60\"", "x"}) {
         try {
             parse_config(std::format("fov = {}", value), "c.toml");
             ADD_FAILURE() << value;
         } catch (const bb::common::ConfigError& e) {
             EXPECT_NE(std::string(e.what()).find("c.toml:1: fov: "), std::string::npos) << e.what();
-            EXPECT_NE(std::string(e.what()).find("is not a number from 30 to 70"),
+            EXPECT_NE(std::string(e.what()).find("is not a number from 30 to 65"),
                       std::string::npos)
                 << e.what();
         }
     }
     EXPECT_EQ(parse_config("fov = 30", "c").config.fov, 30.0f);
-    EXPECT_EQ(parse_config("fov = 70", "c").config.fov, 70.0f);
+    EXPECT_EQ(parse_config("fov = 65", "c").config.fov, 65.0f);
 }
 
 TEST(Config, TakesEachFrameRate) {

@@ -243,11 +243,11 @@ TEST(RunOptions, ParsesTheFieldOfView) {
     EXPECT_FLOAT_EQ(parse({}).fov, 43.0f);
     EXPECT_FLOAT_EQ(parse({"--fov", "63"}).fov, 63.0f);
     EXPECT_FLOAT_EQ(parse({"--fov", "30"}).fov, 30.0f);
-    EXPECT_FLOAT_EQ(parse({"--fov", "70"}).fov, 70.0f);
+    EXPECT_FLOAT_EQ(parse({"--fov", "65"}).fov, 65.0f);
     EXPECT_EQ(parse_error({"--fov"}), "--fov needs a value");
-    for (std::string_view s : {"29.9", "70.1", "nan", "inf", "", "60,5", "-63"}) {
+    for (std::string_view s : {"29.9", "65.1", "nan", "inf", "", "60,5", "-63"}) {
         EXPECT_EQ(parse_error({"--fov", s}),
-                  std::format("--fov: \"{}\" is not a number of degrees from 30 to 70", s));
+                  std::format("--fov: \"{}\" is not a number of degrees from 30 to 65", s));
     }
 }
 

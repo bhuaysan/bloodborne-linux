@@ -88,7 +88,7 @@ inline constexpr std::string_view run_usage =
     "                       screen edges) off\n"
     "  --chromatic-aberration-strength S\n"
     "                       scale the chromatic aberration by S, 0 to 1 (default 1, the game's)\n"
-    "  --fov DEGREES        the vertical field of view of the player's camera, 30 to 70, in place\n"
+    "  --fov DEGREES        the vertical field of view of the player's camera, 30 to 65, in place\n"
     "                       of the game's 43 (about 70 horizontal at 16:9); the game's other\n"
     "                       angles for it move by the same amount, cutscenes keep their own\n";
 
@@ -144,7 +144,7 @@ struct RunOptions {
     float motion_blur_strength = 1.0f;  // --motion-blur-strength: 0 to 1
     bool chromatic_aberration = true;  // false with --no-chromatic-aberration
     float chromatic_aberration_strength = 1.0f;  // --chromatic-aberration-strength: 0 to 1
-    float fov = 43.0f;  // --fov: common::min_fov to common::max_fov degrees, 43 is the game's
+    float fov = common::game_fov;  // --fov: common::min_fov to common::max_fov degrees
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 

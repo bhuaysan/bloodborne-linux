@@ -24,9 +24,11 @@ inline constexpr unsigned max_window_side = 16384;
 inline constexpr float max_rcas_attenuation = 2.0f;
 // The post effect strengths (game::PostEffects): a factor on the game's own value.
 inline constexpr float max_post_effect_strength = 1.0f;
-// The chase camera's vertical field of view in degrees (game::set_field_of_view).
+// The chase camera's vertical field of view in degrees (game::set_field_of_view): the game's
+// angle and the range of the option.
+inline constexpr float game_fov = 43.0f;
 inline constexpr float min_fov = 30.0f;
-inline constexpr float max_fov = 70.0f;
+inline constexpr float max_fov = 65.0f;
 
 // The target frame rates bb-run takes (docs/design/frame-rate.md, "Above 60 FPS"). The sites the
 // game paces in 30 FPS frames run on a 30 Hz clock of game time (game::game_tick), so a rate need
