@@ -535,12 +535,15 @@ TEST(VideoCore, RecordingThreadSubmitsInOrderAndOnShutdown) {
 
 // A sparse arena bind while chunks are queued (#695, docs/design/command-recording.md). The
 // submit callback runs on the GPU thread and calls bindSparse under submit_mutex, as
-// BufferCache::SubmitPendingArenaBinds does, while the recording thread is held on submit_mutex
-// behind an earlier submit with the chunks of the commands recorded before the bind still queued.
-// The bind reaches the queue before those chunks' submit, which waits for it. Commands recorded
-// before the bind, on a page that was bound already, and after it, on the new page, both land.
-// The buffer cache's arenas are 4 GiB, more than lavapipe's sparse address space, so the test
-// binds a small sparse buffer of its own the same way.
+// BufferCache::SubmitPendingArenaBinds does. The test holds the recording thread on submit_mutex
+// behind an earlier, empty submit, so the chunks of the commands recorded before the bind are
+// queued and unsubmitted when the callback runs. Once the test lets go, the bind and that empty
+// submit may take the mutex in either order; the bind still reaches the queue before the submit
+// of those chunks, which waits for it. Commands recorded before the bind, on a page that was
+// bound already, and after it, on the new page, both land. The test holds submit_mutex itself, so
+// it does not check that the bind takes the mutex (lavapipe serialises its queue anyway). The
+// buffer cache's arenas are 4 GiB, more than lavapipe's sparse address space, so the test binds
+// a small sparse buffer of its own the same way.
 TEST(VideoCore, SparseBindWhileChunksAreQueued) {
     if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
         GTEST_SKIP() << reason;
@@ -657,6 +660,8 @@ TEST(VideoCore, SparseBindWhileChunksAreQueued) {
                 bind_next = true;
                 scheduler.Flush();
 
+                // No wait of its own: like the buffer cache's later submits, it relies on the
+                // submit before it having waited for the bind.
                 cmdbuf = scheduler.CommandBuffer();
                 cmdbuf.fillBuffer(sparse, page, updates * 4, 0x600DF00Du);
                 barrier(vk::PipelineStageFlagBits2::eAllTransfer,
