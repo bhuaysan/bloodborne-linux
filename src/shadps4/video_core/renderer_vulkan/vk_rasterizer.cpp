@@ -703,6 +703,10 @@ bool Rasterizer::IsComputeImageCopy(const Pipeline* pipeline) {
     // Perform image copy
     VideoCore::Image& src_image = desc0.is_written ? image1 : image0;
     VideoCore::Image& dst_image = desc0.is_written ? image0 : image1;
+    // Ours (#696): the source is brought up to date first (a no-op unless it is dirty). Upstream
+    // copies a source the guest wrote but the cache has not uploaded yet, so the destination got
+    // stale data and lost the write with its dirty bits.
+    texture_cache.UpdateImage(desc0.is_written ? image1_id : image0_id);
     // Ours (#689): tracked first, so that the copy clears the dirty bits only while a guest write
     // still faults.
     texture_cache.TrackImage(desc0.is_written ? image0_id : image1_id);
@@ -1188,7 +1192,8 @@ void Rasterizer::Resolve() {
     const auto& mrt1_hint = liverpool->last_cb_extent[1];
     VideoCore::TextureCache::ImageDesc mrt0_desc{liverpool->regs.color_buffers[0], mrt0_hint};
     VideoCore::TextureCache::ImageDesc mrt1_desc{liverpool->regs.color_buffers[1], mrt1_hint};
-    auto& mrt0_image = texture_cache.GetImage(texture_cache.FindImage(mrt0_desc, true));
+    const auto mrt0_id = texture_cache.FindImage(mrt0_desc, true);
+    auto& mrt0_image = texture_cache.GetImage(mrt0_id);
     const auto mrt1_id = texture_cache.FindImage(mrt1_desc, true);
     auto& mrt1_image = texture_cache.GetImage(mrt1_id);
 
@@ -1198,6 +1203,10 @@ void Rasterizer::Resolve() {
     // ResolveOverlap does before CopyMip. UpdateImage tracks it too (#689) and uploads only when
     // it is dirty. Upstream does neither, and loses the write the same way.
     texture_cache.UpdateImage(mrt1_id);
+    // Ours (#696): the source too, or a guest write to it that the cache has not uploaded yet
+    // would be lost: the copy takes the stale image and clears the destination's dirty bits. A
+    // multisampled source is never uploaded, so this matters for the plain copy only.
+    texture_cache.UpdateImage(mrt0_id);
     runtime.ResolveImage(&mrt0_image, &mrt1_image, mrt0_desc.view_info.range,
                          mrt1_desc.view_info.range);
 }
@@ -1212,7 +1221,8 @@ void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
         regs.depth_buffer, regs.depth_view, regs.depth_control,
         regs.depth_htile_data_base.GetAddress(), liverpool->last_db_extent, true);
 
-    auto& read_image = texture_cache.GetImage(texture_cache.FindImage(read_desc));
+    const auto read_id = texture_cache.FindImage(read_desc);
+    auto& read_image = texture_cache.GetImage(read_id);
     const auto write_id = texture_cache.FindImage(write_desc);
     auto& write_image = texture_cache.GetImage(write_id);
     // The copy destination is never bound as a target, so its stencil plane is linked here.
@@ -1223,6 +1233,7 @@ void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
     sub_range.extent.layers = liverpool->regs.depth_view.NumSlices() - sub_range.base.layer;
 
     texture_cache.UpdateImage(write_id);  // ours (#691), see Resolve
+    texture_cache.UpdateImage(read_id);   // ours (#696), see Resolve
     runtime.CopyDepthStencil(&read_image, &write_image, sub_range);
 }
 

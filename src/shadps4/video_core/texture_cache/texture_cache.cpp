@@ -365,11 +365,21 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         // bits cleared only while it is still tracked. Upstream uploads the untracked image and
         // clears them, so a guest write in between was lost.
         TrackImage(new_image_id);
-        if (new_info.num_samples == 1 &&
-            (new_info.resources.layers > cache_image.info.resources.layers ||
-             new_info.resources.levels > cache_image.info.resources.levels)) {
+        // Ours (#696): the copy below covers only the source's extent, levels and layers, and
+        // nothing when the source is multisampled (CopyColorAndDepth leaves that unimplemented).
+        // Upstream uploads the new image only when it has more layers or levels, so a larger
+        // extent was left undefined and still marked clean. The source is brought up to date
+        // first, so that the copy does not overwrite the upload with stale data.
+        const ImageInfo& old_info = cache_image.info;
+        const bool copy_covers = old_info.num_samples == 1 &&
+                                 old_info.resources.Contains(new_info.resources) &&
+                                 old_info.size.width >= new_info.size.width &&
+                                 old_info.size.height >= new_info.size.height &&
+                                 old_info.size.depth >= new_info.size.depth;
+        if (new_info.num_samples == 1 && !copy_covers) {
             RefreshImage(new_image);
         }
+        UpdateImage(cache_image_id);
         new_image.ClearDirtyIfTracked();
         // When creating a depth buffer through overlap resolution don't clear it on first use.
         new_image.info.meta_info.htile_clear_mask = 0;

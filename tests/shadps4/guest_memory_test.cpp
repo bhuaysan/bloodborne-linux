@@ -1378,13 +1378,14 @@ TEST(GuestMemory, GuestUnmapsFreeImagesOnTheGpuThread) {
 
 // The contents of one layer of a linear 64 x 64 image as the GPU holds them, read back through a
 // staging buffer. On the GPU thread.
-std::vector<u8> read_back(Gpu& gpu, VideoCore::Image& image, u32 layer = 0) {
+std::vector<u8> read_back(Gpu& gpu, VideoCore::Image& image, u32 layer = 0,
+                          vk::ImageAspectFlagBits aspect = vk::ImageAspectFlagBits::eColor) {
     const u32 size = image.info.guest_size;
     auto& pool = gpu.runtime.GetStagingPool();
     const auto staging = pool.Request(size, VideoCore::MemoryType::HostCached, 16, true);
     const vk::BufferImageCopy copy{
         .bufferOffset = staging.offset,
-        .imageSubresource{.aspectMask = vk::ImageAspectFlagBits::eColor,
+        .imageSubresource{.aspectMask = aspect,
                           .baseArrayLayer = layer,
                           .layerCount = 1},
         .imageExtent = {64, 64, 1},
@@ -1708,6 +1709,228 @@ TEST(GuestMemory, AResolveIntoOneLayerKeepsAGuestWriteToAnother) {
             const std::vector<u8> layer1 = read_back(gpu, image, 1);
             EXPECT_TRUE(std::all_of(layer1.begin(), layer1.begin() + layer_size,
                                     [](u8 b) { return b == 0x55; }));
+            gpu.rasterizer.Finish();
+        });
+        d.unmap();
+    }
+}
+
+// A linear 64 x 64 RGBA8 render target at `at`, its view on layer `layer` of `layer + 1`.
+AmdGpu::ColorBuffer linear_color_buffer(std::uintptr_t at, u32 layer, u32 size = 64) {
+    AmdGpu::ColorBuffer buffer{};
+    buffer.base_address = u32(at >> 8);
+    buffer.pitch.tile_max = size / 8 - 1;
+    buffer.slice.tile_max = size * size / 64 - 1;
+    buffer.view.slice_start = layer;
+    buffer.view.slice_max = layer;
+    buffer.info.format = u32(AmdGpu::DataFormat::Format8_8_8_8);
+    buffer.info.number_type = u32(AmdGpu::NumberFormat::Unorm);
+    buffer.attrib.tile_mode_index = AmdGpu::TileMode::DisplayLinearAligned;
+    return buffer;
+}
+
+// A 64 x 64 Z32 depth buffer (1D tiled; every depth buffer is tiled) that reads at `read`,
+// writes at `write`.
+AmdGpu::DepthBuffer depth_buffer(std::uintptr_t read, std::uintptr_t write) {
+    AmdGpu::DepthBuffer buffer{};
+    buffer.z_info.format = AmdGpu::DepthBuffer::ZFormat::Z32Float;
+    buffer.z_info.tile_mode_index = u32(AmdGpu::TileMode::Depth1DThin);
+    buffer.z_read_base = u32(read >> 8);
+    buffer.z_write_base = u32(write >> 8);
+    buffer.depth_size.pitch_tile_max = 64 / 8 - 1;
+    buffer.depth_size.height_tile_max = 64 / 8 - 1;
+    buffer.depth_slice.tile_max = 64 * 64 / 64 - 1;
+    return buffer;
+}
+
+// Fills `bytes` with the float `value`, so that the data reads the same however it is tiled.
+void fill_floats(u8* bytes, u64 size, float value) {
+    for (u64 i = 0; i < size; i += sizeof(float)) {
+        std::memcpy(bytes + i, &value, sizeof(float));
+    }
+}
+
+testing::AssertionResult all_floats(const std::vector<u8>& bytes, u64 size, float value) {
+    for (u64 i = 0; i < size; i += sizeof(float)) {
+        if (std::memcmp(bytes.data() + i, &value, sizeof(float)) != 0) {
+            float got;
+            std::memcpy(&got, bytes.data() + i, sizeof(float));
+            return testing::AssertionFailure() << "byte " << i << " holds " << got;
+        }
+    }
+    return testing::AssertionSuccess();
+}
+
+// The source of a resolve (here a single-sampled one, a plain copy) is brought up to date before
+// it (#696). Upstream copies the stale source, and since the copy clears the target's dirty bits,
+// the guest's write to the source never reaches the target.
+TEST(GuestMemory, AResolveTakesAGuestWriteToItsSource) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        constexpr u64 image_size = 64 * 64 * 4;
+        Direct d((2 * image_size + page_size - 1) / page_size);
+        const std::uintptr_t start = addr(d.address);
+        ASSERT_EQ(start % 256, 0u);
+        ASSERT_LT(start >> 8, u64(1) << 32);
+        auto* const bytes = static_cast<u8*>(d.address);
+        std::memset(bytes, 0x11, image_size);               // the target
+        std::memset(bytes + image_size, 0x55, image_size);  // the source
+        const AmdGpu::ColorBuffer source = linear_color_buffer(start + image_size, 0);
+        const AmdGpu::ColorBuffer target = linear_color_buffer(start, 0);
+
+        VideoCore::ImageId id{};
+        gpu.liverpool->SendCommand<true>([&] {
+            VideoCore::TextureCache::ImageDesc source_desc{source, {}};
+            const auto source_id = textures.FindImage(source_desc);
+            textures.UpdateImage(source_id);
+            ASSERT_TRUE(
+                False(textures.GetImage(source_id).flags & VideoCore::ImageFlagBits::Dirty));
+            VideoCore::TextureCache::ImageDesc target_desc{target, {}};
+            id = textures.FindImage(target_desc);
+            textures.UpdateImage(id);
+            gpu.rasterizer.Finish();
+        });
+
+        // The guest writes the tracked source: it faults and marks it.
+        for (u64 i = 0; i < image_size; ++i) {
+            std::atomic_ref<u8>(bytes[image_size + i]).store(0x77, std::memory_order_relaxed);
+        }
+        gpu.liverpool->SendCommand<true>([&] {
+            auto& regs = gpu.liverpool->regs;
+            regs.color_control.mode = AmdGpu::ColorControl::OperationMode::Resolve;
+            regs.color_buffers[0] = source;
+            regs.color_buffers[1] = target;
+            gpu.rasterizer.Draw(false);
+            regs.color_control.mode = AmdGpu::ColorControl::OperationMode::Normal;
+            regs.color_buffers[0] = {};
+            regs.color_buffers[1] = {};
+
+            VideoCore::Image& image = textures.GetImage(id);
+            textures.UpdateImage(id);
+            const std::vector<u8> copied = read_back(gpu, image);
+            EXPECT_TRUE(std::all_of(copied.begin(), copied.begin() + image_size,
+                                    [](u8 b) { return b == 0x77; }));
+            gpu.rasterizer.Finish();
+        });
+        d.unmap();
+    }
+}
+
+// The same for the depth copy a draw with color disabled and forced depth dirty and valid does
+// (Rasterizer::DepthStencilCopy, #696).
+TEST(GuestMemory, ADepthCopyTakesAGuestWriteToItsSource) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        constexpr u64 image_size = 64 * 64 * 4;
+        Direct d((2 * image_size + page_size - 1) / page_size);
+        const std::uintptr_t start = addr(d.address);
+        ASSERT_EQ(start % 256, 0u);
+        ASSERT_LT(start >> 8, u64(1) << 32);
+        auto* const bytes = static_cast<u8*>(d.address);
+        fill_floats(bytes, image_size, 0.25f);               // the destination
+        fill_floats(bytes + image_size, image_size, 0.5f);   // the source
+        const AmdGpu::DepthBuffer buffer = depth_buffer(start + image_size, start);
+        const AmdGpu::DepthView view{};
+        const AmdGpu::DepthControl control{};
+
+        VideoCore::ImageId id{};
+        gpu.liverpool->SendCommand<true>([&] {
+            VideoCore::TextureCache::ImageDesc read_desc{buffer, view, control, 0, {}, false};
+            const auto read_id = textures.FindImage(read_desc);
+            textures.UpdateImage(read_id);
+            ASSERT_TRUE(False(textures.GetImage(read_id).flags & VideoCore::ImageFlagBits::Dirty));
+            VideoCore::TextureCache::ImageDesc write_desc{buffer, view, control, 0, {}, true};
+            id = textures.FindImage(write_desc);
+            ASSERT_NE(id, read_id);
+            textures.UpdateImage(id);
+            gpu.rasterizer.Finish();
+        });
+
+        // The guest writes the tracked source: it faults and marks it.
+        for (u64 i = 0; i < image_size; i += sizeof(float)) {
+            constexpr float value = 0.75f;
+            u32 word;
+            std::memcpy(&word, &value, sizeof(word));
+            std::atomic_ref<u32>(*reinterpret_cast<u32*>(bytes + image_size + i))
+                .store(word, std::memory_order_relaxed);
+        }
+        gpu.liverpool->SendCommand<true>([&] {
+            auto& regs = gpu.liverpool->regs;
+            regs.color_control.mode = AmdGpu::ColorControl::OperationMode::Disable;
+            regs.primitive_type = AmdGpu::PrimitiveType::TriangleList;
+            regs.depth_render_override.force_z_dirty = 1;
+            regs.depth_render_override.force_z_valid = 1;
+            regs.depth_buffer = buffer;
+            regs.depth_view = view;
+            gpu.rasterizer.Draw(false);
+            regs.color_control.mode = AmdGpu::ColorControl::OperationMode::Normal;
+            regs.primitive_type = AmdGpu::PrimitiveType::None;
+            regs.depth_render_override = {};
+            regs.depth_buffer = {};
+
+            VideoCore::Image& image = textures.GetImage(id);
+            textures.UpdateImage(id);
+            const std::vector<u8> copied =
+                read_back(gpu, image, 0, vk::ImageAspectFlagBits::eDepth);
+            EXPECT_TRUE(all_floats(copied, image_size, 0.75f));
+            gpu.rasterizer.Finish();
+        });
+        d.unmap();
+    }
+}
+
+// A depth target found where the cache holds a color image of the same pitch and height but a
+// narrower width (from the draw's extent hint) is recreated as a depth image, and the color image
+// is copied into it (TextureCache::ResolveDepthOverlap). The copy covers only the color image's
+// width, so the rest is uploaded from guest memory first (#696). Upstream uploads it only for more
+// layers or levels, and left the rest undefined but marked clean. (Images of another pitch or
+// height at the same address take the pool reuse path in ResolveOverlap and never get here.)
+TEST(GuestMemory, ADepthImageRecreatedWiderHoldsTheGuestData) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        constexpr u64 image_size = 64 * 64 * 4;
+        Direct d((image_size + page_size - 1) / page_size);
+        const std::uintptr_t start = addr(d.address);
+        ASSERT_EQ(start % 256, 0u);
+        ASSERT_LT(start >> 8, u64(1) << 32);
+        auto* const bytes = static_cast<u8*>(d.address);
+        fill_floats(bytes, image_size, 0.375f);
+        AmdGpu::ColorBuffer color = linear_color_buffer(start, 0);
+        color.info.format = u32(AmdGpu::DataFormat::Format32);
+        color.info.number_type = u32(AmdGpu::NumberFormat::Float);
+        AmdGpu::CbDbExtent narrow{};
+        narrow.width = 32;
+        narrow.height = 64;
+        const AmdGpu::DepthBuffer depth = depth_buffer(start, start);
+
+        gpu.liverpool->SendCommand<true>([&] {
+            VideoCore::TextureCache::ImageDesc color_desc{color, narrow};
+            const auto color_id = textures.FindImage(color_desc);
+            textures.UpdateImage(color_id);
+            ASSERT_EQ(textures.GetImage(color_id).info.size.width, 32u);
+            ASSERT_EQ(textures.GetImage(color_id).info.guest_size, image_size);
+
+            VideoCore::TextureCache::ImageDesc depth_desc{depth, {}, {}, 0, {}, false};
+            const auto id = textures.FindImage(depth_desc);
+            ASSERT_NE(id, color_id);
+            VideoCore::Image& image = textures.GetImage(id);
+            ASSERT_TRUE(image.info.props.is_depth);
+            ASSERT_EQ(image.info.size.width, 64u);
+            textures.UpdateImage(id);
+            const std::vector<u8> held = read_back(gpu, image, 0, vk::ImageAspectFlagBits::eDepth);
+            EXPECT_TRUE(all_floats(held, image_size, 0.375f));
             gpu.rasterizer.Finish();
         });
         d.unmap();
