@@ -198,8 +198,9 @@ def find_bb_run(preset: str) -> Path:
 
 
 def bb_run_profile_data(work_root: Path) -> Path:
-    """Where bb-run keeps the save data of the profile the rig uses (XDG data, profile `rig`)."""
-    return work_root / "data" / "bloodborne-linux" / "profiles" / "rig"
+    """Where bb-run keeps the save data of the profile the rig uses (its user folder, profile
+    `rig`)."""
+    return work_root / "user" / "profiles" / "rig"
 
 
 def copy_user_for_bb_run(user_from: Path, dest: Path) -> None:
@@ -222,13 +223,12 @@ def bb_run_program(run: Path, game_dir: Path, preset: str, window: bool, work_ro
                    log: str | None = None, perf: bool = False,
                    pad_input: Path | None = None, frame_rate: int | None = None,
                    extra_args: str | None = None, config: Path | None = None) -> Program:
-    # bb-run refuses runtime directories inside the source checkout, so its XDG roots are outside
-    # analysis/. They are per run, so runs never share or inherit save data.
-    env = {f"XDG_{kind}_HOME": str(work_root / kind.lower())
-           for kind in ("DATA", "CACHE", "CONFIG", "STATE")}
+    # bb-run refuses runtime directories inside the source checkout, so its user folder is outside
+    # analysis/. It is per run, so runs never share or inherit save data.
+    env = {"BB_USER_DIR": str(work_root / "user")}
     if cache_home:
         # The shader and pipeline cache of an earlier run, or of several runs in a row (--cache-home).
-        env["XDG_CACHE_HOME"] = str(cache_home)
+        env["BB_CACHE_DIR"] = str(cache_home)
     # As for the reference: the pad's events count while the window has no focus.
     env["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = "1"
     if config:
@@ -572,6 +572,8 @@ def run_target(args: argparse.Namespace) -> int:
             copy_user_for_bb_run(args.user_from, bb_run_profile_data(work_root))
 
     env = {**os.environ, **program.env, "BB_RIG_DIR": str(run)}
+    if "BB_USER_DIR" in program.env and "BB_CACHE_DIR" not in program.env:
+        env.pop("BB_CACHE_DIR", None)  # a cold run: not the caller's warm cache
     if getattr(args, "bb_run_config", None):
         env.pop("BB_GAME_DIR", None)  # the config file has to be the only source of the game folder
     audio_file = run / "audio.raw"
@@ -747,7 +749,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--window", action="store_true", help="let bb-run open its window")
     run.add_argument("--bb-run", type=Path, help="this bb-run binary instead of the preset's")
     run.add_argument("--cache-home", type=Path,
-                     help="bb-run's XDG_CACHE_HOME, so its shader and pipeline cache persists "
+                     help="bb-run's cache folder (BB_CACHE_DIR), so its shader and pipeline cache persists "
                           "from run to run (default: a fresh directory per run, so every run is cold)")
     run.add_argument("--audio", action="store_true",
                      help="record the sound with SDL's disk driver and report its level")

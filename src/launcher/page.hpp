@@ -25,7 +25,7 @@ struct Context {
     bool game_ready = false;            // a game folder passed its check
     std::filesystem::path game_dir;     // empty unless game_ready
     // What the Help page needs to tell which problem applies now.
-    std::filesystem::path state_dir;    // XDG state directory; the last run's log is below it
+    std::filesystem::path state_dir;    // the runtime's state directory (user/); the last run's log is below it
     bool have_folder = false;           // a game folder is set, whether or not it passed
     common::FolderCheck folder_check = common::FolderCheck::ok;
     bool gpu_ok = true;

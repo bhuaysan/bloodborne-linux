@@ -146,19 +146,19 @@ TEST_F(LogTest, WritesTheFileInTheStateDirectory) {
     std::string templ = (std::filesystem::temp_directory_path() / "bb-log-test-XXXXXX").string();
     ASSERT_NE(::mkdtemp(templ.data()), nullptr);
     const std::filesystem::path root = std::filesystem::canonical(templ);
-    const char* state = std::getenv("XDG_STATE_HOME");
+    const char* state = std::getenv("BB_USER_DIR");
     const std::optional<std::string> saved_state =
         state ? std::optional<std::string>(state) : std::nullopt;
-    ::setenv("XDG_STATE_HOME", (root / "state").c_str(), 1);
+    ::setenv("BB_USER_DIR", (root / "user").c_str(), 1);
     const auto dirs = bb::common::RuntimeDirs::from_environment("default", {});
     if (saved_state) {
-        ::setenv("XDG_STATE_HOME", saved_state->c_str(), 1);
+        ::setenv("BB_USER_DIR", saved_state->c_str(), 1);
     } else {
-        ::unsetenv("XDG_STATE_HOME");
+        ::unsetenv("BB_USER_DIR");
     }
 
     const std::filesystem::path path = bb::common::open_log_file(dirs);
-    EXPECT_EQ(path.parent_path(), root / "state" / "bloodborne-linux" / "logs");
+    EXPECT_EQ(path.parent_path(), root / "user" / "logs");
     EXPECT_TRUE(std::regex_match(path.filename().string(),
                                  std::regex("[0-9]{8}T[0-9]{6}Z-" + std::to_string(::getpid()) +
                                             "\\.log")))

@@ -1,5 +1,5 @@
-// The runtime's own directories: data, cache, config and state under the XDG base directories,
-// and the selected profile (docs/design/m3-core-os.md, "Runtime directories").
+// The runtime's own directories: everything it writes lives in one portable folder, user/ next to
+// the binary, and the selected profile (docs/design/m3-core-os.md, "Runtime directories").
 #pragma once
 
 #include <filesystem>
@@ -18,22 +18,29 @@ bool valid_profile_name(std::string_view name);
 // The source checkout this binary was built from. RuntimeDirs refuses directories inside it.
 std::filesystem::path source_dir();
 
+// The directory of the running executable, from /proc/self/exe. Throws std::runtime_error when
+// that link can't be read.
+std::filesystem::path executable_dir();
+
 class RuntimeDirs {
 public:
-    // Reads XDG_DATA_HOME, XDG_CACHE_HOME, XDG_CONFIG_HOME and XDG_STATE_HOME. A variable that is
-    // unset, empty or relative (the XDG spec says to ignore relative values) falls back to its
-    // default below $HOME: .local/share, .cache, .config and .local/state. Each gets
-    // bloodborne-linux/ appended. Nothing is created here.
+    // The root is BB_USER_DIR when that is set to an absolute path (development, tests, the rig),
+    // else user/ in executable_dir(). config(), data() and state() are the root, cache() is
+    // root/cache, or BB_CACHE_DIR when that is set to an absolute path (the rig keeps a warm cache
+    // apart from the per-run root). Empty and relative values count as unset. XDG variables and
+    // HOME are not read. Nothing is created here.
     //
-    // Throws std::invalid_argument for an invalid profile name, and std::runtime_error when a
-    // default is needed but HOME is unset, empty or relative, or when one of the four directories
-    // and one of `forbidden` (the game directory) or source_dir() lie inside one another.
+    // Throws std::invalid_argument for an invalid profile name, and std::runtime_error when the
+    // executable's directory is needed but can't be read, or when one of the four directories and
+    // one of `forbidden` (the game directory) or source_dir() lie inside one another.
     static RuntimeDirs from_environment(std::string_view profile,
                                         const std::vector<std::filesystem::path>& forbidden);
 
     const std::string& profile() const { return profile_; }
 
-    // $XDG_DATA_HOME/bloodborne-linux and so on.
+    // The portable folder: config.toml, profiles/, cache/ and logs/ below it.
+    const std::filesystem::path& root() const { return root_; }
+    // root(), except cache() as described above.
     const std::filesystem::path& data() const { return data_; }
     const std::filesystem::path& cache() const { return cache_; }
     const std::filesystem::path& config() const { return config_; }
@@ -55,10 +62,19 @@ public:
 
 private:
     std::string profile_;
+    std::filesystem::path root_;
     std::filesystem::path data_;
     std::filesystem::path cache_;
     std::filesystem::path config_;
     std::filesystem::path state_;
 };
+
+// Points the caches that libraries write on their own at cache()/system: XDG_CACHE_HOME (Mesa's
+// shader cache, fontconfig), MESA_SHADER_CACHE_DIR and __GL_SHADER_DISK_CACHE_PATH (NVIDIA), so
+// nothing lands in ~/.cache. XDG_CONFIG_HOME and XDG_DATA_HOME stay: libraries only read them.
+// Creates cache()/system when it can; a folder that can't be written is left to the caller's own
+// error. Call it before SDL, the Vulkan loader or fontconfig start and before threads that read the
+// environment.
+void redirect_library_caches(const RuntimeDirs& dirs);
 
 }  // namespace bb::common

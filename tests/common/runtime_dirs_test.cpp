@@ -19,11 +19,20 @@ namespace {
 namespace fs = std::filesystem;
 using bb::common::RuntimeDirs;
 
-constexpr std::array<const char*, 5> env_keys = {"HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
-                                                 "XDG_CONFIG_HOME", "XDG_STATE_HOME"};
+constexpr std::array<const char*, 9> env_keys = {
+    "HOME",         "XDG_DATA_HOME",         "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME", "XDG_STATE_HOME",     "BB_USER_DIR",
+    "BB_CACHE_DIR", "MESA_SHADER_CACHE_DIR", "__GL_SHADER_DISK_CACHE_PATH"};
 
-// Every test runs with HOME pointing into a fresh temporary directory and all XDG variables
-// unset, and restores the environment afterwards. Nothing is written outside that directory.
+// The variable's value, empty when unset.
+std::string env(const char* key) {
+    const char* value = std::getenv(key);
+    return value != nullptr ? value : "";
+}
+
+// Every test runs with BB_USER_DIR pointing into a fresh temporary directory, every other
+// variable above unset, and restores the environment afterwards. Nothing is written outside that
+// directory.
 class RuntimeDirsTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -35,7 +44,7 @@ protected:
             saved_[key] = value ? std::optional<std::string>(value) : std::nullopt;
             ::unsetenv(key);
         }
-        set("HOME", (tmp_ / "home").string());
+        set("BB_USER_DIR", (tmp_ / "home/user").string());
     }
     void TearDown() override {
         for (const auto& [key, value] : saved_) {
@@ -67,51 +76,63 @@ protected:
     std::map<std::string, std::optional<std::string>> saved_;
 };
 
-TEST_F(RuntimeDirsTest, DefaultsBelowHome) {
+TEST_F(RuntimeDirsTest, EverythingBelowTheUserDir) {
     RuntimeDirs dirs = make();
-    fs::path home = tmp_ / "home";
+    fs::path user = tmp_ / "home/user";
     EXPECT_EQ(dirs.profile(), "default");
-    EXPECT_EQ(dirs.data(), home / ".local/share/bloodborne-linux");
-    EXPECT_EQ(dirs.cache(), home / ".cache/bloodborne-linux");
-    EXPECT_EQ(dirs.config(), home / ".config/bloodborne-linux");
-    EXPECT_EQ(dirs.state(), home / ".local/state/bloodborne-linux");
-    EXPECT_EQ(dirs.profile_data(), dirs.data() / "profiles/default");
-    EXPECT_EQ(dirs.profile_cache(), dirs.cache() / "profiles/default");
-    EXPECT_EQ(dirs.logs(), dirs.state() / "logs");
-    EXPECT_FALSE(fs::exists(home)) << "nothing is created before first use";
+    EXPECT_EQ(dirs.root(), user);
+    EXPECT_EQ(dirs.data(), user);
+    EXPECT_EQ(dirs.config(), user);
+    EXPECT_EQ(dirs.state(), user);
+    EXPECT_EQ(dirs.cache(), user / "cache");
+    EXPECT_EQ(dirs.profile_data(), user / "profiles/default");
+    EXPECT_EQ(dirs.profile_cache(), user / "cache/profiles/default");
+    EXPECT_EQ(dirs.logs(), user / "logs");
+    EXPECT_FALSE(fs::exists(tmp_ / "home")) << "nothing is created before first use";
 }
 
-TEST_F(RuntimeDirsTest, UsesSetVariables) {
-    set("XDG_DATA_HOME", (tmp_ / "d").string());
-    set("XDG_CACHE_HOME", (tmp_ / "c").string());
-    set("XDG_CONFIG_HOME", (tmp_ / "k").string());
-    set("XDG_STATE_HOME", (tmp_ / "s/").string());
-    RuntimeDirs dirs = make("test-1_A");
-    EXPECT_EQ(dirs.data(), tmp_ / "d/bloodborne-linux");
-    EXPECT_EQ(dirs.cache(), tmp_ / "c/bloodborne-linux");
-    EXPECT_EQ(dirs.config(), tmp_ / "k/bloodborne-linux");
-    EXPECT_EQ(dirs.state(), tmp_ / "s/bloodborne-linux");
-    EXPECT_EQ(dirs.profile_data(), tmp_ / "d/bloodborne-linux/profiles/test-1_A");
-}
-
-TEST_F(RuntimeDirsTest, EmptyAndRelativeVariablesUseDefaults) {
-    set("XDG_DATA_HOME", "");
-    set("XDG_CACHE_HOME", "relative/cache");
-    RuntimeDirs dirs = make();
-    EXPECT_EQ(dirs.data(), tmp_ / "home/.local/share/bloodborne-linux");
-    EXPECT_EQ(dirs.cache(), tmp_ / "home/.cache/bloodborne-linux");
-}
-
-TEST_F(RuntimeDirsTest, NeedsHomeOnlyForDefaults) {
-    ::unsetenv("HOME");
-    EXPECT_THROW(make(), std::runtime_error);
-    set("HOME", "");
-    EXPECT_THROW(make(), std::runtime_error);
-    for (const char* key : env_keys) {
+TEST_F(RuntimeDirsTest, IgnoresXdgAndHome) {
+    for (const char* key : {"HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
+                            "XDG_STATE_HOME"}) {
         set(key, (tmp_ / key).string());
     }
-    ::unsetenv("HOME");
-    EXPECT_EQ(make().data(), tmp_ / "XDG_DATA_HOME/bloodborne-linux");
+    set("BB_USER_DIR", (tmp_ / "u/").string());
+    RuntimeDirs dirs = make("test-1_A");
+    EXPECT_EQ(dirs.root(), tmp_ / "u");
+    EXPECT_EQ(dirs.cache(), tmp_ / "u/cache");
+    EXPECT_EQ(dirs.profile_data(), tmp_ / "u/profiles/test-1_A");
+}
+
+TEST_F(RuntimeDirsTest, CacheDirOverridesOnlyTheCache) {
+    set("BB_CACHE_DIR", (tmp_ / "warm").string());
+    RuntimeDirs dirs = make();
+    EXPECT_EQ(dirs.cache(), tmp_ / "warm");
+    EXPECT_EQ(dirs.root(), tmp_ / "home/user");
+    dirs.ensure(dirs.cache() / "pipeline");
+    EXPECT_TRUE(fs::is_directory(tmp_ / "warm/pipeline"));
+}
+
+TEST_F(RuntimeDirsTest, WithoutUserDirTheFolderIsNextToTheBinary) {
+    std::error_code ec;
+    EXPECT_EQ(bb::common::executable_dir(), fs::read_symlink("/proc/self/exe", ec).parent_path());
+    // Empty and relative values count as unset.
+    for (const std::string value : {"", "relative/user"}) {
+        set("BB_USER_DIR", value);
+        set("BB_CACHE_DIR", value);
+        const fs::path expected = fs::weakly_canonical(bb::common::executable_dir() / "user");
+        if (expected.string().starts_with(fs::weakly_canonical(bb::common::source_dir()).string())) {
+            // A test binary in the build tree: refused, and the message says what to set.
+            try {
+                make();
+                ADD_FAILURE() << "a folder inside the checkout was accepted";
+            } catch (const std::runtime_error& e) {
+                EXPECT_NE(std::string(e.what()).find("BB_USER_DIR"), std::string::npos) << e.what();
+            }
+        } else {
+            EXPECT_EQ(make().root(), expected);
+            EXPECT_EQ(make().cache(), expected / "cache");
+        }
+    }
 }
 
 TEST_F(RuntimeDirsTest, ProfileNames) {
@@ -132,25 +153,35 @@ TEST_F(RuntimeDirsTest, ProfileNames) {
 TEST_F(RuntimeDirsTest, RefusesDirectoriesInsideTheGameDirectory) {
     fs::path game = tmp_ / "game";
     fs::create_directory(game);
-    set("XDG_DATA_HOME", (game / "data").string());
+    set("BB_USER_DIR", (game / "user").string());
     EXPECT_THROW(make("default", {game}), std::runtime_error);
     // Also through a symlink and with a trailing slash on the game directory.
     fs::create_directory_symlink(game, tmp_ / "link");
-    set("XDG_DATA_HOME", (tmp_ / "link/x").string());
+    set("BB_USER_DIR", (tmp_ / "link/x").string());
     EXPECT_THROW(make("default", {tmp_ / "game/"}), std::runtime_error);
-    // And the other way round: the game inside a runtime directory.
-    set("XDG_DATA_HOME", (tmp_ / "outer").string());
-    EXPECT_THROW(make("default", {tmp_ / "outer/bloodborne-linux/game"}), std::runtime_error);
-    // A sibling with a common prefix is fine.
-    set("XDG_DATA_HOME", (tmp_ / "game-data").string());
+    // And the other way round: the game inside the user folder.
+    set("BB_USER_DIR", (tmp_ / "outer").string());
+    EXPECT_THROW(make("default", {tmp_ / "outer/game"}), std::runtime_error);
+    // The cache alone counts too.
+    set("BB_USER_DIR", (tmp_ / "elsewhere").string());
+    set("BB_CACHE_DIR", (game / "cache").string());
+    EXPECT_THROW(make("default", {game}), std::runtime_error);
+    ::unsetenv("BB_CACHE_DIR");
+    // A sibling with a common prefix is fine, and the game may sit next to user/.
+    set("BB_USER_DIR", (tmp_ / "game-data").string());
     EXPECT_NO_THROW(make("default", {game}));
+    set("BB_USER_DIR", (tmp_ / "folder/user").string());
+    EXPECT_NO_THROW(make("default", {tmp_ / "folder/game"}));
     EXPECT_FALSE(fs::exists(tmp_ / "game-data"));
     EXPECT_TRUE(fs::is_empty(game));
 }
 
 TEST_F(RuntimeDirsTest, RefusesDirectoriesInsideTheSourceCheckout) {
     // Only computes paths: nothing is created in the checkout.
-    set("XDG_CACHE_HOME", (bb::common::source_dir() / "build").string());
+    set("BB_USER_DIR", (bb::common::source_dir() / "build").string());
+    EXPECT_THROW(make(), std::runtime_error);
+    set("BB_USER_DIR", (tmp_ / "u").string());
+    set("BB_CACHE_DIR", (bb::common::source_dir() / "build").string());
     EXPECT_THROW(make(), std::runtime_error);
 }
 
@@ -168,7 +199,7 @@ TEST_F(RuntimeDirsTest, EnsureCreatesWithMode0700) {
 }
 
 TEST_F(RuntimeDirsTest, EnsureKeepsModeOfExistingDirectories) {
-    set("XDG_STATE_HOME", tmp_.string());
+    set("BB_USER_DIR", tmp_.string());
     RuntimeDirs dirs = make();
     EXPECT_EQ(mode(tmp_), 0700u);  // mkdtemp
     ::chmod(tmp_.c_str(), 0755);
@@ -204,10 +235,37 @@ TEST_F(RuntimeDirsTest, EnsureRefusesSymlinksBelowTheBase) {
     fs::create_symlink(tmp_ / "missing", dirs.data() / "dangling");
     EXPECT_THROW(dirs.ensure(dirs.data() / "dangling/x"), fs::filesystem_error);
     EXPECT_FALSE(fs::exists(tmp_ / "missing"));
-    fs::create_directories(dirs.state().parent_path());
-    fs::create_directory_symlink(game, dirs.state());
-    EXPECT_THROW(dirs.ensure(dirs.logs()), fs::filesystem_error);
+    set("BB_USER_DIR", (tmp_ / "second").string());
+    RuntimeDirs second = make("default", {game});
+    fs::create_directory_symlink(game, second.root());
+    EXPECT_THROW(second.ensure(second.logs()), fs::filesystem_error);
     EXPECT_TRUE(fs::is_empty(game));
+}
+
+TEST_F(RuntimeDirsTest, LibraryCachesGoBelowTheCache) {
+    RuntimeDirs dirs = make();
+    bb::common::redirect_library_caches(dirs);
+    const fs::path system = dirs.cache() / "system";
+    EXPECT_EQ(env("XDG_CACHE_HOME"), system.string());
+    EXPECT_EQ(env("MESA_SHADER_CACHE_DIR"), system.string());
+    EXPECT_EQ(env("__GL_SHADER_DISK_CACHE_PATH"), (system / "nvidia").string());
+    EXPECT_TRUE(fs::is_directory(system / "nvidia"));
+    EXPECT_EQ(std::getenv("XDG_CONFIG_HOME"), nullptr) << "only caches are redirected";
+    EXPECT_EQ(std::getenv("XDG_DATA_HOME"), nullptr);
+}
+
+TEST_F(RuntimeDirsTest, LibraryCachesAreRedirectedEvenWhenTheFolderIsReadOnly) {
+    if (::geteuid() == 0) {
+        GTEST_SKIP() << "root writes anywhere";
+    }
+    fs::create_directories(tmp_ / "ro");
+    ::chmod((tmp_ / "ro").c_str(), 0500);
+    set("BB_USER_DIR", (tmp_ / "ro/user").string());
+    RuntimeDirs dirs = make();
+    EXPECT_THROW(dirs.ensure(dirs.root()), fs::filesystem_error);
+    bb::common::redirect_library_caches(dirs);
+    EXPECT_EQ(env("XDG_CACHE_HOME"), (dirs.cache() / "system").string());
+    ::chmod((tmp_ / "ro").c_str(), 0700);
 }
 
 }  // namespace

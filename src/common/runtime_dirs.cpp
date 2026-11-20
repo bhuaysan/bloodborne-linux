@@ -14,8 +14,6 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr std::string_view app_name = "bloodborne-linux";
-
 // An absolute path from the environment variable `key`. Unset, empty and relative values count
 // as unset.
 std::optional<fs::path> absolute_env(const char* key) {
@@ -46,27 +44,23 @@ bool is_within(const fs::path& inner, const fs::path& outer) {
     return std::mismatch(out.begin(), out.end(), in.begin(), in.end()).first == out.end();
 }
 
-// `key` if set, else $HOME/`fallback`, with bloodborne-linux/ appended. The result is normalised,
-// with symlinks resolved where the path exists, so the containment checks compare real paths.
-fs::path base_dir(const char* key, const char* fallback) {
-    auto path = absolute_env(key);
-    if (!path) {
-        auto home = absolute_env("HOME");
-        if (!home) {
-            throw std::runtime_error(std::string(key) + " and HOME are unset, empty or relative");
-        }
-        path = *home / fallback;
-    }
-    return normal(fs::weakly_canonical(*path / app_name));
-}
+// `path` normalised, with symlinks resolved where it exists, so the containment checks compare
+// real paths.
+fs::path real(const fs::path& path) { return normal(fs::weakly_canonical(path)); }
 
-void check_not_overlapping(const fs::path& dir, const fs::path& forbidden) {
+void check_not_overlapping(const fs::path& dir, const fs::path& forbidden, bool from_variable) {
     fs::path other = normal(fs::weakly_canonical(fs::absolute(forbidden)));
     if (is_within(dir, other) || is_within(other, dir)) {
-        throw std::runtime_error("runtime directory " + dir.string() + " overlaps " +
-                                 other.string() + " (game or source directory)");
+        std::string message = "runtime directory " + dir.string() + " overlaps " + other.string() +
+                              " (game or source directory)";
+        if (!from_variable) {
+            message += "; set BB_USER_DIR to a directory outside both";
+        }
+        throw std::runtime_error(message);
     }
 }
+
+void set_env(const char* key, const fs::path& value) { ::setenv(key, value.c_str(), 1); }
 
 }  // namespace
 
@@ -86,6 +80,15 @@ bool valid_profile_name(std::string_view name) {
 
 fs::path source_dir() { return fs::path(BB_SOURCE_DIR); }
 
+fs::path executable_dir() {
+    std::error_code ec;
+    const fs::path exe = fs::read_symlink("/proc/self/exe", ec);
+    if (ec || !exe.is_absolute()) {
+        throw std::runtime_error("cannot find the running program's folder (/proc/self/exe)");
+    }
+    return exe.parent_path();
+}
+
 RuntimeDirs RuntimeDirs::from_environment(std::string_view profile,
                                           const std::vector<fs::path>& forbidden) {
     if (!valid_profile_name(profile)) {
@@ -94,17 +97,19 @@ RuntimeDirs RuntimeDirs::from_environment(std::string_view profile,
     }
     RuntimeDirs dirs;
     dirs.profile_ = std::string(profile);
-    dirs.data_ = base_dir("XDG_DATA_HOME", ".local/share");
-    dirs.cache_ = base_dir("XDG_CACHE_HOME", ".cache");
-    dirs.config_ = base_dir("XDG_CONFIG_HOME", ".config");
-    dirs.state_ = base_dir("XDG_STATE_HOME", ".local/state");
+    const auto user_dir = absolute_env("BB_USER_DIR");
+    const auto cache_dir = absolute_env("BB_CACHE_DIR");
+    dirs.root_ = real(user_dir ? *user_dir : executable_dir() / "user");
+    dirs.data_ = dirs.root_;
+    dirs.config_ = dirs.root_;
+    dirs.state_ = dirs.root_;
+    dirs.cache_ = cache_dir ? real(*cache_dir) : dirs.root_ / "cache";
 
     std::vector<fs::path> refused = forbidden;
     refused.push_back(source_dir());
-    for (const fs::path* dir : {&dirs.data_, &dirs.cache_, &dirs.config_, &dirs.state_}) {
-        for (const fs::path& other : refused) {
-            check_not_overlapping(*dir, other);
-        }
+    for (const fs::path& other : refused) {
+        check_not_overlapping(dirs.root_, other, user_dir.has_value());
+        check_not_overlapping(dirs.cache_, other, user_dir.has_value() || cache_dir.has_value());
     }
     return dirs;
 }
@@ -126,8 +131,8 @@ fs::path RuntimeDirs::ensure(const fs::path& dir) const {
     if (!target.is_absolute() || !owner) {
         throw std::logic_error("not a runtime directory: " + dir.string());
     }
-    // Create each missing component top-down, so parents above bloodborne-linux/ (for example
-    // ~/.local/state) also get 0700, as the XDG spec asks.
+    // Create each missing component top-down, so a missing root and its missing parents get 0700
+    // too.
     fs::path current;
     for (const fs::path& part : target) {
         current /= part;
@@ -155,6 +160,18 @@ fs::path RuntimeDirs::ensure(const fs::path& dir) const {
                                                    std::generic_category()));
     }
     return target;
+}
+
+void redirect_library_caches(const RuntimeDirs& dirs) {
+    const fs::path system = dirs.cache() / "system";
+    try {
+        dirs.ensure(system / "nvidia");  // NVIDIA's driver may not create its folder itself
+    } catch (const std::exception&) {
+        // The caller reports a folder it can't write; the libraries then fail to write as well.
+    }
+    set_env("XDG_CACHE_HOME", system);
+    set_env("MESA_SHADER_CACHE_DIR", system);
+    set_env("__GL_SHADER_DISK_CACHE_PATH", system / "nvidia");
 }
 
 }  // namespace bb::common

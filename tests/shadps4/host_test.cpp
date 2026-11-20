@@ -36,24 +36,22 @@ TEST(ShadPs4Host, TscIsTheProcessClock) {
     EXPECT_LE(tsc, after);
 }
 
-// shadPS4's user directories land in the runtime's XDG directories. GetUserPath reads the
+// shadPS4's user directories land in the runtime's user folder. GetUserPath reads the
 // environment once, and nothing else in this binary calls it.
-TEST(ShadPs4Host, UserPathsAreXdgDirectories) {
-    ::setenv("XDG_DATA_HOME", "/nonexistent-bb-test/data", 1);
-    ::setenv("XDG_CACHE_HOME", "/nonexistent-bb-test/cache", 1);
-    ::setenv("XDG_STATE_HOME", "/nonexistent-bb-test/state", 1);
-    ::setenv("XDG_CONFIG_HOME", "/nonexistent-bb-test/config", 1);
+TEST(ShadPs4Host, UserPathsAreInTheUserFolder) {
+    ::setenv("BB_USER_DIR", "/nonexistent-bb-test/user", 1);
     using Common::FS::GetUserPath;
     using Common::FS::PathType;
     const std::filesystem::path base{"/nonexistent-bb-test"};
-    EXPECT_EQ(GetUserPath(PathType::UserDir), base / "data/bloodborne-linux");
-    EXPECT_EQ(GetUserPath(PathType::LogDir), base / "state/bloodborne-linux/logs");
-    EXPECT_EQ(GetUserPath(PathType::CacheDir), base / "cache/bloodborne-linux/pipeline");
+    EXPECT_EQ(GetUserPath(PathType::UserDir), base / "user");
+    EXPECT_EQ(GetUserPath(PathType::LogDir), base / "user/logs");
+    EXPECT_EQ(GetUserPath(PathType::CacheDir), base / "user/cache/pipeline");
     EXPECT_FALSE(std::filesystem::exists(base));
 }
 
 // Any other directory ends the process: nothing in the port may write to an unplanned place.
 TEST(ShadPs4HostDeathTest, UnplannedUserPathIsFatal) {
+    ::setenv("BB_USER_DIR", "/nonexistent-bb-test/user", 1);  // when it runs on its own
     EXPECT_DEATH(static_cast<void>(Common::FS::GetUserPath(Common::FS::PathType::GameDataDir)),
                  "GetUserPath");
 }

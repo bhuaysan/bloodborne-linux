@@ -50,11 +50,11 @@ class CommandTests(unittest.TestCase):
             run_mock.return_value = subprocess.CompletedProcess([], 1, stdout="-- No entries --\n")
             self.assertIsNotNone(rig.kernel_journal(0))
 
-    def test_bb_run_uses_per_run_xdg_dirs_and_no_window(self) -> None:
+    def test_bb_run_uses_a_per_run_user_dir_and_no_window(self) -> None:
         with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
             program = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"))
-        self.assertEqual(program.env["XDG_DATA_HOME"], "/w/data")
-        self.assertEqual(program.env["XDG_STATE_HOME"], "/w/state")
+        self.assertEqual(program.env["BB_USER_DIR"], "/w/user")
+        self.assertEqual(rig.bb_run_profile_data(Path("/w")), Path("/w/user/profiles/rig"))
         self.assertEqual(program.env["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"], "1")
         self.assertEqual(program.argv[:3], ["/b/bb-run", "--game-dir", "/g"])
         self.assertIn("--headless", program.argv)
@@ -182,8 +182,9 @@ class CommandTests(unittest.TestCase):
             cold = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"))
             warm = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"),
                                       Path("/c"))
-        self.assertEqual(cold.env["XDG_CACHE_HOME"], "/w/cache")
-        self.assertEqual(warm.env["XDG_CACHE_HOME"], "/c")
+        self.assertNotIn("BB_CACHE_DIR", cold.env)
+        self.assertEqual(cold.env["BB_USER_DIR"], "/w/user")
+        self.assertEqual(warm.env["BB_CACHE_DIR"], "/c")
 
     def test_zenity_stub_answers_without_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

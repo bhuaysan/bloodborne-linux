@@ -84,7 +84,7 @@ void Common::SetCurrentThreadName(const char* name) {
 
 namespace Common::FS {
 
-// shadPS4's user directories, inside the runtime's XDG directories (bb::common::RuntimeDirs).
+// shadPS4's user directories, inside the runtime's user folder (bb::common::RuntimeDirs).
 // Nothing is created here. Types the port never asks for end the process.
 const std::filesystem::path& GetUserPath(PathType user_path) {
     static const std::map<PathType, std::filesystem::path> paths = [] {

@@ -397,6 +397,7 @@ int start(const bb::tools::RunOptions& options) {
     game_dir = fs::absolute(*game_dir);
     const bb::common::RuntimeDirs dirs =
         bb::common::RuntimeDirs::from_environment(options.profile, {*game_dir});
+    bb::common::redirect_library_caches(dirs);  // before SDL and the Vulkan loader
     if (options.log_file) {
         const fs::path log = bb::common::open_log_file(dirs);
         bb::common::log(LogLevel::info, channel, "log file {}", log.string());
@@ -527,7 +528,7 @@ int main(int argc, char** argv) {
                 config_file = bb::common::default_config_path();
             }
             if (!config_file) {
-                std::cerr << "bb-run: no config file location: set HOME or XDG_CONFIG_HOME\n";
+                std::cerr << "bb-run: no config file location: the game's folder can't be found, or set BB_USER_DIR\n";
                 return 1;
             }
             const bb::common::SetupResult r = bb::common::setup_game_folder(*setup, *config_file);

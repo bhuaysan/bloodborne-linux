@@ -34,12 +34,12 @@ protected:
         char pattern[] = "/tmp/bb-save-XXXXXX";
         ASSERT_NE(::mkdtemp(pattern), nullptr);
         tmp_ = pattern;
-        ::setenv("XDG_DATA_HOME", (tmp_ / "data").c_str(), 1);
+        ::setenv("BB_USER_DIR", (tmp_ / "user").c_str(), 1);
         reset_save_data();
     }
     void TearDown() override {
         reset_save_data();
-        ::unsetenv("XDG_DATA_HOME");
+        ::unsetenv("BB_USER_DIR");
         fs::remove_all(tmp_);
     }
 
@@ -67,7 +67,7 @@ protected:
 // The game's save path: mount, on "not found" mount again with the create bit (0x2842481).
 TEST_F(SaveDataTest, MountCreatesTheDirectoryInTheProfile) {
     const fs::path root = use_profile("alice");
-    EXPECT_EQ(root, tmp_ / "data" / "bloodborne-linux" / "profiles" / "alice" / "savedata");
+    EXPECT_EQ(root, tmp_ / "user" / "profiles" / "alice" / "savedata");
     SaveMountOutput out{};
     EXPECT_EQ(mount("SPRJ0000", 2, &out), save_not_found);
     EXPECT_FALSE(fs::exists(root / "SPRJ0000"));

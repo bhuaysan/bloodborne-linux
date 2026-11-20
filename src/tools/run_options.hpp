@@ -50,7 +50,7 @@ inline constexpr std::string_view run_usage =
     "  --present-mode MODE  the swapchain's present mode, falling back to fifo when the device\n"
     "                       lacks it (default: mailbox)\n"
     "  --no-pipeline-cache  neither read nor write the shader and pipeline cache on disk (below\n"
-    "                       $XDG_CACHE_HOME/bloodborne-linux); every shader is translated and\n"
+    "                       user/cache in the game's folder); every shader is translated and\n"
     "                       every pipeline built again, for comparison runs\n"
     "  --sync-pipelines     create every new pipeline on the GPU thread, so no draw is skipped\n"
     "                       while its pipeline is created on a worker thread (the default)\n"

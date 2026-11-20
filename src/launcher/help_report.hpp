@@ -28,7 +28,7 @@ std::vector<Problem> order_problems(const ProblemInput& in);
 
 // ---- The capture of the last run ------------------------------------------------------------
 // The launcher sends the output of bb-run to last_run_log(state) and writes how it ended to
-// last_run_status(state), both in the XDG state directory's logs folder.
+// last_run_status(state), both in the logs folder of the runtime's state directory (user/logs).
 std::filesystem::path last_run_log(const std::filesystem::path& state_dir);
 std::filesystem::path last_run_status(const std::filesystem::path& state_dir);
 // "exit status 3", "killed by signal 11" ... from a waitpid status.

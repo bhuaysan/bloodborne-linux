@@ -1,4 +1,4 @@
-// bb-run's config file, $XDG_CONFIG_HOME/bloodborne-linux/config.toml (docs/design/launcher.md,
+// bb-run's config file, user/config.toml in the game's folder (docs/design/launcher.md,
 // "Config file"). One small reader and writer that bb-run and the launcher both link.
 //
 // The format is the flat subset of TOML that the settings need: `key = value` lines, strings in
@@ -138,8 +138,8 @@ void write_config(const std::filesystem::path& path, const Config& config);
 // ConfigError like read_config and write_config.
 void update_config(const std::filesystem::path& path, const std::function<void(Config&)>& change);
 
-// $XDG_CONFIG_HOME/bloodborne-linux/config.toml (HOME/.config when unset or relative). Nothing
-// when neither is usable.
+// config.toml in RuntimeDirs::config() (user/ next to the binary, or BB_USER_DIR). Nothing when
+// that folder can't be determined.
 std::optional<std::filesystem::path> default_config_path();
 
 }  // namespace bb::common

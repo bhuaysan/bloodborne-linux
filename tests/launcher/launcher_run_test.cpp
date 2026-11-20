@@ -41,13 +41,12 @@ bb::test::Result run_script(const Dir& dir, const std::string& script) {
     std::ofstream(dir.path() / "script.txt") << script;
     const std::string d = dir.path().string();
     return bb::test::run(std::format(
-        "cd {} && env -u BB_GAME_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
+        "cd {} && env -u BB_GAME_DIR -u BB_CACHE_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
         "SDL_VIDEO_DRIVER=offscreen SDL_RENDER_DRIVER=software BB_LAUNCHER_SCRIPT={} "
         "BB_LAUNCHER_CLIPBOARD_LOG={} "
-        "HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} XDG_CACHE_HOME={} XDG_STATE_HOME={} timeout 60 {} 2>&1",
+        "HOME={} BB_USER_DIR={} timeout 60 {} 2>&1",
         quote(d), quote(d + "/script.txt"), quote(d + "/clipboard.txt"), quote(d + "/home"),
-        quote(d + "/config"), quote(d + "/data"), quote(d + "/cache"), quote(d + "/state"),
-        quote(BB_LAUNCHER_PATH)));
+        quote(d + "/user"), quote(BB_LAUNCHER_PATH)));
 }
 
 bool is_png(const fs::path& file) {
@@ -91,11 +90,11 @@ std::string play_with_fake_bb_run(const Dir& dir, const fs::path& game, int exit
         game.string(), before_play, (dir.path() / "shot.png").string());
     const std::string d = dir.path().string();
     result = bb::test::run(std::format(
-        "cd {} && env -u BB_GAME_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
+        "cd {} && env -u BB_GAME_DIR -u BB_CACHE_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
         "SDL_VIDEO_DRIVER=offscreen SDL_RENDER_DRIVER=software BB_LAUNCHER_SCRIPT={} "
-        "HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} XDG_CACHE_HOME={} XDG_STATE_HOME={} timeout 60 {} 2>&1",
-        quote(d), quote(d + "/script.txt"), quote(d + "/home"), quote(d + "/config"), quote(d + "/data"),
-        quote(d + "/cache"), quote(d + "/state"), quote((bin / "bb-launcher").string())));
+        "HOME={} BB_USER_DIR={} timeout 60 {} 2>&1",
+        quote(d), quote(d + "/script.txt"), quote(d + "/home"), quote(d + "/user"),
+        quote((bin / "bb-launcher").string())));
     return slurp(dir.path() / "record.txt");
 }
 
@@ -110,7 +109,7 @@ TEST(LauncherRunGame, PlayStartsBbRunWithOnlyTheConfig) {
     const std::string rec_bad = play_with_fake_bb_run(bad, game, 3, rb);
     EXPECT_EQ(rg.status, 0) << rg.output;
     EXPECT_EQ(rb.status, 0) << rb.output;
-    const std::string config = (good.path() / "config/bloodborne-linux/config.toml").string();
+    const std::string config = (good.path() / "user/config.toml").string();
     EXPECT_EQ(rec, std::format("cwd={} args=--config {}\n", (good.path() / "bin").string(), config));
     EXPECT_NE(rec_bad.find("args=--config "), std::string::npos);
     EXPECT_NE(slurp(good.path() / "shot.png"), slurp(bad.path() / "shot.png"));
@@ -134,14 +133,14 @@ TEST(LauncherRunGame, TheRunsOutputAndStatusAreCaptured) {
     bb::test::Result r;
     const fs::path bin = dir.path() / "bin";
     play_with_fake_bb_run(dir, game, 3, r);
-    EXPECT_EQ(slurp(dir.path() / "state/bloodborne-linux/logs/launcher-last-run.status"),
+    EXPECT_EQ(slurp(dir.path() / "user/logs/launcher-last-run.status"),
               "exit status 3\n");
-    const std::string log = slurp(dir.path() / "state/bloodborne-linux/logs/launcher-last-run.log");
+    const std::string log = slurp(dir.path() / "user/logs/launcher-last-run.log");
     EXPECT_NE(log.find("fake-run-stdout"), std::string::npos) << log;
     EXPECT_NE(log.find("fake-run-stderr"), std::string::npos) << log;
 }
 
-// The dump: the folder goes into the config file, only in the XDG config directory.
+// The dump: the folder goes into the config file, only in the user folder.
 TEST(LauncherRunGame, TheDumpFolderIsWrittenToTheConfig) {
     BB_REQUIRE_GAME(game);
     const Dir dir;
@@ -149,7 +148,7 @@ TEST(LauncherRunGame, TheDumpFolderIsWrittenToTheConfig) {
                                                game.string(), (dir.path() / "shot.png").string()));
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_TRUE(is_png(dir.path() / "shot.png"));
-    const fs::path config = dir.path() / "config/bloodborne-linux/config.toml";
+    const fs::path config = dir.path() / "user/config.toml";
     ASSERT_TRUE(fs::exists(config));
     EXPECT_NE(slurp(config).find(fs::canonical(game).string()), std::string::npos);
     EXPECT_FALSE(fs::exists(dir.path() / "data"));
@@ -184,7 +183,7 @@ TEST(LauncherRunGame, TheSearchTakesTheDumpUnderHome) {
                                                (dir.path() / "shot.png").string()));
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_NE(r.output.find("1 hit(s)"), std::string::npos) << r.output;
-    const fs::path config = dir.path() / "config/bloodborne-linux/config.toml";
+    const fs::path config = dir.path() / "user/config.toml";
     ASSERT_TRUE(fs::exists(config));
     EXPECT_NE(slurp(config).find(fs::canonical(folder).string()), std::string::npos);
 }
@@ -208,7 +207,7 @@ TEST(LauncherRunGame, SeveralSearchHitsSaveAnOpenPicturePage) {
              "press accept\nwait 400\nquit\n");
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_NE(r.output.find("2 hit(s)"), std::string::npos) << r.output;
-    EXPECT_EQ(slurp(dir.path() / "config/bloodborne-linux/config.toml"), "fullscreen = true\n");
+    EXPECT_EQ(slurp(dir.path() / "user/config.toml"), "fullscreen = true\n");
 }
 
 // The Help page puts the pad's focus on its first button: A copies the report at once, and the
@@ -242,7 +241,7 @@ TEST(LauncherRun, ThePicturePageSavesItsChoicesOnBack) {
     script += std::format("shot {}\npress back\nwait 3\nquit\n", (dir.path() / "shot.png").string());
     const auto r = run_script(dir, script);
     EXPECT_EQ(r.status, 0) << r.output;
-    EXPECT_EQ(slurp(dir.path() / "config/bloodborne-linux/config.toml"),
+    EXPECT_EQ(slurp(dir.path() / "user/config.toml"),
               "fullscreen = true\nfsr = true\nrcas_attenuation = 0\nframe_rate = 60\n");
 }
 
@@ -263,7 +262,7 @@ TEST(LauncherRun, ThePicturePageSavesTheImageQualityChoices) {
                           keep ? keep : (dir.path() / "shot.png").string());
     const auto r = run_script(dir, script);
     EXPECT_EQ(r.status, 0) << r.output;
-    EXPECT_EQ(slurp(dir.path() / "config/bloodborne-linux/config.toml"),
+    EXPECT_EQ(slurp(dir.path() / "user/config.toml"),
               "anisotropy = 16\nmotion_blur = false\nchromatic_aberration = false\nfov = 60\n");
 }
 

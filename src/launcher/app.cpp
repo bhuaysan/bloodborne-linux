@@ -147,7 +147,7 @@ private:
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGuiIO& io = ImGui::GetIO();
-        io.IniFilename = nullptr;  // nothing is written outside the XDG directories
+        io.IniFilename = nullptr;  // nothing is written outside user/ in the game's folder
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
         ImGui::StyleColorsDark();
         ImGuiStyle& style = ImGui::GetStyle();
@@ -176,12 +176,21 @@ private:
     }
 
     void load_config() {
-        if (const auto path = common::default_config_path()) {
-            config_path_ = *path;
-        } else {
-            notice_ = "No place for the config file: set HOME or XDG_CONFIG_HOME.";
+        std::optional<common::RuntimeDirs> dirs;
+        try {
+            dirs = common::RuntimeDirs::from_environment(common::default_profile, {});
+        } catch (const std::exception& e) {
+            notice_ = std::string("No place for the game's data: ") + e.what();
             return;
         }
+        try {
+            dirs->ensure(dirs->root());
+        } catch (const std::exception&) {
+            // Copied to /usr/bin, say: everything the game writes belongs in its own folder.
+            notice_ = "This folder can't be written. Unpack the game into a folder of its own.";
+            return;
+        }
+        config_path_ = dirs->config() / "config.toml";
         std::error_code ec;
         if (!fs::exists(config_path_, ec)) {
             return;
@@ -309,7 +318,7 @@ private:
     }
 
     // ---- the game ---------------------------------------------------------------------------
-    // The XDG state directory of the runtime, empty when HOME is not usable.
+    // The runtime's state directory (user/), empty when the game's folder can't be determined.
     fs::path state_dir() const {
         try {
             return common::RuntimeDirs::from_environment(common::default_profile, {}).state();
@@ -658,6 +667,13 @@ private:
 }  // namespace
 
 int run_launcher() {
+    // Before SDL and fontconfig start, so their caches land in the game's folder.
+    try {
+        common::redirect_library_caches(
+            common::RuntimeDirs::from_environment(common::default_profile, {}));
+    } catch (const std::exception&) {
+        // load_config reports it in the status line.
+    }
     return App().run();
 }
 

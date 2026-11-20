@@ -267,9 +267,9 @@ TEST_F(ConfigFileTest, WritingBelowAFileFails) {
     EXPECT_THROW(bb::common::write_config(dir_ / "file" / "config.toml", Config{}), ConfigError);
 }
 
-TEST_F(ConfigFileTest, DefaultPathFollowsXdgConfigHome) {
-    ASSERT_EQ(::setenv("XDG_CONFIG_HOME", dir_.c_str(), 1), 0);
-    EXPECT_EQ(bb::common::default_config_path(), dir_ / "bloodborne-linux" / "config.toml");
+TEST_F(ConfigFileTest, DefaultPathIsInTheUserDir) {
+    ASSERT_EQ(::setenv("BB_USER_DIR", dir_.c_str(), 1), 0);
+    EXPECT_EQ(bb::common::default_config_path(), dir_ / "config.toml");
 }
 
 }  // namespace

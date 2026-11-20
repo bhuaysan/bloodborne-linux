@@ -485,17 +485,15 @@ private:
     std::filesystem::path path_;
 };
 
-// Runs bb-run with `args` in `dir`, with the XDG base directories below it and without BB_LOG
-// and BB_GAME_DIR. Captures its standard output and standard error.
-// `env_args` go to env(1) before the XDG variables, e.g. "-u DISPLAY".
+// Runs bb-run with `args` in `dir`, with its user folder (BB_USER_DIR) below it and without BB_LOG,
+// BB_GAME_DIR and BB_CACHE_DIR. Captures its standard output and standard error.
+// `env_args` go to env(1) before BB_USER_DIR, e.g. "-u DISPLAY".
 Result run_bb_run(const TempDir& dir, const std::string& args, const std::string& env_args = "") {
     const std::string d = dir.path().string();
-    return bb::test::run(std::format("cd {} && env -u BB_LOG -u BB_GAME_DIR {} XDG_DATA_HOME={} "
-                                     "XDG_CACHE_HOME={} XDG_CONFIG_HOME={} XDG_STATE_HOME={} {} {} "
-                                     "2>&1",
-                                     quote(d), env_args, quote(d + "/data"), quote(d + "/cache"),
-                                     quote(d + "/config"), quote(d + "/state"),
-                                     quote(BB_RUN_PATH), args));
+    return bb::test::run(std::format("cd {} && env -u BB_LOG -u BB_GAME_DIR -u BB_CACHE_DIR {} "
+                                     "BB_USER_DIR={} {} {} 2>&1",
+                                     quote(d), env_args, quote(d + "/user"), quote(BB_RUN_PATH),
+                                     args));
 }
 
 TEST(RunOptions, SetupIgnoredArguments) {
@@ -550,8 +548,8 @@ TEST(BbRun, AMissingExplicitConfigIsAnError) {
 // The default file is read when it exists, and its bad values end the run too.
 TEST(BbRun, ReadsTheDefaultConfigFile) {
     const TempDir dir;
-    std::filesystem::create_directories(dir.path() / "config/bloodborne-linux");
-    std::ofstream(dir.path() / "config/bloodborne-linux/config.toml") << "fsr = maybe\n";
+    std::filesystem::create_directories(dir.path() / "user");
+    std::ofstream(dir.path() / "user/config.toml") << "fsr = maybe\n";
     const Result r = run_bb_run(dir, "");
     EXPECT_EQ(r.status, 2);
     EXPECT_NE(r.output.find("fsr: \"maybe\" is not true or false"), std::string::npos) << r.output;
@@ -581,8 +579,8 @@ TEST(BbRun, TheConfigFilesGameDirWinsOverTheEnvironment) {
 // A broken default config file doesn't stop --help.
 TEST(BbRun, HelpWorksWithABrokenConfigFile) {
     const TempDir dir;
-    std::filesystem::create_directories(dir.path() / "config/bloodborne-linux");
-    std::ofstream(dir.path() / "config/bloodborne-linux/config.toml") << "fsr = maybe\n";
+    std::filesystem::create_directories(dir.path() / "user");
+    std::ofstream(dir.path() / "user/config.toml") << "fsr = maybe\n";
     const Result r = run_bb_run(dir, "--help");
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_EQ(r.output, bb::tools::run_usage);
@@ -591,11 +589,11 @@ TEST(BbRun, HelpWorksWithABrokenConfigFile) {
 // An unreadable config directory is no config file, not an uncaught exception.
 TEST(BbRun, AnUnreadableConfigDirectoryIsNoConfigFile) {
     const TempDir dir;
-    std::filesystem::create_directories(dir.path() / "config/bloodborne-linux");
-    std::filesystem::permissions(dir.path() / "config/bloodborne-linux",
+    std::filesystem::create_directories(dir.path() / "user");
+    std::filesystem::permissions(dir.path() / "user",
                                  std::filesystem::perms::none);
     const Result r = run_bb_run(dir, "");
-    std::filesystem::permissions(dir.path() / "config/bloodborne-linux",
+    std::filesystem::permissions(dir.path() / "user",
                                  std::filesystem::perms::owner_all);
     EXPECT_EQ(r.status, 2) << r.output;
     EXPECT_NE(r.output.find("set BB_GAME_DIR"), std::string::npos) << r.output;
@@ -607,7 +605,7 @@ TEST(BbRun, SetupRefusesAFolderWithoutEboot) {
     const Result r = run_bb_run(dir, "--setup " + quote((dir.path() / "folder").string()));
     EXPECT_EQ(r.status, 1);
     EXPECT_NE(r.output.find("This folder has no eboot.bin."), std::string::npos) << r.output;
-    EXPECT_FALSE(std::filesystem::exists(dir.path() / "config/bloodborne-linux/config.toml"));
+    EXPECT_FALSE(std::filesystem::exists(dir.path() / "user/config.toml"));
 }
 
 // On the real dump: the folder is written to the config file, and bb-run then finds the game
@@ -618,7 +616,7 @@ TEST(BbRunGame, SetupWritesTheDumpFolderToTheConfigFile) {
     const Result r = run_bb_run(dir, "--setup " + quote(game.string()) + " --fsr");
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_NE(r.output.find("--setup ignores the rest of the command line: --fsr"), std::string::npos) << r.output;
-    const std::filesystem::path config = dir.path() / "config/bloodborne-linux/config.toml";
+    const std::filesystem::path config = dir.path() / "user/config.toml";
     ASSERT_TRUE(std::filesystem::exists(config));
     EXPECT_EQ(bb::common::read_config(config).config.game_dir, std::filesystem::canonical(game));
     const Result parent = run_bb_run(dir, "--setup " + quote(game.parent_path().string()));
@@ -636,7 +634,7 @@ TEST(BbRun, AcceptsStopAtMainLoop) {
 
 // The whole log file in the logs directory below `dir`, which must hold exactly one.
 std::string read_log_file(const TempDir& dir) {
-    const std::filesystem::path logs = dir.path() / "state/bloodborne-linux/logs";
+    const std::filesystem::path logs = dir.path() / "user/logs";
     std::vector<std::filesystem::path> files;
     for (const auto& entry : std::filesystem::directory_iterator(logs)) {
         files.push_back(entry.path());
@@ -676,7 +674,7 @@ TEST(BbRunGame, RunsTheEntry) {
     const std::string log = read_log_file(dir);
     EXPECT_NE(log.find("run: calling the entry"), std::string::npos) << log;
     EXPECT_TRUE(std::filesystem::is_directory(dir.path() /
-                                              "data/bloodborne-linux/profiles/test/savedata"));
+                                              "user/profiles/test/savedata"));
 }
 
 // The goal of M3 (docs/design/m3-core-os.md, "Goal"): the game reaches its main loop, and bb-run
