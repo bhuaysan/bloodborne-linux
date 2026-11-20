@@ -96,21 +96,14 @@ inline constexpr std::string_view run_usage =
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
 
-// --resolution: the engine's frame buffer size (docs/design/resolution.md). 16:9 sizes with the
-// width a multiple of 64, so the half- and quarter-size targets have whole sides as at 1080p, or
-// one of the wide sizes below, the ones checked (#667): bb-run widens the projection to their
-// aspect (bb::game::set_screen_aspect), and the HUD and menus stay at a centred 16:9 area. Above
-// 1080p bb-run grows the engine's graphics heap with the size (set_graphics_heap_size); 3840x2160
-// is the largest 16:9 size checked.
-inline constexpr unsigned default_resolution_width = 1920;
-inline constexpr unsigned default_resolution_height = 1080;
-inline constexpr unsigned max_resolution_width = 3840;
-inline constexpr unsigned max_resolution_height = 2160;
-inline constexpr unsigned resolution_width_step = 64;
-struct WideResolution {
-    unsigned width, height;
-};
-inline constexpr WideResolution wide_resolutions[] = {{2560, 1080}, {3440, 1440}, {5120, 1440}};
+// --resolution: the engine's frame buffer size, common::valid_resolution. Above 1080p bb-run grows
+// the engine's graphics heap with the size (set_graphics_heap_size).
+using common::default_resolution_height;
+using common::default_resolution_width;
+using common::max_resolution_height;
+using common::max_resolution_width;
+using common::resolution_width_step;
+using common::wide_resolutions;
 
 // --load-hold: the game's minimum time of a death's loading page, and the most the option takes
 // (bb::game::game_load_hold, #684).

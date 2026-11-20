@@ -45,6 +45,38 @@ inline constexpr bool valid_anisotropy(unsigned level) {
     return false;
 }
 
+// The frame buffer sizes bb-run --resolution takes (docs/design/resolution.md). 16:9 sizes with
+// the width a multiple of 64, so the half- and quarter-size targets have whole sides as at 1080p,
+// or one of the wide sizes, the ones checked (#667): bb-run widens the projection to their aspect
+// (bb::game::set_screen_aspect), and the HUD and menus stay at a centred 16:9 area. 3840x2160 is
+// the largest 16:9 size checked.
+inline constexpr unsigned default_resolution_width = 1920;
+inline constexpr unsigned default_resolution_height = 1080;
+inline constexpr unsigned max_resolution_width = 3840;
+inline constexpr unsigned max_resolution_height = 2160;
+inline constexpr unsigned resolution_width_step = 64;
+struct WideResolution {
+    unsigned width, height;
+};
+inline constexpr WideResolution wide_resolutions[] = {{2560, 1080}, {3440, 1440}, {5120, 1440}};
+
+inline constexpr bool is_wide_resolution(unsigned width, unsigned height) {
+    for (const WideResolution r : wide_resolutions) {
+        if (r.width == width && r.height == height) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline constexpr bool valid_resolution(unsigned width, unsigned height) {
+    const bool sixteen_nine =
+        width >= default_resolution_width && width <= max_resolution_width &&
+        width % resolution_width_step == 0 &&
+        static_cast<unsigned long long>(width) * 9 == static_cast<unsigned long long>(height) * 16;
+    return sixteen_nine || is_wide_resolution(width, height);
+}
+
 inline constexpr bool valid_frame_rate(unsigned fps) {
     for (const unsigned rate : frame_rates) {
         if (fps == rate) {
@@ -58,6 +90,7 @@ struct Config {
     std::optional<std::filesystem::path> game_dir;  // game_dir: absolute, or "~/..." for $HOME
     std::optional<std::string> profile;             // profile: valid_profile_name
     std::optional<std::pair<unsigned, unsigned>> window_size;  // window_size = "WIDTHxHEIGHT"
+    std::optional<std::pair<unsigned, unsigned>> resolution;  // "WIDTHxHEIGHT", valid_resolution
     std::optional<bool> fullscreen;                 // fullscreen
     std::optional<bool> fsr;                        // fsr
     std::optional<bool> rcas;                       // rcas

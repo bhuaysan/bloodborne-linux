@@ -370,6 +370,7 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     c.game_dir = std::filesystem::path("/g");
     c.profile = "cfg";
     c.window_size = std::pair{2560u, 1440u};
+    c.resolution = std::pair{5120u, 1440u};
     c.fullscreen = true;
     c.fsr = true;
     c.rcas = false;
@@ -386,6 +387,8 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     EXPECT_EQ(o.profile, "cfg");
     EXPECT_EQ(o.window_width, 2560u);
     EXPECT_EQ(o.window_height, 1440u);
+    EXPECT_EQ(o.resolution_width, 5120u);
+    EXPECT_EQ(o.resolution_height, 1440u);
     EXPECT_TRUE(o.fullscreen);
     EXPECT_TRUE(o.fsr);
     EXPECT_FALSE(o.rcas);
@@ -405,6 +408,8 @@ TEST(RunOptionsConfig, EmptyConfigKeepsTheDefaults) {
     EXPECT_FALSE(o.game_dir);
     EXPECT_EQ(o.profile, d.profile);
     EXPECT_EQ(o.window_width, d.window_width);
+    EXPECT_EQ(o.resolution_width, d.resolution_width);
+    EXPECT_EQ(o.resolution_height, d.resolution_height);
     EXPECT_EQ(o.frame_rate, d.frame_rate);
     EXPECT_EQ(o.fsr, d.fsr);
     EXPECT_EQ(o.anisotropy, 0u);

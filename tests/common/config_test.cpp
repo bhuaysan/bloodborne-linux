@@ -129,6 +129,27 @@ TEST(Config, TakesEachAnisotropyLevel) {
     }
 }
 
+TEST(Config, TakesTheResolutionsBbRunTakes) {
+    for (const auto& [w, h] : {std::pair{1920u, 1080u}, std::pair{2560u, 1440u},
+                               std::pair{3840u, 2160u}, std::pair{2560u, 1080u},
+                               std::pair{3440u, 1440u}, std::pair{5120u, 1440u}}) {
+        Config c;
+        c.resolution = std::pair{w, h};
+        EXPECT_EQ(parse_config(std::format("resolution = \"{}x{}\"", w, h), "c").config, c);
+        EXPECT_EQ(parse_config(bb::common::format_config(c), "c").config, c);
+    }
+    for (const char* value : {"\"1280x720\"", "\"1950x1097\"", "\"4480x2520\"",
+                              "\"3440x1080\"", "\"2560x1080x1\"", "\"x\"", "2560x1080"}) {
+        try {
+            parse_config(std::format("resolution = {}", value), "c.toml");
+            ADD_FAILURE() << value;
+        } catch (const bb::common::ConfigError& e) {
+            EXPECT_NE(std::string(e.what()).find("c.toml:1: resolution: "), std::string::npos)
+                << e.what();
+        }
+    }
+}
+
 TEST(Config, ExpandsTheHomeDirectoryInGameDir) {
     const char* old = std::getenv("HOME");
     const std::string saved = old ? old : "";
@@ -197,6 +218,7 @@ TEST_F(ConfigFileTest, WriteThenReadGivesTheSameConfig) {
     c.game_dir = fs::path("/games/with \"quotes\"");
     c.profile = "p-1";
     c.window_size = std::pair{1920u, 1080u};
+    c.resolution = std::pair{3440u, 1440u};
     c.fullscreen = false;
     c.fsr = true;
     c.rcas = true;

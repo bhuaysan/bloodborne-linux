@@ -179,6 +179,20 @@ ParsedConfig parse_config(std::string_view text, std::string_view source) {
                                    max_window_side));
             }
             c.window_size = std::pair{w, h};
+        } else if (key == "resolution") {
+            const std::string& s = want_string();
+            const std::size_t x = s.find('x');
+            unsigned w = 0;
+            unsigned h = 0;
+            if (x == std::string::npos || !whole_number(std::string_view(s).substr(0, x), w) ||
+                !whole_number(std::string_view(s).substr(x + 1), h) || !valid_resolution(w, h)) {
+                p.fail(std::format(
+                    "resolution: \"{}\" is not a 16:9 WIDTHxHEIGHT from {}x{} to {}x{} with a "
+                    "width that is a multiple of {}, nor 2560x1080, 3440x1440 or 5120x1440",
+                    s, default_resolution_width, default_resolution_height, max_resolution_width,
+                    max_resolution_height, resolution_width_step));
+            }
+            c.resolution = std::pair{w, h};
         } else if (key == "fullscreen") {
             c.fullscreen = want_bool();
         } else if (key == "fsr") {
@@ -259,6 +273,9 @@ std::string format_config(const Config& c) {
     }
     if (c.window_size) {
         out += std::format("window_size = \"{}x{}\"\n", c.window_size->first, c.window_size->second);
+    }
+    if (c.resolution) {
+        out += std::format("resolution = \"{}x{}\"\n", c.resolution->first, c.resolution->second);
     }
     flag("fullscreen", c.fullscreen);
     flag("fsr", c.fsr);

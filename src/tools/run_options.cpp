@@ -62,14 +62,7 @@ void parse_resolution(std::string_view value, RunOptions& options) {
     };
     const bool parsed = x != std::string_view::npos && side(value.substr(0, x), width) &&
                         side(value.substr(x + 1), height);
-    const bool sixteen_nine =
-        width >= default_resolution_width && width <= max_resolution_width &&
-        width % resolution_width_step == 0 &&
-        static_cast<unsigned long long>(width) * 9 == static_cast<unsigned long long>(height) * 16;
-    const bool wide = std::ranges::any_of(wide_resolutions, [&](const WideResolution& r) {
-        return r.width == width && r.height == height;
-    });
-    if (!parsed || !(sixteen_nine || wide)) {
+    if (!parsed || !common::valid_resolution(width, height)) {
         std::string sizes;
         for (std::size_t i = 0; i < std::size(wide_resolutions); ++i) {
             const char* sep = i == 0 ? "" : i + 1 == std::size(wide_resolutions) ? " or " : ", ";
@@ -149,6 +142,10 @@ RunOptions options_from_config(const common::Config& config) {
     if (config.window_size) {
         options.window_width = config.window_size->first;
         options.window_height = config.window_size->second;
+    }
+    if (config.resolution) {
+        options.resolution_width = config.resolution->first;
+        options.resolution_height = config.resolution->second;
     }
     options.fullscreen = config.fullscreen.value_or(options.fullscreen);
     options.fsr = config.fsr.value_or(options.fsr);
