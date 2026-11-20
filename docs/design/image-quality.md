@@ -107,6 +107,15 @@ The block holds the same values for these fields in the clinic and in Central Yh
   | Yharnam `02-turning`, sharpness | 260.3 (262.5) | 389.8 | 317.2 | blur: 335.1 |
   With motion blur off every still shot stays within the run-to-run noise (mean difference 0.1 to 0.4 of 255, 1.05 on the clinic's `03-turned`, where the camera settles differently each run). Values in brackets are a second default run. `rig.py compare main-menu` at the default against the two reference runs: ratio to the noise floor 1.019 and 1.007 for this branch, 1.019 and 0.982 for `main`, all within it.
 
+## Anisotropic filtering (#658)
+
+`bb-run --anisotropy 1|2|4|8|16` and the config key `anisotropy` set the anisotropy of samplers with linear magnification and minification and mipmaps (a mip filter and a LOD range). Point-filtered samplers, those without mipmaps and depth-compare samplers keep the game's value, and so does every sampler by default (`game`). 1 turns anisotropic filtering off on the samplers it reaches. The choice is `VideoCore::ChooseAnisotropy` (`src/shadps4/video_core/texture_cache/sampler_anisotropy.h`), clamped to the device's `maxSamplerAnisotropy`.
+
+- **What the game asks for.** A probe of every new sampler in the clinic (20 in all) found three that the option reaches: the main material sampler, which the game already sets to anisotropic at 4x, and two trilinear samplers without it. One more trilinear sampler asks for a ratio of 16 but with a non-anisotropic filter, so it gets none from the game. The game does not ask for little anisotropy on its main materials, so 16x gains less than the issue expected.
+- **Check.** Runs on 2026-11-20, `yharnam-route` at 60, three runs each at the default and at 16, and one at 1. `00-start` has the same placement in all seven runs. Mean edge strength of the far ground: default 16.64 to 16.67, 16x 16.65 to 16.79, 1x 16.11. Walls: default 21.44 to 21.47, 16x 21.50 to 21.53, 1x 21.06. So 1x blurs the street clearly, and 16x is a small gain beyond the run-to-run spread. By eye, the cobbles near the carriage on `02-camera` (the one placement that a default, a 16x and the 1x run share) are blurrier at 1x, and slightly crisper at 16x than at the default. No other part of the picture changes.
+- **Cost.** At 60, every play segment holds a p50 of 16.69 to 16.71 ms and a p95 of 16.70 to 18.71 ms on both sides, within the spread. At 144, three runs per side are bimodal (7 or 14 ms a frame) with a spread of 5 to 9 ms, and the load average was 3.5 to 5, so they resolve no difference. The rig has no GPU timestamps.
+- **Validation and the menu.** A clinic run with `--validation` at 16 reports no sampler message. Its two VUIDs, `RuntimeSpirv-OpEntryPoint-08743` and `VkBufferCreateInfo-size-06409`, are in earlier `main` runs too. `rig.py compare main-menu` of this branch at the default against two runs of `main`: 0.0267 against a noise floor of 0.0271.
+
 ## Not switched yet
 
 - Bloom (`0x37` = 0, or scaled) and depth of field (`0x6b` = 0) are clean as well. Depth of field changes nothing on the two routes, so it needs a check in a place with a far view before it becomes an option.
