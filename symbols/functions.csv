@@ -5,6 +5,11 @@ address,name,signature,status,file
 0x0045d210,hash_char_range,ulonglong hash_char_range(CharRange * range),replaced,src/game/text/hash.cpp
 0x0063fad0,hkp_world_cinfo_init,void hkp_world_cinfo_init(void * cinfo),named,
 0x009779d0,hks_hkb_get_timestep,,named,
+0x00bd2ab0,pfx_set_lens_distortion_enable,,named,
+0x00bd2b80,pfx_set_sensor_noise_enable,,named,
+0x00bd3320,pfx_set_chromatic_aberration_enable,,named,
+0x00bd3b00,pfx_set_motion_blur_enable,,named,
+0x00bd4b60,pfx_set_glare_parameters,,named,
 0x00fe3980,window_is_foreground,bool window_is_foreground(void * window),named,
 0x0103f9e0,global_task_data,FD4TaskData * global_task_data(void),named,
 0x0103f9f0,set_global_task_data,void set_global_task_data(FD4TaskData * data),named,
@@ -79,6 +84,11 @@ address,name,signature,status,file
 0x020eba00,config_get_int,"int config_get_int(void * config, void * key, int fallback)",named,
 0x02194580,graphics_create,,named,
 0x021b2fb0,swap_chain_present,"void swap_chain_present(void * self, int present_interval)",named,
+0x021d5a80,post_effect_step_execute,,named,
+0x021d5f80,pfx_apply,,named,
+0x021d9ea0,post_effect_debug_menu_build,,named,
+0x021df510,post_effect_params_defaults,,named,
+0x0229e990,draw_params_update,,named,
 0x02313870,effect_light_gather,,replaced,src/game/frame/step_literals.cpp
 0x023174e0,effect_object_update,"void effect_object_update(void * object, float step)",replaced,src/game/frame/step_literals.cpp
 0x0263b8b0,fast_fixed_alloc,void * fast_fixed_alloc(void * pool),named,
