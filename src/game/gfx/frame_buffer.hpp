@@ -2,6 +2,7 @@
 // (docs/design/resolution.md, "Decision: way B").
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -77,5 +78,27 @@ void write_image_bytes(loader::Image& eboot, std::uint64_t link, const void* byt
 // The table lies in the read-only segment; on a finalized image the page is made writable for the
 // write and gets its protection back. At 1920x1080 it writes the value the table already holds.
 void set_graphics_heap_size(loader::Image& eboot, std::uint32_t width, std::uint32_t height);
+
+// The clear colour of the graphics device: graphics_init (0x01d969f0) copies these 16 bytes, four
+// floats R, G, B, A, into the device description at 0x01d96afb; no other code reads them. The
+// device clears its 2D target (the target the logos, menus, loading pages and HUD are drawn into,
+// and the target the final picture is composited from) to this colour at the start of every frame
+// (#711). The game's colour is a grey 0.5, 0.5, 0.5, 1: at 16:9 the full-screen menus cover all
+// of it, at a wider frame buffer it shows as grey bars at the sides of their 16:9 stage.
+inline constexpr std::uint64_t device_clear_color = 0x04914f00;
+inline constexpr std::array<float, 4> device_clear_grey = {0.5f, 0.5f, 0.5f, 1.0f};
+inline constexpr std::array<float, 4> device_clear_black = {0.0f, 0.0f, 0.0f, 1.0f};
+
+// The device clear colour for a frame buffer of `width` x `height`: the game's grey at 16:9,
+// black at any other aspect, so the sides of the 16:9 menus are black.
+constexpr std::array<float, 4> device_clear_color_for(std::uint32_t width, std::uint32_t height) {
+    return std::uint64_t{width} * 9 == std::uint64_t{height} * 16 ? device_clear_grey
+                                                                  : device_clear_black;
+}
+
+// Writes device_clear_color_for(width, height) into the device clear colour of `eboot`. Called
+// once after the eboot is mapped and before its entry point runs. Throws std::runtime_error when
+// the bytes hold neither the grey nor the black, so a wrong address never gets written.
+void set_device_clear_color(loader::Image& eboot, std::uint32_t width, std::uint32_t height);
 
 }  // namespace bb::game

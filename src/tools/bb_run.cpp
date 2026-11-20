@@ -447,6 +447,9 @@ int start(const bb::tools::RunOptions& options) {
                                                              options.resolution_height) >> 20);
         // The HUD places its world markers in 1920x1080 stage coordinates (#713).
         bb::game::set_hud_stage_loads(eboot, options.resolution_width, options.resolution_height);
+        // Black, not the game's grey, beside the 16:9 menus at a wider frame buffer (#711).
+        bb::game::set_device_clear_color(eboot, options.resolution_width,
+                                         options.resolution_height);
     });
     bb::game::set_image(game->eboot);
     // Before the entry point: system_properties_init and the graphics device read the size from

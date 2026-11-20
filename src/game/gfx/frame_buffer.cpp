@@ -40,4 +40,16 @@ void set_graphics_heap_size(loader::Image& eboot, std::uint32_t width, std::uint
     write_image_bytes(eboot, graphics_private_heap_size_entry, &size, sizeof size);
 }
 
+void set_device_clear_color(loader::Image& eboot, std::uint32_t width, std::uint32_t height) {
+    const void* at = reinterpret_cast<const void*>(eboot.runtime(device_clear_color));
+    constexpr std::size_t size = sizeof(device_clear_grey);
+    if (std::memcmp(at, device_clear_grey.data(), size) != 0 &&
+        std::memcmp(at, device_clear_black.data(), size) != 0) {
+        throw std::runtime_error(
+            "set_device_clear_color: the bytes hold neither the game's grey nor black");
+    }
+    const std::array<float, 4> color = device_clear_color_for(width, height);
+    write_image_bytes(eboot, device_clear_color, color.data(), size);
+}
+
 }  // namespace bb::game
