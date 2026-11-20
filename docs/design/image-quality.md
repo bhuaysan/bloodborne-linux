@@ -111,3 +111,71 @@ The block holds the same values for these fields in the clinic and in Central Yh
 
 - Bloom (`0x37` = 0, or scaled) and depth of field (`0x6b` = 0) are clean as well. Depth of field changes nothing on the two routes, so it needs a check in a place with a far view before it becomes an option.
 - The vignette is off on both routes; film grain and lens distortion are never drawn.
+
+## Camera and aspect ratio (#660)
+
+Where the engine sets the field of view and the aspect ratio of its projection, and how the HUD and menus are placed, for the field-of-view option (#666) and the wide frame buffer (#667). Addresses as above; `SprjPersCam` is the game's own class name (its runtime class is registered at 0x01d16e60).
+
+### Result
+
+| Question | Answer |
+|---|---|
+| Field of view | vertical, in radians at `+0x50` of every game camera. The chase camera eases it toward its camera parameter row's angle, clamped to 38°–48° (43° in the clinic); cutscenes set their own (32° to 44° in the intro) |
+| Aspect ratio | a constant 16:9 at `+0x54` of every game camera, written by its constructor; not taken from `frame_buffer_width` / `frame_buffer_height` |
+| Projection | 0x021aa290 builds it from the render camera: y scale cot(fov / 2), x scale y scale / aspect. The vertical angle is fixed, so a wider aspect shows more at the sides (Hor+) |
+| Culling | no object missing at the screen edges at 56° and 77° or at 64:27: the same render camera feeds the projection, the shadow cascade fits and the other users below |
+| Cutscenes | in-engine, the same cameras, 16:9, no letterbox of their own. At 2560×1080 with the aspect fixed they fill the frame |
+| HUD and menus | at 2560×1080 the HUD keeps its 16:9 size and sits in the centred 16:9 area; full-screen menus, logos and loading screens are 16:9 with grey (128, 128, 128) bars at the sides |
+
+### The game cameras
+
+- **`SprjPersCam`.** The base constructor stores the vtable 0x0539ffb0 and the defaults (0x01d1661a–0x01d16644): `+0x10`–`+0x4f` the camera matrix, `+0x50` field of view 0.75049 rad (43°), `+0x54` aspect 1.77778 (`0x3fe38e39`), `+0x58` near 0.05, `+0x5c` far 3000.
+- **The chase camera.** `chase_cam_construct` (0x0143a0e0) stores the same four values (0x0143a353–0x0143a368) and the vtable 0x0536b7c0. `chase_cam_update` (0x0143ac60) looks up its camera parameter row (0x0143add1–0x0143ae62) and eases `+0x50` toward the row's angle at `+0x14`, in degrees: below 38 it takes 38 (0.663225 rad, 0x04925e5c), above 48 it takes 48, then × π/180 (0x0143af14–0x0143af70), by the factor `+0x330` per call. It reads `+0x50` again for its collision and distance (tan(fov / 2) at 0x0143bbb0 and 0x0143bf04).
+- **Other cameras.** 27 stores of the 16:9 constant to `+0x54` in camera constructors and setup code: 0x01432bc0, 0x014332a0, 0x01435fc0 (3), 0x0143a0e0, 0x0156fec0 (4), 0x01973df0, 0x0199e550, 0x019a5d60, 0x019ba0a0, 0x01a07f10 (5), 0x01da7aa0, 0x01edc310 (2), and five outside the functions Ghidra found (0x014312a2, 0x01444509, 0x014462b9, 0x01d14569, 0x01d1662c). No code reads the frame buffer size for an aspect: the #660 sweep of all readers of 0x051289f8 / 0x051289fc found no ratio.
+
+### The render camera
+
+`SprjPersCam`'s vtable slot `+0x28` (0x01d16690; the chase camera's vtable has the same slot) copies a game camera into a render camera. The callers are 0x01edc310 (twice) and 0x01da7aa0. The render camera's layout:
+
+| Offset | Field | Set by 0x01d16690 |
+|---|---|---|
+| `+0x00`–`+0x3f` | camera matrix | game camera `+0x10` |
+| `+0x50` | field of view (vertical, rad) | `+0x50` |
+| `+0x54`, `+0x58` | near, far | `+0x58`, `+0x5c` |
+| `+0x5c`, `+0x60` | width, height (u32) | the constants 1920 and 1080 (0x01d166d5) |
+| `+0x64` | aspect; 0 means width / height | `+0x54` |
+| `+0x68` | half-pixel offset flag | — |
+| `+0x70`–`+0x80` | tile count, index and sizes (tiled capture) | — |
+
+The projection builder 0x021aa290 (`(out, camera)`) and the tile frustum 0x021aa950 read this layout; 0x021ab450 fills it from a packed copy with 16-bit tile fields. The probe saw these callers of 0x021aa290 in the clinic and the intro: 0x02290dd0 (the view state: view matrix at `+0x10`, projection at `+0x50`; also called with the shadow cascade slices, near and far 0.1–2, 2–8, 8–15, 15–25.1 or 40 m), 0x021aaa90, 0x02192d20, `pfx_apply` 0x021d5f80, 0x022d46b0, 0x00e669d0, 0x00eed3c0, 0x00ef1c00, all with the camera's angle and 16:9, and 0x022b5b10 with 90° and an aspect of 0 at 32 to 256 pixels square (point light shadow cube faces). The character editor's preview uses its own 784×784 camera with aspect 1 (49°, and 23°). 0x021aa950 had no caller in these runs.
+
+### The HUD
+
+- The game's own HUD scales its rectangles by `S × 1.5 × x × 0.125` with `S` the factors width / 1920 and height / 1080 at 0x055404d0 / 0x055404d4 (0x01816a50, 0x01817690, 0x018179c0, 0x0181a9c0); `system_properties_init`, the frame buffer setter 0x01d9e850 (vtable 0x0534dcb8) and 0x0201a2f0 compute them.
+- The pointer slots (`[0x05562878] + 0x10f8 + i × 0x98`, 8 slots) count as valid only inside 0 ≤ x < width and 0 ≤ y < height (0x01654d80, 0x016b3320, 0x01bfb2a0); 0x01654d80 centres the cursor at width / 2, height / 2.
+- 0x01f58360 gives each Scaleform movie a viewport of the full frame buffer (vcall `+0x68`); the movies then fit their 16:9 stage inside it.
+- 0x016439b0, 0x016448f0 and 0x01644cf0 map projected points to pixels with the full width and height (markers in the world, likely the lock-on).
+
+At 2560×1080 the shots show the HUD bars and counters at their 1080p pixel size, 320 px further right than at 1920 wide, so the HUD stays inside the centred 16:9 area; the subtitles stay centred. Forcing the width factor to 1.0 left the title menu unchanged; the HUD was not shot with it. Whether some element the clinic does not show (the lock-on marker, item pick-up messages, the boss bar) uses the full width was not checked.
+
+### What the options need
+
+- **Field of view (#666).** Scale `+0x50` of the render camera that 0x01d16690 writes, when its source has the chase camera's vtable (0x0536b7c0), so cutscenes keep their framing. Scaling the chase camera's own `+0x50` does not hold: the update eases it back toward the parameter row and clamps the target to 38°–48°. Writing the render camera reaches the projection, the shadow cascades and YEBIS together.
+- **Wide frame buffer (#667).** `--resolution` with a width / height other than 16:9 (the global write works as at 16:9), plus `+0x64` of every render camera that 0x01d16690 writes set to width / height; without it the picture is the 16:9 projection stretched to the width. The HUD and the menus need nothing to keep their 16:9 size; the grey side bars of the full-screen menus and loading screens are the open question (black, or the menus' background widened).
+
+### The probe
+
+A local probe build (not committed) wrapped 0x021aa290 and 0x021aa950: `BB_CAMLOG` logged the render camera's fields per caller, `BB_FOVX=k` multiplied `+0x50` by k during the call for every camera with an aspect (so not the shadow cubes), `BB_ASPECT=a` set `+0x64`, and `BB_HUDX` held the HUD width factor. `--resolution` took 2560x1080 with its 16:9 check removed. Runs on 2026-11-20, `rig.py run bb-run --window`, 1280×720 window, so a 2560×1080 frame is a 1280×540 band in the shot. Every run ended `scenario finished`.
+
+| Run | What | Result |
+|---|---|---|
+| clinic, 1920×1080 | default | 43° and 16:9 in every render camera, cascade slices as above |
+| clinic, `BB_FOVX=1.3` (56°) | wider view | more of the room on every side (the lamp stand and the lit door at the right), the HUD unchanged, no object missing at the edges |
+| clinic, `BB_FOVX=1.8` (77°) | stress | still nothing missing at the edges, but vertical streaks over the top fifth of the picture, which 56° does not show (cause not looked for; an option should stay well below this) |
+| clinic, 2560×1080 | the game's 16:9 | the 16:9 picture stretched to the width by 4:3 (the hunter visibly wider) |
+| clinic, 2560×1080, `BB_ASPECT=2.370370` (64:27) | Hor+ | correct proportions, more of the room at the sides, nothing missing at the edges, the HUD at 16:9 size in the centre |
+| new game and intro, 1920×1080 | cutscene | its own angles: 44°, 43°, 41.3°, 35.6°, 31.9°; 16:9, full frame |
+| new game and intro, 2560×1080, `BB_ASPECT=2.370370` | cutscene | fills 21:9 with the same vertical framing, subtitles centred; the editor and menus at 16:9 with grey sides |
+| title, 2560×1080 | menus | the logos run longer, so a scenario must wait for them by picture, not by a fixed step; the menus then take input as at 16:9 |
+
+Shots stay local (`analysis/issue-660/`).
