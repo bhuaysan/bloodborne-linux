@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_runtime.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-19
+// Changed for bloodborne-linux, 2026-11-20
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/alignment.h"
@@ -242,10 +242,23 @@ void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
                   vk::to_string(src->info.pixel_format), vk::to_string(dst->info.pixel_format));
     }
 
-    const u32 base_width = src->info.size.width;
-    const u32 base_height = src->info.size.height;
-    const u32 base_depth =
-        dst->info.type == AmdGpu::ImageType::Color3D ? dst->info.size.depth : src->info.size.depth;
+    // Ours (#699): the region is clamped to both images. Upstream copied the source's extent, out
+    // of bounds of a smaller destination (a depth image recreated narrower than the color image it
+    // replaces), and the destination's depth from a shallower 3D source. Between a block-coded and
+    // a plain image the extent counts source texels, which the destination's size does not, so
+    // that pair keeps the source's extent.
+    u32 base_width = src->info.size.width;
+    u32 base_height = src->info.size.height;
+    if (src->info.props.is_block == dst->info.props.is_block) {
+        base_width = std::min(base_width, dst->info.size.width);
+        base_height = std::min(base_height, dst->info.size.height);
+    }
+    u32 base_depth = src->info.size.depth;
+    if (dst->info.type == AmdGpu::ImageType::Color3D) {
+        base_depth = src->info.type == AmdGpu::ImageType::Color3D
+                         ? std::min(base_depth, dst->info.size.depth)
+                         : dst->info.size.depth;
+    }
 
     // Match sample count before copying
     SetBackingSamples(dst, dst->info.num_samples, false);
@@ -333,6 +346,11 @@ void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
     dst->ClearDirtyIfTracked();  // ours (#689), see CopyImage
     const u32 num_mips = std::min(src->info.resources.levels, dst->info.resources.levels);
     const u32 num_layers = std::min(src->info.resources.layers, dst->info.resources.layers);
+    // Ours (#699): both copies use this extent, clamped to both images as in CopyImage. Both are
+    // plain (a depth image and a color image), so their sizes count the same texels.
+    const u32 width = std::min(src->info.size.width, dst->info.size.width);
+    const u32 height = std::min(src->info.size.height, dst->info.size.height);
+    const u32 depth = std::min(src->info.size.depth, dst->info.size.depth);
 
     SetBackingSamples(dst, dst->info.num_samples, false);
     SetBackingSamples(src, src->info.num_samples);
@@ -348,7 +366,7 @@ void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
             .layerCount = num_layers,
         },
         .imageOffset = {0, 0, 0},
-        .imageExtent = {src->info.size.width, src->info.size.height, src->info.size.depth},
+        .imageExtent = {width, height, depth},
     };
     u64 copy_size = BufferImageCopySize(buffer_copy, src->info.pixel_format);
     SmallVector<vk::BufferImageCopy, 8> buffer_copies;
@@ -357,9 +375,8 @@ void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
         auto mip_copy = buffer_copy;
         mip_copy.bufferOffset = Common::AlignUp(offset + copy_size, 16);
         mip_copy.imageSubresource.mipLevel = mip;
-        mip_copy.imageExtent = vk::Extent3D{std::max(src->info.size.width >> mip, 1u),
-                                            std::max(src->info.size.height >> mip, 1u),
-                                            std::max(src->info.size.depth >> mip, 1u)};
+        mip_copy.imageExtent = vk::Extent3D{std::max(width >> mip, 1u), std::max(height >> mip, 1u),
+                                            std::max(depth >> mip, 1u)};
         copy_size =
             mip_copy.bufferOffset - offset + BufferImageCopySize(mip_copy, src->info.pixel_format);
         buffer_copies.push_back(mip_copy);

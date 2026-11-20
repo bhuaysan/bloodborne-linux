@@ -650,9 +650,10 @@ constexpr u64 pages_per_kernel_page = page_size / tp;
 // tracking tests below. Members are destroyed in reverse order: the rasterizer before the device,
 // Liverpool last.
 struct Gpu {
+    Vulkan::ValidationOptions validation{};
     std::unique_ptr<AmdGpu::Liverpool> liverpool = std::make_unique<AmdGpu::Liverpool>(memory());
     Frontend::WindowSDL window;
-    Vulkan::Instance instance{window, -1};
+    Vulkan::Instance instance{window, -1, validation};
     bool imgui = (start_imgui(instance), true);
     Vulkan::Scheduler scheduler{instance};
     Vulkan::Runtime runtime{instance, scheduler};
@@ -660,6 +661,9 @@ struct Gpu {
     Unregister unregister;
 
     Gpu() {
+        bb::shadps4::install_fault_handler();
+    }
+    explicit Gpu(Vulkan::ValidationOptions options) : validation{options} {
         bb::shadps4::install_fault_handler();
     }
     VideoCore::MemoryTracker& tracker() {
@@ -1388,7 +1392,7 @@ std::vector<u8> read_back(Gpu& gpu, VideoCore::Image& image, u32 layer = 0,
         .imageSubresource{.aspectMask = aspect,
                           .baseArrayLayer = layer,
                           .layerCount = 1},
-        .imageExtent = {64, 64, 1},
+        .imageExtent = {image.info.size.width, image.info.size.height, 1},
     };
     gpu.runtime.DownloadImage(&image, staging.buffer, std::span{&copy, 1});
     gpu.rasterizer.Finish();
@@ -1987,6 +1991,176 @@ TEST(GuestMemory, ADepthImageRecreatedTakesAGuestWriteToTheOldImage) {
             gpu.rasterizer.Finish();
         });
         d.unmap();
+    }
+}
+
+// Whether the Khronos validation layer can be loaded (CI has none; locally VK_ADD_LAYER_PATH).
+// Asks the loader directly: vulkan.hpp's dispatcher is set up only by the first instance.
+bool validation_layer_present() {
+    void* loader = ::dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+    if (loader == nullptr) {
+        return false;
+    }
+    const auto get_proc =
+        reinterpret_cast<PFN_vkGetInstanceProcAddr>(::dlsym(loader, "vkGetInstanceProcAddr"));
+    const auto enumerate = reinterpret_cast<PFN_vkEnumerateInstanceLayerProperties>(
+        get_proc != nullptr ? get_proc(nullptr, "vkEnumerateInstanceLayerProperties") : nullptr);
+    std::vector<VkLayerProperties> layers;
+    uint32_t count = 0;
+    if (enumerate != nullptr && enumerate(&count, nullptr) == VK_SUCCESS) {
+        layers.resize(count);
+        if (enumerate(&count, layers.data()) != VK_SUCCESS) {
+            layers.clear();
+        }
+        layers.resize(std::min<std::size_t>(count, layers.size()));
+    }
+    ::dlclose(loader);
+    return std::ranges::any_of(layers, [](const VkLayerProperties& layer) {
+        return std::strcmp(layer.layerName, "VK_LAYER_KHRONOS_validation") == 0;
+    });
+}
+
+// Counts the validation layer's errors on `instance` while it lives, and prints them.
+struct ValidationErrors {
+    std::atomic<u32> count{0};
+    vk::UniqueDebugUtilsMessengerEXT messenger;
+
+    explicit ValidationErrors(vk::Instance instance) {
+        const vk::DebugUtilsMessengerCreateInfoEXT info{
+            .messageSeverity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+            .messageType = vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation,
+            .pfnUserCallback = &ValidationErrors::OnMessage,
+            .pUserData = this,
+        };
+        auto [result, created] = instance.createDebugUtilsMessengerEXTUnique(info);
+        EXPECT_EQ(result, vk::Result::eSuccess);
+        messenger = std::move(created);
+    }
+
+    static VKAPI_ATTR vk::Bool32 VKAPI_CALL
+    OnMessage(vk::DebugUtilsMessageSeverityFlagBitsEXT, vk::DebugUtilsMessageTypeFlagsEXT,
+              const vk::DebugUtilsMessengerCallbackDataEXT* data, void* user) {
+        static_cast<ValidationErrors*>(user)->count.fetch_add(1, std::memory_order_relaxed);
+        std::fprintf(stderr, "validation: %s\n",
+                     data != nullptr && data->pMessage != nullptr ? data->pMessage : "?");
+        return vk::False;
+    }
+};
+
+// A depth target of 6 layers requested at the address of a texture of 2 levels and 1 layer is
+// recreated as a depth image (TextureCache::ResolveDepthOverlap) with the larger count of each:
+// 2 levels and 6 layers (#699). Upstream took the larger extent as a whole, levels first, and
+// recreated it with 2 levels and 1 layer, so the 6 layers the guest renders to were missing.
+TEST(GuestMemory, ADepthImageRecreatedFromFewerLayersHasTheRequestedLayers) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        constexpr u32 layers = 6;
+        constexpr u64 slice_size = 64 * 64 * 4;
+        // Room for the recreated image's 2 levels of 6 layers.
+        constexpr u64 mapped = 4 * layers * slice_size;
+        Direct d((mapped + page_size - 1) / page_size);
+        const std::uintptr_t start = addr(d.address);
+        ASSERT_EQ(start % 256, 0u);
+        ASSERT_LT(start >> 8, u64(1) << 32);
+        fill_floats(static_cast<u8*>(d.address), mapped, 0.375f);
+
+        AmdGpu::Image texture{};
+        texture.base_address = start >> 8;
+        texture.data_format = u64(AmdGpu::DataFormat::Format32);
+        texture.num_format = u64(AmdGpu::NumberFormat::Float);
+        texture.width = 64 - 1;
+        texture.height = 64 - 1;
+        texture.pitch = 64 - 1;
+        texture.last_level = 1;
+        texture.tiling_index = u64(AmdGpu::TileMode::Depth1DThin);
+        texture.type = u64(AmdGpu::ImageType::Color2D);
+        texture.dst_sel_x = u64(AmdGpu::CompSwizzle::Red);
+        AmdGpu::DepthBuffer depth = depth_buffer(start, start);
+        AmdGpu::DepthView view{};
+        view.slice_max = layers - 1;
+
+        gpu.liverpool->SendCommand<true>([&] {
+            VideoCore::TextureCache::ImageDesc texture_desc{texture, Shader::ImageResource{}};
+            const auto texture_id = textures.FindImage(texture_desc);
+            textures.UpdateImage(texture_id);
+            ASSERT_EQ(textures.GetImage(texture_id).info.resources.levels, 2u);
+            ASSERT_EQ(textures.GetImage(texture_id).info.resources.layers, 1u);
+
+            VideoCore::TextureCache::ImageDesc depth_desc{depth, view, {}, 0, {}, false};
+            const auto id = textures.FindImage(depth_desc);
+            ASSERT_NE(id, texture_id);
+            VideoCore::Image& image = textures.GetImage(id);
+            ASSERT_TRUE(image.info.props.is_depth);
+            EXPECT_EQ(image.info.resources.levels, 2u);
+            ASSERT_EQ(image.info.resources.layers, layers);
+            textures.UpdateImage(id);
+            const std::vector<u8> held =
+                read_back(gpu, image, layers - 1, vk::ImageAspectFlagBits::eDepth);
+            EXPECT_TRUE(all_floats(held, slice_size, 0.375f));
+            gpu.rasterizer.Finish();
+        });
+        d.unmap();
+    }
+}
+
+// A depth target narrower (from the draw's extent hint) than the color image at its address is
+// recreated at its own extent, and the copy from the color image is clamped to it (#699). Upstream
+// copied the color image's whole extent, out of the depth image's bounds: with the validation
+// layer present (VK_ADD_LAYER_PATH) that is an error, which this test counts.
+TEST(GuestMemory, ADepthImageRecreatedNarrowerTakesACopyWithinItsBounds) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    const bool validate = validation_layer_present();
+    if (!validate) {
+        std::fprintf(stderr, "no validation layer: only the data is checked\n");
+    }
+    {
+        Gpu gpu{Vulkan::ValidationOptions{.enable = validate}};
+        std::unique_ptr<ValidationErrors> errors;
+        if (validate) {
+            errors = std::make_unique<ValidationErrors>(gpu.instance.GetInstance());
+        }
+        auto& textures = gpu.rasterizer.GetTextureCache();
+        constexpr u64 image_size = 64 * 64 * 4;
+        Direct d((image_size + page_size - 1) / page_size);
+        const std::uintptr_t start = addr(d.address);
+        ASSERT_EQ(start % 256, 0u);
+        ASSERT_LT(start >> 8, u64(1) << 32);
+        fill_floats(static_cast<u8*>(d.address), image_size, 0.375f);
+        AmdGpu::ColorBuffer color = linear_color_buffer(start, 0);
+        color.info.format = u32(AmdGpu::DataFormat::Format32);
+        color.info.number_type = u32(AmdGpu::NumberFormat::Float);
+        AmdGpu::CbDbExtent narrow{};
+        narrow.width = 32;
+        narrow.height = 64;
+        const AmdGpu::DepthBuffer depth = depth_buffer(start, start);
+
+        gpu.liverpool->SendCommand<true>([&] {
+            VideoCore::TextureCache::ImageDesc color_desc{color, {}};
+            const auto color_id = textures.FindImage(color_desc);
+            textures.UpdateImage(color_id);
+            ASSERT_EQ(textures.GetImage(color_id).info.size.width, 64u);
+
+            VideoCore::TextureCache::ImageDesc depth_desc{depth, {}, {}, 0, narrow, false};
+            const auto id = textures.FindImage(depth_desc);
+            ASSERT_NE(id, color_id);
+            VideoCore::Image& image = textures.GetImage(id);
+            ASSERT_TRUE(image.info.props.is_depth);
+            ASSERT_EQ(image.info.size.width, 32u);
+            textures.UpdateImage(id);
+            const std::vector<u8> held = read_back(gpu, image, 0, vk::ImageAspectFlagBits::eDepth);
+            EXPECT_TRUE(all_floats(held, 32 * 64 * 4, 0.375f));
+            gpu.rasterizer.Finish();
+        });
+        d.unmap();
+        if (errors != nullptr) {
+            EXPECT_EQ(errors->count.load(), 0u);
+        }
     }
 }
 
