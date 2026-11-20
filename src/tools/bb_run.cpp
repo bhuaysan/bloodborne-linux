@@ -41,6 +41,7 @@
 #include "common/log.hpp"
 #include "common/runtime_dirs.hpp"
 #include "common/signal_stack.hpp"
+#include "game/camera/field_of_view.hpp"
 #include "game/chr/ragdoll.hpp"
 #include "game/frame/frame.hpp"
 #include "game/frame/step_literals.hpp"
@@ -474,6 +475,13 @@ int start(const bb::tools::RunOptions& options) {
                         options.motion_blur ? "on" : "off", options.motion_blur_strength,
                         options.chromatic_aberration ? "on" : "off",
                         options.chromatic_aberration_strength);
+    }
+    static_assert(bb::common::min_fov == bb::game::min_fov &&
+                  bb::common::max_fov == bb::game::max_fov);
+    bb::game::set_field_of_view(options.fov);
+    if (options.fov != bb::game::game_fov) {
+        bb::common::log(LogLevel::info, channel, "field of view {} degrees (the game's: {})",
+                        options.fov, bb::game::game_fov);
     }
     bb::hle::video::set_vblank_rate(options.frame_rate);
     bb::common::log(LogLevel::info, channel, "target frame rate {} FPS, vblank period {} ns",

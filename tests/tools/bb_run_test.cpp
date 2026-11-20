@@ -239,6 +239,18 @@ TEST(RunOptions, ParsesPostEffects) {
     }
 }
 
+TEST(RunOptions, ParsesTheFieldOfView) {
+    EXPECT_FLOAT_EQ(parse({}).fov, 43.0f);
+    EXPECT_FLOAT_EQ(parse({"--fov", "63"}).fov, 63.0f);
+    EXPECT_FLOAT_EQ(parse({"--fov", "30"}).fov, 30.0f);
+    EXPECT_FLOAT_EQ(parse({"--fov", "70"}).fov, 70.0f);
+    EXPECT_EQ(parse_error({"--fov"}), "--fov needs a value");
+    for (std::string_view s : {"29.9", "70.1", "nan", "inf", "", "60,5", "-63"}) {
+        EXPECT_EQ(parse_error({"--fov", s}),
+                  std::format("--fov: \"{}\" is not a number of degrees from 30 to 70", s));
+    }
+}
+
 TEST(RunOptions, ParsesFsrAndRcas) {
     const RunOptions d = parse({});
     EXPECT_FALSE(d.fsr);
@@ -364,6 +376,7 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     c.motion_blur_strength = 0.5f;
     c.chromatic_aberration = false;
     c.chromatic_aberration_strength = 0.25f;
+    c.fov = 58.0f;
     const RunOptions o = with_config(c, {});
     EXPECT_EQ(o.game_dir, std::filesystem::path("/g"));
     EXPECT_EQ(o.profile, "cfg");
@@ -379,6 +392,7 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     EXPECT_EQ(o.motion_blur_strength, 0.5f);
     EXPECT_FALSE(o.chromatic_aberration);
     EXPECT_EQ(o.chromatic_aberration_strength, 0.25f);
+    EXPECT_EQ(o.fov, 58.0f);
 }
 
 TEST(RunOptionsConfig, EmptyConfigKeepsTheDefaults) {

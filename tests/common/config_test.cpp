@@ -46,7 +46,8 @@ TEST(Config, ParsesEverySetting) {
         "motion_blur = false\n"
         "motion_blur_strength = 0.5\n"
         "chromatic_aberration = true\n"
-        "chromatic_aberration_strength = 0.25",
+        "chromatic_aberration_strength = 0.25\n"
+        "fov = 55.5",
         "c");
     const Config& c = parsed.config;
     EXPECT_EQ(c.game_dir, fs::path("/games/bb"));
@@ -64,6 +65,7 @@ TEST(Config, ParsesEverySetting) {
     EXPECT_EQ(c.motion_blur_strength, 0.5f);
     EXPECT_EQ(c.chromatic_aberration, true);
     EXPECT_EQ(c.chromatic_aberration_strength, 0.25f);
+    EXPECT_EQ(c.fov, 55.5f);
     EXPECT_TRUE(parsed.unknown_keys.empty());
 }
 
@@ -84,6 +86,22 @@ TEST(Config, RefusesPostEffectStrengthsOutOfRange) {
         }
         EXPECT_EQ(parse_config(std::format("{} = 0", key), "c").unknown_keys.size(), 0u);
     }
+}
+
+TEST(Config, RefusesAFieldOfViewOutOfRange) {
+    for (const char* value : {"29.9", "70.5", "0", "nan", "\"60\"", "x"}) {
+        try {
+            parse_config(std::format("fov = {}", value), "c.toml");
+            ADD_FAILURE() << value;
+        } catch (const bb::common::ConfigError& e) {
+            EXPECT_NE(std::string(e.what()).find("c.toml:1: fov: "), std::string::npos) << e.what();
+            EXPECT_NE(std::string(e.what()).find("is not a number from 30 to 70"),
+                      std::string::npos)
+                << e.what();
+        }
+    }
+    EXPECT_EQ(parse_config("fov = 30", "c").config.fov, 30.0f);
+    EXPECT_EQ(parse_config("fov = 70", "c").config.fov, 70.0f);
 }
 
 TEST(Config, TakesEachFrameRate) {
@@ -188,6 +206,7 @@ TEST_F(ConfigFileTest, WriteThenReadGivesTheSameConfig) {
     c.motion_blur_strength = 0.3f;
     c.chromatic_aberration = true;
     c.chromatic_aberration_strength = 0.75f;
+    c.fov = 62.5f;
     const fs::path file = dir_ / "sub" / "config.toml";  // the directory is created
     bb::common::write_config(file, c);
     EXPECT_EQ(bb::common::read_config(file).config, c);

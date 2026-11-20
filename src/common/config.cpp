@@ -138,14 +138,15 @@ ParsedConfig parse_config(std::string_view text, std::string_view source) {
             }
             return v.text;
         };
-        // A decimal number from 0 to `max`.
-        const auto want_number = [&](float max) {
+        // A decimal number from `min` to `max`.
+        const auto want_number = [&](float max, float min = 0.0f) {
             float number = 0;
             const char* end = v.text.data() + v.text.size();
             const auto [ptr, ec] = std::from_chars(v.text.data(), end, number);
             // The negated test also refuses NaN.
-            if (v.quoted || ec != std::errc{} || ptr != end || !(number >= 0.0f && number <= max)) {
-                p.fail(std::format("{}: \"{}\" is not a number from 0 to {}", key, v.text, max));
+            if (v.quoted || ec != std::errc{} || ptr != end || !(number >= min && number <= max)) {
+                p.fail(std::format("{}: \"{}\" is not a number from {} to {}", key, v.text, min,
+                                   max));
             }
             return number;
         };
@@ -206,6 +207,8 @@ ParsedConfig parse_config(std::string_view text, std::string_view source) {
             c.chromatic_aberration = want_bool();
         } else if (key == "chromatic_aberration_strength") {
             c.chromatic_aberration_strength = want_number(max_post_effect_strength);
+        } else if (key == "fov") {
+            c.fov = want_number(max_fov, min_fov);
         } else {
             result.unknown_keys.push_back(key);
         }
@@ -277,6 +280,9 @@ std::string format_config(const Config& c) {
     if (c.chromatic_aberration_strength) {
         out += std::format("chromatic_aberration_strength = {}\n",
                            *c.chromatic_aberration_strength);
+    }
+    if (c.fov) {
+        out += std::format("fov = {}\n", *c.fov);
     }
     return out;
 }

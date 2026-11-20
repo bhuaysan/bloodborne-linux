@@ -99,6 +99,20 @@ float parse_strength(std::string_view option, std::string_view value) {
     return strength;
 }
 
+float parse_fov(std::string_view value) {
+    float degrees = 0;
+    const char* end = value.data() + value.size();
+    const auto [ptr, ec] = std::from_chars(value.data(), end, degrees);
+    // The negated test also refuses NaN.
+    if (ec != std::errc{} || ptr != end ||
+        !(degrees >= common::min_fov && degrees <= common::max_fov)) {
+        throw std::invalid_argument(
+            std::format("--fov: \"{}\" is not a number of degrees from {} to {}", value,
+                        common::min_fov, common::max_fov));
+    }
+    return degrees;
+}
+
 float parse_load_hold(std::string_view value) {
     float seconds = 0;
     const char* end = value.data() + value.size();
@@ -136,6 +150,7 @@ RunOptions options_from_config(const common::Config& config) {
         config.chromatic_aberration.value_or(options.chromatic_aberration);
     options.chromatic_aberration_strength =
         config.chromatic_aberration_strength.value_or(options.chromatic_aberration_strength);
+    options.fov = config.fov.value_or(options.fov);
     return options;
 }
 
@@ -265,6 +280,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             options.chromatic_aberration = false;
         } else if (arg == "--chromatic-aberration-strength") {
             options.chromatic_aberration_strength = parse_strength(arg, value());
+        } else if (arg == "--fov") {
+            options.fov = parse_fov(value());
         } else if (arg == "--fullscreen") {
             options.fullscreen = true;
         } else if (arg == "--fsr") {

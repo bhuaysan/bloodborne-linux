@@ -29,6 +29,7 @@ inline constexpr std::string_view run_usage =
     "              [--anisotropy game|1|2|4|8|16]\n"
     "              [--no-motion-blur] [--motion-blur-strength S]\n"
     "              [--no-chromatic-aberration] [--chromatic-aberration-strength S]\n"
+    "              [--fov DEGREES]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
@@ -86,7 +87,10 @@ inline constexpr std::string_view run_usage =
     "                       switch the game's chromatic aberration (colour fringes towards the\n"
     "                       screen edges) off\n"
     "  --chromatic-aberration-strength S\n"
-    "                       scale the chromatic aberration by S, 0 to 1 (default 1, the game's)\n";
+    "                       scale the chromatic aberration by S, 0 to 1 (default 1, the game's)\n"
+    "  --fov DEGREES        the vertical field of view of the player's camera, 30 to 70, in place\n"
+    "                       of the game's 43 (about 70 horizontal at 16:9); the game's other\n"
+    "                       angles for it move by the same amount, cutscenes keep their own\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
@@ -140,6 +144,7 @@ struct RunOptions {
     float motion_blur_strength = 1.0f;  // --motion-blur-strength: 0 to 1
     bool chromatic_aberration = true;  // false with --no-chromatic-aberration
     float chromatic_aberration_strength = 1.0f;  // --chromatic-aberration-strength: 0 to 1
+    float fov = 43.0f;  // --fov: common::min_fov to common::max_fov degrees, 43 is the game's
     bool help = false;  // -h or --help: print run_usage and exit 0
 };
 

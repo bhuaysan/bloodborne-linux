@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 
+#include "game/camera/field_of_view.hpp"
 #include "game/frame/frame.hpp"
 #include "game/image.hpp"
 #include "hook/hook.hpp"
@@ -137,8 +138,11 @@ void chase_cam_update(void* cam, void* chr, void* world, float dt) {
     auto* const original =
         reinterpret_cast<ChaseCamUpdate*>(hook::original(image(), 0x0143ac60));
     const bool eases = global<std::uint8_t>(0x05127a94) != 0;  // camera collision on
+    ChaseFovWidener& fov = chase_fov_widener();
+    fov.restore(cam);
     chase_cam_update_scaled(original, static_cast<double>(frame_rate()) / default_frame_rate,
                             eases, cam, chr, world, dt);
+    fov.widen(cam, field_of_view());
 }
 
 }  // namespace bb::game
