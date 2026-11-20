@@ -35,92 +35,78 @@ What's next is in the [roadmap](docs/roadmap.md).
 - A gamepad. Keyboard and mouse don't work in the game yet.
 - Your own dump of Bloodborne **CUSA03173 with update 1.09**, as a folder that holds `eboot.bin`
 
-## Install
-
-There are no prebuilt packages yet, so you build it yourself. It takes a few minutes.
-
-**1. Install the build tools.** On Fedora:
-
-```bash
-sudo dnf install git cmake ninja-build gcc-c++ python3 spirv-headers-devel spirv-tools vulkan-headers vulkan-loader-devel glslang SDL3-devel ffmpeg-free-devel
-```
-
-Other distributions need the same packages under their own names. You need CMake 3.27 or newer.
-
-**2. Get the source.**
-
-```bash
-git clone https://github.com/bhuaysan/bloodborne-linux.git
-```
-
-```bash
-cd bloodborne-linux
-```
-
-**3. Build and install.** The first build downloads Zydis and Dear ImGui.
-
-```bash
-cmake --preset release -DBB_BUILD_TESTS=OFF
-```
-
-```bash
-cmake --build --preset release
-```
-
-```bash
-cmake --install build/release --prefix ~/.local
-```
-
 ## Play
 
-1. Open **Bloodborne on Linux** from your application menu. If it's not there yet, log out and back in, or run `~/.local/bin/bb-launcher`.
-2. The launcher looks for your game folder on its own. If it finds none, press **Set up game** and pick the folder, or drag it onto the window.
-3. Press **Play**.
+The game is one folder. Nothing gets installed.
+
+1. Download `Bloodborne-Linux-….tar.gz` from [Releases](https://github.com/bhuaysan/bloodborne-linux/releases) and unpack it anywhere you can write.
+2. Start `bb-launcher` in that folder.
+3. Drag your game folder onto the window. Or put the dump into `game/` beforehand, then the launcher finds it on its own.
+4. Press **Play**.
 
 The launcher works with the gamepad, too. Cross (A) chooses, Circle (B) goes back.
 
 **Picture and sound** sets window or fullscreen, resolution, frame rate, sharpening, field of view, texture filtering, motion blur and colour fringes. The defaults look like the PS4.
 
-**Saves** keeps separate profiles, for example one for testing and one for your playthrough. **Open folder** shows where a profile's saves are, so you can back them up.
+**Saves** keeps separate profiles, for example one for testing and one for your playthrough. **Open folder** shows a profile's saves, so you can back them up.
 
-**Help with problems** explains the errors we know and copies a problem report. Paste it into an [issue](https://github.com/bhuaysan/bloodborne-linux/issues) if something breaks. The report replaces your home folder and user name.
+**Help with problems** explains the errors we know and copies a problem report. Paste it into an [issue](https://github.com/bhuaysan/bloodborne-linux/issues) if something breaks. The report leaves out your user name and folder paths.
 
-## Where your files go
+## The folder
 
-The game folder is only read, never written.
+```
+Bloodborne-Linux/
+├── bb-launcher    start this
+├── bb-run         the game itself
+├── lib/           bundled libraries
+├── game/          optional: put your dump here
+└── user/          settings, saves, shader cache, logs
+```
 
-| What | Where |
-|---|---|
-| Settings | `~/.config/bloodborne-linux/config.toml` |
-| Saves | `~/.local/share/bloodborne-linux/profiles/<profile>/` |
-| Shader cache | `~/.cache/bloodborne-linux/` |
-| Logs | `~/.local/state/bloodborne-linux/logs/` |
+Everything the game writes stays in `user/`. Delete the folder and it's all gone. Your dump is only read, never written.
 
-These follow the `XDG_*_HOME` variables if you set them.
+You can move or rename the folder, for example onto a USB stick. A dump inside `game/` moves with it.
+
+Played an older build? Its saves are in `~/.local/share/bloodborne-linux`. Copy them over once:
+
+```bash
+cp -r ~/.local/share/bloodborne-linux/profiles Bloodborne-Linux/user/
+```
 
 ## Without the launcher
 
-`bb-run` is the game itself. It reads the same config file, and its options override it.
+`bb-run` is the game itself. It reads the launcher's settings from `user/config.toml`, and its options override them.
 
 ```bash
-bb-run --setup /path/to/CUSA03173
+./bb-run --frame-rate 60 --fullscreen
 ```
 
-```bash
-bb-run --frame-rate 60 --fullscreen
-```
-
-`bb-run --help` lists every option.
+`./bb-run --help` lists every option.
 
 ## Known limits
 
 - At 60 FPS and above, a few small differences from 30 remain. They are listed in [docs/design/frame-rate.md](docs/design/frame-rate.md).
 - 120 FPS holds only where the GPU keeps up. Faster frames are still work in progress.
+- Releases are built on Fedora 44. Distributions with an older glibc may not run them yet.
 - No PKG installs. Bring the game as a folder.
 
-## For developers
+## Build it yourself
 
-Build with tests and sanitizers:
+Install the build tools. On Fedora:
+
+```bash
+sudo dnf install git cmake ninja-build gcc-c++ python3 spirv-headers-devel spirv-tools vulkan-headers vulkan-loader-devel glslang SDL3-devel ffmpeg-free-devel gtest-devel libasan libubsan
+```
+
+Other distributions need the same packages under their own names. You need CMake 3.27 or newer. The first build downloads Zydis and Dear ImGui.
+
+Build the same folder as a release:
+
+```bash
+tools/package-portable.sh
+```
+
+Or build for development, with tests and sanitizers:
 
 ```bash
 cmake --preset debug
@@ -134,13 +120,15 @@ cmake --build --preset debug
 ctest --preset debug
 ```
 
-The tests also need `gtest-devel`, `libasan` and `libubsan` (Fedora names). Tests that need the game skip unless `BB_GAME_DIR` points at your dump.
-
 | Preset | Use |
 |---|---|
 | `debug` | everyday work, AddressSanitizer and UBSan |
 | `relwithdebinfo` | optimized and debuggable, for profiling |
-| `release` | what players build |
+| `release` | what releases are built from |
+
+Builds in `build/` sit inside the source tree, and the game refuses to write there. To start them by hand, point `BB_USER_DIR` at a folder outside the checkout. Tests that need the game skip unless `BB_GAME_DIR` points at your dump.
+
+## Contributing
 
 Before your first commit, turn on the repository's git hooks:
 
