@@ -299,6 +299,24 @@ TEST(SysLibsHost, PadFollowsAVirtualSDLGamepad) {
     EXPECT_FALSE(held(released, OrbisPadButtonDataOffset::Cross));
     EXPECT_FALSE(held(released, OrbisPadButtonDataOffset::R2));
 
+    // Back is the touch pad pressed in its middle, as upstream's default touchpad_center binding:
+    // the button and a touch at (0.5, 0.5) of the 1920x941 pad (#722).
+    SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_BACK, true);
+    SDL_UpdateJoysticks();
+    pump();
+    Input::State touched = state();
+    EXPECT_TRUE(held(touched, OrbisPadButtonDataOffset::TouchPad));
+    EXPECT_TRUE(touched.touchpad[0].state);
+    EXPECT_FALSE(touched.touchpad[1].state);
+    EXPECT_EQ(touched.touchpad[0].x, 960);
+    EXPECT_EQ(touched.touchpad[0].y, 470);
+    SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_BACK, false);
+    SDL_UpdateJoysticks();
+    pump();
+    Input::State untouched = state();
+    EXPECT_FALSE(held(untouched, OrbisPadButtonDataOffset::TouchPad));
+    EXPECT_FALSE(untouched.touchpad[0].state);
+
     SDL_CloseJoystick(joystick);
     SDL_DetachVirtualJoystick(id);
     SDL_UpdateJoysticks();

@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/sdl_window.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
+// Source: shadPS4 src/input/input_handler.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
 // Changed for bloodborne-linux, 2026-11-11: SDLGamepadToOrbisButton, PollController, InitTimers
 // and OnGamepadEvent as a handler of its own. The bindings of upstream's input config are
 // written out as its defaults (buttons, sticks with the default deadzone, triggers); keyboard
 // and mouse input are left out.
+// Changed for bloodborne-linux, 2026-11-20: Back also touches the middle of the pad, as upstream's
+// default binding touchpad_center does (#722).
 // License texts: third_party/shadps4/LICENSES/
 
 #include "core/libraries/pad_input.h"
@@ -150,7 +153,15 @@ void HandleGamepadEvent(const SDL_Event& event) {
             break;
         }
         if (Input::GameController* c = ControllerOf(event.gbutton.which)) {
-            c->Button(button, event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
+            const bool down = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+            // Upstream's default binding of Back is touchpad_center: a touch in the middle of
+            // the pad along with the button. The game counts a press of the pad only with a
+            // touch on it (the gesture menu, a menu's "Controls" list). A pad's own touch-pad
+            // button comes with SDL's touch events, so it needs none.
+            if (event.gbutton.button == SDL_GAMEPAD_BUTTON_BACK) {
+                c->SetTouchpadState(0, down, 0.5f, 0.5f);
+            }
+            c->Button(button, down);
         }
         break;
     }
