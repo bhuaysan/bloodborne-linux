@@ -183,7 +183,9 @@ TEST(RunOptions, ParsesTheResolution) {
     for (const auto& [text, width, height] :
          {std::tuple{"1920x1080", 1920U, 1080U}, std::tuple{"1984x1116", 1984U, 1116U},
           std::tuple{"2240x1260", 2240U, 1260U}, std::tuple{"2560x1440", 2560U, 1440U},
-          std::tuple{"3200x1800", 3200U, 1800U}, std::tuple{"3840x2160", 3840U, 2160U}}) {
+          std::tuple{"3200x1800", 3200U, 1800U}, std::tuple{"3840x2160", 3840U, 2160U},
+          std::tuple{"2560x1080", 2560U, 1080U}, std::tuple{"3440x1440", 3440U, 1440U},
+          std::tuple{"5120x1440", 5120U, 1440U}}) {
         const RunOptions o = parse({"--resolution", text});
         EXPECT_EQ(o.resolution_width, width) << text;
         EXPECT_EQ(o.resolution_height, height) << text;
@@ -192,16 +194,18 @@ TEST(RunOptions, ParsesTheResolution) {
     EXPECT_EQ(parse({"--resolution", "2560x1440", "--resolution", "1920x1080"}).resolution_width,
               1920U);
     EXPECT_EQ(parse_error({"--resolution"}), "--resolution needs a value");
-    // Below and above the range, other aspect ratios, widths that aren't multiples of 64 (1936 is
-    // 16:9 with an odd height), and malformed sizes.
+    // Below and above the range, other aspect ratios and wide sizes not in the list, widths that
+    // aren't multiples of 64 (1936 is 16:9 with an odd height), and malformed sizes.
     for (std::string_view size :
-         {"1280x720", "1856x1044", "3904x2196", "7680x4320", "1920x1200", "2560x1080",
+         {"1280x720", "1856x1044", "3904x2196", "7680x4320", "1920x1200", "2560x1081",
+          "3440x1080", "1080x2560", "3840x1600", "5120x2160", "5120x1441",
           "2560x1600", "1936x1089", "2000x1125", "2048x1153", "1920", "x1080", "1920x",
           "1920X1080", "1920x1080x1", "+1920x1080", " 1920x1080", "1920.0x1080", "-1920x1080",
           "4294967295x4294967295", "68719476736x38654705664", ""}) {
         EXPECT_EQ(parse_error({"--resolution", size}),
                   std::format("--resolution: \"{}\" is not a 16:9 WIDTHxHEIGHT from 1920x1080 to "
-                              "3840x2160 with a width that is a multiple of 64",
+                              "3840x2160 with a width that is a multiple of 64, nor 2560x1080, "
+                              "3440x1440 or 5120x1440",
                               size));
     }
 }

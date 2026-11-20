@@ -41,6 +41,7 @@
 #include "common/log.hpp"
 #include "common/runtime_dirs.hpp"
 #include "common/signal_stack.hpp"
+#include "game/camera/aspect.hpp"
 #include "game/camera/field_of_view.hpp"
 #include "game/chr/ragdoll.hpp"
 #include "game/frame/frame.hpp"
@@ -448,6 +449,7 @@ int start(const bb::tools::RunOptions& options) {
     // Before the entry point: system_properties_init and the graphics device read the size from
     // the globals (docs/design/resolution.md).
     bb::game::set_frame_buffer_size(options.resolution_width, options.resolution_height);
+    bb::game::set_screen_aspect(options.resolution_width, options.resolution_height);
     bb::common::log(LogLevel::info, channel, "rendering at {}x{}", options.resolution_width,
                     options.resolution_height);
     bb::hle::kernel::check_eboot_tls();

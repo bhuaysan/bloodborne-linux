@@ -1,5 +1,6 @@
 #include "tools/run_options.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <format>
 #include <stdexcept>
@@ -59,13 +60,19 @@ void parse_resolution(std::string_view value, RunOptions& options) {
         const auto [ptr, ec] = std::from_chars(text.data(), end, out);
         return ec == std::errc{} && ptr == end;
     };
-    if (x == std::string_view::npos || !side(value.substr(0, x), width) ||
-        !side(value.substr(x + 1), height) || width < default_resolution_width ||
-        width > max_resolution_width || width % resolution_width_step != 0 ||
-        static_cast<unsigned long long>(width) * 9 != static_cast<unsigned long long>(height) * 16) {
+    const bool parsed = x != std::string_view::npos && side(value.substr(0, x), width) &&
+                        side(value.substr(x + 1), height);
+    const bool sixteen_nine =
+        width >= default_resolution_width && width <= max_resolution_width &&
+        width % resolution_width_step == 0 &&
+        static_cast<unsigned long long>(width) * 9 == static_cast<unsigned long long>(height) * 16;
+    const bool wide = std::ranges::any_of(wide_resolutions, [&](const WideResolution& r) {
+        return r.width == width && r.height == height;
+    });
+    if (!parsed || !(sixteen_nine || wide)) {
         throw std::invalid_argument(std::format(
             "--resolution: \"{}\" is not a 16:9 WIDTHxHEIGHT from {}x{} to {}x{} with a width "
-            "that is a multiple of {}",
+            "that is a multiple of {}, nor 2560x1080, 3440x1440 or 5120x1440",
             value, default_resolution_width, default_resolution_height, max_resolution_width,
             max_resolution_height, resolution_width_step));
     }

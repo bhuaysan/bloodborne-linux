@@ -75,8 +75,9 @@ inline constexpr std::string_view run_usage =
     "                       with --fsr: RCAS sharpness, 0 (sharpest) to 2 stops of attenuation\n"
     "                       (default 0.25)\n"
     "  --resolution WxH     the size the game renders at: 16:9, the width a multiple of 64, from\n"
-    "                       1920x1080 to 3840x2160 (default 1920x1080); the window shows it\n"
-    "                       scaled to the window's size\n"
+    "                       1920x1080 to 3840x2160 (default 1920x1080), or the wide 2560x1080,\n"
+    "                       3440x1440 or 5120x1440 (more to the sides, the HUD at 16:9); the\n"
+    "                       window shows it scaled to the window's size\n"
     "  --anisotropy N       the anisotropic filtering of textures with linear filtering and\n"
     "                       mipmaps, 1 (off), 2, 4, 8 or 16 (default: game, the game's own);\n"
     "                       sharpens ground seen at a grazing angle\n"
@@ -95,15 +96,21 @@ inline constexpr std::string_view run_usage =
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
 
-// --resolution: the engine's frame buffer size (docs/design/resolution.md). 16:9 only, because the
-// HUD layout scales width and height separately; the width a multiple of 64, so the half- and
-// quarter-size targets have whole sides as at 1080p. Above 1080p bb-run grows the engine's graphics
-// heap with the size (set_graphics_heap_size); 3840x2160 is the largest size checked.
+// --resolution: the engine's frame buffer size (docs/design/resolution.md). 16:9 sizes with the
+// width a multiple of 64, so the half- and quarter-size targets have whole sides as at 1080p, or
+// one of the wide sizes below, the ones checked (#667): bb-run widens the projection to their
+// aspect (bb::game::set_screen_aspect), and the HUD and menus stay at a centred 16:9 area. Above
+// 1080p bb-run grows the engine's graphics heap with the size (set_graphics_heap_size); 3840x2160
+// is the largest 16:9 size checked.
 inline constexpr unsigned default_resolution_width = 1920;
 inline constexpr unsigned default_resolution_height = 1080;
 inline constexpr unsigned max_resolution_width = 3840;
 inline constexpr unsigned max_resolution_height = 2160;
 inline constexpr unsigned resolution_width_step = 64;
+struct WideResolution {
+    unsigned width, height;
+};
+inline constexpr WideResolution wide_resolutions[] = {{2560, 1080}, {3440, 1440}, {5120, 1440}};
 
 // --load-hold: the game's minimum time of a death's loading page, and the most the option takes
 // (bb::game::game_load_hold, #684).
