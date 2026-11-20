@@ -37,6 +37,11 @@ address,name,signature,status,file
 0x015a30f0,chr_anim_state_update,,named,
 0x015af4f0,anim_update_all,,named,
 0x015b2910,anim_update_entry,,named,
+0x016439b0,hud_world_markers_project,void hud_world_markers_project(void * self),replaced,src/game/gfx/hud_stage.cpp
+0x016448f0,lock_on_reticle_project,,replaced,src/game/gfx/hud_stage.cpp
+0x01644cf0,enemy_bars_project,,replaced,src/game/gfx/hud_stage.cpp
+0x01654d80,enemy_bar_update,"void enemy_bar_update(float step, void * bar)",replaced,src/game/gfx/hud_stage.cpp
+0x016b3320,lock_on_reticle_visible,,replaced,src/game/gfx/hud_stage.cpp
 0x01734510,shop_tab_refresh,void shop_tab_refresh(void * shop),replaced,src/game/frame/step_literals.cpp
 0x0176d3c0,now_loading_request_close,,named,
 0x017f99d0,havok_world_step,void havok_world_step(void * self),replaced,src/game/havok/world.cpp
@@ -55,6 +60,7 @@ address,name,signature,status,file
 0x019a6860,hkai_test_module_step,,named,
 0x019baa40,navmesh_test_module_step,,named,
 0x01a0f910,ai_pad_step,"void ai_pad_step(void * pad, FD4TaskData * task)",named,
+0x01bfb2a0,hud_update,,replaced,src/game/gfx/hud_stage.cpp
 0x01cb4dd0,anim_slots_update,,named,
 0x01d969f0,graphics_init,,named,
 0x01d978e0,graphics_apply_flip_settings,void graphics_apply_flip_settings(void),named,

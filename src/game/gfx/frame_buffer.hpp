@@ -2,6 +2,7 @@
 // (docs/design/resolution.md, "Decision: way B").
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "loader/image.hpp"
@@ -64,6 +65,12 @@ static_assert(graphics_private_heap_size(3840, 2160) < (std::uint64_t{1} << 32))
 static_assert(graphics_private_heap_size(3840, 2160) - graphics_private_heap_default +
                   std::uint64_t{4478} * (1 << 20) <
               (std::uint64_t{8} << 30));
+
+// Writes `size` bytes at link address `link` of `eboot`, before its entry point runs. On a
+// finalized image the pages are made writable for the write and get their segment's protection
+// back; throws std::out_of_range when the bytes don't lie inside one segment.
+void write_image_bytes(loader::Image& eboot, std::uint64_t link, const void* bytes,
+                       std::size_t size);
 
 // Writes graphics_private_heap_size(width, height) into the heap size table of `eboot`. Called
 // once after the eboot is mapped and before its entry point runs: the heaps are set up at start.

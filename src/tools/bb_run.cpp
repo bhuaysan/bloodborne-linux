@@ -47,6 +47,7 @@
 #include "game/frame/frame.hpp"
 #include "game/frame/step_literals.hpp"
 #include "game/gfx/frame_buffer.hpp"
+#include "game/gfx/hud_stage.hpp"
 #include "game/gfx/post_effects.hpp"
 #include "game/image.hpp"
 #include "game/load/load_hold.hpp"
@@ -444,6 +445,8 @@ int start(const bb::tools::RunOptions& options) {
         bb::common::log(LogLevel::info, channel, "GFX_GraphicsPrivate heap {} MiB",
                         bb::game::graphics_private_heap_size(options.resolution_width,
                                                              options.resolution_height) >> 20);
+        // The HUD places its world markers in 1920x1080 stage coordinates (#713).
+        bb::game::set_hud_stage_loads(eboot, options.resolution_width, options.resolution_height);
     });
     bb::game::set_image(game->eboot);
     // Before the entry point: system_properties_init and the graphics device read the size from
