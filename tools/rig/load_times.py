@@ -163,6 +163,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{target:9s} {scenario:18s} {name:8s} median {statistics.median(values):5.1f} s, "
               f"spread {max(values) - min(values):4.1f} s, runs {len(values)}: "
               + " ".join(f"{v:.1f}" for v in values))
+    if not groups:
+        print("no finished run with a load to sum")
+        return 1
     return 0
 
 

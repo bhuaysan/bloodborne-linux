@@ -451,6 +451,8 @@ int start(const bb::tools::RunOptions& options) {
     main_loop = new MainLoop{bb::tools::MainLoopProbe(), options.stop_at_main_loop, start_time};
     bb::game::set_frame_observer(&observe_frame);
     bb::game::set_frame_rate(options.frame_rate);
+    static_assert(bb::tools::max_load_hold == bb::game::game_load_hold,
+                  "--load-hold's range must end at the game's hold");
     bb::game::set_load_hold(options.load_hold);
     if (options.load_hold != bb::game::game_load_hold) {
         bb::common::log(LogLevel::info, channel, "loading page hold {} s (the game's: {} s)",

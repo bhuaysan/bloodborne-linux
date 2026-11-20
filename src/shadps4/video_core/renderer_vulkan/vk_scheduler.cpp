@@ -250,9 +250,10 @@ void Scheduler::Process(Work& work) {
     if (!work.submit) {
         return;
     }
-    if (recording != Recording::Threaded) {
-        recorder.Replay();
-    }
+    // SubmitExecution handed the records over before it queued or ran this work, so nothing is
+    // left in the recorder that would miss this command buffer.
+    ASSERT_MSG(recording == Recording::Threaded || recorder.PendingBytes() == 0,
+               "{} bytes of records left at a submit", recorder.PendingBytes());
     Check(primary.end());
 
     SubmitInfo& info = work.info;

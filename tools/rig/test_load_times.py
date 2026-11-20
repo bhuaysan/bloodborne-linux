@@ -172,8 +172,9 @@ class LoadTests(unittest.TestCase):
         r.shot(2, True)
         out = io.StringIO()
         with redirect_stdout(out):
-            load_times.main([str(r.finish(finished=False))])
+            status = load_times.main([str(r.finish(finished=False))])
         self.assertIn("(scenario not finished)", out.getvalue())
+        self.assertEqual(status, 1)
         self.assertNotIn("median", out.getvalue())
 
     def test_runs_are_summed_per_load_and_a_broken_run_is_skipped(self) -> None:
@@ -190,7 +191,8 @@ class LoadTests(unittest.TestCase):
             broken.mkdir()
             out = io.StringIO()
             with redirect_stdout(out):
-                load_times.main([*runs, str(broken)])
+                status = load_times.main([*runs, str(broken)])
+        self.assertEqual(status, 0)
         self.assertIn("broken: unreadable run", out.getvalue())
         self.assertIn("travel   median   2.0 s, spread  1.0 s, runs 2: 1.5 2.5", out.getvalue())
 
@@ -205,8 +207,10 @@ class LoadTests(unittest.TestCase):
             {"target": "bb-run", "scenario": "x", "scenario_ok": False}))
         out = io.StringIO()
         with redirect_stdout(out):
-            load_times.main([str(r.dir)])
+            status = load_times.main([str(r.dir)])
         self.assertNotIn("median", out.getvalue())
+        self.assertIn("no finished run with a load to sum", out.getvalue())
+        self.assertEqual(status, 1)
 
 
 if __name__ == "__main__":
