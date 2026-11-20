@@ -7,7 +7,7 @@ The interfaces that the loader, the import stubs, the hooks and the differential
 ```
 src/
   common/    bbcommon   file reading, SHA-256, game folder check, config file, logger, runtime directories
-                        (XDG, profile), the frame counters, the pad input stream
+                        (portable user folder, profile), the frame counters, the pad input stream
   loader/    bbloader   SELF → ELF, ELF parsing, mapping, relocation, eh_frame lookup, load set
   hle/       bbhle      HLE module registry, import stubs, NID name table, linking the load set, PRX init,
                         the libkernel modules (kernel/: threads, sync, event queues, memory, files, time,

@@ -4,6 +4,24 @@ The launcher `bb-launcher` sets up the game and starts it. It's for players who 
 
 The guideline is: keep it simple, but don't look like every other launcher.
 
+## One portable folder
+
+The game is one folder that the player unpacks anywhere they can write. Nothing is installed, and there is no menu entry:
+
+```
+Bloodborne-Linux/
+├── bb-launcher, bb-run
+├── lib/        libraries not linked statically (RPATH $ORIGIN/lib)
+├── game/       optional: the dump put here is found without setup
+└── user/       config.toml, profiles/<name>/savedata/, cache/, logs/
+```
+
+Everything the launcher and `bb-run` write goes to `user/` (`docs/design/m3-core-os.md`, "Runtime directories"). Deleting the folder removes the game with its settings, saves, caches and logs; nothing stays in `~/.config`, `~/.local/share`, `~/.cache` or `~/.local/state`, and later nothing in AppData on Windows. The dump stays where the player keeps it, and only its path is stored. A dump inside the folder is stored relative to it, so the whole folder can be moved or renamed, for example onto a USB stick. We don't copy the dump in: it is large, and players keep it where they like (#728).
+
+A folder that can't be written (copied to `/usr/bin`, say) gets a status line that says so and asks to unpack the game into a folder of its own.
+
+What we can't control: the folder dialog runs through xdg-desktop-portal, which may add the chosen folder to the desktop's "recently used" list (dragging the folder onto the window doesn't); a crash may leave a core dump with systemd-coredump; a graphics driver that ignores the cache variables writes its cache where it likes.
+
 ## Layout: one window in the style of a late-90s autorun menu
 
 A small window with a fixed size, the game's title picture at the top, a one-line status below it, then a single column of buttons. The first button is Play, and it is bigger than the others. Late-90s PC games opened with a menu like this. It needs no explaining: there is one obvious button, and everything else is a short list under it.
@@ -50,9 +68,9 @@ Buttons are never disabled. A button that can't do anything yet says why when pr
 
 ## First start
 
-1. **Search.** The launcher looks for the game folder on its own: directories that hold `eboot.bin` and `sce_sys/param.sfo` with title ID CUSA03173, under `$HOME` (up to four levels deep, without hidden directories) and under the removable-media mount points (`/run/media/$USER`, `/media`). The search is limited to two seconds and runs off the UI thread. One hit that passes the check is taken, and the status line shows the folder with a "Choose another folder" link. Several hits become a list to pick from.
+1. **Search.** The launcher looks for the game folder on its own: directories that hold `eboot.bin` and `sce_sys/param.sfo` with title ID CUSA03173, first in `game/` inside the launcher's folder, then under `$HOME` (up to four levels deep, without hidden directories) and under the removable-media mount points (`/run/media/$USER`, `/media`). The search is limited to two seconds and runs off the UI thread. One hit that passes the check is taken, and the status line shows the folder with a "Choose another folder" link. Several hits become a list to pick from.
 2. **Drop or choose.** Otherwise the header becomes the drop target: "Drag your game folder here (the one with eboot.bin)". Set up game opens the folder dialog (`SDL_ShowOpenFolderDialog`).
-3. **Check.** The setup check from #578 runs on the folder and its message goes to the status line in plain words (wrong folder, other game, base game without update 1.09, unknown version). The folder is written to the config file only when the check passes.
+3. **Check.** The setup check from #578 runs on the folder and its message goes to the status line in plain words (wrong folder, other game, base game without update 1.09, unknown version). The folder is written to the config file only when the check passes, relative to the launcher's folder when it lies inside it.
 
 The search goes first because "where did I put the dump" is the most common place for a non-technical player to get stuck.
 
@@ -89,7 +107,7 @@ Changes are saved when the page closes. There is no Apply button.
 ## Saves
 
 - The profiles (`--profile`), each with the time it was last played. Choose one, make a new one, rename one.
-- "Open folder" opens the profile's save folder in the file manager (`SDL_OpenURL` with a `file://` URL), so players can make backups without knowing where XDG directories are.
+- "Open folder" opens the profile's save folder in the file manager (`SDL_OpenURL` with a `file://` URL), so players can make backups without knowing where in the folder their saves are.
 - Deleting a profile is not offered. Players who really want to delete one can do it in the file manager.
 
 ## Help with problems
@@ -98,13 +116,13 @@ Changes are saved when the page closes. There is no Apply button.
 - **Copy problem report:** copies to the clipboard the launcher and `bb-run` versions, distribution, kernel, GPU and driver, the last run's exit status and the last 200 lines of its log. Home-directory paths are replaced with `~` and the user name never appears. The player can paste the report into an issue.
 - **Open log folder.**
 
-The page lists the four problems with what to do and puts the ones that apply now first (the check of the game folder, the GPU probe, the last run's status). Play sends the output of `bb-run` to `$XDG_STATE_HOME/bloodborne-linux/logs/launcher-last-run.log` and writes how it ended to `launcher-last-run.status` next to it, because `bb-run` has no log file of its own when it stops early. The report takes the last 200 lines of that capture, then replaces the home directory and any `/home/<name>` with `~` and every whole word equal to the user name with `<user>`. The launcher has no version number yet, so the report gives the commit it was built from; `bb-run` is built with it.
+The page lists the four problems with what to do and puts the ones that apply now first (the check of the game folder, the GPU probe, the last run's status). Play sends the output of `bb-run` to `user/logs/launcher-last-run.log` and writes how it ended to `launcher-last-run.status` next to it, because `bb-run` has no log file of its own when it stops early. The report takes the last 200 lines of that capture, then replaces the launcher's folder with `<folder>`, the home directory and any `/home/<name>` with `~` and every whole word equal to the user name with `<user>`. The launcher has no version number yet, so the report gives the commit it was built from; `bb-run` is built with it.
 
 ## Starting the game
 
 - Play starts `bb-run` from the launcher's own directory (found via `/proc/self/exe`) as a separate process, with `--config <path>` and nothing else. The launcher holds no settings of its own: the config file is the only state.
 - The launcher hides its window while the game runs and waits for the process to end. On exit code 0 it comes back to the main screen. On any other exit it comes back with the error state above.
-- The launcher never writes into the game folder, and nothing outside the XDG directories.
+- The launcher never writes into the game folder, and nothing outside `user/` in its own folder.
 
 ## Controller
 
@@ -126,6 +144,7 @@ For the checks and the tests, `BB_LAUNCHER_SCRIPT` names a file with one step pe
 ## Not in scope
 
 - PKG installs (roadmap, decision 2026-11-16).
+- Installing into the system or a menu entry: the game is one portable folder (#728).
 - Downloads and updates of any kind, including of the launcher itself.
 - Keyboard input for the game. That belongs in `bb-run`, as an issue of its own.
 - Themes, news, mod lists: they would make the launcher less simple.

@@ -137,7 +137,7 @@ GitHub Actions builds every preset, runs the unit tests and the privacy checks. 
 
 ### Data locations
 - Game dump: read-only, from `BB_GAME_DIR`.
-- Runtime output (save data, shader cache, logs, config) goes to XDG directories, e.g. `$XDG_DATA_HOME/bloodborne-linux/` and `$XDG_CACHE_HOME/bloodborne-linux/`. Never into the game or repo directory.
+- Runtime output (save data, shader cache, logs, config) goes to the folder `user/` next to the binaries, so the game is portable and deleting its folder removes everything. Nothing goes to the XDG directories or, later, to AppData. `BB_USER_DIR` overrides the folder for development, tests and the rig. Never into the game or repo directory.
 - `--profile <name>` keeps separate save data per profile, so test saves stay apart from a real playthrough.
 - `analysis/` and the Ghidra project are disposable. `symbols/` is the source of truth.
 
