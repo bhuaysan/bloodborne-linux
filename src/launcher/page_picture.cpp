@@ -32,16 +32,52 @@ struct Text {
     const char* sharpened;
     const char* extra_sharp;
     const char* look_tail;
+    // The second sentence: view, textures, motion blur and colour fringes.
+    const char* see_lead;
+    const char* fov[3];         // fov_choices
+    const char* fov_other;      // a value the list has no word for, in degrees
+    const char* textures[3];    // anisotropy_choices
+    const char* textures_other;  // another level, as a factor
+    const char* blur[2];        // on, off
+    const char* fringes[2];     // on, off
+    const char* comma;
+    const char* and_;
+    const char* see_tail;
     const char* saved_note;
 };
 constexpr Text english{"Picture and sound", "I play in",       "a window",   "fullscreen",
                        "at",                "your screen's size", "at",       "frames per second,",
                        "with a",            "normal",          "sharpened",  "extra sharp",
-                       "picture.",          "Changes are saved when you go back."};
+                       "picture.",
+                       "I see it with",
+                       {"the game's view", "a wider view", "a much wider view"},
+                       "a {}\xC2\xB0 view",
+                       {"textures as sharp as in the game", "sharper distant textures",
+                        "the sharpest distant textures"},
+                       "{}\xC3\x97 filtered textures",
+                       {"motion blur", "no motion blur"},
+                       {"colour fringes at the edges", "no colour fringes"},
+                       ",",
+                       "and",
+                       ".",
+                       "Changes are saved when you go back."};
 constexpr Text german{"Bild und Ton", "Ich spiele", "im Fenster",  "im Vollbild",
                       "in",           "der Größe deines Bildschirms", "mit", "Bildern pro Sekunde",
                       "und einem",    "normalen",   "geschärften", "extra scharfen",
-                      "Bild.",        "Änderungen werden beim Zurückgehen gespeichert."};
+                      "Bild.",
+                      "Ich sehe es mit",
+                      {"dem Blickfeld des Spiels", "einem weiteren Blickfeld",
+                       "einem viel weiteren Blickfeld"},
+                      "einem Blickfeld von {}\xC2\xB0",
+                      {"Texturen so scharf wie im Spiel", "schärferen Texturen in der Ferne",
+                       "den schärfsten Texturen in der Ferne"},
+                      "{}-fach gefilterten Texturen",
+                      {"Bewegungsunschärfe", "keiner Bewegungsunschärfe"},
+                      {"Farbsäumen am Rand", "keinen Farbsäumen"},
+                      ",",
+                      "und",
+                      ".",
+                      "Änderungen werden beim Zurückgehen gespeichert."};
 
 const Text& text(const Context& ctx) {
     return ctx.lang == Lang::de ? german : english;
@@ -87,14 +123,16 @@ class PicturePage : public Page {
 public:
     const char* title(const Context& ctx) const override { return text(ctx).title; }
 
-    void draw(const Context& ctx, float) override {
+    void draw(const Context& ctx, float height) override {
         const bool first_frame = !loaded_;
         load(ctx);
         const Text& t = text(ctx);
         const float s = ctx.scale;
         const float gap = 8 * s;
-        ImGui::Indent(24 * s);
-        ImGui::Dummy(ImVec2(0, gap));
+        // Two sentences need more than the page's height at a small scale: the child scrolls,
+        // and gamepad navigation scrolls it to the focused choice.
+        ImGui::BeginChild("picture", ImVec2(432 * s, std::max(height - gap, 60 * s)));
+        const PictureChoices was = now_;
 
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(t.lead);
@@ -153,9 +191,15 @@ public:
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(t.look_tail);
 
-        ImGui::Dummy(ImVec2(0, gap));
+        ImGui::Dummy(ImVec2(0, gap / 2));
+        draw_second_sentence(t, s);
+
+        ImGui::Dummy(ImVec2(0, gap / 2));
         ImGui::TextDisabled("%s", t.saved_note);
-        ImGui::Unindent(24 * s);
+        ImGui::EndChild();
+        if (now_.fullscreen != was.fullscreen || now_.size != was.size) {
+            now_.wide = wide_frame(now_, display_);
+        }
     }
 
     void on_close(const Context& ctx) override {
@@ -173,6 +217,58 @@ public:
     }
 
 private:
+    // "I see it with [view], [textures], [motion blur] and [colour fringes]."
+    void draw_second_sentence(const Text& t, float s) {
+        const auto tail = [s](const char* text) {
+            ImGui::SameLine(0, 3 * s);  // clear of the focus frame
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(text);
+        };
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(t.see_lead);
+        ImGui::SameLine();
+
+        std::vector<std::string> labels(std::begin(t.fov), std::end(t.fov));
+        std::vector<float> fovs(std::begin(fov_choices), std::end(fov_choices));
+        if (std::find(fovs.begin(), fovs.end(), now_.fov) == fovs.end()) {
+            fovs.push_back(now_.fov);
+            labels.push_back(std::vformat(t.fov_other, std::make_format_args(now_.fov)));
+        }
+        int index = static_cast<int>(std::find(fovs.begin(), fovs.end(), now_.fov) - fovs.begin());
+        if (choice("##fov", labels, index, s)) {
+            now_.fov = fovs[static_cast<size_t>(index)];
+        }
+        tail(t.comma);
+
+        labels.assign(std::begin(t.textures), std::end(t.textures));
+        std::vector<unsigned> levels(std::begin(anisotropy_choices), std::end(anisotropy_choices));
+        if (std::find(levels.begin(), levels.end(), now_.anisotropy) == levels.end()) {
+            levels.push_back(now_.anisotropy);
+            labels.push_back(
+                std::vformat(t.textures_other, std::make_format_args(now_.anisotropy)));
+        }
+        index = static_cast<int>(std::find(levels.begin(), levels.end(), now_.anisotropy) -
+                                 levels.begin());
+        if (choice("##textures", labels, index, s)) {
+            now_.anisotropy = levels[static_cast<size_t>(index)];
+        }
+        tail(t.comma);
+
+        int blur = now_.motion_blur ? 0 : 1;
+        if (choice("##blur", {t.blur[0], t.blur[1]}, blur, s)) {
+            now_.motion_blur = blur == 0;
+        }
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(t.and_);
+
+        int fringes = now_.chromatic_aberration ? 0 : 1;
+        if (choice("##fringes", {t.fringes[0], t.fringes[1]}, fringes, s)) {
+            now_.chromatic_aberration = fringes == 0;
+        }
+        tail(t.see_tail);
+    }
+
     void load(const Context& ctx) {
         if (loaded_) {
             return;
@@ -187,12 +283,14 @@ private:
             config = {};
         }
         before_ = now_ = choices_from_config(config);
-        sizes_ = resolution_choices(display_size(), now_.size);
+        display_ = display_size();
+        sizes_ = resolution_choices(display_, now_.size);
     }
 
     bool loaded_ = false;
     PictureChoices before_;
     PictureChoices now_;
+    Size display_{0, 0};
     std::vector<Size> sizes_;
 };
 

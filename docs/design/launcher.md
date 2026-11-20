@@ -58,20 +58,29 @@ The search goes first because "where did I put the dump" is the most common plac
 
 ## Picture and sound
 
-The settings read as a sentence with choices in it, not as a form:
+The settings read as two sentences with choices in them, not as a form:
 
 > I play in **[a window | fullscreen]** at **[1280 × 720 | 1920 × 1080 | 2560 × 1440 | …]**, at **[30 | 60 | 120]** frames per second, with a **[normal | sharpened | extra sharp]** picture.
+>
+> I see it with **[the game's view | a wider view | a much wider view]**, **[textures as sharp as in the game | sharper distant textures | the sharpest distant textures]**, **[motion blur | no motion blur]** and **[colour fringes at the edges | no colour fringes]**.
 
-The sentence says what the player gets, without technical terms. The mapping onto the config file from #577 (and so onto `bb-run`'s options):
+The sentences say what the player gets, without technical terms. The second one holds the options of R11 (image quality). Its default choices are the game's own picture, and a choice the player left alone writes nothing, so the defaults leave the config file as it was. The mapping onto the config file from #577 (and so onto `bb-run`'s options):
 
 | Choice | Config / `bb-run` |
 |---|---|
 | a window / fullscreen | `--fullscreen` (borderless, at the display's size) |
-| resolution | `--window-size WxH`. The list holds the common 16:9 sizes up to the display's size. With fullscreen the sentence reads "at your screen's size" instead of a choice |
+| resolution | `--window-size WxH`. The list holds the common 16:9 sizes up to the display's size, and on a 21:9 or 32:9 display (width at least twice, or three times, the height) the wide sizes of that shape that fit it (2560 × 1080 and 3440 × 1440, or 5120 × 1440). With fullscreen the sentence reads "at your screen's size" instead of a choice |
+| a wide size (window), or fullscreen on a 21:9 or 32:9 display | also `--resolution WxH`, the config key `resolution`: the game renders at the wide size (#667). In fullscreen it is the smallest wide size of the display's shape that is at least as tall as the display, else the largest, so FSR only scales up. A 16:9 choice removes a wide `resolution` again; a 16:9 `resolution` set by hand stays |
 | 30 / 60 / 120 | `--frame-rate` (the rates of `bb::common::frame_rates`) |
 | normal | no FSR |
 | sharpened | `--fsr`, RCAS at its default attenuation (0.25) |
 | extra sharp | `--fsr --rcas-attenuation 0` |
+| the game's / a wider / a much wider view | `--fov`: no key (43°), 52°, 60° (#666). Another value in the file shows as its degrees |
+| textures as in the game / sharper / the sharpest | `--anisotropy`: no key (the game's filtering), 4, 16 (#658). Another level shows as its factor |
+| motion blur / no motion blur | `motion_blur = true / false` (`--no-motion-blur`, #665) |
+| colour fringes / no colour fringes | `chromatic_aberration = true / false` (`--no-chromatic-aberration`, #665) |
+
+The strengths of motion blur and chromatic aberration (`--motion-blur-strength`, `--chromatic-aberration-strength`) have no choice; a strength in the file stays. Options that the shadow and draw-distance issues of R11 add get their place in the second sentence in their own issue. The two sentences need more than the page's height at a small display scale, so the page scrolls, and gamepad navigation scrolls it to the focused choice.
 
 Sound gets choices once `bb-run` has any (output device, volume). Until then the page is called "Picture and sound" anyway, so the button list doesn't change later.
 

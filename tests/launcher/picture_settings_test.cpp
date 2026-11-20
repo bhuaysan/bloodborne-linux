@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 namespace {
 
 using namespace bb::launcher;
@@ -13,6 +15,160 @@ TEST(PictureSettings, AnEmptyConfigShowsBbRunsDefaults) {
     EXPECT_EQ(c.size, (Size{1280, 720}));
     EXPECT_EQ(c.frame_rate, 30u);
     EXPECT_EQ(c.sharpness, Sharpness::normal);
+    EXPECT_FALSE(c.wide);
+    EXPECT_EQ(c.anisotropy, 0u);
+    EXPECT_EQ(c.fov, 43.0f);
+    EXPECT_TRUE(c.motion_blur);
+    EXPECT_TRUE(c.chromatic_aberration);
+}
+
+// The defaults write nothing: the page leaves the file as it was.
+TEST(PictureSettings, TheDefaultsLeaveTheConfigAlone) {
+    Config config;
+    const PictureChoices c = choices_from_config(config);
+    apply_choices(config, c, c);
+    EXPECT_EQ(config, Config{});
+    // Choosing something and then the default again within one visit writes nothing either.
+    PictureChoices round = c;
+    round.anisotropy = 16;
+    round.anisotropy = 0;
+    apply_choices(config, c, round);
+    EXPECT_EQ(config, Config{});
+}
+
+TEST(PictureSettings, R11ChoicesGoToTheConfigAndComeBack) {
+    for (const float fov : fov_choices) {
+        for (const unsigned level : anisotropy_choices) {
+            for (const bool blur : {false, true}) {
+                for (const bool fringes : {false, true}) {
+                    PictureChoices want;
+                    want.fov = fov;
+                    want.anisotropy = level;
+                    want.motion_blur = blur;
+                    want.chromatic_aberration = fringes;
+                    Config config;
+                    apply_choices(config, choices_from_config(config), want);
+                    EXPECT_EQ(choices_from_config(config), want);
+                    // And the text of the file reads back the same.
+                    EXPECT_EQ(bb::common::parse_config(bb::common::format_config(config), "c")
+                                  .config,
+                              config);
+                }
+            }
+        }
+    }
+}
+
+TEST(PictureSettings, MapsTheR11ChoicesOntoTheirKeys) {
+    Config config;
+    const PictureChoices base;
+    PictureChoices c = base;
+    c.fov = 60.0f;
+    c.anisotropy = 16;
+    c.motion_blur = false;
+    c.chromatic_aberration = false;
+    apply_choices(config, base, c);
+    EXPECT_EQ(config.fov, 60.0f);
+    EXPECT_EQ(config.anisotropy, 16u);
+    EXPECT_EQ(config.motion_blur, false);
+    EXPECT_EQ(config.chromatic_aberration, false);
+    // Back to the game's view and filtering removes the keys; bb-run has no "game" anisotropy key.
+    apply_choices(config, c, base);
+    EXPECT_FALSE(config.fov);
+    EXPECT_FALSE(config.anisotropy);
+    EXPECT_EQ(config.motion_blur, true);
+    EXPECT_EQ(config.chromatic_aberration, true);
+}
+
+TEST(PictureSettings, OddR11ValuesAndStrengthsSurvive) {
+    Config config;
+    config.fov = 47.5f;
+    config.anisotropy = 2;
+    config.motion_blur_strength = 0.5f;
+    config.chromatic_aberration_strength = 0.25f;
+    config.resolution = std::pair{2560u, 1440u};  // a 16:9 frame set by hand
+    const PictureChoices before = choices_from_config(config);
+    EXPECT_EQ(before.fov, 47.5f);
+    EXPECT_EQ(before.anisotropy, 2u);
+    EXPECT_FALSE(before.wide);
+    PictureChoices after = before;
+    after.motion_blur = false;
+    apply_choices(config, before, after);
+    EXPECT_EQ(config.fov, 47.5f);
+    EXPECT_EQ(config.anisotropy, 2u);
+    EXPECT_EQ(config.motion_blur_strength, 0.5f);
+    EXPECT_EQ(config.chromatic_aberration_strength, 0.25f);
+    EXPECT_EQ(config.resolution, (Size{2560, 1440}));
+    EXPECT_EQ(config.motion_blur, false);
+}
+
+TEST(PictureSettings, DisplayShapes) {
+    EXPECT_EQ(shape_of({1920, 1080}), Shape::normal);
+    EXPECT_EQ(shape_of({1920, 1200}), Shape::normal);
+    EXPECT_EQ(shape_of({0, 0}), Shape::normal);
+    EXPECT_EQ(shape_of({2560, 1080}), Shape::wide);
+    EXPECT_EQ(shape_of({3440, 1440}), Shape::wide);
+    EXPECT_EQ(shape_of({3840, 1600}), Shape::wide);
+    EXPECT_EQ(shape_of({5120, 1440}), Shape::super_wide);
+    EXPECT_EQ(shape_of({3840, 1080}), Shape::super_wide);
+}
+
+TEST(PictureSettings, WideSizesOnlyOnAWideDisplay) {
+    EXPECT_EQ(resolution_choices({3440, 1440}, {1280, 720}),
+              (std::vector<Size>{{1280, 720},
+                                 {1600, 900},
+                                 {1920, 1080},
+                                 {2560, 1080},
+                                 {2560, 1440},
+                                 {3440, 1440}}));
+    EXPECT_EQ(resolution_choices({2560, 1080}, {1280, 720}),
+              (std::vector<Size>{{1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1080}}));
+    // 32:9: its own size, not the 21:9 ones.
+    EXPECT_EQ(resolution_choices({5120, 1440}, {1280, 720}),
+              (std::vector<Size>{
+                  {1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}, {5120, 1440}}));
+    // A 16:9 display gets no wide size, also when it is large enough.
+    const auto list = resolution_choices({5120, 2880}, {1280, 720});
+    EXPECT_EQ(std::count(list.begin(), list.end(), Size{2560, 1080}), 0);
+    EXPECT_EQ(std::count(list.begin(), list.end(), Size{5120, 1440}), 0);
+}
+
+TEST(PictureSettings, AWideWindowRendersAWideFrame) {
+    Config config;
+    const PictureChoices before = choices_from_config(config);
+    PictureChoices after = before;
+    after.size = {3440, 1440};
+    after.wide = wide_frame(after, {3440, 1440});
+    EXPECT_EQ(after.wide, (Size{3440, 1440}));
+    apply_choices(config, before, after);
+    EXPECT_EQ(config.window_size, (Size{3440, 1440}));
+    EXPECT_EQ(config.resolution, (Size{3440, 1440}));
+    EXPECT_EQ(choices_from_config(config), after);
+    // A 16:9 window again: bb-run's 16:9 frame, the key goes.
+    PictureChoices back = after;
+    back.size = {1920, 1080};
+    back.wide = wide_frame(back, {3440, 1440});
+    EXPECT_FALSE(back.wide);
+    apply_choices(config, after, back);
+    EXPECT_FALSE(config.resolution);
+    EXPECT_EQ(config.window_size, (Size{1920, 1080}));
+}
+
+TEST(PictureSettings, FullscreenRendersAtTheDisplaysShape) {
+    PictureChoices c;
+    c.fullscreen = true;
+    EXPECT_FALSE(wide_frame(c, {1920, 1080}));
+    EXPECT_FALSE(wide_frame(c, {0, 0}));
+    EXPECT_EQ(wide_frame(c, {2560, 1080}), (Size{2560, 1080}));
+    EXPECT_EQ(wide_frame(c, {3440, 1440}), (Size{3440, 1440}));
+    EXPECT_EQ(wide_frame(c, {3840, 1600}), (Size{3440, 1440}));  // the largest 21:9 size
+    EXPECT_EQ(wide_frame(c, {5120, 1440}), (Size{5120, 1440}));
+    EXPECT_EQ(wide_frame(c, {3840, 1080}), (Size{5120, 1440}));
+    // The window size does not count in fullscreen.
+    c.size = {2560, 1080};
+    EXPECT_FALSE(wide_frame(c, {1920, 1080}));
+    c.fullscreen = false;
+    EXPECT_EQ(wide_frame(c, {1920, 1080}), (Size{2560, 1080}));
 }
 
 TEST(PictureSettings, ChoicesGoToTheConfigAndComeBack) {
@@ -20,7 +176,11 @@ TEST(PictureSettings, ChoicesGoToTheConfigAndComeBack) {
         for (const unsigned rate : {30u, 60u, 120u}) {
             for (const Sharpness sharp :
                  {Sharpness::normal, Sharpness::sharpened, Sharpness::extra_sharp}) {
-                const PictureChoices want{fullscreen, {1920, 1080}, rate, sharp};
+                PictureChoices want;
+                want.fullscreen = fullscreen;
+                want.size = {1920, 1080};
+                want.frame_rate = rate;
+                want.sharpness = sharp;
                 Config config;
                 apply_choices(config, choices_from_config(config), want);
                 EXPECT_EQ(choices_from_config(config), want);

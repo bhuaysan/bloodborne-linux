@@ -246,6 +246,27 @@ TEST(LauncherRun, ThePicturePageSavesItsChoicesOnBack) {
               "fullscreen = true\nfsr = true\nrcas_attenuation = 0\nframe_rate = 60\n");
 }
 
+// The second sentence with the pad alone: a much wider view, the sharpest textures, no motion blur
+// and no colour fringes (R11, #668).
+TEST(LauncherRun, ThePicturePageSavesTheImageQualityChoices) {
+    const Dir dir;
+    std::string script = "wait 3\npress down\nwait 2\npress accept\nwait 3\n";
+    for (const char* step : {"down", "down", "down", "down",         // mode -> view
+                             "accept", "down", "down", "accept",     // the game's -> much wider
+                             "down", "accept", "down", "down", "accept",  // -> the sharpest
+                             "down", "accept", "down", "accept",     // no motion blur
+                             "down", "accept", "down", "accept"}) {  // no colour fringes
+        script += std::format("press {}\nwait 2\n", step);
+    }
+    const char* keep = std::getenv("BB_LAUNCHER_TEST_SHOT");  // a shot to look at, if asked for
+    script += std::format("shot {}\npress back\nwait 3\nquit\n",
+                          keep ? keep : (dir.path() / "shot.png").string());
+    const auto r = run_script(dir, script);
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(slurp(dir.path() / "config/bloodborne-linux/config.toml"),
+              "anisotropy = 16\nmotion_blur = false\nchromatic_aberration = false\nfov = 60\n");
+}
+
 TEST(LauncherRun, ABadScriptEndsWithAMessage) {
     const Dir dir;
     const auto r = run_script(dir, "frobnicate\n");
