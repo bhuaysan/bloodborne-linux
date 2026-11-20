@@ -5,7 +5,9 @@
 #include <dlfcn.h>
 #include <unistd.h>
 
+#include <array>
 #include <atomic>
+#include <bit>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
@@ -528,6 +530,162 @@ TEST(VideoCore, RecordingThreadSubmitsInOrderAndOnShutdown) {
     EXPECT_EQ(counter(), 1u);
     EXPECT_EQ(words[1], 0x5678u);
     vmaDestroyBuffer(allocator, buffer, buffer_allocation);
+    liverpool.reset();
+}
+
+// A sparse arena bind while chunks are queued (#695, docs/design/command-recording.md). The
+// submit callback runs on the GPU thread and calls bindSparse under submit_mutex, as
+// BufferCache::SubmitPendingArenaBinds does, while the recording thread is held on submit_mutex
+// behind an earlier submit with the chunks of the commands recorded before the bind still queued.
+// The bind reaches the queue before those chunks' submit, which waits for it. Commands recorded
+// before the bind, on a page that was bound already, and after it, on the new page, both land.
+// The buffer cache's arenas are 4 GiB, more than lavapipe's sparse address space, so the test
+// binds a small sparse buffer of its own the same way.
+TEST(VideoCore, SparseBindWhileChunksAreQueued) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    Core::MemoryManager memory;
+    auto liverpool = std::make_unique<AmdGpu::Liverpool>(memory);
+    Frontend::WindowSDL window;
+    Vulkan::Instance instance{window, -1};
+    start_imgui(instance);
+    const vk::PhysicalDeviceFeatures features = instance.GetPhysicalDevice().getFeatures();
+    if (!features.sparseBinding || !features.sparseResidencyBuffer) {
+        liverpool.reset();
+        GTEST_SKIP() << "no sparse residency buffers on this device";
+    }
+    const vk::Device device = instance.GetDevice();
+    const VmaAllocator allocator = instance.GetAllocator();
+    constexpr u32 updates = 6000; // about 3 hand-overs of 64 KiB, all on the first page
+    constexpr vk::DeviceSize buffer_bytes = 4 * 1024 * 1024;
+
+    const vk::Buffer sparse =
+        device
+            .createBuffer({.flags = vk::BufferCreateFlagBits::eSparseBinding |
+                                    vk::BufferCreateFlagBits::eSparseResidency,
+                           .size = buffer_bytes,
+                           .usage = vk::BufferUsageFlagBits::eTransferSrc |
+                                    vk::BufferUsageFlagBits::eTransferDst})
+            .value;
+    const vk::MemoryRequirements requirements = device.getBufferMemoryRequirements(sparse);
+    // A "page" here is the bind unit: whole sparse blocks that hold the updates.
+    const vk::DeviceSize block = requirements.alignment;
+    const vk::DeviceSize page = (vk::DeviceSize{updates} * 4 + block - 1) / block * block;
+    ASSERT_LE(2 * page, buffer_bytes);
+    const u32 type = static_cast<u32>(std::countr_zero(requirements.memoryTypeBits));
+    std::vector<vk::DeviceMemory> pages;
+    for (int i = 0; i < 2; ++i) {
+        pages.push_back(device.allocateMemory({.allocationSize = page, .memoryTypeIndex = type})
+                            .value);
+    }
+    Vulkan::Semaphore bound{instance};
+    // Binds page `index` of the buffer and, given a submit, makes it wait for the bind.
+    const auto bind = [&](u32 index, Vulkan::SubmitInfo* info) {
+        const vk::SparseMemoryBind memory_bind{
+            .resourceOffset = index * page, .size = page, .memory = pages[index]};
+        const vk::SparseBufferMemoryBindInfo buffer_bind{
+            .buffer = sparse, .bindCount = 1, .pBinds = &memory_bind};
+        const u64 tick = bound.NextTick();
+        const vk::Semaphore handle = bound.Handle();
+        const vk::TimelineSemaphoreSubmitInfo timeline{.signalSemaphoreValueCount = 1,
+                                                       .pSignalSemaphoreValues = &tick};
+        const vk::BindSparseInfo bind_info{.pNext = &timeline,
+                                           .bufferBindCount = 1,
+                                           .pBufferBinds = &buffer_bind,
+                                           .signalSemaphoreCount = 1,
+                                           .pSignalSemaphores = &handle};
+        if (info != nullptr) {
+            info->AddWait(handle, tick);
+        }
+        std::scoped_lock lk{Vulkan::Scheduler::submit_mutex};
+        EXPECT_EQ(instance.GetGraphicsQueue().bindSparse(bind_info), vk::Result::eSuccess);
+        return tick;
+    };
+    bound.Wait(bind(0, nullptr));
+
+    VkBufferCreateInfo readback_ci{};
+    readback_ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    readback_ci.size = 2 * updates * 4;
+    readback_ci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VmaAllocationCreateInfo readback_alloc{};
+    readback_alloc.flags =
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    readback_alloc.usage = VMA_MEMORY_USAGE_AUTO;
+    readback_alloc.requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    VkBuffer raw_readback{};
+    VmaAllocation readback_allocation{};
+    VmaAllocationInfo readback_info{};
+    ASSERT_EQ(vmaCreateBuffer(allocator, &readback_ci, &readback_alloc, &raw_readback,
+                              &readback_allocation, &readback_info),
+              VK_SUCCESS);
+    const vk::Buffer readback{raw_readback};
+    const auto* words = static_cast<const volatile u32*>(readback_info.pMappedData);
+
+    {
+        Vulkan::Scheduler scheduler{instance, Vulkan::Recording::Threaded};
+        std::atomic<bool> bind_next{false};
+        std::atomic<bool> bound_in_callback{false};
+        scheduler.SetSubmitCallback([&](Vulkan::SubmitInfo& info) {
+            if (bind_next.exchange(false)) {
+                bind(1, &info);
+                bound_in_callback = true;
+            }
+        });
+        const auto barrier = [&](vk::PipelineStageFlags2 dst, vk::AccessFlags2 dst_access) {
+            const vk::MemoryBarrier2 memory_barrier{
+                .srcStageMask = vk::PipelineStageFlagBits2::eAllTransfer,
+                .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+                .dstStageMask = dst,
+                .dstAccessMask = dst_access};
+            scheduler.CommandBuffer().pipelineBarrier2(
+                {.memoryBarrierCount = 1, .pMemoryBarriers = &memory_barrier});
+        };
+
+        std::thread gpu;
+        {
+            // The recording thread can't submit while the test holds submit_mutex, so the
+            // chunks recorded after the first flush are still queued when the bind is made.
+            std::scoped_lock hold{Vulkan::Scheduler::submit_mutex};
+            gpu = std::thread([&] {
+                scheduler.Flush();
+                auto cmdbuf = scheduler.CommandBuffer();
+                for (u32 i = 0; i < updates; ++i) {
+                    const u32 value = i + 1;
+                    cmdbuf.updateBuffer(sparse, 4 * i, sizeof(value), &value);
+                }
+                bind_next = true;
+                scheduler.Flush();
+
+                cmdbuf = scheduler.CommandBuffer();
+                cmdbuf.fillBuffer(sparse, page, updates * 4, 0x600DF00Du);
+                barrier(vk::PipelineStageFlagBits2::eAllTransfer,
+                        vk::AccessFlagBits2::eTransferRead);
+                const std::array copies{
+                    vk::BufferCopy{.srcOffset = 0, .dstOffset = 0, .size = updates * 4},
+                    vk::BufferCopy{.srcOffset = page, .dstOffset = updates * 4,
+                                   .size = updates * 4}};
+                cmdbuf.copyBuffer(sparse, readback, copies);
+                barrier(vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostRead);
+                scheduler.Finish();
+            });
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            EXPECT_FALSE(bound_in_callback.load());
+        }
+        gpu.join();
+        EXPECT_TRUE(bound_in_callback.load());
+        for (u32 i = 0; i < updates; i += 599) {
+            EXPECT_EQ(words[i], i + 1) << i;
+            EXPECT_EQ(words[updates + i], 0x600DF00Du) << i;
+        }
+        EXPECT_EQ(words[updates - 1], updates);
+        EXPECT_EQ(words[2 * updates - 1], 0x600DF00Du);
+    }
+    vmaDestroyBuffer(allocator, readback, readback_allocation);
+    device.destroyBuffer(sparse);
+    for (const vk::DeviceMemory memory_page : pages) {
+        device.freeMemory(memory_page);
+    }
     liverpool.reset();
 }
 
