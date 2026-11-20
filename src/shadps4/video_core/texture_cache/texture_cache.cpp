@@ -1070,7 +1070,7 @@ vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sharp,
     const u64 hash = HashCombine(XXH3_64bits(&sharp, sizeof(sharp)), is_depth);
     const auto [it, new_sampler] = samplers.try_emplace(hash);
     if (new_sampler) {
-        it->second = slot_samplers.Insert(instance, sharp, border_color_base, is_depth);
+        it->second = slot_samplers.Insert(instance, sharp, border_color_base, is_depth, anisotropy);
         Sampler& sampler = slot_samplers[it->second];
         sampler.hash = hash;
         sampler_lru_cache.Insert(sampler, gc_tick);

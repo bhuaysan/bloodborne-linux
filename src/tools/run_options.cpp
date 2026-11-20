@@ -128,6 +128,7 @@ RunOptions options_from_config(const common::Config& config) {
     options.rcas = config.rcas.value_or(options.rcas);
     options.rcas_attenuation = config.rcas_attenuation.value_or(options.rcas_attenuation);
     options.frame_rate = config.frame_rate.value_or(options.frame_rate);
+    options.anisotropy = config.anisotropy.value_or(options.anisotropy);
     options.motion_blur = config.motion_blur.value_or(options.motion_blur);
     options.motion_blur_strength =
         config.motion_blur_strength.value_or(options.motion_blur_strength);
@@ -239,6 +240,17 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
                     std::format("--frame-rate: \"{}\" is not 30, 60, 120 or 144", fps));
             }
             options.frame_rate = rate;
+        } else if (arg == "--anisotropy") {
+            const std::string_view level = value();
+            unsigned parsed = 0;
+            for (const unsigned l : common::anisotropy_levels) {
+                parsed = level == std::to_string(l) ? l : parsed;
+            }
+            if (parsed == 0 && level != "game") {
+                throw std::invalid_argument(
+                    std::format("--anisotropy: \"{}\" is not game, 1, 2, 4, 8 or 16", level));
+            }
+            options.anisotropy = parsed;
         } else if (arg == "--load-hold") {
             options.load_hold = parse_load_hold(value());
         } else if (arg == "--window-size") {

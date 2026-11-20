@@ -192,6 +192,12 @@ ParsedConfig parse_config(std::string_view text, std::string_view source) {
                 p.fail(std::format("frame_rate: \"{}\" is not 30, 60, 120 or 144", v.text));
             }
             c.frame_rate = fps;
+        } else if (key == "anisotropy") {
+            unsigned level = 0;
+            if (v.quoted || !whole_number(v.text, level) || !valid_anisotropy(level)) {
+                p.fail(std::format("anisotropy: \"{}\" is not 1, 2, 4, 8 or 16", v.text));
+            }
+            c.anisotropy = level;
         } else if (key == "motion_blur") {
             c.motion_blur = want_bool();
         } else if (key == "motion_blur_strength") {
@@ -259,6 +265,9 @@ std::string format_config(const Config& c) {
     }
     if (c.frame_rate) {
         out += std::format("frame_rate = {}\n", *c.frame_rate);
+    }
+    if (c.anisotropy) {
+        out += std::format("anisotropy = {}\n", *c.anisotropy);
     }
     flag("motion_blur", c.motion_blur);
     if (c.motion_blur_strength) {

@@ -1,25 +1,24 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/texture_cache/sampler.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-09; 2026-11-20: anisotropy level (bb-run --anisotropy)
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/texture_cache/sampler.h"
+#include "video_core/texture_cache/sampler_anisotropy.h"
 
 namespace VideoCore {
 
 Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sampler,
-                 const AmdGpu::BorderColorBuffer border_color_base, const bool is_depth) {
+                 const AmdGpu::BorderColorBuffer border_color_base, const bool is_depth,
+                 const u32 anisotropy) {
     using namespace Vulkan;
-    const bool anisotropy_enable = instance.IsAnisotropicFilteringSupported() &&
-                                   (AmdGpu::IsAnisoFilter(sampler.xy_mag_filter) ||
-                                    AmdGpu::IsAnisoFilter(sampler.xy_min_filter));
-    const float max_anisotropy =
-        anisotropy_enable ? std::clamp(sampler.MaxAniso(), 1.0f, instance.MaxSamplerAnisotropy())
-                          : 1.0f;
+    const SamplerAnisotropy aniso =
+        ChooseAnisotropy(sampler, is_depth, anisotropy, instance.IsAnisotropicFilteringSupported(),
+                         instance.MaxSamplerAnisotropy());
     auto border_color = LiverpoolToVK::BorderColor(sampler.border_color_type);
     if (border_color == vk::BorderColor::eFloatCustomEXT &&
         !instance.IsCustomBorderColorSupported()) {
@@ -55,8 +54,8 @@ Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sample
         .addressModeV = LiverpoolToVK::ClampMode(sampler.clamp_y),
         .addressModeW = LiverpoolToVK::ClampMode(sampler.clamp_z),
         .mipLodBias = std::min(sampler.LodBias(), instance.MaxSamplerLodBias()),
-        .anisotropyEnable = anisotropy_enable,
-        .maxAnisotropy = max_anisotropy,
+        .anisotropyEnable = aniso.enable,
+        .maxAnisotropy = aniso.max,
         // GCN compares per instruction; a plain read of a compare sampler is undefined in Vulkan.
         .compareEnable = is_depth,
         .compareOp = LiverpoolToVK::DepthCompare(sampler.depth_compare_func),

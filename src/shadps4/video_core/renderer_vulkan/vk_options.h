@@ -1,5 +1,5 @@
 // What bb-run hands the renderer (bb-run --device, --validation*, --present-mode, --fsr and
-// RCAS).
+// RCAS, --anisotropy).
 
 #pragma once
 
@@ -33,6 +33,9 @@ struct RendererOptions {
     bool fsr = false;
     bool rcas = true;
     float rcas_attenuation = 0.25f;
+    // The anisotropy of samplers with linear filtering and mipmaps (bb-run --anisotropy, #658):
+    // 0 keeps the game's value, 1 to 16 sets it (VideoCore::ChooseAnisotropy).
+    u32 anisotropy = 0;
 };
 
 } // namespace Vulkan

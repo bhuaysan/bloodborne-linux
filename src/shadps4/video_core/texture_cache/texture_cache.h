@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/texture_cache/texture_cache.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-19
+// Changed for bloodborne-linux, 2026-11-20
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -195,6 +195,12 @@ public:
     [[nodiscard]] vk::Sampler GetSampler(const AmdGpu::Sampler& sampler,
                                          AmdGpu::BorderColorBuffer border_color_base,
                                          bool is_depth);
+
+    /// The anisotropy level of bb-run --anisotropy, 0 for the game's own (ChooseAnisotropy).
+    /// Set before the first draw: samplers made earlier keep the level they were made with.
+    void SetAnisotropy(u32 level) noexcept {
+        anisotropy = level;
+    }
 
     /// Retrieves the image with the specified id.
     [[nodiscard]] Image& GetImage(ImageId id) {
@@ -482,6 +488,7 @@ private:
     BlitHelper blit_helper;
     TileManager tile_manager;
     absl::flat_hash_map<u64, SamplerId> samplers;
+    u32 anisotropy = 0; // SetAnisotropy
     u64 total_used_memory = 0;
     u64 trigger_gc_memory = 0;
     u64 pressure_gc_memory = 0;

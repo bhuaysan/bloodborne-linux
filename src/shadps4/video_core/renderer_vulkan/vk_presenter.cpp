@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_presenter.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12; 2026-11-17: FSR and RCAS from RendererOptions; ReleaseFrame; 2026-11-19: deferred recording of the draw scheduler, its recording thread
+// Changed for bloodborne-linux, 2026-11-12; 2026-11-17: FSR and RCAS from RendererOptions; ReleaseFrame; 2026-11-19: deferred recording of the draw scheduler, its recording thread; 2026-11-20: anisotropy level
 // License texts: third_party/shadps4/LICENSES/
 
 #include "core/display_state.h"
@@ -97,6 +97,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     fsr_settings.enable = options.fsr;
     fsr_settings.use_rcas = options.rcas;
     fsr_settings.rcas_attenuation = options.rcas_attenuation;
+    texture_cache.SetAnisotropy(options.anisotropy);
 
     fsr_pass.Create(device, instance.GetAllocator(), num_images);
     pp_pass.Create(device, swapchain.GetSurfaceFormat().format);

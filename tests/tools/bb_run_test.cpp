@@ -125,6 +125,19 @@ TEST(RunOptions, ParsesThePadInput) {
     EXPECT_EQ(parse_error({"--pad-input"}), "--pad-input needs a value");
 }
 
+TEST(RunOptions, ParsesTheAnisotropy) {
+    EXPECT_EQ(parse({}).anisotropy, 0U);
+    for (const unsigned level : bb::common::anisotropy_levels) {
+        EXPECT_EQ(parse({"--anisotropy", std::to_string(level)}).anisotropy, level);
+    }
+    EXPECT_EQ(parse({"--anisotropy", "16", "--anisotropy", "game"}).anisotropy, 0U);
+    EXPECT_EQ(parse_error({"--anisotropy"}), "--anisotropy needs a value");
+    for (std::string_view level : {"0", "3", "32", "16.0", "", "x16"}) {
+        EXPECT_EQ(parse_error({"--anisotropy", level}),
+                  std::format("--anisotropy: \"{}\" is not game, 1, 2, 4, 8 or 16", level));
+    }
+}
+
 TEST(RunOptions, ParsesTheFrameRate) {
     EXPECT_EQ(parse({}).frame_rate, 30U);
     EXPECT_EQ(parse({"--frame-rate", "60"}).frame_rate, 60U);
@@ -346,6 +359,7 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     c.rcas = false;
     c.rcas_attenuation = 0.5f;
     c.frame_rate = 60;
+    c.anisotropy = 8;
     c.motion_blur = false;
     c.motion_blur_strength = 0.5f;
     c.chromatic_aberration = false;
@@ -360,6 +374,7 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     EXPECT_FALSE(o.rcas);
     EXPECT_EQ(o.rcas_attenuation, 0.5f);
     EXPECT_EQ(o.frame_rate, 60u);
+    EXPECT_EQ(o.anisotropy, 8u);
     EXPECT_FALSE(o.motion_blur);
     EXPECT_EQ(o.motion_blur_strength, 0.5f);
     EXPECT_FALSE(o.chromatic_aberration);
@@ -374,6 +389,7 @@ TEST(RunOptionsConfig, EmptyConfigKeepsTheDefaults) {
     EXPECT_EQ(o.window_width, d.window_width);
     EXPECT_EQ(o.frame_rate, d.frame_rate);
     EXPECT_EQ(o.fsr, d.fsr);
+    EXPECT_EQ(o.anisotropy, 0u);
 }
 
 TEST(RunOptionsConfig, CommandLineWinsOverTheFile) {

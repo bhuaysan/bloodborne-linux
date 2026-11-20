@@ -26,6 +26,7 @@ inline constexpr std::string_view run_usage =
     "              [--window-size WIDTHxHEIGHT] [--fullscreen]\n"
     "              [--fsr] [--no-rcas]\n"
     "              [--rcas-attenuation STOPS] [--resolution WIDTHxHEIGHT]\n"
+    "              [--anisotropy game|1|2|4|8|16]\n"
     "              [--no-motion-blur] [--motion-blur-strength S]\n"
     "              [--no-chromatic-aberration] [--chromatic-aberration-strength S]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
@@ -75,6 +76,9 @@ inline constexpr std::string_view run_usage =
     "  --resolution WxH     the size the game renders at: 16:9, the width a multiple of 64, from\n"
     "                       1920x1080 to 3840x2160 (default 1920x1080); the window shows it\n"
     "                       scaled to the window's size\n"
+    "  --anisotropy N       the anisotropic filtering of textures with linear filtering and\n"
+    "                       mipmaps, 1 (off), 2, 4, 8 or 16 (default: game, the game's own);\n"
+    "                       sharpens ground seen at a grazing angle\n"
     "  --no-motion-blur     switch the game's motion blur off\n"
     "  --motion-blur-strength S\n"
     "                       scale the motion blur by S, 0 to 1 (default 1, the game's)\n"
@@ -131,6 +135,7 @@ struct RunOptions {
     float rcas_attenuation = 0.25f;  // --rcas-attenuation, only with --fsr
     unsigned resolution_width = default_resolution_width;  // --resolution
     unsigned resolution_height = default_resolution_height;
+    unsigned anisotropy = 0;  // --anisotropy: 0 (game) or valid_anisotropy
     bool motion_blur = true;  // false with --no-motion-blur
     float motion_blur_strength = 1.0f;  // --motion-blur-strength: 0 to 1
     bool chromatic_aberration = true;  // false with --no-chromatic-aberration
@@ -143,7 +148,8 @@ struct RunOptions {
 // isn't a whole number from 1 to 86400, a log spec that LogFilter::parse refuses, a --present-mode
 // that is none of fifo, mailbox and immediate, a --frame-rate other than 30, 60, 120 and 144, a
 // --load-hold that isn't a number from 0 to 12, a --window-size that isn't WIDTHxHEIGHT in range, a
-// --resolution that isn't one of the sizes above, an --rcas-attenuation that isn't a number from 0 to 2, --validation-sync or --validation-gpu
+// --resolution that isn't one of the sizes above, an --rcas-attenuation that isn't a number from 0 to 2, an --anisotropy other than game, 1, 2, 4,
+// 8 and 16, --validation-sync or --validation-gpu
 // without --validation, and --no-rcas or --rcas-attenuation without --fsr.
 RunOptions parse_run_options(std::span<const std::string_view> args);
 

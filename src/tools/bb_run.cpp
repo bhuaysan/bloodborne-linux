@@ -258,7 +258,8 @@ void open_display(const bb::tools::RunOptions& options) {
     Vulkan::async_pipeline_builds = options.async_pipelines;
     Vulkan::threaded_recording = options.threaded_recording;
     Vulkan::RendererOptions renderer{*gpu_id, validation, Vulkan::PresentMode::Mailbox,
-                                     options.fsr, options.rcas, options.rcas_attenuation};
+                                     options.fsr, options.rcas, options.rcas_attenuation,
+                                     options.anisotropy};
     const char* present_mode_name = "mailbox";
     switch (options.present_mode) {
     case bb::tools::PresentMode::fifo:
@@ -278,6 +279,10 @@ void open_display(const bb::tools::RunOptions& options) {
                     d->window->GetWidth(), d->window->GetHeight(),
                     options.fullscreen ? " fullscreen" : "", options.fsr ? "on" : "off",
                     options.fsr && options.rcas ? "on" : "off", options.rcas_attenuation);
+    if (options.anisotropy != 0) {
+        bb::common::log(LogLevel::info, channel, "anisotropy {}x on linear mipmapped samplers",
+                        options.anisotropy);
+    }
     d->presenter = std::make_unique<bb::hle::video::VideoCorePresenter>(d->window.get(),
                                                                          *guest_memory, renderer);
     display = d.release();

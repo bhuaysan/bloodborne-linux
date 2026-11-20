@@ -29,6 +29,17 @@ inline constexpr float max_post_effect_strength = 1.0f;
 // game paces in 30 FPS frames run on a 30 Hz clock of game time (game::game_tick), so a rate need
 // not be a whole multiple of 30.
 inline constexpr unsigned frame_rates[] = {30, 60, 120, 144};
+// The anisotropy levels bb-run --anisotropy takes (#658).
+inline constexpr unsigned anisotropy_levels[] = {1, 2, 4, 8, 16};
+inline constexpr bool valid_anisotropy(unsigned level) {
+    for (const unsigned l : anisotropy_levels) {
+        if (level == l) {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline constexpr bool valid_frame_rate(unsigned fps) {
     for (const unsigned rate : frame_rates) {
         if (fps == rate) {
@@ -47,6 +58,7 @@ struct Config {
     std::optional<bool> rcas;                       // rcas
     std::optional<float> rcas_attenuation;          // rcas_attenuation: 0 to 2 stops
     std::optional<unsigned> frame_rate;             // frame_rate: valid_frame_rate
+    std::optional<unsigned> anisotropy;             // anisotropy: valid_anisotropy
     std::optional<bool> motion_blur;                // motion_blur
     std::optional<float> motion_blur_strength;      // motion_blur_strength: 0 to 1
     std::optional<bool> chromatic_aberration;       // chromatic_aberration

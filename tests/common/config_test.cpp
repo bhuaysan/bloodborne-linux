@@ -42,6 +42,7 @@ TEST(Config, ParsesEverySetting) {
         "rcas = false\n"
         "rcas_attenuation = 0.5\n"
         "frame_rate = 60\n"
+        "anisotropy = 16\n"
         "motion_blur = false\n"
         "motion_blur_strength = 0.5\n"
         "chromatic_aberration = true\n"
@@ -58,6 +59,7 @@ TEST(Config, ParsesEverySetting) {
     EXPECT_EQ(c.rcas, false);
     EXPECT_EQ(c.rcas_attenuation, 0.5f);
     EXPECT_EQ(c.frame_rate, 60u);
+    EXPECT_EQ(c.anisotropy, 16u);
     EXPECT_EQ(c.motion_blur, false);
     EXPECT_EQ(c.motion_blur_strength, 0.5f);
     EXPECT_EQ(c.chromatic_aberration, true);
@@ -87,6 +89,25 @@ TEST(Config, RefusesPostEffectStrengthsOutOfRange) {
 TEST(Config, TakesEachFrameRate) {
     for (const unsigned rate : bb::common::frame_rates) {
         EXPECT_EQ(parse_config(std::format("frame_rate = {}", rate), "c").config.frame_rate, rate);
+    }
+}
+
+TEST(Config, TakesEachAnisotropyLevel) {
+    for (const unsigned level : bb::common::anisotropy_levels) {
+        EXPECT_EQ(parse_config(std::format("anisotropy = {}", level), "c").config.anisotropy,
+                  level);
+        Config c;
+        c.anisotropy = level;
+        EXPECT_EQ(parse_config(bb::common::format_config(c), "c").config, c);
+    }
+    for (const char* value : {"0", "3", "32", "\"16\"", "game", "16.0"}) {
+        try {
+            parse_config(std::format("anisotropy = {}", value), "c.toml");
+            ADD_FAILURE() << value;
+        } catch (const bb::common::ConfigError& e) {
+            EXPECT_NE(std::string(e.what()).find("c.toml:1: anisotropy: "), std::string::npos)
+                << e.what();
+        }
     }
 }
 
