@@ -116,6 +116,50 @@ The block holds the same values for these fields in the clinic and in Central Yh
 - **Cost.** At 60, every play segment holds a p50 of 16.69 to 16.71 ms and a p95 of 16.70 to 18.71 ms on both sides, within the spread. At 144, three runs per side are bimodal (7 or 14 ms a frame) with a spread of 5 to 9 ms, and the load average was 3.5 to 5, so they resolve no difference. The rig has no GPU timestamps.
 - **Validation and the menu.** A clinic run with `--validation` at 16 reports no sampler message. Its two VUIDs, `RuntimeSpirv-OpEntryPoint-08743` and `VkBufferCreateInfo-size-06409`, are in earlier `main` runs too. `rig.py compare main-menu` of this branch at the default against two runs of `main`: 0.0267 against a noise floor of 0.0271.
 
+## Shadows (#661)
+
+Where the engine sizes its shadow maps and sets the cascade distances, and what twice the size costs and shows. The shadow map is one of the fixed-size targets of `docs/design/resolution.md`.
+
+### Result
+
+| Question | Answer |
+|---|---|
+| Targets | the sun's shadow map: one D32 depth target of 4096×4096 in the clinic and in Central Yharnam, an atlas of four cascades of 2048×2048 (2×2). Besides it, D32 targets of 256×256, 64×64 and 32×32 for point light shadows (the cube faces #660 found at 0x022b5b10); this issue did not size those |
+| Where the size comes from | every frame, from the map's draw parameters: a size index in the shadow group picks one of four sizes from a table at 0x048a9668 (2048, 1024, 2048, 4096); an index of 4 or more gives 2048. Both maps use index 3 |
+| Cascades | four, fixed. Split distances 2, 8 and 15 m in both maps, from the same group, clamped to ascend; the near plane is 0.1 m |
+| Twice the size | the table times two gives an 8192×8192 target with four 4096×4096 cascades. It runs without a fault, but the shots show no difference beyond the run-to-run noise: the game draws its shadows through a soft, blurred screen-space pass, which hides the texel size |
+| Cost | 192 MiB more of `GFX_GraphicsPrivate` (256 MiB for the 8192² D32 target against 64 MiB). Frame time at 144: at most about 0.3 ms, at the edge of the spread; at 30 none |
+
+### The code
+
+- **Scene renderer setup.** 0x022979b0 builds the scene renderer's description and calls its init 0x022c39f0: the frame buffer size at `+0`, a shadow map size of 0x800 at `+8` (the immediates at 0x02297b22 and 0x02297b2d). The init passes that size to the shadow scene (`scene + 0x1320`, init 0x00eabf20), which creates the depth target through 0x00eb0b30 (format 0x28, D32, one mip) and four cascade objects (`+0x130` to `+0x148`) that share it. This first size never reaches the GPU: the first frame's update replaces it.
+- **Per frame.** 0x0229cb70 calls the shadow scene's update 0x00eac210 with the map's shadow group (`+0x80` of its draw parameters, blended like the post-effect groups by 0x0229e990). The update reads the size index at group `+0x90`, looks the size up in the table at 0x048a9668 (0x800 for an index of 4 or more), and when it differs from the current size (`+0x860`, `+0x864`) it calls the init 0x00eabf20 again, which frees the old target and creates the new one.
+- **Distances.** The same update copies group `+0x34` (near, 0.1) to `+0x6d0` and the three splits `+0x40`, `+0x44`, `+0x48` (2, 8, 15 m) to `+0x6dc`, `+0x6e0`, `+0x6e4`, each raised to at least the previous one plus 0.1 m, and `+0x38` to `+0x6d4`, raised to at least the last split plus 0.1 m. A local probe logged the group on every change: from a load on, `+0x38` and `+0x3c` blend over about 70 frames to their map values (2 and 10 in the clinic, 2 and 15 in Central Yharnam); the index and the splits stay. #660's camera probe saw the cascade slices 0.1–2, 2–8, 8–15 and 15 to 25.1 or 40 m, so the end of the last slice comes from elsewhere (not traced).
+- **Cascade viewports.** 0x00eacb30 places cascade i at x = (i & 1) × size / 2 and y = (i ≥ 2) × size / 2, each size / 2 square. The pass probe of `docs/design/resolution.md` saw this in the clinic: four of the five logged frames drew only the two cascades of the top row (44 draws), one drew all four (74 draws, 104 in the run at twice the size).
+- **The screen-space pass.** A full-size pass (pixel shader `f55643de`) reads the shadow map and the depth, and writes the shadow mask that lighting uses. The debug menu of the shadow parameters (0x00eb3250, labels at 0x048a9b50 and on) names its modes `GXScreenSpaceCascadedShadow_PCF4`, `_PCF9` and `_Soft`, and a filter mode, blur count and blur radius. That filtering is why a sharper map shows so little; whether a harder filter would show the larger map was not tested.
+
+### The probe and the runs
+
+A local probe build (not committed): `BB_SHADOW=2` multiplied the four table entries before the game starts, `BB_HEAPLOG` logged the free space of `GFX_GraphicsPrivate` and `GFX_GraphicsPrivateB` every second (as in #640), a wrap of 0x00eac210 logged the shadow group on every change, and the pass probe of #511 logged the targets. Runs on 2026-11-20, `rig.py run bb-run --window` (1280×720 window, 1920×1080 frame), the clinic scenario of #659 and the first part of `yharnam-route` (the #665 local scenario). Every run ended `scenario finished`, with no crash or GPU fault.
+
+| Runs | Default | Twice |
+|---|---|---|
+| Shadow target (pass probe, clinic) | 4096×4096, viewports 2048×2048 | 8192×8192, viewports 4096×4096, 44 draws in the two-cascade frames as at the default |
+| Least free in `GFX_GraphicsPrivate`, clinic (3 + 3) | 408 MiB | 213 MiB |
+| Least free, Yharnam at 30 (3 + 3) | 343 to 350 MiB | 149 to 153 MiB |
+| Least free, Yharnam at 144 (3 + 3) | 463 MiB | 268 MiB |
+| `GFX_GraphicsPrivateB` | unchanged (188 and 133 MiB) | unchanged |
+| Frame time, Yharnam at 30 (3 + 3), p50 / p95 in every play segment | 33.33 / 33.35 to 33.46 ms | 33.33 / 33.35 to 33.37 ms |
+| Frame time, Yharnam at 144 (3 + 3), p50 in `play-stand` / `play-walk` / `play-camera` | 7.08 to 7.28 / 6.95 to 7.15 / 6.95 to 6.96 ms | 7.15 to 7.31 / 7.16 to 7.46 / 6.95 to 6.96 ms |
+| Shot difference, mean of 255 | clinic `01-clinic` 0.07 between two defaults; Yharnam `00-start` 0.26 to 0.47 | 0.12 to 0.19 against a default; 0.35 to 0.49 |
+| Edge strength in Yharnam `00-start` (mean gradient), the wheel's shadow on the cobbles / the street at the right / the ground in the centre | 8.857 to 8.869 / 7.542 to 7.551 / 15.266 to 15.268 | 8.859 to 8.876 / 7.539 to 7.549 / 15.270 to 15.271 |
+
+The 144 runs are bimodal (7 or 14 ms a frame, p95 14 to 14.7 ms on both sides), and the machine had a load average of 3.4 to 5.6 from other programs during them, so they bound the cost at about 0.3 ms without resolving it. In the clinic the larger differences sit on the hunter, but they are as large between the two runs at twice the size (0.70 in a box around the hunter) as between the sides: the idle pose, not the shadow. Shots stay local (`analysis/issue-661/`).
+
+### What an option needs
+
+A larger size works without a fault, so an option is possible (#718): multiply the table at 0x048a9668 before the game starts, rather than poke the immediates in 0x022979b0, which the first frame overrides. It must grow `GFX_GraphicsPrivate` by the target's extra bytes (192 MiB at twice the size; four times would be 960 MiB, 16384² D32) the way `--resolution` does (`docs/design/resolution.md`), or a large frame buffer and a large shadow map together run the heap dry. At 1920×1080 it shows nothing on these routes. Where it could show is above 1080p, where a cascade texel covers more pixels, and with a harder screen-space filter. The option issue's check has to find such a place first; it is low priority.
+
 ## Not switched yet
 
 - Bloom (`0x37` = 0, or scaled) and depth of field (`0x6b` = 0) are clean as well. Depth of field changes nothing on the two routes, so it needs a check in a place with a far view before it becomes an option.
