@@ -138,6 +138,28 @@ The block holds the same values for these fields in the clinic and in Central Yh
   | `rig.py compare main-menu` at the default, against the two reference runs | 1.007 of the noise floor, `main` 0.997 |
   | `clinic-fight`, three runs each at the default and at 63 (30 FPS) | every play segment p50 33.33 ms and p95 33.36 to 33.48 ms on both sides: the cap hides the cost. CPU per frame of the render threads (`thread_cpu.py`) rises at 63 by 0.4 to 0.7 ms for the GX workers and 0.3 to 0.5 ms for the GPU thread in the moving segments, above the spread of 0.03 to 0.7 ms; the game thread by about 0.2 ms. The machine had a load average of 2.3 to 2.7 from other sessions |
 
+## Wide frame buffer (#667)
+
+`bb-run --resolution` takes the wide sizes 2560x1080 and 3440x1440 (21:9) and 5120x1440 (32:9) besides the 16:9 sizes. The frame buffer is set as at 16:9 (`docs/design/resolution.md`), the graphics heap grows with the pixels as there (5120×1440 is below 3840×2160), and the projection gets the frame buffer's own aspect, so a wide frame shows more at the sides with the vertical angle unchanged (Hor+).
+
+- **Where.** A wrap of the render camera copy 0x01d16690 (`src/game/camera/aspect.cpp`): after the game's copy, a render camera aspect `+0x64` that holds the game's 16:9 constant becomes width / height. Every game camera passes this copy (chase, lock-on, cutscenes), so the projection, culling, the shadow cascades and YEBIS follow, as #660's probe showed. Other aspects stay: the character editor's square preview (1) and the render camera's own width / height (0). At 16:9 sizes the wrap changes nothing, also at sizes where width / height does not round to the game's constant. The render camera's width and height fields keep the game's 1920×1080: the projection reads them only when the aspect is 0.
+- **Sizes.** Only the three sizes checked. The width 3440 is not a multiple of 64 like the 16:9 sizes'; the half and quarter targets still have whole sides (1720, 860).
+- **HUD and menus.** They need nothing: the game's HUD keeps its 16:9 layout in the centre (#660, "The HUD"), and Scaleform fits its 16:9 stage into the frame. The logos, the full-screen menus and the loading screens keep grey sides (#711). They are not the Scaleform letterbox: a local try that set each movie's viewport to the centred 16:9 area (after 0x01f58360) left them unchanged.
+- **Tests.** `tests/game/aspect_test.cpp`: the aspect for 16:9 and wide sizes, the replacement of 16:9 only, and against the eboot the game's copy under the wrap with the constructors' constant.
+- **Check.** Runs on 2026-11-20, `rig.py run bb-run --window` (1280×720 window, so a wide frame is a band across it):
+
+  | Run | Result |
+  |---|---|
+  | clinic at 2560x1080 and 3440x1440 (the #660 local scenario) | correct proportions, more of the room at the sides, nothing missing at the edges, the HUD at its 16:9 size in the centred area |
+  | clinic at 5120x1440 | the same at 32:9 |
+  | `main-menu` at 2560x1080 and 3440x1440 | logos and title menu 16:9 in the centre, not stretched, with grey sides (#711); the title menu takes input as at 16:9 |
+  | `yharnam-route` at 2560x1080 and 3440x1440 | the street wider, the carriage and the statues whole at the edges, the HUD in the centre; peak memory 4.0 and 4.0 GB |
+  | `clinic-fight` at 3440x1440, two runs (30 FPS) | every segment p50 33.33 ms and p95 33.35 to 33.36 ms (35.4 in `play-camera`), no stutters after the logos, peak memory 3.2 GB; no crash or GPU fault |
+  | `clinic-fight` at 3440x1440 with `--validation` | finished; the validation layer reports only the two kinds a 1920x1080 run of 2026-11-20 (`clinic-floor`) reports too: `VUID-RuntimeSpirv-OpEntryPoint-08743` (22) and `VUID-VkBufferCreateInfo-size-06409` (the 4 GiB buffer at start) |
+  | `rig.py compare main-menu` at 1920x1080, against the two reference runs | 0.997 of the noise floor (`main` 1.007): 16:9 unchanged |
+
+  At a wide frame `clinic-fight` reaches the title menu but sends its menu inputs too early: the first logo changes over a smaller share of the shot, so `stable delta=1` already holds on it. The runs above used a local copy with 14 s more before that wait; the game's logos take no longer than at 16:9.
+
 ## Camera and aspect ratio (#660)
 
 Where the engine sets the field of view and the aspect ratio of its projection, and how the HUD and menus are placed, for the field-of-view option (#666) and the wide frame buffer (#667). Addresses as above; `SprjPersCam` is the game's own class name (its runtime class is registered at 0x01d16e60).
@@ -187,7 +209,7 @@ At 2560×1080 the shots show the HUD bars and counters at their 1080p pixel size
 ### What the options need
 
 - **Field of view (#666).** #660 proposed scaling `+0x50` of the render camera that 0x01d16690 writes when its source is the chase camera. That source is never the chase camera: the camera manager copies the chase camera into a `SprjPersCam` (vtable 0x0539ffb0) first, as it does with the other cameras, so at 0x01d16690 they look the same. #666 widens the chase camera itself instead (below).
-- **Wide frame buffer (#667).** `--resolution` with a width / height other than 16:9 (the global write works as at 16:9), plus `+0x64` of every render camera that 0x01d16690 writes set to width / height; without it the picture is the 16:9 projection stretched to the width. The HUD and the menus need nothing to keep their 16:9 size; the grey side bars of the full-screen menus and loading screens are the open question (black, or the menus' background widened).
+- **Wide frame buffer (#667).** `--resolution` with a width / height other than 16:9 (the global write works as at 16:9), plus `+0x64` of every render camera that 0x01d16690 writes set to width / height; without it the picture is the 16:9 projection stretched to the width. The HUD and the menus need nothing to keep their 16:9 size; the grey side bars of the full-screen menus and loading screens are the open question (black, or the menus' background widened). Done as planned: "Wide frame buffer (#667)" above.
 
 ### The probe
 
