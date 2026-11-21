@@ -16,7 +16,7 @@
 # downloads of cmake/*.cmake) and podman.
 set -euo pipefail
 
-usage() { sed -n '2,3p;5p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,3p;5,6p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 lists=$root/tools/distro-packages
@@ -62,8 +62,17 @@ image=$(image_of "$distro")
 if [ "$mode" = line ]; then install_line "$distro"; exit 0; fi
 
 command -v podman >/dev/null || { echo "distro-build: podman not found" >&2; exit 1; }
-work=${BB_DISTRO_WORK:-$(mktemp -d "${TMPDIR:-/tmp}/bb-distro-$distro.XXXXXX")}
-mkdir -p "$work"
+# A given BB_DISTRO_WORK must be new or empty: the script removes what it builds there.
+if [ -n "${BB_DISTRO_WORK:-}" ]; then
+    work=$BB_DISTRO_WORK
+    if [ -e "$work" ] && [ -n "$(ls -A "$work")" ]; then
+        echo "distro-build: BB_DISTRO_WORK=$work is not empty" >&2
+        exit 2
+    fi
+    mkdir -p "$work"
+else
+    work=$(mktemp -d "${TMPDIR:-/tmp}/bb-distro-$distro.XXXXXX")
+fi
 if [ "$keep" -eq 0 ]; then trap 'rm -rf "$work"' EXIT; fi
 rm -rf "$work/src" "$work/build"; mkdir -p "$work/src"
 cd "$root"
@@ -99,8 +108,16 @@ EOS
 )
 log=$work/log.txt
 status=0
-# Memory-limited, no swap: the machine has other work.
-podman run --rm --memory 8g --memory-swap 8g -e CMAKE_BUILD_PARALLEL_LEVEL="$jobs" \
+# Memory-limited, no swap: the machine has other work. Rootless podman can set the limit only
+# where systemd delegates the memory controller to the user; elsewhere (some CI runners) it runs
+# without one rather than fail.
+limits=(--memory 8g --memory-swap 8g)
+case $(podman info --format '{{.Host.CgroupControllers}}' 2>/dev/null) in
+    *memory*) ;;
+    *) echo "distro-build: no memory controller for podman, running without a memory limit" >&2
+       limits=() ;;
+esac
+podman run --rm "${limits[@]}" -e CMAKE_BUILD_PARALLEL_LEVEL="$jobs" \
     -e CTEST_PARALLEL_LEVEL="$jobs" -v "$work:/work:rw,Z" "$image" bash -c "$inner" 2>&1 |
     tee "$log" || status=$?
 echo "== distro-build $distro: $(grep -A1 -m1 '^== compiler' "$log" | tail -1); $(grep -m1 BUILD_SECONDS "$log" || echo 'no build time')"
