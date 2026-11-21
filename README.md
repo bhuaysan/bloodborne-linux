@@ -29,15 +29,9 @@ export BB_GAME_DIR=/path/to/your/CUSA03173
 
 ## Playing
 
-Build the `release` preset (see Building), install it and start the launcher:
+Download `Bloodborne-Linux-<version>-x86_64.tar.gz` from the [Releases page](https://github.com/bhuaysan/bloodborne-linux/releases), check it with `sha256sum -c --ignore-missing SHA256SUMS`, unpack it into a folder you can write and start `bb-launcher` in `Bloodborne-Linux/`. On the first start the launcher looks for your game folder, the one that holds `eboot.bin`. If it finds none, press "Set up game" and choose the folder of your own dump, or drag it onto the window. Then press Play. Everything the game writes stays in `Bloodborne-Linux/user/`. The `BB_GAME_DIR` setup above is for developers.
 
-```sh
-cmake --preset release
-cmake --build --preset release
-cmake --install build/release --prefix ~/.local   # or /usr/local with sudo
-```
-
-"Bloodborne on Linux" now shows in your application menu (log out and in if it doesn't at once), or run `~/.local/bin/bb-launcher`. On the first start the launcher looks for your game folder, the one that holds `eboot.bin`. If it finds none, press "Set up game" and choose the folder of your own dump, or drag it onto the window. Then press Play. The `BB_GAME_DIR` setup above is for developers.
+To build the same folder from source, run `tools/package-portable.sh` (see Building; the script names what it needs). Versions and how releases are made are in [docs/releasing.md](docs/releasing.md).
 
 ## Building
 
@@ -69,6 +63,7 @@ CI (GitHub Actions, `.github/workflows/ci.yml`) builds the presets in a Fedora 4
 
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
+- [Releases](docs/releasing.md)
 - [Source and license policy](docs/source-policy.md)
 - [References and credits](docs/references.md)
 

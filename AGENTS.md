@@ -77,7 +77,7 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 
 Work effectively at optimal efficiency: choose the cheapest way (models, effort, number of agents, review rounds) that still delivers correct, tested work. There is no fixed token budget.
 
-Agents decide on their own how to cut and bundle issues and PRs, which models and effort to use, design questions inside a milestone, and when to start the next milestone or part. These go to the maintainer: anything that fails the merge gate, guardrail changes, license questions `docs/source-policy.md` doesn't answer, changes to the goal or architecture above, and milestone tags.
+Agents decide on their own how to cut and bundle issues and PRs, which models and effort to use, design questions inside a milestone, and when to start the next milestone or part. These go to the maintainer: anything that fails the merge gate, guardrail changes, license questions `docs/source-policy.md` doesn't answer, changes to the goal or architecture above, and release tags.
 
 ## Reviews
 
@@ -109,7 +109,7 @@ Risky code is never reviewed only in the session that wrote it.
    - a source and license audit (`docs/references.md` complete, code sources and `third_party/` match their licenses, nothing from the off-limits list)
    - a privacy audit of the history
    
-   Small fixes go into a follow-up PR. Bigger findings become issues labeled `review`. Then the maintainer tags the milestone.
+   Small fixes go into a follow-up PR. Bigger findings become issues labeled `review`. Then the milestone ends with a release (see Releases below).
 
 ## Game runs
 
@@ -129,8 +129,13 @@ There are no separate dev and prod environments. The differences live in build p
 ### Branches
 - `main` always builds and passes its tests.
 - Work happens on short-lived feature branches (`feat/…`, `fix/…`, `docs/…`) merged through PRs, so CI runs.
-- The maintainer tags each completed milestone (`m3`, `r1`, …) after its review. Agents never create tags.
+- Agents never create or push tags. The milestone tags up to `r11` stay as they are; releases replace them.
 - No long-lived `develop` branch.
+
+### Releases
+Releases are on the GitHub Releases page, versioned `vMAJOR.MINOR.PATCH` (`docs/releasing.md`). Until the game is playable from start to an ending (R7) the major version is 0.
+- A milestone ends with a minor release (`v0.N.0`) after its review. A patch release (`v0.N.1`) takes fixes that matter to players at any time. Both come from `main`; there are no release branches.
+- An agent prepares a release in a PR that adds the highlights `docs/releases/<tag>.md`. Only the maintainer pushes the release tag. The release workflow builds the portable package and publishes the release.
 
 ### CI (from M2)
 GitHub Actions builds every preset, runs the unit tests and the privacy checks. CI never has game files, so tests that need the game run locally only and must skip cleanly when `BB_GAME_DIR` is unset.

@@ -11,7 +11,8 @@ One row per source and use. A change that uses a source adds its own row (or row
 | [Ghidra](https://github.com/NationalSecurityAgency/ghidra) 12.1.4 | Apache-2.0 | Disassembly and decompiler-assisted analysis |
 | [REA](https://github.com/morluto/rea) 6.8.0 | MIT | Agent-driven reverse engineering workflow on top of Ghidra |
 | PyGhidra 3.1.0 and JPype 1.5.2 (bundled with Ghidra) | Apache-2.0 | Running headless Ghidra scripts in Python 3 (`tools/ghidra-sync`) |
-| [actions/checkout](https://github.com/actions/checkout) v7.0.1 (pinned by commit SHA) | MIT | Checking out the repository in the GitHub Actions CI (`.github/workflows/ci.yml`) |
+| [actions/checkout](https://github.com/actions/checkout) v7.0.1 (pinned by commit SHA) | MIT | Checking out the repository in the GitHub Actions CI (`.github/workflows/ci.yml`) and the release workflow (`.github/workflows/release.yml`) |
+| [GitHub CLI](https://github.com/cli/cli) (`gh` of Fedora 44) | MIT | Listing the PRs of a release and publishing it (`tools/release/notes.py`, `.github/workflows/release.yml`) |
 | [SDL](https://github.com/libsdl-org/SDL) 3.4 (`SDL3-devel` of Fedora 44, locally and in CI) | Zlib | Window and Vulkan surface for presentation (`docs/design/graphics.md`, second wave; M4 design note, removed in #435); the launcher's window and its SDL_Renderer (`src/launcher/CMakeLists.txt`, #579) |
 | [fontconfig](https://www.freedesktop.org/wiki/Software/fontconfig/) (`fontconfig-devel` of Fedora 44) | fontconfig license, an HPND-style permissive license (`COPYING`; Fedora's tag: HPND AND LicenseRef-Fedora-Public-Domain AND Unicode-DFS-2016) | System library, linked by the launcher and not copied: finding the system sans-serif font (`src/launcher/fonts.cpp`, #579) |
 | [FFmpeg](https://ffmpeg.org) 8 (`libavcodec`, `libavformat`, `libavutil`, `libswscale`, `libswresample`; `ffmpeg-free-devel` of Fedora 44 in CI, any FFmpeg 8 build that pkg-config finds locally) | LGPL-2.1-or-later (`ffmpeg-free` leaves out the GPL and non-free parts) | System library, linked and not copied (`docs/source-policy.md`, "Code reuse and licenses"): video, movie audio and MP3 decoding for the imported AvPlayer and AJM (`src/shadps4_host/CMakeLists.txt`, #456) |
@@ -125,6 +126,7 @@ One row per source and use. A change that uses a source adds its own row (or row
 | Linux UAPI headers `linux/uinput.h`, `linux/input-event-codes.h`, `linux/input.h` (installed `kernel-headers`) | The uinput ioctl numbers, `struct uinput_user_dev`, `struct input_event` and the button and axis codes of the virtual gamepad, whose layout is that of the kernel's `xpad` driver for Xbox 360 pads (`tools/rig/vpad.py`, #411); its USB ids and name are our own since #543 | 2026-11-09 |
 | [PNG specification](https://www.w3.org/TR/png/) (W3C) | Chunk layout, CRC and filter byte of the PNG files the run report writes (`tools/rig/report.py`, #411) | 2026-11-09 |
 | [Vulkan specification](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html), `VkFormat` | The numbers and bit layouts of the swapchain formats the run report converts (`tools/rig/report.py`, #411) | 2026-11-09 |
+| [Semantic Versioning 2.0.0](https://semver.org/) | The release version scheme `vMAJOR.MINOR.PATCH` and major version 0 before the first stable release (`docs/releasing.md`) | 2026-11-21 |
 
 ## Code sources
 
