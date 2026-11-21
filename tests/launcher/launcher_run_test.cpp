@@ -197,6 +197,21 @@ TEST(LauncherRunGame, TheDumpFolderIsWrittenToTheConfig) {
     EXPECT_TRUE(!fs::exists(dir.path() / "home") || fs::is_empty(dir.path() / "home"));
 }
 
+// A user folder that can't be written: a dropped dump keeps that reason in the status line
+// instead of the error of writing a config file without a path.
+TEST(LauncherRunGame, ADropWithoutAUserFolderKeepsTheReason) {
+    BB_REQUIRE_GAME(game);
+    const Dir dir;
+    fs::create_directories(dir.path() / "user");
+    fs::permissions(dir.path() / "user", fs::perms::owner_read | fs::perms::owner_exec);
+    const auto r = run_script(dir, std::format("wait 3\ndrop {}\nwait 3\nquit\n", game.string()));
+    fs::permissions(dir.path() / "user", fs::perms::owner_all);
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(r.output.find("can't be written"), std::string::npos) << r.output;
+    EXPECT_EQ(r.output.find("filesystem error"), std::string::npos) << r.output;
+    EXPECT_TRUE(fs::is_empty(dir.path() / "user"));
+}
+
 // The first-start search: a folder of another game under $HOME is no hit, the search ends and
 // the drop target stays; nothing is written.
 TEST(LauncherRun, TheSearchFindsNothingAndLeavesTheDropTarget) {

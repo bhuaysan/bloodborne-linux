@@ -181,6 +181,7 @@ private:
             dirs = common::RuntimeDirs::from_environment(common::default_profile, {});
         } catch (const std::exception& e) {
             notice_ = std::string("No place for the game's data: ") + e.what();
+            no_place_ = notice_;
             return;
         }
         try {
@@ -191,6 +192,7 @@ private:
         } catch (const std::exception&) {
             // Copied to /usr/bin, say: everything the game writes belongs in its own folder.
             notice_ = "This folder can't be written. Unpack the game into a folder of its own.";
+            no_place_ = notice_;
             return;
         }
         config_path_ = dirs->config() / "config.toml";
@@ -298,6 +300,10 @@ private:
 
     void set_up_folder(const fs::path& folder) {
         tried_folder_ = true;
+        if (config_path_.empty()) {  // no user/ folder: say why, not what writing "" fails with
+            notice_ = no_place_;
+            return;
+        }
         const common::SetupResult r = common::setup_game_folder(folder, config_path_);
         if (r.folder.ok() && !r.config_written) {
             notice_ = r.config_error;
@@ -663,6 +669,12 @@ private:
             action = a;
         }
         ImGui::End();
+        if (notice_ != logged_notice_) {  // for the log and the tests: the status line's problems
+            logged_notice_ = notice_;
+            if (!notice_.empty()) {
+                std::cerr << "bb-launcher: " << notice_ << '\n';
+            }
+        }
         focus_first_ = false;
         ImGui::Render();
         SDL_SetRenderDrawColor(renderer_, 6, 5, 5, 255);
@@ -707,6 +719,8 @@ private:
     Prompt prompt_ = Prompt::none;
     std::string prompted_notice_;  // the text of the notice prompt
     std::string notice_;  // the last problem: in the status line without a game, else a prompt
+    std::string logged_notice_;  // the last notice written to stderr
+    std::string no_place_;  // why there is no user/ folder (and no config file) this run
     std::vector<std::unique_ptr<Page>> pages_;  // the open pages, the one shown last
     std::shared_ptr<DialogMailbox> dialog_ = std::make_shared<DialogMailbox>();
     std::vector<ScriptStep> script_;
