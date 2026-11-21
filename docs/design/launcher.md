@@ -100,7 +100,7 @@ A settings form like the ones in other games: one row per setting, its name on t
 | Resolution | dropdown; in fullscreen the text "Screen size" |
 | Frame rate | dropdown: 30, 60, 120, 144 FPS |
 | Sharpness | dropdown: Normal, Sharpened, Extra sharp |
-| Field of view | slider in whole degrees from 30° to 65°, the angle shown beside it; the game's 43° reads "43° (default)" |
+| Field of view | slider in whole degrees from 30° to 65°, drawn as a thin line with a diamond and a small tick at the game's 43°; the angle stands beside it, 43° reads "43° (default)" |
 | Texture filtering | dropdown: Default (the game's own filtering), 2×, 4×, 8×, 16× |
 | Motion blur | checkbox |
 | Colour fringes | checkbox |

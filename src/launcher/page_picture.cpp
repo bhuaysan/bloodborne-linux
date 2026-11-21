@@ -104,6 +104,32 @@ bool dropdown(const char* id, const std::vector<std::string>& labels, int& index
     return changed;
 }
 
+// The look of the field-of-view slider over the last item, ImGui's SliderInt: a thin line with a
+// diamond at `value` and a small tick at `mark` (the game's angle). The diamond sits where ImGui
+// puts its grab, so clicks and drags land under it.
+void draw_line_slider(int value, int min, int max, int mark, float s, bool lit) {
+    const ImVec2 lo = ImGui::GetItemRectMin();
+    const ImVec2 hi = ImGui::GetItemRectMax();
+    constexpr float padding = 2.0f;  // ImGui's grab padding
+    const float size = hi.x - lo.x - 2 * padding;
+    const float range = static_cast<float>(max - min);
+    const float grab = std::min(std::max(size / (range + 1), ImGui::GetStyle().GrabMinSize), size);
+    const float x0 = lo.x + padding + grab * 0.5f;
+    const float x1 = hi.x - padding - grab * 0.5f;
+    const auto at = [&](int v) { return x0 + (x1 - x0) * static_cast<float>(v - min) / range; };
+    const float y = std::round((lo.y + hi.y) * 0.5f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 line = lit ? IM_COL32(205, 196, 178, 170) : colour::line;
+    dl->AddRectFilled(ImVec2(x0, y), ImVec2(x1, y + std::max(1.0f, s)), line);
+    dl->AddRectFilled(ImVec2(at(mark), y - 4 * s), ImVec2(at(mark) + std::max(1.0f, s), y + 5 * s),
+                      line);
+    const float r = 6.5f * s;
+    const float x = at(value);
+    const ImVec2 top(x, y - r), right(x + r, y), bottom(x, y + r), left(x - r, y);
+    dl->AddQuadFilled(top, right, bottom, left, lit ? colour::chosen : colour::gold);
+    dl->AddQuad(top, right, bottom, left, colour::background, s);
+}
+
 // The rows' geometry, logical pixels.
 constexpr float row_h = 44;
 constexpr float control_x = 230;  // from the window's left edge
@@ -183,8 +209,20 @@ public:
                 };
                 const float value_w = ImGui::CalcTextSize(label(game).c_str()).x + 12 * s;
                 ImGui::SetNextItemWidth(control_w * s - value_w);
+                // ImGui's slider does the input; its frame and grab are hidden, and a line with
+                // a diamond stands in for them.
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_SliderGrab, IM_COL32(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, IM_COL32(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_NavCursor, IM_COL32(0, 0, 0, 0));
                 bool moved =
                     ImGui::SliderInt("##fov", &degrees, min, max, "", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::PopStyleColor(6);
+                draw_line_slider(degrees, min, max, game, s,
+                                 ImGui::IsItemFocused() || ImGui::IsItemHovered() ||
+                                     ImGui::IsItemActive());
                 const std::string value = label(degrees);
                 const ImVec2 at = ImGui::GetItemRectMax();
                 const float text_w = ImGui::CalcTextSize(value.c_str()).x;
