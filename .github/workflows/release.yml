@@ -43,8 +43,8 @@ jobs:
               python3 spirv-headers-devel vulkan-headers glslang vulkan-loader-devel \
               fontconfig-devel libstdc++-static pkgconf-pkg-config nasm perl diffutils xz tar gzip \
               wayland-devel libxkbcommon-devel libdecor-devel libX11-devel libXext-devel \
-              libXcursor-devel libXi-devel libXfixes-devel libXrandr-devel pipewire-devel \
-              pulseaudio-libs-devel alsa-lib-devel gh
+              libXcursor-devel libXi-devel libXfixes-devel libXrandr-devel libXtst-devel \
+              pipewire-devel pulseaudio-libs-devel alsa-lib-devel gh
 
       # The whole history: the version (cmake/version.cmake) and the notes need the tags and main.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

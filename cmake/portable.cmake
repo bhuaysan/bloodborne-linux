@@ -21,7 +21,7 @@ set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
 find_package(PkgConfig REQUIRED)
 set(BB_SDL_MISSING)
 foreach(module wayland-client wayland-egl wayland-cursor wayland-scanner xkbcommon libdecor-0
-        x11 xext xcursor xi xfixes xrandr libpipewire-0.3 libpulse alsa)
+        x11 xext xcursor xi xfixes xrandr xtst libpipewire-0.3 libpulse alsa)
     string(MAKE_C_IDENTIFIER "BB_SDL_${module}" var)
     pkg_check_modules(${var} QUIET ${module})
     if(NOT ${var}_FOUND)
@@ -31,11 +31,11 @@ endforeach()
 if(BB_SDL_MISSING)
     string(JOIN " " BB_SDL_MISSING ${BB_SDL_MISSING})
     message(FATAL_ERROR "The portable package needs these headers for SDL's backends: "
-        "${BB_SDL_MISSING} (Fedora: wayland-devel libxkbcommon-devel "
-        "libdecor-devel libX11-devel libXext-devel libXcursor-devel libXi-devel libXfixes-devel "
-        "libXrandr-devel pipewire-devel pulseaudio-libs-devel alsa-lib-devel; Debian and Ubuntu: "
-        "libwayland-dev libxkbcommon-dev libdecor-0-dev libx11-dev libxext-dev "
-        "libxcursor-dev libxi-dev libxfixes-dev libxrandr-dev libpipewire-0.3-dev libpulse-dev "
+        "${BB_SDL_MISSING} (Fedora: wayland-devel libxkbcommon-devel libdecor-devel "
+        "libX11-devel libXext-devel libXcursor-devel libXi-devel libXfixes-devel libXrandr-devel "
+        "libXtst-devel pipewire-devel pulseaudio-libs-devel alsa-lib-devel; Debian and Ubuntu: "
+        "libwayland-dev libxkbcommon-dev libdecor-0-dev libx11-dev libxext-dev libxcursor-dev "
+        "libxi-dev libxfixes-dev libxrandr-dev libxtst-dev libpipewire-0.3-dev libpulse-dev "
         "libasound2-dev)")
 endif()
 # Parts the game and the launcher don't use, so their headers aren't needed to build.
