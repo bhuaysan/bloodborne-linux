@@ -1,9 +1,15 @@
 #include "launcher/logic.hpp"
 
+#include <stdlib.h>
+#include <sys/stat.h>
+
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 
 #include <gtest/gtest.h>
 
+#include "common/runtime_dirs.hpp"
 #include "launcher/text.hpp"
 
 namespace {
@@ -150,6 +156,110 @@ TEST(LauncherText, GermanHasEveryStringAndMessage) {
         EXPECT_NE(check_message(Lang::de, r), "english");
         EXPECT_EQ(check_message(Lang::en, r), "english");
     }
+}
+
+TEST(LauncherLogic, ParsesTheDataFolderSteps) {
+    const auto steps = parse_script("datafolder /tmp/some folder\ndatadefault\n");
+    ASSERT_EQ(steps.size(), 2u);
+    EXPECT_EQ(steps[0].kind, StepKind::datafolder);
+    EXPECT_EQ(steps[0].text, "/tmp/some folder");
+    EXPECT_EQ(steps[1].kind, StepKind::datadefault);
+    EXPECT_THROW(parse_script("datafolder"), std::invalid_argument);
+}
+
+TEST(LauncherLogic, ProposesTheFolderNextToTheAppImageOrInHome) {
+    EXPECT_EQ(propose_data_folder("/games/BB.AppImage", "/srv/p", true),
+              std::filesystem::path("/games/Bloodborne-Linux-data"));
+    EXPECT_EQ(propose_data_folder("/games/BB.AppImage", "/srv/p", false),
+              std::filesystem::path("/srv/p/Bloodborne-Linux-data"));
+    EXPECT_EQ(propose_data_folder("", "/srv/p", true),
+              std::filesystem::path("/srv/p/Bloodborne-Linux-data"));
+    EXPECT_TRUE(propose_data_folder("", "", false).empty());
+    EXPECT_TRUE(propose_data_folder("/games/BB.AppImage", "relative", false).empty());
+}
+
+TEST(LauncherLogic, SearchesGameInTheDataFolderInAnAppImage) {
+    EXPECT_EQ(game_search_dir(true, "/data", "/tmp/.mount_x/usr/bin"),
+              std::filesystem::path("/data/game"));
+    EXPECT_EQ(game_search_dir(false, "/data", "/opt/bb"), std::filesystem::path("/opt/bb/game"));
+}
+
+TEST(LauncherLogic, AdoptingADataFolderCreatesItAndWritesThePointer) {
+    namespace fs = std::filesystem;
+    std::string templ = (fs::temp_directory_path() / "bb-datafolder-test-XXXXXX").string();
+    ASSERT_NE(::mkdtemp(templ.data()), nullptr);
+    const fs::path tmp = fs::canonical(templ);
+    const char* saved = std::getenv("XDG_CONFIG_HOME");
+    const std::string saved_value = saved != nullptr ? saved : "";
+    ::setenv("XDG_CONFIG_HOME", (tmp / "config").c_str(), 1);
+
+    const DataFolderResult ok = adopt_data_folder(tmp / "a/data");
+    EXPECT_TRUE(ok.ok()) << ok.detail;
+    struct stat st {};
+    ASSERT_EQ(::stat((tmp / "a/data").c_str(), &st), 0);
+    EXPECT_EQ(st.st_mode & 07777, 0700u);
+    EXPECT_EQ(bb::common::read_data_dir_pointer(), tmp / "a/data");
+
+    EXPECT_EQ(adopt_data_folder("relative").problem, DataFolderProblem::not_absolute);
+    std::ofstream(tmp / "a/data/eboot.bin") << "x";
+    EXPECT_EQ(adopt_data_folder(tmp / "a/data").problem, DataFolderProblem::is_game);
+    std::ofstream(tmp / "file") << "x";
+    EXPECT_EQ(adopt_data_folder(tmp / "file/sub").problem, DataFolderProblem::cannot_create);
+    EXPECT_EQ(adopt_data_folder(bb::common::source_dir()).problem, DataFolderProblem::overlaps);
+    // A refused folder leaves the pointer as it was.
+    EXPECT_EQ(bb::common::read_data_dir_pointer(), tmp / "a/data");
+
+    if (saved != nullptr) {
+        ::setenv("XDG_CONFIG_HOME", saved_value.c_str(), 1);
+    } else {
+        ::unsetenv("XDG_CONFIG_HOME");
+    }
+    fs::remove_all(tmp);
+}
+
+// An AppImage kept inside the dump must not get a data folder in the game's folder (the dump is
+// read-only for us), and a folder inside it is refused whether it exists or not.
+TEST(LauncherLogic, ADataFolderInsideAGameFolderIsNeitherProposedNorAdopted) {
+    namespace fs = std::filesystem;
+    std::string templ = (fs::temp_directory_path() / "bb-datafolder-game-XXXXXX").string();
+    ASSERT_NE(::mkdtemp(templ.data()), nullptr);
+    const fs::path tmp = fs::canonical(templ);
+    const char* saved = std::getenv("XDG_CONFIG_HOME");
+    const std::string saved_value = saved != nullptr ? saved : "";
+    ::setenv("XDG_CONFIG_HOME", (tmp / "config").c_str(), 1);
+
+    const fs::path dump = tmp / "CUSA03173";
+    fs::create_directories(dump / "sub");
+    std::ofstream(dump / "eboot.bin") << "x";
+
+    EXPECT_TRUE(inside_game_folder(dump));
+    EXPECT_TRUE(inside_game_folder(dump / "sub"));
+    EXPECT_TRUE(inside_game_folder(dump / "not/yet/there"));
+    EXPECT_FALSE(inside_game_folder(tmp));
+    EXPECT_FALSE(inside_game_folder(tmp / "Bloodborne-Linux-data"));
+
+    // The AppImage lies in the dump: the proposal falls back to the home folder, and to nothing
+    // when that lies in a dump as well.
+    EXPECT_EQ(propose_data_folder(dump / "BB.AppImage", (tmp / "home").string(), true),
+              tmp / "home/Bloodborne-Linux-data");
+    EXPECT_TRUE(propose_data_folder(dump / "BB.AppImage", dump.string(), true).empty());
+    EXPECT_EQ(propose_data_folder(tmp / "BB.AppImage", (tmp / "home").string(), true),
+              tmp / "Bloodborne-Linux-data");
+
+    EXPECT_EQ(adopt_data_folder(dump).problem, DataFolderProblem::is_game);
+    EXPECT_EQ(adopt_data_folder(dump / "sub").problem, DataFolderProblem::inside_game);
+    EXPECT_EQ(adopt_data_folder(dump / "Bloodborne-Linux-data").problem,
+              DataFolderProblem::inside_game);
+    // Nothing was created in the dump, and no pointer was written.
+    EXPECT_FALSE(fs::exists(dump / "Bloodborne-Linux-data"));
+    EXPECT_FALSE(fs::exists(tmp / "config"));
+
+    if (saved != nullptr) {
+        ::setenv("XDG_CONFIG_HOME", saved_value.c_str(), 1);
+    } else {
+        ::unsetenv("XDG_CONFIG_HOME");
+    }
+    fs::remove_all(tmp);
 }
 
 }  // namespace

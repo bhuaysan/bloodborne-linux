@@ -2,10 +2,18 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <cstring>
 #include <charconv>
 #include <cstdlib>
 #include <format>
 #include <stdexcept>
+#include <system_error>
+
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "common/runtime_dirs.hpp"
 
 namespace bb::launcher {
 
@@ -92,6 +100,91 @@ std::vector<std::string> bb_run_arguments(const std::filesystem::path& bb_run,
     return {bb_run.string(), "--config", config.string()};
 }
 
+bool inside_game_folder(const std::filesystem::path& folder) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path current = fs::weakly_canonical(folder, ec);
+    if (ec) {
+        current = folder.lexically_normal();
+    }
+    while (!current.empty()) {
+        if (fs::exists(current / "eboot.bin", ec)) {
+            return true;
+        }
+        const fs::path parent = current.parent_path();
+        if (parent == current) {
+            break;
+        }
+        current = parent;
+    }
+    return false;
+}
+
+std::filesystem::path propose_data_folder(const std::filesystem::path& appimage,
+                                          std::string_view home, bool appimage_dir_writable) {
+    // A folder inside a dump (the AppImage was kept in the game's folder, say) is never proposed:
+    // the game's folder is read-only for us.
+    if (appimage.is_absolute() && appimage_dir_writable) {
+        const std::filesystem::path next_to = appimage.parent_path() / data_folder_name;
+        if (!inside_game_folder(next_to)) {
+            return next_to;
+        }
+    }
+    if (!home.empty() && std::filesystem::path(home).is_absolute()) {
+        const std::filesystem::path in_home = std::filesystem::path(home) / data_folder_name;
+        if (!inside_game_folder(in_home)) {
+            return in_home;
+        }
+    }
+    return {};
+}
+
+std::filesystem::path game_search_dir(bool appimage, const std::filesystem::path& data_folder,
+                                      const std::filesystem::path& executable_dir) {
+    return (appimage ? data_folder : executable_dir) / "game";
+}
+
+DataFolderResult adopt_data_folder(const std::filesystem::path& folder) {
+    namespace fs = std::filesystem;
+    const auto fail = [](DataFolderProblem p, std::string detail) {
+        return DataFolderResult{p, std::move(detail)};
+    };
+    if (!folder.is_absolute()) {
+        return fail(DataFolderProblem::not_absolute, folder.string());
+    }
+    if (std::error_code none; inside_game_folder(folder)) {  // before anything is created there
+        return fail(fs::exists(folder / "eboot.bin", none) ? DataFolderProblem::is_game
+                                                     : DataFolderProblem::inside_game,
+                    folder.string());
+    }
+    std::error_code ec;
+    fs::path current;
+    for (const fs::path& part : folder.lexically_normal()) {  // missing folders get 0700
+        current /= part;
+        if (fs::is_directory(current, ec)) {
+            continue;
+        }
+        if (::mkdir(current.c_str(), 0700) != 0 && errno != EEXIST) {
+            return fail(DataFolderProblem::cannot_create,
+                        current.string() + ": " + std::strerror(errno));
+        }
+    }
+    if (!fs::is_directory(folder, ec) || ::access(folder.c_str(), W_OK | X_OK) != 0) {
+        return fail(DataFolderProblem::not_writable, folder.string());
+    }
+    try {
+        common::check_data_folder(folder, {});
+    } catch (const std::exception& e) {
+        return fail(DataFolderProblem::overlaps, e.what());
+    }
+    try {
+        common::write_data_dir_pointer(fs::canonical(folder));
+    } catch (const std::exception& e) {
+        return fail(DataFolderProblem::pointer_failed, e.what());
+    }
+    return {};
+}
+
 std::vector<ScriptStep> parse_script(std::string_view text) {
     std::vector<ScriptStep> steps;
     int line_no = 0;
@@ -131,13 +224,14 @@ std::vector<ScriptStep> parse_script(std::string_view text) {
         } else if (word == "waitgame") {
             step.kind = StepKind::waitgame;
             step.number = number();
-        } else if (word == "drop" || word == "shot" || word == "config") {
+        } else if (word == "drop" || word == "shot" || word == "config" || word == "datafolder") {
             if (arg.empty()) {
                 fail("a path is needed");
             }
-            step.kind = word == "drop" ? StepKind::drop
+            step.kind = word == "drop"   ? StepKind::drop
                         : word == "shot" ? StepKind::shot
-                                         : StepKind::config;
+                        : word == "config" ? StepKind::config
+                                           : StepKind::datafolder;
             step.text = std::string(arg);
         } else if (word == "press") {
             step.kind = StepKind::press;
@@ -156,10 +250,12 @@ std::vector<ScriptStep> parse_script(std::string_view text) {
             } else {
                 fail("press needs accept, back, up, down, left or right");
             }
-        } else if (word == "nopad" || word == "search" || word == "quit") {
-            step.kind = word == "nopad"    ? StepKind::nopad
-                        : word == "search" ? StepKind::search
-                                           : StepKind::quit;
+        } else if (word == "nopad" || word == "search" || word == "quit" ||
+                   word == "datadefault") {
+            step.kind = word == "nopad"      ? StepKind::nopad
+                        : word == "search"   ? StepKind::search
+                        : word == "datadefault" ? StepKind::datadefault
+                                             : StepKind::quit;
         } else {
             fail(std::format("unknown step \"{}\"", word));
         }

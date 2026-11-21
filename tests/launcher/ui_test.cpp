@@ -330,4 +330,39 @@ TEST(LauncherText, PagesHaveEveryStringInBothLanguages) {
     }
 }
 
+// The first-start screen of an AppImage: each text is there in both languages, and German has
+// its own words.
+TEST(LauncherText, DataFolderScreenHasEveryStringInBothLanguages) {
+    const DataFolderText& en = data_folder_text(Lang::en);
+    const DataFolderText& de = data_folder_text(Lang::de);
+    for (auto field : {&DataFolderText::title, &DataFolderText::body, &DataFolderText::use_folder,
+                       &DataFolderText::choose, &DataFolderText::dialog_title,
+                       &DataFolderText::no_proposal}) {
+        ASSERT_NE(en.*field, nullptr);
+        ASSERT_NE(de.*field, nullptr);
+        EXPECT_STRNE(en.*field, de.*field) << en.*field;
+    }
+    for (auto p : {DataFolderProblem::not_absolute, DataFolderProblem::cannot_create,
+                   DataFolderProblem::not_writable, DataFolderProblem::overlaps,
+                   DataFolderProblem::is_game, DataFolderProblem::pointer_failed,
+                   DataFolderProblem::inside_game}) {
+        EXPECT_FALSE(data_folder_problem_text(Lang::en, p).empty());
+        EXPECT_NE(data_folder_problem_text(Lang::de, p), data_folder_problem_text(Lang::en, p));
+    }
+    EXPECT_FALSE(game_in_data_folder_text(Lang::en).empty());
+    EXPECT_NE(game_in_data_folder_text(Lang::de), game_in_data_folder_text(Lang::en));
+    using Reason = bb::common::NoDataFolder::Reason;
+    EXPECT_TRUE(data_folder_lost_text(Lang::en, Reason::not_chosen, "/srv/d").empty());
+    for (Reason reason :
+         {Reason::pointer_unusable, Reason::folder_missing, Reason::folder_unwritable}) {
+        const std::string en = data_folder_lost_text(Lang::en, reason, "/srv/d");
+        const std::string de = data_folder_lost_text(Lang::de, reason, "/srv/d");
+        EXPECT_FALSE(en.empty());
+        EXPECT_NE(en, de);
+    }
+    // The lost folder is named, so the player knows which drive to plug in.
+    EXPECT_NE(data_folder_lost_text(Lang::en, Reason::folder_missing, "/srv/d").find("/srv/d"),
+              std::string::npos);
+}
+
 }  // namespace

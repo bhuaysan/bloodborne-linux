@@ -72,10 +72,135 @@ TEST(LauncherRun, ARefusedFolderWritesNoConfig) {
     EXPECT_FALSE(fs::exists(dir.path() / "config"));
 }
 
+std::string slurp_file(const fs::path& file);
+
+// Runs bb-launcher as an AppImage's runtime starts it (APPIMAGE at `appimage`, APPDIR the folder
+// of the launcher), with HOME and TMPDIR below dir, and no data folder variables.
+bb::test::Result run_appimage_script(const Dir& dir, const std::string& script,
+                                     const fs::path& appimage) {
+    fs::create_directories(dir.path() / "home");
+    fs::create_directories(dir.path() / "tmp");
+    std::ofstream(dir.path() / "script.txt") << script;
+    const std::string d = dir.path().string();
+    return bb::test::run(std::format(
+        "cd {} && env -u BB_GAME_DIR -u BB_CACHE_DIR -u BB_USER_DIR -u XDG_CONFIG_HOME -u XDG_CACHE_HOME "
+        "-u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 SDL_VIDEO_DRIVER=offscreen "
+        "SDL_RENDER_DRIVER=software BB_LAUNCHER_SCRIPT={} APPIMAGE={} APPDIR={} HOME={} TMPDIR={} "
+        "timeout 60 {} 2>&1",
+        quote(d), quote(d + "/script.txt"), quote(appimage.string()),
+        quote(fs::path(BB_LAUNCHER_PATH).parent_path().string()), quote(d + "/home"),
+        quote(d + "/tmp"), quote(BB_LAUNCHER_PATH)));
+}
+
+// Every file below `root`, relative to it.
+std::vector<std::string> files_below(const fs::path& root) {
+    std::vector<std::string> files;
+    for (const auto& entry : fs::recursive_directory_iterator(root)) {
+        if (!entry.is_directory()) {
+            files.push_back(fs::relative(entry.path(), root).string());
+        }
+    }
+    return files;
+}
+
+// The first start of an AppImage: without a data folder the launcher asks, the script takes the
+// proposed one, and only the pointer file lands outside it. The first run's cache folder is gone
+// at the end, and nothing else is written to HOME.
+TEST(LauncherRun, AnAppImageWithoutADataFolderAsksAndWritesThePointer) {
+    const Dir dir;
+    fs::create_directories(dir.path() / "apps");
+    const auto r = run_appimage_script(
+        dir,
+        std::format("wait 3\nshot {0}\ndatadefault\nwait 5\nshot {1}\nquit\n",
+                    (dir.path() / "ask.png").string(), (dir.path() / "after.png").string()),
+        dir.path() / "apps/BB.AppImage");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_TRUE(is_png(dir.path() / "ask.png"));
+    EXPECT_NE(slurp_file(dir.path() / "ask.png"), slurp_file(dir.path() / "after.png"));
+    EXPECT_EQ(slurp_file(dir.path() / "home/.config/bloodborne-linux/data-dir"),
+              (fs::canonical(dir.path() / "apps") / "Bloodborne-Linux-data").string() + "\n");
+    EXPECT_TRUE(fs::is_directory(dir.path() / "apps/Bloodborne-Linux-data"));
+    EXPECT_EQ(files_below(dir.path() / "home"),
+              std::vector<std::string>{".config/bloodborne-linux/data-dir"});
+    EXPECT_TRUE(fs::is_empty(dir.path() / "tmp")) << "the first-start cache folder is removed";
+}
+
+// The AppImage file lies in the dump: the data folder must not go there, the proposal moves to HOME.
+TEST(LauncherRun, AnAppImageKeptInTheDumpGetsItsDataFolderInHome) {
+    const Dir dir;
+    const fs::path dump = dir.path() / "CUSA03173";
+    fs::create_directories(dump);
+    std::ofstream(dump / "eboot.bin") << "x";
+    const auto r = run_appimage_script(dir, "wait 3\ndatadefault\nwait 5\nquit\n",
+                                       dump / "BB.AppImage");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(slurp_file(dir.path() / "home/.config/bloodborne-linux/data-dir"),
+              (fs::canonical(dir.path() / "home") / "Bloodborne-Linux-data").string() + "\n");
+    EXPECT_EQ(files_below(dump), std::vector<std::string>{"eboot.bin"});
+}
+
+// "Choose..." on a folder inside the dump is refused, and the screen stays: no pointer.
+TEST(LauncherRun, ADataFolderInsideTheDumpIsRefused) {
+    const Dir dir;
+    const fs::path dump = dir.path() / "CUSA03173";
+    fs::create_directories(dump / "sub");
+    std::ofstream(dump / "eboot.bin") << "x";
+    const auto r = run_appimage_script(dir,
+                                       std::format("wait 3\ndatafolder {}\nwait 3\nquit\n",
+                                                   (dump / "sub").string()),
+                                       dir.path() / "BB.AppImage");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(r.output.find("data folder " + (dump / "sub").string()), std::string::npos) << r.output;
+    EXPECT_FALSE(fs::exists(dir.path() / "home/.config/bloodborne-linux/data-dir"));
+    EXPECT_EQ(files_below(dump), std::vector<std::string>{"eboot.bin"});
+}
+
+// A data folder that holds the dump (not in game/) would make every Play fail in bb-run: the
+// launcher refuses the game folder before it writes anything.
+TEST(LauncherRun, AGameFolderAroundTheDataFolderIsRefused) {
+    const Dir dir;
+    const fs::path games = dir.path() / "Games";
+    fs::create_directories(games / "CUSA03173");
+    const auto r = run_appimage_script(
+        dir,
+        std::format("wait 3\ndatafolder {0}\nwait 5\ndrop {1}\nwait 3\nquit\n", games.string(),
+                    (games / "CUSA03173").string()),
+        dir.path() / "BB.AppImage");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(r.output.find("bb-launcher: game folder " + (games / "CUSA03173").string()),
+              std::string::npos) << r.output;
+    EXPECT_NE(r.output.find("overlaps"), std::string::npos) << r.output;
+    EXPECT_FALSE(fs::exists(games / "config.toml")) << "no game_dir was written";
+}
+
+// A data-dir file that names a folder that is gone (an unmounted USB stick): the first-start
+// screen comes up with the reason, the folder is not made again and the file stays until the
+// player chooses.
+TEST(LauncherRun, AMissingDataFolderBringsBackTheFirstStartScreen) {
+    const Dir dir;
+    fs::create_directories(dir.path() / "home/.config/bloodborne-linux");
+    const std::string gone = (dir.path() / "usb/Bloodborne-Linux-data").string();
+    std::ofstream(dir.path() / "home/.config/bloodborne-linux/data-dir") << gone << "\n";
+    const auto r = run_appimage_script(
+        dir, std::format("wait 3\nshot {}\nquit\n", (dir.path() / "lost.png").string()),
+        dir.path() / "BB.AppImage");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(r.output.find("the data folder " + gone + " does not exist"), std::string::npos)
+        << r.output;
+    EXPECT_FALSE(fs::exists(dir.path() / "usb"));
+    EXPECT_EQ(slurp_file(dir.path() / "home/.config/bloodborne-linux/data-dir"), gone + "\n");
+    // The screen is the first-start screen with the reason, not the main screen with a notice.
+    EXPECT_EQ(r.output.find("No place for the game's data"), std::string::npos) << r.output;
+    EXPECT_EQ(r.output.find("This folder can't be written"), std::string::npos) << r.output;
+    EXPECT_TRUE(is_png(dir.path() / "lost.png"));
+}
+
 std::string slurp(const fs::path& file) {
     std::ifstream in(file, std::ios::binary);
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
+
+std::string slurp_file(const fs::path& file) { return slurp(file); }
 
 // Runs a copy of bb-launcher next to a fake bb-run that records its arguments and directory,
 // prints one line to stdout and one to stderr and exits with `exit_code`. The script drops the dump, presses Play and takes a shot afterwards.

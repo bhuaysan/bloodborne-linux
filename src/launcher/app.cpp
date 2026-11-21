@@ -58,6 +58,7 @@ struct DialogMailbox {
     std::mutex mutex;
     std::optional<std::string> folder;
     bool open = false;
+    bool for_data = false;  // the dialog was opened to choose the data folder, not the game folder
 };
 
 void on_folder_chosen(void* userdata, const char* const* list, int) {
@@ -181,6 +182,21 @@ private:
         std::optional<common::RuntimeDirs> dirs;
         try {
             dirs = common::RuntimeDirs::from_environment(common::default_profile, {});
+        } catch (const common::NoDataFolder& e) {
+            // An AppImage without a usable data folder: the first-start screen asks for one, and
+            // says why when one was chosen before.
+            need_data_folder_ = true;
+            data_error_ = data_folder_lost_text(lang_, e.reason(), e.folder());
+            if (!data_error_.empty()) {
+                std::cerr << "bb-launcher: " << e.what() << '\n';
+            }
+            const char* appimage = std::getenv("APPIMAGE");
+            const char* home = std::getenv("HOME");
+            const fs::path file = appimage != nullptr ? fs::path(appimage) : fs::path();
+            const bool writable =
+                !file.empty() && ::access(file.parent_path().c_str(), W_OK | X_OK) == 0;
+            data_proposed_ = propose_data_folder(file, home != nullptr ? home : "", writable);
+            return;
         } catch (const std::exception& e) {
             notice_ = std::string("No place for the game's data: ") + e.what();
             no_place_ = notice_;
@@ -197,6 +213,7 @@ private:
             no_place_ = notice_;
             return;
         }
+        data_root_ = dirs->root();
         config_path_ = dirs->config() / "config.toml";
         std::error_code ec;
         if (!fs::exists(config_path_, ec)) {
@@ -214,6 +231,25 @@ private:
         }
     }
 
+    // ---- the data folder of an AppImage -------------------------------------------------------
+    // Takes the folder the player chose on the first-start screen: on success the normal startup
+    // goes on, else the screen stays and says why.
+    void choose_data_folder(const fs::path& folder) {
+        const DataFolderResult r = adopt_data_folder(folder);
+        if (!r.ok()) {
+            data_error_ = data_folder_problem_text(lang_, r.problem);
+            std::cerr << std::format("bb-launcher: data folder {}: {}\n", folder.string(), r.detail);
+            focus_first_ = true;
+            return;
+        }
+        need_data_folder_ = false;
+        data_error_.clear();
+        notice_.clear();
+        load_config();
+        focus_first_ = true;
+        start_search();
+    }
+
     // ---- the game folder ----------------------------------------------------------------------
     // The first start: look for the dump while no game folder is set up (docs/design/launcher.md).
     void start_search() {
@@ -222,10 +258,12 @@ private:
         }
         const char* home = std::getenv("HOME");
         const char* user = std::getenv("USER");
+        const fs::path game_dir_local =
+            game_search_dir(common::running_from_appimage(), data_root_, own_directory());
         auto roots = default_search_roots(home != nullptr ? home : "", user != nullptr ? user : "");
         searching_ = true;
         auto box = search_;
-        search_thread_ = std::thread([box, roots = std::move(roots), game = own_directory() / "game"] {
+        search_thread_ = std::thread([box, roots = std::move(roots), game = game_dir_local] {
             // game/ next to the launcher first: one dump there is taken without the wider search.
             const auto started = std::chrono::steady_clock::now();
             const std::vector<fs::path> local = find_in_game_dir(game);
@@ -308,6 +346,18 @@ private:
             notice_ = no_place_;
             return;
         }
+        if (common::running_from_appimage()) {
+            // The dump may not lie around the data folder (it is fine inside its game/): bb-run
+            // refuses that, and every Play would stop at once.
+            try {
+                common::check_data_folder(data_root_, {folder});
+            } catch (const std::exception& e) {
+                std::cerr << std::format("bb-launcher: game folder {}: {}\n", folder.string(),
+                                         e.what());
+                notice_ = game_in_data_folder_text(lang_);
+                return;
+            }
+        }
         const common::SetupResult r = common::setup_game_folder(folder, config_path_);
         if (r.folder.ok() && !r.config_written) {
             notice_ = r.config_error;
@@ -316,7 +366,9 @@ private:
         accept_check(r.folder, folder);
     }
 
-    void open_folder_dialog() {
+    // `for_data`: the dialog chooses the data folder, else the game folder. The result is used
+    // only for that purpose (the player may have moved on while the portal dialog was open).
+    void open_folder_dialog(const char* title, bool for_data) {
         {
             // SDL may call back from this thread, so the lock is released before the call.
             const std::lock_guard lock(dialog_->mutex);
@@ -324,14 +376,14 @@ private:
                 return;
             }
             dialog_->open = true;
+            dialog_->for_data = for_data;
         }
         // The callback gets its own reference; SDL calls back once.
         auto* ref = new std::shared_ptr<DialogMailbox>(dialog_);
         // SDL reads the properties during the call, as its own SDL_ShowOpenFolderDialog does.
         const SDL_PropertiesID props = SDL_CreateProperties();
         SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_WINDOW_POINTER, window_);
-        SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING,
-                              strings(lang_).dialog_title);
+        SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, title);
         SDL_ShowFileDialogWithProperties(SDL_FILEDIALOG_OPENFOLDER, on_folder_chosen, ref, props);
         SDL_DestroyProperties(props);
     }
@@ -442,7 +494,21 @@ private:
         wait_left_ = 2;  // the frame shows the step's effect before the next step
         switch (step.kind) {
         case StepKind::wait: wait_left_ = step.number; break;
-        case StepKind::drop: set_up_folder(step.text); break;
+        case StepKind::drop:
+            if (!need_data_folder_) {
+                set_up_folder(step.text);
+            }
+            break;
+        case StepKind::datafolder:
+            if (need_data_folder_) {
+                choose_data_folder(step.text);
+            }
+            break;
+        case StepKind::datadefault:
+            if (need_data_folder_) {
+                choose_data_folder(data_proposed_);
+            }
+            break;
         case StepKind::press:
             release_key_ = gamepad_key(step.button);
             io.AddKeyEvent(release_key_, true);
@@ -525,7 +591,7 @@ private:
     void act(Action a) {
         switch (a) {
         case Action::set_up:
-        case Action::choose_another: open_folder_dialog(); break;
+        case Action::choose_another: open_folder_dialog(strings(lang_).dialog_title, false); break;
         case Action::play:
             if (prompt_ != Prompt::none) {
                 break;  // a prompt came up in the frame of the press; it goes first
@@ -606,7 +672,8 @@ private:
             ImGui_ImplSDL3_ProcessEvent(&e);
             if (e.type == SDL_EVENT_QUIT || e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
                 running_ = false;
-            } else if (e.type == SDL_EVENT_DROP_FILE && e.drop.data != nullptr) {
+            } else if (e.type == SDL_EVENT_DROP_FILE && e.drop.data != nullptr &&
+                       !need_data_folder_) {
                 set_up_folder(e.drop.data);
             }
         }
@@ -615,7 +682,13 @@ private:
             if (dialog_->folder) {
                 const std::string folder = *dialog_->folder;
                 dialog_->folder.reset();
-                set_up_folder(folder);
+                // A late result that no longer fits the screen is dropped: "Use this folder"
+                // may have ended the first-start screen while the dialog was still open.
+                if (dialog_->for_data && need_data_folder_) {
+                    choose_data_folder(folder);
+                } else if (!dialog_->for_data && !need_data_folder_) {
+                    set_up_folder(folder);
+                }
             }
         }
         poll_search();
@@ -661,7 +734,15 @@ private:
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
         Action action = Action::none;
-        if (!pages_.empty()) {
+        if (need_data_folder_) {
+            switch (draw_data_folder_screen(ctx, data_proposed_, data_error_, focus_first_)) {
+            case DataFolderChoice::use_proposed: choose_data_folder(data_proposed_); break;
+            case DataFolderChoice::choose_other:
+                open_folder_dialog(data_folder_text(lang_).dialog_title, true);
+                break;
+            case DataFolderChoice::none: break;
+            }
+        } else if (!pages_.empty()) {
             const std::size_t open = pages_.size();
             action = draw_page(ctx);
             // Back closes an open choice list or prompt first, and the page only on the next press.
@@ -716,6 +797,10 @@ private:
     bool refocus_ = false;  // a page was closed in the last frame
     bool popup_open_ = false;  // a choice list of the page was open in the last frame
     fs::path config_path_;
+    fs::path data_root_;  // the data folder (user/ next to the program, or the AppImage's choice)
+    bool need_data_folder_ = false;  // an AppImage without a data folder: ask first
+    fs::path data_proposed_;
+    std::string data_error_;  // why the last choice was refused
     fs::path play_config_;  // set by a script's config step
     fs::path game_dir_;
     std::string title_;
@@ -747,9 +832,37 @@ private:
 
 int run_launcher() {
     // Before SDL and fontconfig start, so their caches land in the game's folder.
+    std::optional<fs::path> scratch;
+    // Removes the first-start cache folder when the launcher ends, also by an exception.
+    struct Cleanup {
+        std::optional<fs::path>& folder;
+        ~Cleanup() {
+            if (folder) {
+                std::error_code ec;
+                fs::remove_all(*folder, ec);
+            }
+        }
+    } cleanup{scratch};
     try {
         common::redirect_library_caches(
             common::RuntimeDirs::from_environment(common::default_profile, {}));
+    } catch (const common::NoDataFolder&) {
+        // The first start of an AppImage: there is no data folder yet, and nothing may land in
+        // ~/.cache. This run's caches go to a folder of their own, removed at the end; bb-run
+        // redirects its own caches once the player has chosen.
+        const char* tmp = std::getenv("TMPDIR");
+        std::string pattern = std::string(tmp != nullptr && *tmp ? tmp : "/tmp") +
+                              "/bloodborne-linux-cache.XXXXXX";
+        if (::mkdtemp(pattern.data()) != nullptr) {
+            scratch = pattern;
+            ::setenv("XDG_CACHE_HOME", pattern.c_str(), 1);
+            ::setenv("MESA_SHADER_CACHE_DIR", pattern.c_str(), 1);
+            ::setenv("__GL_SHADER_DISK_CACHE_PATH", pattern.c_str(), 1);
+        } else {
+            std::cerr << "bb-launcher: cannot make a cache folder in "
+                      << pattern.substr(0, pattern.rfind('/')) << ": " << std::strerror(errno)
+                      << '\n';
+        }
     } catch (const std::exception&) {
         // load_config reports it in the status line.
     }

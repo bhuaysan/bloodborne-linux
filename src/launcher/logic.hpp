@@ -60,14 +60,47 @@ Prompt before_play(bool gpu_ok, bool controller);
 std::vector<std::string> bb_run_arguments(const std::filesystem::path& bb_run,
                                           const std::filesystem::path& config);
 
+// ---- The AppImage's data folder (docs/design/launcher.md, "One portable folder") -------------------
+inline constexpr const char* data_folder_name = "Bloodborne-Linux-data";
+
+// True when `folder` or one of its parents holds an eboot.bin: it is a game folder or lies inside
+// one. The folder need not exist.
+bool inside_game_folder(const std::filesystem::path& folder);
+
+// The folder the first-start screen proposes: Bloodborne-Linux-data in the directory of the
+// AppImage file when that directory can be written (`appimage_dir_writable`), else in `home`;
+// a candidate inside a game folder (inside_game_folder) is skipped. Empty when none is possible
+// (no absolute AppImage path and no home).
+std::filesystem::path propose_data_folder(const std::filesystem::path& appimage,
+                                          std::string_view home, bool appimage_dir_writable);
+
+// The folder where the first-start search looks for the dump next to the program: game/ inside the
+// data folder in an AppImage, else game/ next to the executable.
+std::filesystem::path game_search_dir(bool appimage, const std::filesystem::path& data_folder,
+                                      const std::filesystem::path& executable_dir);
+
+enum class DataFolderProblem { none, not_absolute, cannot_create, not_writable, overlaps, is_game,
+                               pointer_failed, inside_game };
+struct DataFolderResult {
+    DataFolderProblem problem = DataFolderProblem::none;
+    std::string detail;  // the system's or the check's own message, for the log
+    bool ok() const { return problem == DataFolderProblem::none; }
+};
+// Refuses a folder that holds the game's files or lies inside a game folder (is_game, inside_game;
+// nothing is created then). Else creates `folder` (mode 0700), checks that it can be written and
+// doesn't overlap the source directory, then writes the pointer file (common::write_data_dir_pointer).
+DataFolderResult adopt_data_folder(const std::filesystem::path& folder);
+
 // ---- The scripted input of a test run (BB_LAUNCHER_SCRIPT, see app.cpp) ----------------------------
 // One step per line: `wait N` (frames), `drop PATH`, `press accept|back|up|down|left|right`,
-// `shot PATH` (the rendered frame as a PNG), `config PATH` (Play uses this config file from now
+// `datafolder PATH` (chooses PATH on the first-start screen of an AppImage, as "Use this folder"
+// would), `datadefault` (takes the proposed folder), `shot PATH` (the rendered frame as a PNG), `config PATH` (Play uses this config file from now
 // on), `waitgame SECONDS` (waits for the game, then ends it), `nopad` (acts as if no controller
 // were connected from now on), `search` (a script with this step holds back the first-start
 // search's result until the step, which waits for the search to end and hands the result over)
 // and `quit`. Empty lines and lines that start with # are skipped.
-enum class StepKind { wait, drop, press, shot, config, waitgame, nopad, search, quit };
+enum class StepKind { wait, drop, press, shot, config, waitgame, nopad, search, quit, datafolder,
+                      datadefault };
 enum class PadButton { accept, back, up, down, left, right };
 struct ScriptStep {
     StepKind kind = StepKind::quit;

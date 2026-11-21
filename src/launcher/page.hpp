@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "common/runtime_dirs.hpp"
 #include "launcher/logic.hpp"
 #include "launcher/text.hpp"
 
@@ -53,6 +54,33 @@ std::unique_ptr<Page> make_saves_page();
 // one is there.
 std::vector<const char*> picture_strings(Lang lang);
 std::vector<const char*> advanced_strings(Lang lang);
+
+// The first-start screen of an AppImage (page_datafolder.cpp): where the game keeps its data. It
+// has no Back entry; the app shows it instead of the main screen until a folder is chosen.
+struct DataFolderText {
+    const char* title;
+    const char* body;
+    const char* use_folder;  // "Use this folder"
+    const char* choose;      // "Choose..."
+    const char* dialog_title;
+    const char* no_proposal;  // no folder to propose: only Choose is useful
+};
+const DataFolderText& data_folder_text(Lang lang);
+// The player-facing text of a refused folder.
+std::string data_folder_problem_text(Lang lang, DataFolderProblem problem);
+
+// Shown when a chosen game folder and the data folder lie inside one another.
+std::string game_in_data_folder_text(Lang lang);
+// The line on the first-start screen when the data folder chosen before is gone or unusable
+// (empty for "not chosen yet"). `folder` is the one the pointer file named.
+std::string data_folder_lost_text(Lang lang, common::NoDataFolder::Reason reason,
+                                  const std::filesystem::path& folder);
+
+enum class DataFolderChoice { none, use_proposed, choose_other };
+// Draws the screen into the current ImGui window. `error` is shown under the folder when not empty.
+// `focus_first` moves the gamepad focus to "Use this folder".
+DataFolderChoice draw_data_folder_screen(const Context& ctx, const std::filesystem::path& proposed,
+                                         const std::string& error, bool focus_first);
 
 // The first-start search (page_find.cpp): its strings, and the list of several folders that
 // passed the check. `chosen` is called from draw() when the player picks one.
