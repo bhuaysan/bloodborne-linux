@@ -815,8 +815,8 @@ TEST(HleVideo, FlipsCompleteOnePerVblank) {
         ASSERT_EQ(w.result, 0);
     }
     // A flip completes at the first vblank after it was queued, so the third one needs two more
-    // vblanks after the first.
-    EXPECT_GE(std::chrono::steady_clock::now() - start, 2 * vblank_period);
+    // vblanks after the first. The first may take a vblank up to flip_grace before start.
+    EXPECT_GE(std::chrono::steady_clock::now() - start, 2 * vblank_period - flip_grace);
     EXPECT_EQ(flip_count(port.handle), 3u);
 }
 

@@ -143,8 +143,12 @@ TEST(KernelCountedSync, TimedOutHeadLetsTheNextRequestThrough) {
         EXPECT_EQ(wait(h, 3, &timeout), sce_error(etimedout));
         head_done = true;
     });
-    std::this_thread::sleep_for(20ms);
-    // The queued head holds back a request that the count would cover.
+    // The queued head holds back a request that the count would cover. Until the head is queued,
+    // try_wait takes the count: give it back and look again, or next would wait for good.
+    while (try_wait(h, 1) == 0) {
+        EXPECT_EQ(post(h, 1), 0);
+        std::this_thread::sleep_for(1ms);
+    }
     EXPECT_EQ(try_wait(h, 1), sce_error(ebusy));
     std::thread next([&] { result = wait(h, 1, nullptr); });
     std::this_thread::sleep_for(20ms);
