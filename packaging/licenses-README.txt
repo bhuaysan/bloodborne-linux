@@ -1,7 +1,8 @@
 bloodborne-linux is free software under the GNU General Public License, version 2 or later
 (bloodborne-linux-GPL-2.0). Its complete source code, including the scripts that build this
-package, is at https://github.com/bhuaysan/bloodborne-linux ; the commit is in the archive's
-name (Bloodborne-Linux-<commit>.tar.gz).
+package, is at https://github.com/bhuaysan/bloodborne-linux ; the version is in the archive's
+name and printed by "bb-run --version". A version vX.Y.Z is the tag of that name; one like
+v0.2.0-3-gabc1234 is the commit abc1234.
 
 Built into the programs, each under its own license in this folder:
 
