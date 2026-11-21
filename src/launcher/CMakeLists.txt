@@ -58,9 +58,19 @@ install(TARGETS bb-launcher bb-run RUNTIME DESTINATION .)
 install(FILES ${PROJECT_SOURCE_DIR}/packaging/game-README.txt DESTINATION game RENAME README.txt)
 install(FILES ${PROJECT_SOURCE_DIR}/packaging/bloodborne-linux.svg DESTINATION .)
 install(FILES ${PROJECT_SOURCE_DIR}/LICENSE DESTINATION licenses RENAME bloodborne-linux-GPL-2.0)
-# The notices of the third-party code built into the binaries.
-install(DIRECTORY ${PROJECT_SOURCE_DIR}/third_party/ DESTINATION licenses/third_party
-    FILES_MATCHING REGEX "/(LICENSE|COPYING|COPYRIGHT)[^/]*$|/LICENSES/[^/]+$")
+install(FILES ${PROJECT_SOURCE_DIR}/packaging/licenses-README.txt DESTINATION licenses
+    RENAME README.txt)
+# The notices of the third-party code built into the binaries, each in a folder of its project.
+file(GLOB_RECURSE BB_THIRD_PARTY_NOTICES RELATIVE ${PROJECT_SOURCE_DIR}/third_party
+    ${PROJECT_SOURCE_DIR}/third_party/*/LICENSE* ${PROJECT_SOURCE_DIR}/third_party/*/COPYING*
+    ${PROJECT_SOURCE_DIR}/third_party/*/COPYRIGHT* ${PROJECT_SOURCE_DIR}/third_party/*/LICENSES/*)
+foreach(notice IN LISTS BB_THIRD_PARTY_NOTICES)
+    string(REGEX MATCH "^[^/]+" project ${notice})
+    if(notice MATCHES "^[^/]+/(LICENSE|COPYING|COPYRIGHT)[^/]*$|^[^/]+/LICENSES/[^/]+$")
+        get_filename_component(sub ${notice} DIRECTORY)
+        install(FILES ${PROJECT_SOURCE_DIR}/third_party/${notice} DESTINATION licenses/third_party/${sub})
+    endif()
+endforeach()
 FetchContent_GetProperties(zydis SOURCE_DIR BB_ZYDIS_DIR)
 install(FILES ${BB_ZYDIS_DIR}/LICENSE DESTINATION licenses/third_party/zydis)
 install(FILES ${BB_ZYDIS_DIR}/dependencies/zycore/LICENSE DESTINATION licenses/third_party/zycore)

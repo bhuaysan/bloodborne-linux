@@ -15,12 +15,13 @@ set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
-# Backends SDL would otherwise leave out with only a warning: libdecor draws the window decorations
-# on GNOME's Wayland; PipeWire, PulseAudio and ALSA play the sound, whichever the system has. All
-# are opened at run time; only their headers are needed here.
+# Backends SDL would otherwise leave out with only a warning: Wayland (with libdecor, which draws
+# the window decorations on GNOME) and X11 for the window; PipeWire, PulseAudio and ALSA for the
+# sound, whichever the system has. All are opened at run time; only their headers are needed here.
 find_package(PkgConfig REQUIRED)
 set(BB_SDL_MISSING)
-foreach(module libdecor-0 libpipewire-0.3 libpulse alsa)
+foreach(module wayland-client wayland-egl wayland-cursor wayland-scanner xkbcommon libdecor-0
+        x11 xext xcursor xi xfixes xrandr libpipewire-0.3 libpulse alsa)
     string(MAKE_C_IDENTIFIER "BB_SDL_${module}" var)
     pkg_check_modules(${var} QUIET ${module})
     if(NOT ${var}_FOUND)
@@ -30,8 +31,11 @@ endforeach()
 if(BB_SDL_MISSING)
     string(JOIN " " BB_SDL_MISSING ${BB_SDL_MISSING})
     message(FATAL_ERROR "The portable package needs these headers for SDL's backends: "
-        "${BB_SDL_MISSING} (Fedora: libdecor-devel pipewire-devel pulseaudio-libs-devel "
-        "alsa-lib-devel; Debian and Ubuntu: libdecor-0-dev libpipewire-0.3-dev libpulse-dev "
+        "${BB_SDL_MISSING} (Fedora: wayland-devel libxkbcommon-devel "
+        "libdecor-devel libX11-devel libXext-devel libXcursor-devel libXi-devel libXfixes-devel "
+        "libXrandr-devel pipewire-devel pulseaudio-libs-devel alsa-lib-devel; Debian and Ubuntu: "
+        "libwayland-dev libxkbcommon-dev libdecor-0-dev libx11-dev libxext-dev "
+        "libxcursor-dev libxi-dev libxfixes-dev libxrandr-dev libpipewire-0.3-dev libpulse-dev "
         "libasound2-dev)")
 endif()
 # Parts the game and the launcher don't use, so their headers aren't needed to build.
@@ -60,6 +64,11 @@ else()
     message(WARNING "nasm not found: FFmpeg is built without its x86 assembly (slower movies)")
 endif()
 set(BB_FFMPEG_PREFIX ${CMAKE_BINARY_DIR}/ffmpeg)
+# make's jobs as for the rest of the build: CMAKE_BUILD_PARALLEL_LEVEL, else one per core.
+set(BB_FFMPEG_JOBS $ENV{CMAKE_BUILD_PARALLEL_LEVEL})
+if(NOT BB_FFMPEG_JOBS)
+    cmake_host_system_information(RESULT BB_FFMPEG_JOBS QUERY NUMBER_OF_PHYSICAL_CORES)
+endif()
 set(BB_FFMPEG_LIBS avformat avcodec swscale swresample avutil)
 set(BB_FFMPEG_ARCHIVES)
 foreach(lib IN LISTS BB_FFMPEG_LIBS)
@@ -79,7 +88,7 @@ ExternalProject_Add(bb_ffmpeg_build
         --enable-parser=h264,hevc,aac,mpegaudio
         --enable-demuxer=mov,mp3,aac
         --enable-protocol=file
-    BUILD_COMMAND make -j
+    BUILD_COMMAND make -j${BB_FFMPEG_JOBS}
     INSTALL_COMMAND make install
     BUILD_BYPRODUCTS ${BB_FFMPEG_ARCHIVES}
     USES_TERMINAL_BUILD ON)

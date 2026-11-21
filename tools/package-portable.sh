@@ -12,7 +12,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-out=${1:-$root/build/portable/package}
+out=$(realpath -m "${1:-$root/build/portable/package}")  # relative to the caller's directory
 cd "$root"
 
 cmake --preset portable
@@ -45,5 +45,7 @@ if [[ -n $(git status --porcelain --untracked-files=no) ]]; then
 fi
 mkdir -p "$out"
 archive=$out/Bloodborne-Linux-$commit.tar.gz
-tar -C "$stage" --owner=0 --group=0 --numeric-owner --sort=name -czf "$archive" Bloodborne-Linux
+# Times of the commit and a fixed order: the same commit packs the same archive.
+tar -C "$stage" --owner=0 --group=0 --numeric-owner --sort=name \
+    --mtime="@$(git log -1 --format=%ct)" -cf - Bloodborne-Linux | gzip -n > "$archive"
 echo "$archive"
