@@ -52,7 +52,7 @@ std::string data_folder_problem_text(Lang lang, DataFolderProblem problem) {
         return de ? "In diesen Ordner kann nicht geschrieben werden. W\xc3\xa4hle einen anderen."
                   : "This folder can't be written. Choose another one.";
     case DataFolderProblem::overlaps:
-        return de ? "Der Ordner \xc3\xbcberschneidet sich mit dem Spiel oder dem Quellcode. "
+        return de ? "Der Ordner \xc3\xbc" "berschneidet sich mit dem Spiel oder dem Quellcode. "
                     "W\xc3\xa4hle einen anderen."
                   : "This folder overlaps the game or the source code. Choose another one.";
     case DataFolderProblem::is_game:
