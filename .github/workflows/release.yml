@@ -1,10 +1,11 @@
-# Publishes the GitHub release of a release tag vX.Y.Z (docs/releasing.md): builds the portable
-# package with tools/package-portable.sh, writes SHA256SUMS and the notes
-# (tools/release/notes.py: docs/releases/<tag>.md, then the PRs since the previous release) and
-# creates the release with both files.
+# Publishes the GitHub release of a release tag vX.Y.Z (docs/releasing.md): checks the tag and
+# CI, builds the portable package in the Steam Runtime 3 "sniper" SDK with
+# tools/package-portable.sh, writes SHA256SUMS and the notes (tools/release/notes.py:
+# docs/releases/<tag>.md, then the PRs since the previous release) and creates the release with
+# both files.
 #
 # Only the maintainer pushes release tags. A failed run publishes nothing; re-run it once the
-# cause is fixed on the tagged commit's side (a flaky download), or move the tag.
+# cause is fixed on the tagged commit's side (a flaky download, CI still running), or move the tag.
 name: Release
 
 on:
@@ -21,41 +22,21 @@ defaults:
   run:
     shell: bash
 
-jobs:
-  release:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    # The base the package is built on decides the oldest glibc it runs with. Fedora 44 like
-    # CI for now; an older base is #737.
-    container:
-      image: fedora:44
-    permissions:
-      contents: write  # gh release create
-      actions: read    # the CI runs of the tagged commit
-    env:
-      TAG: ${{ github.ref_name }}
-    steps:
-      # What the portable preset needs (tools/package-portable.sh, cmake/portable.cmake): the
-      # release preset's build tools without the test packages, the static libstdc++, the headers
-      # of SDL's backends, nasm, make and perl for FFmpeg, and gh for the release.
-      - name: Install build tools
-        run: |
-          dnf -y --setopt=install_weak_deps=False install git cmake ninja-build gcc-c++ make \
-              python3 spirv-headers-devel vulkan-headers glslang vulkan-loader-devel \
-              fontconfig-devel libstdc++-static pkgconf-pkg-config nasm perl diffutils xz tar gzip \
-              wayland-devel libxkbcommon-devel libdecor-devel libX11-devel libXext-devel \
-              libXcursor-devel libXi-devel libXfixes-devel libXrandr-devel libXtst-devel \
-              pipewire-devel pulseaudio-libs-devel alsa-lib-devel gh
+env:
+  TAG: ${{ github.ref_name }}
 
-      # The whole history: the version (cmake/version.cmake) and the notes need the tags and main.
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read  # the CI runs of the tagged commit
+    steps:
+      # The whole history: the checks need the tags and main.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      # The checkout belongs to another user than the container's root.
-      - name: Trust the checkout
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Check the tag
         run: |
@@ -90,8 +71,32 @@ jobs:
               exit 1
           fi
 
+  package:
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    # The build base decides the oldest glibc the package starts on: the sniper SDK (Debian 11,
+    # glibc 2.31, GCC 14) is Valve's base for Linux games (docs/releasing.md, "Build base"). The
+    # same digest as tools/release/build-package.sh.
+    container:
+      image: registry.gitlab.steamos.cloud/steamrt/sniper/sdk@sha256:bb30053d3cd19d35c76ae69b2790dbaa1430448006f8240cb6d7e723f2d1940e
+    steps:
+      # The whole history: the version (cmake/version.cmake) needs the tags.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The checkout belongs to another user than the container's root.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # sniper-setup.sh adds nasm and CMake and sets GCC 14 and BB_GLIBC_MAX, which makes
+      # package-portable.sh fail for a package that needs a newer glibc.
       - name: Build the package
-        run: tools/package-portable.sh dist
+        run: |
+          eval "$(tools/release/sniper-setup.sh)"
+          tools/package-portable.sh dist
 
       # The programs report the tag as their version: a clean build of exactly the tagged commit.
       - name: Check the version
@@ -99,6 +104,30 @@ jobs:
           ls dist
           test -f "dist/Bloodborne-Linux-$TAG-x86_64.tar.gz"
           (cd dist && sha256sum -- *.tar.gz > SHA256SUMS && cat SHA256SUMS)
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: package
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write  # gh release create
+    steps:
+      # The whole history: the notes need the previous release tag and main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: package
+          path: dist
 
       - name: Write the notes
         env:
@@ -109,5 +138,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          (cd dist && sha256sum -c SHA256SUMS)
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" \
               --notes-file notes.md "dist/Bloodborne-Linux-$TAG-x86_64.tar.gz" dist/SHA256SUMS

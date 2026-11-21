@@ -8,7 +8,7 @@
 # builds its Wayland (with libdecor), X11 and audio (PipeWire, PulseAudio, ALSA) backends from, and
 # nasm for FFmpeg's x86 assembly (without it movies decode slower). Fedora: libstdc++-static
 # libdecor-devel pipewire-devel pulseaudio-libs-devel alsa-lib-devel nasm. CMake names what is
-# missing.
+# missing. Releases build it in the sniper SDK (tools/release/build-package.sh, docs/releasing.md).
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -38,6 +38,18 @@ for bin in bb-launcher bb-run; do
     fi
 done
 [[ $status -eq 0 ]] || exit 1
+
+# The newest glibc symbol version the programs need decides the oldest system they start on
+# (docs/releasing.md, "Build base"). BB_GLIBC_MAX makes a newer one an error, as the release build
+# sets it.
+glibc=$(objdump -T "$folder/bb-run" "$folder/bb-launcher" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' |
+    sed 's/^GLIBC_//' | sort -Vu | tail -1)
+echo "package-portable: needs glibc $glibc or newer" >&2
+newest=$(printf '%s\n' "$glibc" "${BB_GLIBC_MAX:-$glibc}" | sort -V | tail -1)
+if [[ $newest != "${BB_GLIBC_MAX:-$glibc}" ]]; then
+    echo "package-portable: glibc $glibc is newer than BB_GLIBC_MAX=$BB_GLIBC_MAX" >&2
+    exit 1
+fi
 
 # The version the programs were built with (cmake/version.cmake): v0.2.0 on a release tag,
 # v0.2.0-3-gabc1234 after it, with -dirty for uncommitted changes.

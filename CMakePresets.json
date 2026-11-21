@@ -30,7 +30,7 @@
       "name": "portable",
       "inherits": "release",
       "displayName": "Portable package: SDL3, FFmpeg and libstdc++ linked statically",
-      "cacheVariables": { "BB_PORTABLE": "ON", "BB_BUILD_TESTS": "OFF" }
+      "cacheVariables": { "BB_PORTABLE": "ON", "BB_BUILD_TESTS": "OFF", "BB_FETCH_HEADERS": "always" }
     }
   ],
   "buildPresets": [

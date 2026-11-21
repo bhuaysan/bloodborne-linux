@@ -30,7 +30,18 @@ Releases come from `main`, which always passes its tests. There are no release b
    ```
 
    The tag is lightweight: an annotated tag would carry the tagger's name and address.
-3. **Release (workflow).** `.github/workflows/release.yml` checks that the tag has the right form, is lightweight, is on `main` and has its highlights, and that CI on `main` passed for the tagged commit. Tag a commit whose CI run has finished: a release that fails this check is re-run once CI is green. It then builds the package with `tools/package-portable.sh` and checks that the programs report the tag as their version. That fails for a build that is not exactly the tagged commit. Finally it writes `SHA256SUMS` and publishes the release with the package, the checksums and the notes.
+3. **Release (workflow).** `.github/workflows/release.yml` checks that the tag has the right form, is lightweight, is on `main` and has its highlights, and that CI on `main` passed for the tagged commit. Tag a commit whose CI run has finished: a release that fails this check is re-run once CI is green. It then builds the package with `tools/package-portable.sh` on the build base below and checks that the programs report the tag as their version. That fails for a build that is not exactly the tagged commit. Finally it writes `SHA256SUMS` and publishes the release with the package, the checksums and the notes.
+
+## Build base
+
+The package needs only glibc, the Vulkan driver and, for the launcher, fontconfig from the system (`docs/design/launcher.md`, "One portable folder"). The glibc it was built against decides the oldest system it starts on. The release workflow therefore builds it in the Steam Runtime 3 "sniper" SDK, the image Valve builds Linux games in (#737):
+
+- Debian 11 with glibc 2.31 and GCC 14 (`g++-14`), and the headers of every SDL backend. `tools/release/sniper-setup.sh` adds nasm from the image's archive and a pinned CMake release, because the image's CMake 3.25 is older than `CMakeLists.txt` needs. The Vulkan and SPIR-V headers come from the pins in `cmake/headers.cmake`; the `portable` preset always fetches them.
+- The package then starts on glibc 2.31 and newer: Ubuntu 20.04 and later, Debian 11 and later, SteamOS 3, and any current Fedora or Arch. `BB_GLIBC_MAX=2.31` makes `tools/package-portable.sh` fail if a change makes it need a newer one.
+- The image is pinned by digest in `.github/workflows/release.yml` and `tools/release/build-package.sh`. A new digest is a change of its own, checked like this one: build the package, run the game from it, start it on the oldest system.
+- `tools/release/build-package.sh` builds the committed `HEAD` the same way locally (podman).
+
+We chose sniper over an old Ubuntu or a RHEL clone with a newer GCC because it has GCC 14 on glibc 2.31 and all SDL backend headers ready, and because it is the base games on Linux are built for. Building on Fedora 44 would need glibc 2.43, which excludes Ubuntu 24.04, Debian 13 and SteamOS.
 
 The notes (`tools/release/notes.py`) are the highlights, then every PR merged since the previous release, grouped by branch: `feat/` under Features, `fix/` under Fixes, the rest under Other changes. PR titles therefore have to read well on their own. A release with a wrong text is fixed by editing it on GitHub. A release with a wrong package is deleted together with its tag, and the next patch version is released.
 
