@@ -1,89 +1,149 @@
 # bloodborne-linux
 
-An independent reverse engineering project with one goal: make the complete game of Bloodborne (PS4) playable natively on Linux, with no CPU emulation and the best performance and quality we can reach.
+Bloodborne (PS4) running natively on Linux. No emulator, no CPU translation.
 
-The PS4 runs x86-64 code, so the game's own machine code can run directly on a Linux PC. This project builds what is missing around it:
+> [!IMPORTANT]
+> This repository contains no game files, and never will. You need your own dump of the game.
 
-- a loader for the game executable
-- reimplementations of the PS4 system libraries
-- a translation layer from the PS4 graphics API to Vulkan
+## What it is
 
-Game functions are decompiled into readable C++ only where that helps: to fix a bug, remove a bottleneck or lift a limit such as the frame rate. A complete decompilation is not a goal, so the game's own machine code keeps running for everything else.
+The PS4 has an x86-64 CPU, like your PC. So the game's own machine code can run directly on Linux. This project builds what is missing around it:
 
-The renderer, the shader translator and some system libraries are derived from the shadPS4 emulator, under the rules in [docs/source-policy.md](docs/source-policy.md). Every source is credited in [docs/references.md](docs/references.md).
+- **Loader.** Maps the game executable into memory and starts it.
+- **System libraries.** The PS4's operating system functions, rebuilt on Linux.
+- **Graphics.** Translates the PS4's GPU commands and shaders to Vulkan.
+
+Where the game itself needs fixing, single functions are rewritten in C++. That is how the frame rate goes past 30. Everything else stays the game's own code.
+
+Think of it as Wine plus DXVK, built for one game. The renderer, the shader translator and some libraries come from [shadPS4](https://github.com/shadps4-emu/shadPS4). Every source is credited in [docs/references.md](docs/references.md).
 
 ## Status
 
-`bb-run` plays the game. It goes from the title through character creation and the intro to the clinic, saves and continues, and plays Central Yharnam, fights included, at the game's 30 FPS. `bb-run --frame-rate 60` runs it at 60 and `--frame-rate 120` at 120 where the GPU thread keeps up (#676); the few differences from 30 that are left are listed in [docs/design/frame-rate.md](docs/design/frame-rate.md). A playthrough from start to an ending isn't checked yet (R7). See [docs/roadmap.md](docs/roadmap.md).
+| | |
+|---|---|
+| Works | Title, character creation, intro, saving and loading, Central Yharnam with fights |
+| Frame rate | 30 (the game's own), 60 and 120 FPS |
+| Picture | Up to 3840 × 2160, 21:9 and 32:9, wider field of view, FSR 1 upscaling |
+| Not checked yet | A full playthrough to an ending |
 
-## Requirements
+What's next is in the [roadmap](docs/roadmap.md).
 
-- Linux x86-64
-- Your own legally obtained and dumped copy of Bloodborne (CUSA03173, patch 1.09)
+## What you need
 
-**This repository contains no game files, assets or executables, and never will.** You need your own copy. Point the tools at it with:
+- Linux on x86-64
+- A GPU with a Vulkan driver. We test on an AMD RX 7800 XT with RADV.
+- A gamepad. Keyboard and mouse don't work in the game yet.
+- Your own dump of Bloodborne **CUSA03173 with update 1.09**, as a folder that holds `eboot.bin`
 
-```sh
-export BB_GAME_DIR=/path/to/your/CUSA03173
+## Play
+
+The game is one folder. Nothing gets installed.
+
+1. Download `Bloodborne-Linux-….tar.gz` from [Releases](https://github.com/bhuaysan/bloodborne-linux/releases) and unpack it anywhere you can write.
+2. Start `bb-launcher` in that folder.
+3. Drag your game folder onto the window. Or put the dump into `game/` beforehand, then the launcher finds it on its own.
+4. Press **Play**.
+
+The launcher works with the gamepad, too. Cross (A) chooses, Circle (B) goes back.
+
+**Settings → Picture and sound** sets window or fullscreen, monitor, graphics card, resolution, frame rate, VSync, sharpening, field of view, texture filtering, motion blur and colour fringes. The defaults look like the PS4. **Settings → Advanced** can shorten the loading screen after you die.
+
+**Saves** keeps separate profiles, for example one for testing and one for your playthrough. **Open folder** shows a profile's saves, so you can back them up.
+
+If the game stops unexpectedly, its output is in `user/logs/launcher-last-run.log`. Open an [issue](https://github.com/bhuaysan/bloodborne-linux/issues) and paste the end of it, after taking out your user name and folder paths.
+
+## The folder
+
+```
+Bloodborne-Linux/
+├── bb-launcher    start this
+├── bb-run         the game itself
+├── lib/           bundled libraries
+├── game/          optional: put your dump here
+└── user/          settings, saves, shader cache, logs
 ```
 
-## Playing
+Everything the game writes stays in `user/`. Delete the folder and it's all gone. Your dump is only read, never written.
 
-Build the `release` preset (see Building), install it and start the launcher:
+You can move or rename the folder, for example onto a USB stick. A dump inside `game/` moves with it.
 
-```sh
-cmake --preset release
-cmake --build --preset release
-cmake --install build/release --prefix ~/.local   # or /usr/local with sudo
+Played an older build? Its saves are in `~/.local/share/bloodborne-linux`. Copy them over once:
+
+```bash
+cp -r ~/.local/share/bloodborne-linux/profiles Bloodborne-Linux/user/
 ```
 
-"Bloodborne on Linux" now shows in your application menu (log out and in if it doesn't at once), or run `~/.local/bin/bb-launcher`. On the first start the launcher looks for your game folder, the one that holds `eboot.bin`. If it finds none, press "Set up game" and choose the folder of your own dump, or drag it onto the window. Then press Play. The `BB_GAME_DIR` setup above is for developers.
+## Without the launcher
 
-## Building
+`bb-run` is the game itself. It reads the launcher's settings from `user/config.toml`, and its options override them.
 
-The runtime is C++20, built with CMake (3.27 or newer) and Ninja. The unit tests use GoogleTest, which the build finds as an installed package (on Fedora: `cmake ninja-build gtest-devel libasan libubsan`; on Debian and Ubuntu: `cmake ninja-build libgtest-dev`).
+```bash
+./bb-run --frame-rate 60 --fullscreen
+```
 
-```sh
-cmake --preset debug          # or relwithdebinfo, release
+`./bb-run --help` lists every option.
+
+## Known limits
+
+- At 60 FPS and above, a few small differences from 30 remain. They are listed in [docs/design/frame-rate.md](docs/design/frame-rate.md).
+- 120 FPS holds only where the GPU keeps up. Faster frames are still work in progress.
+- Releases are built on Fedora 44. Distributions with an older glibc may not run them yet.
+- No PKG installs. Bring the game as a folder.
+
+## Build it yourself
+
+Install the build tools. On Fedora:
+
+```bash
+sudo dnf install git cmake ninja-build gcc-c++ python3 spirv-headers-devel spirv-tools vulkan-headers vulkan-loader-devel glslang SDL3-devel ffmpeg-free-devel gtest-devel libasan libubsan
+```
+
+Other distributions need the same packages under their own names. You need CMake 3.27 or newer. The first build downloads Zydis and Dear ImGui.
+
+Build the same folder as a release:
+
+```bash
+tools/package-portable.sh
+```
+
+Or build for development, with tests and sanitizers:
+
+```bash
+cmake --preset debug
+```
+
+```bash
 cmake --build --preset debug
+```
+
+```bash
 ctest --preset debug
 ```
 
 | Preset | Use |
 |---|---|
-| `debug` | everyday development, with AddressSanitizer and UndefinedBehaviorSanitizer |
-| `relwithdebinfo` | optimized and debuggable, for playtesting and profiling |
-| `release` | optimized |
+| `debug` | everyday work, AddressSanitizer and UBSan |
+| `relwithdebinfo` | optimized and debuggable, for profiling |
+| `release` | what releases are built from |
 
-Each preset builds into `build/<preset>/`. Tests that need the game skip when `BB_GAME_DIR` is not set.
-
-`bb-load` checks that your dump loads: it maps the game executable and the two bundled PRXs it loads at start (`libSceFios2.prx`, `libc.prx`), binds their imports, then prints their segments, TLS templates and imports, without running any game code. It takes the game from `BB_GAME_DIR` or `--game-dir`:
-
-```sh
-build/debug/src/tools/bb-load --game-dir /path/to/your/CUSA03173
-```
-
-CI (GitHub Actions, `.github/workflows/ci.yml`) builds the presets in a Fedora 44 container (all three on `main`, `debug` and `release` on pull requests) with warnings as errors, runs the tests and checks every commit of a pull request with `tools/privacy-check.sh`. CI has no game files, so the game tests skip there.
-
-## Documentation
-
-- [Architecture](docs/architecture.md)
-- [Roadmap](docs/roadmap.md)
-- [Source and license policy](docs/source-policy.md)
-- [References and credits](docs/references.md)
+Builds in `build/` sit inside the source tree, and the game refuses to write there. To start them by hand, point `BB_USER_DIR` at a folder outside the checkout. Tests that need the game skip unless `BB_GAME_DIR` points at your dump.
 
 ## Contributing
 
-Before your first commit, enable the repository's git hooks:
+Before your first commit, turn on the repository's git hooks:
 
-```sh
+```bash
 git config core.hooksPath tools/githooks
 ```
 
+Read these before you change code:
+
+- [Architecture](docs/architecture.md): how the pieces fit
+- [Source and license policy](docs/source-policy.md): what code we may use, and what never
+- [AGENTS.md](AGENTS.md): the working rules, reviews and merge gate
+
 ## License
 
-Copyright (C) 2026 bloodborne-linux contributors. The project is licensed under the GNU General Public License, version 2 or (at your option) any later version (see [LICENSE](LICENSE)). Code taken from other projects keeps its own license and notices (`third_party/`, header comments). Code written before 2026-11-06 was published under the MIT license. The license does not cover the game.
+GPL-2.0-or-later, see [LICENSE](LICENSE). Code from other projects keeps its own license and notices. Code written before 2026-11-06 was published under MIT. The license does not cover the game.
 
-## Legal
-
-Bloodborne is a trademark of Sony Interactive Entertainment. This project is not affiliated with or endorsed by Sony Interactive Entertainment or FromSoftware.
+Bloodborne is a trademark of Sony Interactive Entertainment. This project is not affiliated with Sony Interactive Entertainment or FromSoftware.
