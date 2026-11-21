@@ -137,6 +137,8 @@ The wait is a minimum time the game gives the loading page of a death's reload, 
 
 The death load is 7 s shorter. Continue and travel don't change (one Continue read a picture late on the loaded machine; the option doesn't touch that load). The first pictures of the area after the death load show the same scene with and without the option, with nothing appearing later.
 
+The config key `load_hold` sets the same hold (#704), and the launcher's Advanced page writes it. Checked on 2026-11-21 with `load-death-travel`, a relwithdebinfo build given the key through `--config` (the rig's `--game-dir` and `--profile` win over the file), default and `load_hold = 0` interleaved, a warm cache: death to control 18.0 s and 17.0 s with the default, 10.0, 10.0 and 11.0 s with `load_hold = 0`; Continue 6.9 s and travel 9.5 s in every run. The log of each `load_hold = 0` run says `loading page hold 0 s`.
+
 ## Profiling `bb-run` (#513)
 
 Tracy is gone, so a slow frame is found with three tools: `perf` for where the threads spend CPU time, frame counters for how much each part of the GPU thread's frame took, and the thread times of every run for what each thread costs per frame.
