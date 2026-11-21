@@ -121,7 +121,7 @@ TEST(LauncherText, GermanHasEveryStringAndMessage) {
     const Strings& en = strings(Lang::en);
     const char* const Strings::*fields[] = {
         &Strings::play,           &Strings::set_up,        &Strings::settings,
-        &Strings::picture_sound,  &Strings::controller,    &Strings::saves,
+        &Strings::picture_sound,  &Strings::advanced,      &Strings::controller,    &Strings::saves,
         &Strings::quit,           &Strings::back,
         &Strings::status_no_game, &Strings::status_version, &Strings::no_controller_title,
         &Strings::no_controller_text, &Strings::play_anyway, &Strings::cancel,

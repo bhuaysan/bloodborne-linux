@@ -522,6 +522,7 @@ private:
         case Action::settings: open(make_settings_page()); break;
         case Action::game_folder: open(make_game_folder_page()); break;
         case Action::picture: open(make_picture_page()); break;
+        case Action::advanced: open(make_advanced_page()); break;
         case Action::controller: open(make_controller_page()); break;
         case Action::saves:
             if (game_ready_) {

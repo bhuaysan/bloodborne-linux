@@ -44,7 +44,7 @@ MainState select_state(const StateInput& in);
 // and saves open a page; play_anyway is Play after the no-controller prompt.
 enum class Action {
     none, set_up, play, play_anyway, settings, saves, quit, choose_another, game_folder, picture,
-    controller
+    advanced, controller
 };
 // The first button of a state.
 Action first_button(MainState state);

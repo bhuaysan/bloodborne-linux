@@ -207,7 +207,7 @@ TEST(LauncherUi, DrawsTheMainScreenForEveryStateWithoutPressing) {
             EXPECT_GT(ImGui::GetDrawData()->CmdListsCount, 0);
         }
         for (auto make : {make_settings_page, make_game_folder_page, make_controller_page,
-                          make_picture_page, make_saves_page}) {
+                          make_picture_page, make_advanced_page, make_saves_page}) {
             auto page = make();
             EXPECT_NE(std::string(page->title(ctx)), "");
         }
@@ -310,8 +310,8 @@ TEST(LauncherUi, EnterPressesTheFirstButtonOfEachState) {
 // Every string of the pages that keep their own tables is there in both languages, and German
 // has its own words except where the two languages share them.
 TEST(LauncherText, PagesHaveEveryStringInBothLanguages) {
-    const std::string same[] = {"VSync"};
-    for (auto strings_of : {picture_strings}) {
+    const std::string same[] = {"VSync", "{} s"};
+    for (auto strings_of : {picture_strings, advanced_strings}) {
         const std::vector<const char*> en = strings_of(Lang::en);
         const std::vector<const char*> de = strings_of(Lang::de);
         ASSERT_EQ(en.size(), de.size());

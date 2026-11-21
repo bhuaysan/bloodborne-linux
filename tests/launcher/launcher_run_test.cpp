@@ -349,6 +349,23 @@ TEST(LauncherRun, ThePicturePageSavesTheImageQualityChoices) {
               "chromatic_aberration = false\nfov = 52\n");
 }
 
+// The Advanced page: Settings, its third entry, the load hold slider from the game's 12 s down to
+// 0 with left alone (#704).
+TEST(LauncherRun, TheAdvancedPageSavesTheLoadHold) {
+    const Dir dir;
+    std::string script = "wait 3\npress down\nwait 2\npress accept\nwait 3\npress down\nwait 2\n"
+                         "press down\nwait 2\npress accept\nwait 3\n";
+    for (int i = 0; i < 13; ++i) {
+        script += "press left\nwait 2\n";
+    }
+    const char* keep = std::getenv("BB_LAUNCHER_TEST_SHOT");  // a shot to look at, if asked for
+    script += std::format("shot {}\npress back\nwait 3\nquit\n",
+                          keep ? keep : (dir.path() / "shot.png").string());
+    const auto r = run_script(dir, script);
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(slurp(dir.path() / "user/config.toml"), "load_hold = 0\n");
+}
+
 TEST(LauncherRun, ABadScriptEndsWithAMessage) {
     const Dir dir;
     const auto r = run_script(dir, "frobnicate\n");

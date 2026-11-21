@@ -161,6 +161,7 @@ RunOptions options_from_config(const common::Config& config) {
     options.chromatic_aberration_strength =
         config.chromatic_aberration_strength.value_or(options.chromatic_aberration_strength);
     options.fov = config.fov.value_or(options.fov);
+    options.load_hold = config.load_hold.value_or(options.load_hold);
     options.present_mode = config.present_mode.value_or(options.present_mode);
     if (config.device) {
         options.device = *config.device;

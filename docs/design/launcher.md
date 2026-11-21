@@ -82,10 +82,11 @@ The search goes first because "where did I put the dump" is the most common plac
 
 ## Settings
 
-A menu like the main one, with three entries:
+A menu like the main one, with four entries:
 
 - **Set up game:** the folder in use and the game's version, and "Choose another folder", which opens the folder dialog. Without a game, how to drop the folder and "Choose folder". The last refused folder's message shows here too.
 - **Picture and sound:** the page below.
+- **Advanced:** the page below that.
 - **Controller:** whether a controller is connected, with the names SDL reports, or how to connect one.
 
 The folder and the controller moved here from the main screen's old status line, so the main screen shows only the menu.
@@ -134,6 +135,16 @@ Sound gets a row once `bb-run` has a choice for it: the output device (#750), no
 
 Changes are saved when the page closes. There is no Apply button.
 
+## Advanced
+
+Settings that change how the game behaves rather than how it looks, in the same form as Picture and sound. The maintainer asked for the page on 2026-11-21 and left its name to us; "Advanced" ("Erweitert") says that a player can leave it alone. It has one row so far:
+
+| Row | Control | Config / `bb-run` |
+|---|---|---|
+| Loading after death | slider in whole seconds from 0 to 12; 12 reads "12 s (default)" | `load_hold`, `--load-hold` (#704): no key at the game's 12, else the seconds. A fraction in the file shows rounded and stays until the slider moves |
+
+Under the row a line says what it does: the least time the loading page of a death's reload stays up; the game still waits until the area is ready, so 0 s loads about 7 s faster (measured with `load-death-travel`, docs/test-rig.md, "The death's loading hold"). The page saves when it closes, like Picture and sound. The form's rows, dropdowns and sliders are shared in `form.hpp`.
+
 ## Saves
 
 - The profiles (`--profile`), each with the time it was last played. Choose one, make a new one, rename one.
@@ -160,7 +171,7 @@ The launcher is meant for the mouse first. Each part of it can also be used with
 
 ## Code layout and test input
 
-The code is in `src/launcher/`: `app.cpp` (window and loop), `main_screen.cpp`, one `page_*.cpp` per page behind the `Page` interface of `page.hpp`, shared widgets in `widgets.hpp`, and the pure logic (states, crop, language, `bb-run` arguments, script parsing) in `logic.cpp`, which `tests/launcher` covers. The main screen and the common words have one string table per language (`text.cpp`). Each page keeps its own English and German strings in its own file, so pages can be built in parallel. Play looks for `bb-run` next to the launcher.
+The code is in `src/launcher/`: `app.cpp` (window and loop), `main_screen.cpp`, one `page_*.cpp` per page behind the `Page` interface of `page.hpp`, shared widgets in `widgets.hpp` and the settings form in `form.hpp`, and the pure logic (states, crop, language, `bb-run` arguments, script parsing) in `logic.cpp`, which `tests/launcher` covers. The main screen and the common words have one string table per language (`text.cpp`). Each page keeps its own English and German strings in its own file, so pages can be built in parallel. Play looks for `bb-run` next to the launcher.
 
 For the checks and the tests, `BB_LAUNCHER_SCRIPT` names a file with one step per line (`wait N`, `drop PATH`, `press accept|back|up|down|left|right`, `shot PATH`, `config PATH`, `waitgame SECONDS`, `nopad`, `quit`). The steps feed drops and gamepad presses, save the rendered frame as a PNG, point Play at another config file and end the game after a time. `waitgame` only counts as the step directly after the `press` that starts the game; any other step in between leaves the game running without a limit. With a script, the launcher acts as if a controller were connected until a `nopad` step, whatever is plugged into the machine, so the prompt for a missing controller can be tested. `BB_LAUNCHER_URL_LOG` names a file that gets the folder URLs of the Saves page instead of a file manager window.
 

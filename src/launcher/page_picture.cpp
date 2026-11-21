@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "common/config.hpp"
+#include "launcher/form.hpp"
 #include "launcher/gpu_probe.hpp"
 #include "launcher/page.hpp"
 #include "launcher/picture_settings.hpp"
@@ -145,118 +146,6 @@ std::string size_label(Size s) {
     return std::format("{} \xC3\x97 {}", s.first, s.second);  // "x" as the multiplication sign
 }
 
-// A dropdown of `labels`. The closed dropdown shows the choice shortened to its width; the list
-// shows the whole names. Returns true when the choice changed.
-bool dropdown(const char* id, const std::vector<std::string>& labels, int& index) {
-    const ImGuiStyle& style = ImGui::GetStyle();
-    const float room = ImGui::CalcItemWidth() - ImGui::GetFrameHeight() - 2 * style.FramePadding.x;
-    const std::string preview = ellipsize_right(labels[static_cast<size_t>(index)], room);
-    bool changed = false;
-    if (ImGui::BeginCombo(id, preview.c_str())) {
-        for (int i = 0; i < static_cast<int>(labels.size()); ++i) {
-            const bool selected = i == index;
-            if (ImGui::Selectable(labels[static_cast<size_t>(i)].c_str(), selected)) {
-                changed = changed || i != index;
-                index = i;
-            }
-            if (selected) {
-                ImGui::SetItemDefaultFocus();
-            }
-        }
-        ImGui::EndCombo();
-    }
-    return changed;
-}
-
-// A dropdown of `names` with `first` (the choice that writes no key) at the top. A name that is
-// set but no longer listed (a card or monitor that is gone) stays as the last entry.
-bool name_dropdown(const char* id, const char* first, std::vector<std::string> names,
-                   std::string& value) {
-    if (!value.empty() && std::find(names.begin(), names.end(), value) == names.end()) {
-        names.push_back(value);
-    }
-    std::vector<std::string> labels{first};
-    labels.insert(labels.end(), names.begin(), names.end());
-    int index = 0;
-    for (size_t i = 0; i < names.size(); ++i) {
-        index = names[i] == value ? static_cast<int>(i) + 1 : index;
-    }
-    if (!dropdown(id, labels, index)) {
-        return false;
-    }
-    value = index == 0 ? std::string() : names[static_cast<size_t>(index) - 1];
-    return true;
-}
-
-// The look of a slider over the last item, ImGui's SliderInt: a thin line with a diamond at
-// `value` and a small tick at `mark` (the default). The diamond sits where ImGui puts its grab,
-// so clicks and drags land under it.
-void draw_line_slider(int value, int min, int max, int mark, float s, bool lit) {
-    const ImVec2 lo = ImGui::GetItemRectMin();
-    const ImVec2 hi = ImGui::GetItemRectMax();
-    constexpr float padding = 2.0f;  // ImGui's grab padding
-    const float size = hi.x - lo.x - 2 * padding;
-    const float range = static_cast<float>(max - min);
-    const float grab = std::min(std::max(size / (range + 1), ImGui::GetStyle().GrabMinSize), size);
-    const float x0 = lo.x + padding + grab * 0.5f;
-    const float x1 = hi.x - padding - grab * 0.5f;
-    const auto at = [&](int v) { return x0 + (x1 - x0) * static_cast<float>(v - min) / range; };
-    const float y = std::round((lo.y + hi.y) * 0.5f);
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImU32 line = lit ? IM_COL32(205, 196, 178, 170) : colour::line;
-    dl->AddRectFilled(ImVec2(x0, y), ImVec2(x1, y + std::max(1.0f, s)), line);
-    dl->AddRectFilled(ImVec2(at(mark), y - 4 * s), ImVec2(at(mark) + std::max(1.0f, s), y + 5 * s),
-                      line);
-    const float r = 6.5f * s;
-    const float x = at(value);
-    const ImVec2 top(x, y - r), right(x + r, y), bottom(x, y + r), left(x - r, y);
-    dl->AddQuadFilled(top, right, bottom, left, lit ? colour::chosen : colour::gold);
-    dl->AddQuad(top, right, bottom, left, colour::background, s);
-}
-
-// A slider of whole numbers from `min` to `max` in the row's control space, `width` wide: the
-// line slider, with `label(value)` right-aligned in the last `value_w` of it, where the diamond
-// can't cover it. Left and right move it by `step` while it has the focus, without pressing A
-// first, as in a game's settings. Returns true when it moved.
-bool line_slider(const char* id, int& value, int min, int max, int mark, int step, float width,
-                 float value_w, const std::function<std::string(int)>& label, float s) {
-    ImGui::SetNextItemWidth(width - value_w);
-    // ImGui's slider does the input; its frame and grab are hidden, and a line with a diamond
-    // stands in for them.
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrab, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_NavCursor, IM_COL32(0, 0, 0, 0));
-    bool moved = ImGui::SliderInt(id, &value, min, max, "", ImGuiSliderFlags_AlwaysClamp);
-    ImGui::PopStyleColor(6);
-    if (ImGui::IsItemFocused() && !ImGui::IsItemActive()) {
-        const int dir = (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight) ||
-                         ImGui::IsKeyPressed(ImGuiKey_RightArrow)) -
-                        (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft) ||
-                         ImGui::IsKeyPressed(ImGuiKey_LeftArrow));
-        const int next = std::clamp(value + dir * step, min, max);
-        moved = moved || next != value;
-        value = next;
-    }
-    draw_line_slider(value, min, max, mark, s,
-                     ImGui::IsItemFocused() || ImGui::IsItemHovered() || ImGui::IsItemActive());
-    const std::string shown = label(value);
-    const ImVec2 at = ImGui::GetItemRectMax();
-    const float text_w = ImGui::CalcTextSize(shown.c_str()).x;
-    ImGui::GetWindowDrawList()->AddText(
-        ImVec2(at.x + value_w - text_w,
-               at.y - ImGui::GetFrameHeight() * 0.5f - ImGui::GetTextLineHeight() * 0.5f),
-        colour::text, shown.c_str());
-    return moved;
-}
-
-// The rows' geometry, logical pixels: eleven rows fill the page's 448.
-constexpr float row_h = 40;
-constexpr float control_x = 230;  // from the window's left edge
-constexpr float control_w = 226;
-
 class PicturePage : public Page {
 public:
     const char* title(const Context& ctx) const override { return text(ctx.lang).title; }
@@ -267,119 +156,7 @@ public:
         const Text& t = text(ctx.lang);
         const float s = ctx.scale;
         const PictureChoices was = now_;
-        ImGui::SetCursorPosX(0);
-        // All rows fit at the design's scale; at a small one the child scrolls, and gamepad
-        // navigation scrolls it to the focused row.
-        ImGui::BeginChild("picture", ImVec2(ImGui::GetWindowWidth(), height));
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->ChannelsSplit(2);  // the band of the focused row goes behind it
-        dl->ChannelsSetCurrent(1);
-        row_ = 0;
-        focus_first_ = first_frame;
-
-        int mode = now_.fullscreen ? 1 : 0;
-        if (row(t.mode, s, [&] { return dropdown("##mode", {t.modes[0], t.modes[1]}, mode); })) {
-            now_.fullscreen = mode == 1;
-        }
-        row(t.display, s,
-            [&] { return name_dropdown("##display", t.main_display, displays_, now_.display); });
-        if (now_.fullscreen) {
-            row(t.resolution, s, [&] {
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("%s", t.screen_size);
-                return false;
-            });
-        } else {
-            std::vector<std::string> labels;
-            int index = 0;
-            for (const Size sz : sizes_) {
-                index = sz == now_.size ? static_cast<int>(labels.size()) : index;
-                labels.push_back(size_label(sz));
-            }
-            if (row(t.resolution, s, [&] { return dropdown("##size", labels, index); })) {
-                now_.size = sizes_[static_cast<size_t>(index)];
-            }
-        }
-
-        std::vector<std::string> rates;
-        int rate = 0;
-        for (const unsigned r : common::frame_rates) {
-            rate = r == now_.frame_rate ? static_cast<int>(rates.size()) : rate;
-            rates.push_back(std::format("{} FPS", r));
-        }
-        if (row(t.frame_rate, s, [&] { return dropdown("##rate", rates, rate); })) {
-            now_.frame_rate = common::frame_rates[static_cast<size_t>(rate)];
-        }
-
-        int sync = static_cast<int>(std::find(std::begin(sync_modes), std::end(sync_modes),
-                                              now_.present_mode) -
-                                    std::begin(sync_modes));
-        if (row(t.sync, s,
-                [&] { return dropdown("##sync", {t.syncs[0], t.syncs[1], t.syncs[2]}, sync); })) {
-            now_.present_mode = sync_modes[sync];
-        }
-        row(t.gpu, s, [&] { return name_dropdown("##gpu", t.automatic, gpus_, now_.device); });
-
-        // Whole degrees; a fractional angle in the file stays until the slider moves.
-        int degrees = static_cast<int>(std::lround(now_.fov));
-        const int game = static_cast<int>(common::game_fov);
-        const auto angle = [&](int d) {
-            return d == game ? std::vformat(t.fov_default, std::make_format_args(d))
-                             : std::format("{}\xC2\xB0", d);
-        };
-        const auto percent = [&](int p) {
-            return p == 0 ? std::string(t.off) : std::format("{} %", p);
-        };
-        // One value column for every slider, as wide as the widest value ("43° (default)"), so
-        // the lines have the same length.
-        float value_w = 0;
-        for (const std::string& v : {angle(game), percent(full_effect), std::string(t.off)}) {
-            value_w = std::max(value_w, ImGui::CalcTextSize(v.c_str()).x);
-        }
-        value_w += 12 * s;
-
-        row(t.sharpness, s, [&] {
-            return line_slider("##sharp", now_.sharpness, sharpness_off, max_sharpness,
-                               sharpness_off, 1, control_w * s, value_w, [&](int v) {
-                                   return v == sharpness_off ? std::string(t.off)
-                                                             : std::to_string(v);
-                               }, s);
-        });
-
-        if (row(t.fov, s, [&] {
-                return line_slider("##fov", degrees, static_cast<int>(common::min_fov),
-                                   static_cast<int>(common::max_fov), game, 1, control_w * s,
-                                   value_w, angle, s);
-            })) {
-            now_.fov = static_cast<float>(degrees);
-        }
-
-        std::vector<unsigned> levels(std::begin(anisotropy_choices), std::end(anisotropy_choices));
-        if (std::find(levels.begin(), levels.end(), now_.anisotropy) == levels.end()) {
-            levels.push_back(now_.anisotropy);  // a level set by hand goes at the end
-        }
-        std::vector<std::string> filters;
-        int level = 0;
-        for (const unsigned l : levels) {
-            level = l == now_.anisotropy ? static_cast<int>(filters.size()) : level;
-            filters.push_back(l == 0 ? t.game_textures : std::format("{}\xC3\x97", l));
-        }
-        if (row(t.textures, s, [&] { return dropdown("##textures", filters, level); })) {
-            now_.anisotropy = levels[static_cast<size_t>(level)];
-        }
-
-        row(t.motion_blur, s, [&] {
-            return line_slider("##blur", now_.motion_blur, 0, full_effect, full_effect, 5,
-                               control_w * s, value_w, percent, s);
-        });
-        row(t.fringes, s, [&] {
-            return line_slider("##fringes", now_.chromatic_aberration, 0, full_effect,
-                               full_effect, 5, control_w * s, value_w, percent, s);
-        });
-
-        ImGui::Dummy(ImVec2(0, 0));  // the cursor below the last row is the child's end
-        dl->ChannelsMerge();
-        ImGui::EndChild();
+        draw_form(t, s, height, first_frame);
         if (now_.display != was.display) {
             display_ = display_size(now_.display);
             sizes_ = resolution_choices(display_, now_.size);
@@ -406,44 +183,107 @@ public:
     }
 
 private:
-    // One row: `label` on the left, the control `draw` puts on the right. The row of the focused
-    // or hovered control gets a band behind it and a lighter label. Returns what `draw` returns.
-    template <typename Control>
-    bool row(const char* label, float s, Control draw) {
-        const float y = ImGui::GetCursorPosY();
-        const float frame = ImGui::GetFrameHeight();
-        const float control_y = y + (row_h * s - frame) * 0.5f;
-        ImGui::SetCursorPos(ImVec2(control_x * s, control_y));
-        ImGui::SetNextItemWidth(control_w * s);
-        if (focus_first_ && row_ == 0) {  // gamepad navigation starts at the first row
-            ImGui::SetKeyboardFocusHere();
+    void draw_form(const Text& t, float s, float height, bool first_frame) {
+        Form form("picture", height, s, first_frame);
+
+        int mode = now_.fullscreen ? 1 : 0;
+        if (form.row(t.mode,
+                     [&] { return dropdown("##mode", {t.modes[0], t.modes[1]}, mode); })) {
+            now_.fullscreen = mode == 1;
         }
-        const bool changed = draw();
-        // Plain text (the resolution in fullscreen) has no ID and never lights up.
-        const bool lit = ImGui::GetItemID() != 0 &&
-                         (ImGui::IsItemFocused() || ImGui::IsItemHovered() || ImGui::IsItemActive());
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        const ImVec2 win = ImGui::GetWindowPos();
-        const float top = win.y + y - ImGui::GetScrollY();
-        if (lit) {
-            dl->ChannelsSetCurrent(0);
-            const float x0 = win.x + 12 * s;
-            const float x1 = win.x + ImGui::GetWindowWidth() - 12 * s;
-            const float mid = (x0 + x1) * 0.5f;
-            constexpr ImU32 clear = IM_COL32(214, 160, 72, 0);
-            constexpr ImU32 band = IM_COL32(214, 160, 72, 46);
-            dl->AddRectFilledMultiColor(ImVec2(x0, top), ImVec2(mid, top + row_h * s), clear, band,
-                                        band, clear);
-            dl->AddRectFilledMultiColor(ImVec2(mid, top), ImVec2(x1, top + row_h * s), band, clear,
-                                        clear, band);
-            dl->ChannelsSetCurrent(1);
+        form.row(t.display,
+            [&] { return name_dropdown("##display", t.main_display, displays_, now_.display); });
+        if (now_.fullscreen) {
+            form.row(t.resolution, [&] {
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("%s", t.screen_size);
+                return false;
+            });
+        } else {
+            std::vector<std::string> labels;
+            int index = 0;
+            for (const Size sz : sizes_) {
+                index = sz == now_.size ? static_cast<int>(labels.size()) : index;
+                labels.push_back(size_label(sz));
+            }
+            if (form.row(t.resolution, [&] { return dropdown("##size", labels, index); })) {
+                now_.size = sizes_[static_cast<size_t>(index)];
+            }
         }
-        const float text_h = ImGui::GetTextLineHeight();
-        dl->AddText(ImVec2(win.x + 24 * s, top + (row_h * s - text_h) * 0.5f),
-                    lit ? colour::chosen : colour::text, label);
-        ImGui::SetCursorPos(ImVec2(0, y + row_h * s));
-        ++row_;
-        return changed;
+
+        std::vector<std::string> rates;
+        int rate = 0;
+        for (const unsigned r : common::frame_rates) {
+            rate = r == now_.frame_rate ? static_cast<int>(rates.size()) : rate;
+            rates.push_back(std::format("{} FPS", r));
+        }
+        if (form.row(t.frame_rate, [&] { return dropdown("##rate", rates, rate); })) {
+            now_.frame_rate = common::frame_rates[static_cast<size_t>(rate)];
+        }
+
+        int sync = static_cast<int>(std::find(std::begin(sync_modes), std::end(sync_modes),
+                                              now_.present_mode) -
+                                    std::begin(sync_modes));
+        if (form.row(t.sync,
+                [&] { return dropdown("##sync", {t.syncs[0], t.syncs[1], t.syncs[2]}, sync); })) {
+            now_.present_mode = sync_modes[sync];
+        }
+        form.row(t.gpu, [&] { return name_dropdown("##gpu", t.automatic, gpus_, now_.device); });
+
+        // Whole degrees; a fractional angle in the file stays until the slider moves.
+        int degrees = static_cast<int>(std::lround(now_.fov));
+        const int game = static_cast<int>(common::game_fov);
+        const auto angle = [&](int d) {
+            return d == game ? std::vformat(t.fov_default, std::make_format_args(d))
+                             : std::format("{}\xC2\xB0", d);
+        };
+        const auto percent = [&](int p) {
+            return p == 0 ? std::string(t.off) : std::format("{} %", p);
+        };
+        // One value column for every slider, as wide as the widest value ("43° (default)"), so
+        // the lines have the same length.
+        const float value_w =
+            value_column({angle(game), percent(full_effect), std::string(t.off)}, s);
+
+        form.row(t.sharpness, [&] {
+            return line_slider("##sharp", now_.sharpness, sharpness_off, max_sharpness,
+                               sharpness_off, 1, value_w, [&](int v) {
+                                   return v == sharpness_off ? std::string(t.off)
+                                                             : std::to_string(v);
+                               }, s);
+        });
+
+        if (form.row(t.fov, [&] {
+                return line_slider("##fov", degrees, static_cast<int>(common::min_fov),
+                                   static_cast<int>(common::max_fov), game, 1, value_w, angle,
+                                   s);
+            })) {
+            now_.fov = static_cast<float>(degrees);
+        }
+
+        std::vector<unsigned> levels(std::begin(anisotropy_choices), std::end(anisotropy_choices));
+        if (std::find(levels.begin(), levels.end(), now_.anisotropy) == levels.end()) {
+            levels.push_back(now_.anisotropy);  // a level set by hand goes at the end
+        }
+        std::vector<std::string> filters;
+        int level = 0;
+        for (const unsigned l : levels) {
+            level = l == now_.anisotropy ? static_cast<int>(filters.size()) : level;
+            filters.push_back(l == 0 ? t.game_textures : std::format("{}\xC3\x97", l));
+        }
+        if (form.row(t.textures, [&] { return dropdown("##textures", filters, level); })) {
+            now_.anisotropy = levels[static_cast<size_t>(level)];
+        }
+
+        form.row(t.motion_blur, [&] {
+            return line_slider("##blur", now_.motion_blur, 0, full_effect, full_effect, 5,
+                               value_w, percent, s);
+        });
+        form.row(t.fringes, [&] {
+            return line_slider("##fringes", now_.chromatic_aberration, 0, full_effect,
+                               full_effect, 5, value_w, percent, s);
+        });
+
     }
 
     void load(const Context& ctx) {
@@ -467,8 +307,6 @@ private:
     }
 
     bool loaded_ = false;
-    bool focus_first_ = false;
-    int row_ = 0;
     PictureChoices before_;
     PictureChoices now_;
     Size display_{0, 0};

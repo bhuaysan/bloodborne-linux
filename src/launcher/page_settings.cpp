@@ -1,5 +1,5 @@
 // Settings and the two small pages under it, Set up game and Controller (docs/design/launcher.md,
-// "Settings"). Picture and sound, the third entry, has its own file.
+// "Settings"). Picture and sound and Advanced have their own files.
 #include <string>
 #include <vector>
 
@@ -67,6 +67,7 @@ public:
         Action a = Action::none;
         a = entry(ctx, t.set_up, ctx.focus_first) ? Action::game_folder : a;
         a = entry(ctx, t.picture_sound, false) ? Action::picture : a;
+        a = entry(ctx, t.advanced, false) ? Action::advanced : a;
         a = entry(ctx, t.controller, false) ? Action::controller : a;
         return a;
     }

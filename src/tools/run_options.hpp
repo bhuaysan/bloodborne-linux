@@ -109,8 +109,8 @@ using common::resolution_width_step;
 using common::wide_resolutions;
 
 // --load-hold: the game's minimum time of a death's loading page, and the most the option takes
-// (bb::game::game_load_hold, #684).
-inline constexpr float max_load_hold = 12.0f;
+// (bb::game::game_load_hold, #684). The config key load_hold has the same range.
+using common::max_load_hold;
 
 // --present-mode. Same order and meaning as Vulkan::PresentMode, which bb-run maps it to.
 using common::PresentMode;

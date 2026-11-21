@@ -49,6 +49,7 @@ TEST(Config, ParsesEverySetting) {
         "chromatic_aberration = true\n"
         "chromatic_aberration_strength = 0.25\n"
         "fov = 55.5\n"
+        "load_hold = 2.5\n"
         "present_mode = \"immediate\"\n"
         "device = \"AMD Radeon RX 7900 XTX (RADV NAVI31)\"\n"
         "display = \"DELL U2723QE\"",
@@ -70,6 +71,7 @@ TEST(Config, ParsesEverySetting) {
     EXPECT_EQ(c.chromatic_aberration, true);
     EXPECT_EQ(c.chromatic_aberration_strength, 0.25f);
     EXPECT_EQ(c.fov, 55.5f);
+    EXPECT_EQ(c.load_hold, 2.5f);
     EXPECT_EQ(c.present_mode, bb::common::PresentMode::immediate);
     EXPECT_EQ(c.device, "AMD Radeon RX 7900 XTX (RADV NAVI31)");
     EXPECT_EQ(c.display, "DELL U2723QE");
@@ -123,6 +125,17 @@ TEST(Config, TakesEachPresentModeAndRefusesOthers) {
               "c.toml:1: present_mode: \"vsync\" is not fifo, mailbox or immediate");
     EXPECT_EQ(error_of("present_mode = fifo"),
               "c.toml:1: present_mode: the value must be in double quotes");
+}
+
+TEST(Config, RefusesALoadHoldOutOfRange) {
+    for (const char* value : {"-1", "12.5", "nan", "\"5\"", "x"}) {
+        EXPECT_EQ(error_of(std::format("load_hold = {}", value)),
+                  std::format("c.toml:1: load_hold: \"{}\" is not a number from 0 to 12",
+                              value[0] == '"' ? "5" : value))
+            << value;
+    }
+    EXPECT_EQ(parse_config("load_hold = 0", "c").config.load_hold, 0.0f);
+    EXPECT_EQ(parse_config("load_hold = 12", "c").config.load_hold, 12.0f);
 }
 
 TEST(Config, RefusesAnEmptyDeviceOrDisplay) {
@@ -256,6 +269,7 @@ TEST_F(ConfigFileTest, WriteThenReadGivesTheSameConfig) {
     c.chromatic_aberration = true;
     c.chromatic_aberration_strength = 0.75f;
     c.fov = 62.5f;
+    c.load_hold = 0.0f;
     c.present_mode = bb::common::PresentMode::fifo;
     c.device = "GPU \"one\"";
     c.display = "Monitor\twith tab";

@@ -386,6 +386,7 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     c.chromatic_aberration = false;
     c.chromatic_aberration_strength = 0.25f;
     c.fov = 58.0f;
+    c.load_hold = 3.0f;
     c.present_mode = bb::common::PresentMode::immediate;
     c.device = "Radeon";
     c.display = "Lenovo";
@@ -407,6 +408,7 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     EXPECT_FALSE(o.chromatic_aberration);
     EXPECT_EQ(o.chromatic_aberration_strength, 0.25f);
     EXPECT_EQ(o.fov, 58.0f);
+    EXPECT_EQ(o.load_hold, 3.0f);
     EXPECT_EQ(o.present_mode, PresentMode::immediate);
     EXPECT_EQ(o.device, "Radeon");
     EXPECT_TRUE(o.device_fallback);  // a card in the file that is gone doesn't stop the game
@@ -424,6 +426,7 @@ TEST(RunOptionsConfig, EmptyConfigKeepsTheDefaults) {
     EXPECT_EQ(o.frame_rate, d.frame_rate);
     EXPECT_EQ(o.fsr, d.fsr);
     EXPECT_EQ(o.anisotropy, 0u);
+    EXPECT_EQ(o.load_hold, 12.0f);
     EXPECT_EQ(o.present_mode, d.present_mode);
     EXPECT_EQ(o.device, "");
     EXPECT_FALSE(o.device_fallback);
@@ -449,8 +452,10 @@ TEST(RunOptionsConfig, CommandLineWinsOverTheFile) {
     c.present_mode = bb::common::PresentMode::immediate;
     c.device = "Radeon";
     c.display = "Lenovo";
-    const RunOptions r =
-        with_config(c, {"--present-mode", "fifo", "--device", "llvmpipe", "--display", "DELL"});
+    c.load_hold = 0.0f;
+    const RunOptions r = with_config(c, {"--present-mode", "fifo", "--device", "llvmpipe",
+                                         "--display", "DELL", "--load-hold", "6"});
+    EXPECT_EQ(r.load_hold, 6.0f);
     EXPECT_EQ(r.present_mode, PresentMode::fifo);
     EXPECT_EQ(r.device, "llvmpipe");
     EXPECT_FALSE(r.device_fallback);  // --device that names no card still ends the run

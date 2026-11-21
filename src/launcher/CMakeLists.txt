@@ -30,7 +30,7 @@ target_compile_options(bb_launcher_imgui PRIVATE -w)
 # The window's parts: widgets, the main screen, fonts, the GPU probe, the header picture and the
 # pages. One file per page: a new page_*.cpp is picked up without editing this list.
 file(GLOB BB_LAUNCHER_PAGES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/page_*.cpp)
-add_library(bblauncherui STATIC main_screen.cpp widgets.cpp fonts.cpp gpu_probe.cpp
+add_library(bblauncherui STATIC main_screen.cpp widgets.cpp form.cpp fonts.cpp gpu_probe.cpp
     header_image.cpp stb_impl.cpp ${BB_LAUNCHER_PAGES})
 target_include_directories(bblauncherui PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_include_directories(bblauncherui SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/stb)

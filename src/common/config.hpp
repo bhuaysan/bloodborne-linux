@@ -31,6 +31,9 @@ inline constexpr float max_post_effect_strength = 1.0f;
 inline constexpr float game_fov = 43.0f;
 inline constexpr float min_fov = 30.0f;
 inline constexpr float max_fov = 65.0f;
+// The least time in seconds the loading page of a death's reload stays up: the game's 12, and
+// the most bb-run --load-hold and the config key load_hold take (bb::game::game_load_hold, #684).
+inline constexpr float max_load_hold = 12.0f;
 
 // The target frame rates bb-run takes (docs/design/frame-rate.md, "Above 60 FPS"). The sites the
 // game paces in 30 FPS frames run on a 30 Hz clock of game time (game::game_tick), so a rate need
@@ -123,6 +126,7 @@ struct Config {
     std::optional<bool> chromatic_aberration;       // chromatic_aberration
     std::optional<float> chromatic_aberration_strength;  // chromatic_aberration_strength: 0 to 1
     std::optional<float> fov;                       // fov: min_fov to max_fov degrees
+    std::optional<float> load_hold;                 // load_hold: 0 to max_load_hold seconds
     std::optional<PresentMode> present_mode;        // present_mode = "fifo"|"mailbox"|"immediate"
     // device: a part of the Vulkan device's name, display: of the SDL display's name, ignoring
     // case (bb-run --device, --display). Not empty.
