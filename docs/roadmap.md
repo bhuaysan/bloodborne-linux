@@ -33,6 +33,7 @@ Each step is a GitHub milestone, and tasks are tracked as issues.
 | Milestone | Goal | Done when |
 |---|---|---|
 | **R7 Playthrough** | The complete game is playable | The game can be played from the start to an ending on the reference machine, without a crash or a rendering fault that blocks play. The work goes area by area, and every fault found gets an issue |
+| **R12 Distributions** | The game runs on the common Linux distributions | The portable package runs and plays on Fedora, Ubuntu, Debian, Arch and Bazzite, and the source builds on them (`docs/distributions.md`) |
 | **Decomp** (continuous, as needed) | Replace game code where that helps | No end state of its own. A function is decompiled when an issue needs it for a bug, a crash, a bottleneck or a limit such as the frame rate. It passes its differential test and is hooked in. Progress is tracked in `symbols/functions.csv` |
 
 R10 and R11 ran alongside R7, which kept priority: a fault that blocks play comes before any option (maintainer decision, 2026-11-19). Both started with research issues that found the engine's own parameters (vblank rate, frame-rate assumptions, post-processing, camera, shadows, draw distance); the options built on what they found. Each option keeps the game's own behaviour as the default, so 30 FPS and 1x stay as they are on `main`.
