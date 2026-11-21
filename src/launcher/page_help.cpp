@@ -182,6 +182,7 @@ std::string collect_problem_report(const Context& ctx) {
         self_dir = common::executable_dir();
     } catch (const std::exception&) {
     }
+    in.folder = self_dir.string();
     in.bb_run = !self_dir.empty() && fs::exists(self_dir / "bb-run", ec)
                     ? "found next to the launcher, built with it"
                     : "missing next to the launcher";

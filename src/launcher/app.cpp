@@ -223,8 +223,23 @@ private:
         auto roots = default_search_roots(home != nullptr ? home : "", user != nullptr ? user : "");
         searching_ = true;
         auto box = search_;
-        search_thread_ = std::thread([box, roots = std::move(roots)] {
-            FindResult r = find_game_folders(roots, FindOptions{}, box->cancel);
+        search_thread_ = std::thread([box, roots = std::move(roots), game = own_directory() / "game"] {
+            // game/ next to the launcher first: one dump there is taken without the wider search.
+            const auto started = std::chrono::steady_clock::now();
+            const std::vector<fs::path> local = find_in_game_dir(game);
+            FindResult r;
+            if (local.size() == 1) {
+                r.folders = local;
+                r.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - started);
+            } else {
+                r = find_game_folders(roots, FindOptions{}, box->cancel);
+                for (auto it = local.rbegin(); it != local.rend(); ++it) {
+                    if (std::ranges::find(r.folders, *it) == r.folders.end()) {
+                        r.folders.insert(r.folders.begin(), *it);
+                    }
+                }
+            }
             const std::lock_guard lock(box->mutex);
             box->result = std::move(r);
         });

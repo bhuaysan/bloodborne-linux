@@ -87,7 +87,9 @@ inline constexpr bool valid_frame_rate(unsigned fps) {
 }
 
 struct Config {
-    std::optional<std::filesystem::path> game_dir;  // game_dir: absolute, or "~/..." for $HOME
+    // game_dir: absolute, "~/..." for $HOME, or relative to the config file's folder (read_config
+    // resolves it; parse_config keeps it relative).
+    std::optional<std::filesystem::path> game_dir;
     std::optional<std::string> profile;             // profile: valid_profile_name
     std::optional<std::pair<unsigned, unsigned>> window_size;  // window_size = "WIDTHxHEIGHT"
     std::optional<std::pair<unsigned, unsigned>> resolution;  // "WIDTHxHEIGHT", valid_resolution
@@ -122,7 +124,8 @@ struct ParsedConfig {
 // range. Unknown keys are returned, not an error.
 ParsedConfig parse_config(std::string_view text, std::string_view source);
 
-// Reads and parses `path`. Throws ConfigError when the file can't be read or doesn't parse.
+// Reads and parses `path`. A relative game_dir is resolved against the folder of `path`. Throws
+// ConfigError when the file can't be read or doesn't parse.
 ParsedConfig read_config(const std::filesystem::path& path);
 
 // The text of `config`, one line per setting that is set.

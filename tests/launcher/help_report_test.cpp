@@ -74,6 +74,20 @@ TEST(HelpReport, HasTheTwoHundredLastLinesOnlyAndIsScrubbed) {
     EXPECT_EQ(std::count(r.begin(), r.end(), '\n'), 9 + 200 - 1 + 1);
 }
 
+// The portable folder goes first, so the rest of its path below home doesn't show either.
+TEST(HelpReport, TheLaunchersFolderBecomesAPlaceholder) {
+    ReportInput in;
+    in.home = "/ho" "me/alice";
+    in.user = "alice";
+    in.folder = "/ho" "me/alice/Games/Bloodborne-Linux/";
+    in.log = "open /ho" "me/alice/Games/Bloodborne-Linux/user/logs/x.log\n"
+             "other /ho" "me/alice/Games/Bloodborne-Linux2/y\n";
+    const std::string r = build_report(in);
+    EXPECT_NE(r.find("open <folder>/user/logs/x.log\n"), std::string::npos) << r;
+    EXPECT_NE(r.find("other ~/Games/Bloodborne-Linux2/y\n"), std::string::npos) << r;
+    EXPECT_EQ(r.find("alice"), std::string::npos) << r;
+}
+
 TEST(HelpReport, NoRunNoLog) {
     ReportInput in;
     const std::string r = build_report(in);

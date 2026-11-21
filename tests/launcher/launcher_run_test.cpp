@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include "common/config.hpp"
 #include "support/game.hpp"
 #include "support/process.hpp"
 
@@ -186,7 +187,51 @@ TEST(LauncherRunGame, TheSearchTakesTheDumpUnderHome) {
     EXPECT_NE(r.output.find("1 hit(s)"), std::string::npos) << r.output;
     const fs::path config = dir.path() / "user/config.toml";
     ASSERT_TRUE(fs::exists(config));
-    EXPECT_NE(slurp(config).find(fs::canonical(folder).string()), std::string::npos);
+    // Stored relative here (home/ and user/ share the test folder); read back it is the dump.
+    EXPECT_EQ(bb::common::read_config(config).config.game_dir, fs::canonical(folder));
+}
+
+// The portable folder: a dump in game/ next to the launcher is taken without any setup and stored
+// relative to the folder, so the folder still works after it was moved. No BB_USER_DIR: user/ is
+// next to the copied launcher, outside the checkout.
+TEST(LauncherRunGame, TheDumpInGameIsTakenAndTheFolderCanMove) {
+    BB_REQUIRE_GAME(game);
+    const Dir dir;
+    const fs::path folder = dir.path() / "Bloodborne-Linux";
+    const fs::path dump = folder / "game/CUSA03173";
+    fs::create_directories(dump / "sce_sys");
+    fs::create_symlink(fs::canonical(game) / "eboot.bin", dump / "eboot.bin");
+    fs::create_symlink(fs::canonical(game) / "sce_sys/param.sfo", dump / "sce_sys/param.sfo");
+    fs::copy_file(BB_LAUNCHER_PATH, folder / "bb-launcher");
+    std::ofstream(folder / "bb-run") << std::format("#!/bin/sh\necho \"args=$*\" > {}\n",
+                                                    quote((dir.path() / "record.txt").string()));
+    fs::permissions(folder / "bb-run", fs::perms::owner_all);
+    fs::create_directories(dir.path() / "home");
+    const auto launch = [&](const fs::path& at, const std::string& script) {
+        std::ofstream(dir.path() / "script.txt") << script;
+        return bb::test::run(std::format(
+            "cd {} && env -u BB_GAME_DIR -u BB_USER_DIR -u BB_CACHE_DIR -u WAYLAND_DISPLAY "
+            "-u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 SDL_VIDEO_DRIVER=offscreen "
+            "SDL_RENDER_DRIVER=software BB_LAUNCHER_SCRIPT={} HOME={} timeout 60 {} 2>&1",
+            quote(dir.path().string()), quote((dir.path() / "script.txt").string()),
+            quote((dir.path() / "home").string()), quote((at / "bb-launcher").string())));
+    };
+    auto r = launch(folder, "wait 200\nquit\n");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(r.output.find("1 hit(s)"), std::string::npos) << r.output;
+    EXPECT_EQ(slurp(folder / "user/config.toml"), "game_dir = \"../game/CUSA03173\"\n");
+    EXPECT_TRUE(fs::is_empty(dir.path() / "home"));
+
+    const fs::path moved = dir.path() / "elsewhere/Bloodborne on a stick";
+    fs::create_directories(moved.parent_path());
+    fs::rename(folder, moved);
+    r = launch(moved, "wait 3\npress accept\nwaitgame 20\nwait 3\nquit\n");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(r.output.find("hit(s)"), std::string::npos) << "no search: the stored folder works";
+    const std::string record = slurp(dir.path() / "record.txt");
+    EXPECT_NE(record.find("--config " + (fs::canonical(moved) / "user/config.toml").string()),
+              std::string::npos)
+        << record;
 }
 
 // Several hits while the Picture and sound page is open: the page is closed properly first, so

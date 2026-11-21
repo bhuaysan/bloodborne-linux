@@ -1,5 +1,6 @@
 #include "common/config.hpp"
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cstdlib>
@@ -186,7 +187,7 @@ TEST(Config, BadValuesNameFileLineAndKey) {
     EXPECT_NE(error_of("rcas_attenuation = nan").find("rcas_attenuation"), std::string::npos);
     EXPECT_NE(error_of("rcas_attenuation = abc").find("rcas_attenuation"), std::string::npos);
     EXPECT_NE(error_of("profile = \"bad name\"").find("profile"), std::string::npos);
-    EXPECT_NE(error_of("game_dir = \"relative/dir\"").find("absolute"), std::string::npos);
+    EXPECT_NE(error_of("game_dir = \"\"").find("empty"), std::string::npos);
     EXPECT_NE(error_of("game_dir = /unquoted").find("double quotes"), std::string::npos);
 }
 
@@ -265,6 +266,49 @@ TEST_F(ConfigFileTest, ReadingAMissingFileFails) {
 TEST_F(ConfigFileTest, WritingBelowAFileFails) {
     std::ofstream(dir_ / "file") << "x";
     EXPECT_THROW(bb::common::write_config(dir_ / "file" / "config.toml", Config{}), ConfigError);
+}
+
+// The portable folder: a dump inside the folder that holds user/ is stored relative to user/, and
+// read back as an absolute path from wherever the folder is now.
+TEST_F(ConfigFileTest, AGameDirInsideTheFolderIsStoredRelative) {
+    const fs::path folder = dir_ / "Bloodborne-Linux";
+    const fs::path config = folder / "user/config.toml";
+    Config c;
+    c.game_dir = folder / "game/CUSA03173";
+    bb::common::write_config(config, c);
+    std::ifstream in(config);
+    std::string line;
+    std::getline(in, line);
+    EXPECT_EQ(line, "game_dir = \"../game/CUSA03173\"");
+    EXPECT_EQ(bb::common::read_config(config).config.game_dir, folder / "game/CUSA03173");
+    // Another writer keeps it relative, and the moved folder still finds it.
+    bb::common::update_config(config, [](Config& k) { k.fullscreen = true; });
+    const fs::path moved = dir_ / "moved";
+    fs::rename(folder, moved);
+    EXPECT_EQ(bb::common::read_config(moved / "user/config.toml").config.game_dir,
+              moved / "game/CUSA03173");
+}
+
+TEST_F(ConfigFileTest, AGameDirOutsideTheFolderStaysAbsolute) {
+    const fs::path config = dir_ / "Bloodborne-Linux/user/config.toml";
+    Config c;
+    c.game_dir = fs::path("/games/bb");
+    bb::common::write_config(config, c);
+    EXPECT_EQ(bb::common::read_config(config).config.game_dir, fs::path("/games/bb"));
+    std::ifstream in(config);
+    std::string line;
+    std::getline(in, line);
+    EXPECT_EQ(line, "game_dir = \"/games/bb\"");
+}
+
+TEST_F(ConfigFileTest, NewFoldersGetMode0700) {
+    ::umask(022);
+    bb::common::write_config(dir_ / "a/user/config.toml", Config{});
+    for (const fs::path& p : {dir_ / "a", dir_ / "a/user"}) {
+        struct stat st {};
+        ASSERT_EQ(::stat(p.c_str(), &st), 0);
+        EXPECT_EQ(st.st_mode & 07777, 0700u) << p;
+    }
 }
 
 TEST_F(ConfigFileTest, DefaultPathIsInTheUserDir) {

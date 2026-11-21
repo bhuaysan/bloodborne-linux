@@ -1,7 +1,10 @@
 #include "common/config.hpp"
 
+#include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cerrno>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
@@ -156,10 +159,10 @@ ParsedConfig parse_config(std::string_view text, std::string_view source) {
             if (home && *home && (dir == "~" || dir.starts_with("~/"))) {
                 dir = home + dir.substr(1);
             }
-            if (dir.empty() || dir.front() != '/') {
-                p.fail(std::format("game_dir: \"{}\" is not an absolute path", v.text));
+            if (dir.empty()) {
+                p.fail("game_dir: the path is empty");
             }
-            c.game_dir = fs::path(dir);
+            c.game_dir = fs::path(dir);  // a relative one is resolved by read_config
         } else if (key == "profile") {
             if (!valid_profile_name(want_string())) {
                 p.fail(std::format("profile: \"{}\" is not 1 to 32 characters from [A-Za-z0-9_-]",
@@ -237,7 +240,14 @@ ParsedConfig read_config(const fs::path& path) {
     }
     std::ostringstream text;
     text << in.rdbuf();
-    return parse_config(text.str(), path.string());
+    ParsedConfig parsed = parse_config(text.str(), path.string());
+    if (parsed.config.game_dir && parsed.config.game_dir->is_relative()) {
+        // The portable folder: a dump in game/ next to user/ is stored as ../game/<dump>, so the
+        // whole folder can be moved (docs/design/launcher.md, "One portable folder").
+        parsed.config.game_dir =
+            (fs::absolute(path).parent_path() / *parsed.config.game_dir).lexically_normal();
+    }
+    return parsed;
 }
 
 namespace {
@@ -304,6 +314,29 @@ std::string format_config(const Config& c) {
     return out;
 }
 
+// `game_dir` relative to the folder of `config_path` when it lies inside the folder that holds
+// that folder (the portable folder around user/), else unchanged.
+static fs::path relative_game_dir(const fs::path& config_path, const fs::path& game_dir) {
+    if (!game_dir.is_absolute()) {
+        return game_dir;
+    }
+    std::error_code ec;
+    const fs::path config_dir = fs::weakly_canonical(fs::absolute(config_path), ec).parent_path();
+    const fs::path folder = config_dir.parent_path();
+    if (ec || folder == config_dir || folder == folder.root_path()) {
+        return game_dir;
+    }
+    const fs::path game = fs::weakly_canonical(game_dir, ec);  // both sides with symlinks resolved
+    if (ec) {
+        return game_dir;
+    }
+    const auto [f, g] = std::mismatch(folder.begin(), folder.end(), game.begin(), game.end());
+    if (f != folder.end()) {
+        return game_dir;  // not inside the folder that holds the config folder
+    }
+    return game.lexically_relative(config_dir);
+}
+
 void write_config(const fs::path& path, const Config& config) {
     const auto fail = [&](const std::string& what) {
         throw ConfigError(std::format("{}: cannot write the config file: {}", path.string(), what));
@@ -311,15 +344,30 @@ void write_config(const fs::path& path, const Config& config) {
     std::error_code ec;
     const fs::path dir = path.parent_path();
     if (!dir.empty()) {
-        fs::create_directories(dir, ec);
-        if (ec) {
-            fail(ec.message());
+        // Missing folders get 0700, as RuntimeDirs::ensure gives them: user/ holds the saves.
+        fs::path current;
+        for (const fs::path& part : fs::absolute(dir)) {
+            current /= part;
+            if (fs::is_directory(current, ec)) {
+                continue;
+            }
+            if (::mkdir(current.c_str(), 0700) != 0) {
+                const int err = errno;
+                if (err != EEXIST || !fs::is_directory(current, ec)) {
+                    fail(std::error_code(err == EEXIST ? ENOTDIR : err, std::generic_category())
+                             .message());
+                }
+            }
         }
+    }
+    Config written = config;
+    if (written.game_dir) {
+        written.game_dir = relative_game_dir(path, *written.game_dir);
     }
     const fs::path temp = path.string() + ".tmp";
     {
         std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-        out << format_config(config);
+        out << format_config(written);
         out.flush();
         if (!out) {
             fs::remove(temp, ec);

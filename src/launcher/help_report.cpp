@@ -175,6 +175,14 @@ std::string build_report(const ReportInput& in) {
     text += "last run: " + (in.last_exit.empty() ? std::string("no run yet") : in.last_exit) + "\n";
     const std::string log = last_lines(in.log, report_log_lines);
     text += "\nlast lines of the log:\n" + (log.empty() ? std::string("(no log)\n") : log);
+    // The portable folder first: it usually lies below home, and its own name says nothing.
+    std::string_view folder = in.folder;
+    while (folder.size() > 1 && folder.ends_with('/')) {
+        folder.remove_suffix(1);
+    }
+    if (folder.size() > 1) {
+        text = replace_bounded(text, folder, "<folder>", name_char);
+    }
     return scrub(text, in.home, in.user);
 }
 

@@ -30,6 +30,12 @@ struct FindResult {
 // $HOME, /run/media/$USER and /media. Empty values are left out.
 std::vector<std::filesystem::path> default_search_roots(std::string_view home, std::string_view user);
 
+// The game/ folder next to the launcher (docs/design/launcher.md, "One portable folder"): the
+// folders that pass the check among `dir` itself and its direct children (not hidden; a symbolic
+// link to a folder counts), with symlinks resolved, sorted. Empty when `dir` doesn't exist.
+std::vector<std::filesystem::path> find_in_game_dir(
+    const std::filesystem::path& dir, std::string_view eboot_sha256 = common::default_eboot_sha256);
+
 // Walks `roots` breadth first, skipping hidden directories (a leading dot) and symbolic links, and
 // stops at `options.time_limit` or when `cancel` is set. A folder with eboot.bin and
 // sce_sys/param.sfo is a candidate and is not searched further; it is a hit when the full check

@@ -192,4 +192,36 @@ TEST(FindGameRoots, HomeAndMediaMountPoints) {
     EXPECT_EQ(default_search_roots("", "").size(), 1u);
 }
 
+TEST_F(FindGameTest, GameDirHoldingTheDumpItself) {
+    game("game");
+    EXPECT_EQ(find_in_game_dir(root_ / "game", fake_hash()),
+              std::vector<fs::path>{root_ / "game"});
+}
+
+TEST_F(FindGameTest, GameDirHoldingDumpFolders) {
+    game("game/CUSA03173");
+    game("game/.hidden");
+    game("game/other", "CUSA00900");  // another game fails the check
+    game("game/deeper/CUSA03173");     // only direct children count
+    EXPECT_EQ(find_in_game_dir(root_ / "game", fake_hash()),
+              std::vector<fs::path>{root_ / "game/CUSA03173"});
+    game("game/second");
+    EXPECT_EQ(find_in_game_dir(root_ / "game", fake_hash()),
+              (std::vector<fs::path>{root_ / "game/CUSA03173", root_ / "game/second"}));
+}
+
+TEST_F(FindGameTest, GameDirFollowsALinkedDump) {
+    game("elsewhere/dump");
+    fs::create_directories(root_ / "game");
+    fs::create_directory_symlink(root_ / "elsewhere/dump", root_ / "game/CUSA03173");
+    EXPECT_EQ(find_in_game_dir(root_ / "game", fake_hash()),
+              std::vector<fs::path>{root_ / "elsewhere/dump"});
+}
+
+TEST_F(FindGameTest, NoGameDir) {
+    EXPECT_TRUE(find_in_game_dir(root_ / "game", fake_hash()).empty());
+    std::ofstream(root_ / "game") << "a file";
+    EXPECT_TRUE(find_in_game_dir(root_ / "game", fake_hash()).empty());
+}
+
 }  // namespace

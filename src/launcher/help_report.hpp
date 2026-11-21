@@ -55,6 +55,7 @@ struct ReportInput {
     std::string log;          // the whole captured log, or its tail
     std::string home;
     std::string user;
+    std::string folder;       // the launcher's own folder, replaced with <folder> before `home`
 };
 // The text for the clipboard, scrubbed as a whole.
 std::string build_report(const ReportInput& in);
