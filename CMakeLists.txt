@@ -6,6 +6,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# The shader translator (src/shadps4, from shadPS4) uses explicit object parameters ("deducing
+# this"): GCC 14, Clang 18 or newer. Ubuntu 24.04's default GCC 13 doesn't have them.
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles("
+struct S { int v; template <class Self> auto& get(this Self& self) { return self.v; } };
+int main() { S s{1}; return s.get() - 1; }" BB_HAVE_EXPLICIT_OBJECT_PARAMETERS)
+if(NOT BB_HAVE_EXPLICIT_OBJECT_PARAMETERS)
+    message(FATAL_ERROR "The compiler (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}) lacks "
+        "explicit object parameters: use GCC 14 or Clang 18 or newer (Ubuntu 24.04: install g++-14 and "
+        "configure with CC=gcc-14 CXX=g++-14 in the environment)")
+endif()
+
 # The kernel puts the heap of a non-PIE program at a random address up to 1 GiB above it, which
 # can overlap the image range at loader::default_base. A PIE program and its heap go far higher.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -39,8 +51,17 @@ endif()
 # The pipeline cache keys on the executable's build id (vk_pipeline_serialization.cpp).
 add_link_options(-Wl,--build-id=sha1)
 
+include(cmake/headers.cmake)
+
 if(BB_PORTABLE)
     include(cmake/portable.cmake)
+else()
+    # A distribution without an SDL3 package (Ubuntu 24.04) builds SDL3 from its release source.
+    find_package(SDL3 CONFIG QUIET)
+    if(NOT SDL3_FOUND)
+        message(STATUS "SDL3: no system package found, building the pinned release")
+        include(cmake/sdl3.cmake)
+    endif()
 endif()
 
 add_subdirectory(src)
