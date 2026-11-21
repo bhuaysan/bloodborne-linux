@@ -124,7 +124,7 @@ TEST(KernelCountedSync, PostWakesWaitersInTheOrderOfTheirRequests) {
             EXPECT_EQ(wait(h, needs[i], nullptr), 0);
             granted.add(i);
         });
-        until_waiting(h, i + 1);  // queue the requests in order
+        ASSERT_NO_FATAL_FAILURE(until_waiting(h, i + 1));  // queue the requests in order
     }
     // One unit doesn't cover the head's request, so the later ones wait behind it.
     EXPECT_EQ(post(h, 1), 0);
@@ -132,7 +132,9 @@ TEST(KernelCountedSync, PostWakesWaitersInTheOrderOfTheirRequests) {
     EXPECT_EQ(granted.size(), 0u);
     EXPECT_EQ(try_wait(h, 1), sce_error(ebusy));
     EXPECT_EQ(post(h, 2), 0);
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
     while (granted.size() < 2) {
+        ASSERT_LT(std::chrono::steady_clock::now(), deadline) << "waiters 0 and 1 not granted";
         std::this_thread::sleep_for(1ms);
     }
     EXPECT_EQ(post(h, 1), 0);
@@ -155,10 +157,10 @@ TEST(KernelCountedSync, TimedOutHeadLetsTheNextRequestThrough) {
         head_done = true;
     });
     // The queued head holds back a request that the count would cover.
-    until_waiting(h, 1);
+    ASSERT_NO_FATAL_FAILURE(until_waiting(h, 1));
     EXPECT_EQ(try_wait(h, 1), sce_error(ebusy));
     std::thread next([&] { result = wait(h, 1, nullptr); });
-    until_waiting(h, 2);
+    ASSERT_NO_FATAL_FAILURE(until_waiting(h, 2));
     EXPECT_FALSE(head_done);
     EXPECT_EQ(result, -1);
     head.join();
@@ -170,7 +172,7 @@ TEST(KernelCountedSync, TimedOutHeadLetsTheNextRequestThrough) {
 TEST(KernelCountedSync, DestroyWakesWaitersWithEacces) {
     const std::uint64_t h = make(0, 1);
     std::thread waiter([&] { EXPECT_EQ(wait(h, 1, nullptr), sce_error(eacces)); });
-    until_waiting(h, 1);
+    ASSERT_NO_FATAL_FAILURE(until_waiting(h, 1));
     EXPECT_EQ(destroy(h), 0);
     waiter.join();
 }
