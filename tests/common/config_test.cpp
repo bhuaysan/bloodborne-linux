@@ -48,7 +48,10 @@ TEST(Config, ParsesEverySetting) {
         "motion_blur_strength = 0.5\n"
         "chromatic_aberration = true\n"
         "chromatic_aberration_strength = 0.25\n"
-        "fov = 55.5",
+        "fov = 55.5\n"
+        "present_mode = \"immediate\"\n"
+        "device = \"AMD Radeon RX 7900 XTX (RADV NAVI31)\"\n"
+        "display = \"DELL U2723QE\"",
         "c");
     const Config& c = parsed.config;
     EXPECT_EQ(c.game_dir, fs::path("/games/bb"));
@@ -67,6 +70,9 @@ TEST(Config, ParsesEverySetting) {
     EXPECT_EQ(c.chromatic_aberration, true);
     EXPECT_EQ(c.chromatic_aberration_strength, 0.25f);
     EXPECT_EQ(c.fov, 55.5f);
+    EXPECT_EQ(c.present_mode, bb::common::PresentMode::immediate);
+    EXPECT_EQ(c.device, "AMD Radeon RX 7900 XTX (RADV NAVI31)");
+    EXPECT_EQ(c.display, "DELL U2723QE");
     EXPECT_TRUE(parsed.unknown_keys.empty());
 }
 
@@ -103,6 +109,26 @@ TEST(Config, RefusesAFieldOfViewOutOfRange) {
     }
     EXPECT_EQ(parse_config("fov = 30", "c").config.fov, 30.0f);
     EXPECT_EQ(parse_config("fov = 65", "c").config.fov, 65.0f);
+}
+
+TEST(Config, TakesEachPresentModeAndRefusesOthers) {
+    using bb::common::PresentMode;
+    for (const PresentMode mode :
+         {PresentMode::fifo, PresentMode::mailbox, PresentMode::immediate}) {
+        const std::string line =
+            std::format("present_mode = \"{}\"", bb::common::present_mode_name(mode));
+        EXPECT_EQ(parse_config(line, "c").config.present_mode, mode) << line;
+    }
+    EXPECT_EQ(error_of("present_mode = \"vsync\""),
+              "c.toml:1: present_mode: \"vsync\" is not fifo, mailbox or immediate");
+    EXPECT_EQ(error_of("present_mode = fifo"),
+              "c.toml:1: present_mode: the value must be in double quotes");
+}
+
+TEST(Config, RefusesAnEmptyDeviceOrDisplay) {
+    EXPECT_EQ(error_of("device = \"\""), "c.toml:1: device: the name is empty");
+    EXPECT_EQ(error_of("display = \"\""), "c.toml:1: display: the name is empty");
+    EXPECT_EQ(error_of("display = 1"), "c.toml:1: display: the value must be in double quotes");
 }
 
 TEST(Config, TakesEachFrameRate) {
@@ -230,6 +256,9 @@ TEST_F(ConfigFileTest, WriteThenReadGivesTheSameConfig) {
     c.chromatic_aberration = true;
     c.chromatic_aberration_strength = 0.75f;
     c.fov = 62.5f;
+    c.present_mode = bb::common::PresentMode::fifo;
+    c.device = "GPU \"one\"";
+    c.display = "Monitor\twith tab";
     const fs::path file = dir_ / "sub" / "config.toml";  // the directory is created
     bb::common::write_config(file, c);
     EXPECT_EQ(bb::common::read_config(file).config, c);

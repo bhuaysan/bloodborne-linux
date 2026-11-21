@@ -235,13 +235,18 @@ void open_display(const bb::tools::RunOptions& options) {
         return;
     }
     std::string why;
+    std::string display_note;
     auto d = std::make_unique<Display>();
     d->window = Frontend::WindowSDL::Open(
         "Bloodborne", static_cast<std::int32_t>(options.window_width),
-        static_cast<std::int32_t>(options.window_height), options.fullscreen, why);
+        static_cast<std::int32_t>(options.window_height), options.fullscreen, options.display,
+        display_note, why);
     if (!d->window) {
         bb::common::log(LogLevel::error, channel, "cannot open the window: {}", why);
         end_run(1);
+    }
+    if (!display_note.empty()) {
+        bb::common::log(LogLevel::warn, channel, "--display: {}", display_note);
     }
     // The window passes the SDL gamepad events on to the imported pad, which the libraries
     // registered before.
@@ -250,9 +255,15 @@ void open_display(const bb::tools::RunOptions& options) {
     // After the window: the device order depends on its window system type.
     const Vulkan::ValidationOptions validation{options.validation, options.validation_sync,
                                                options.validation_gpu};
-    const std::optional<std::int32_t> gpu_id =
+    std::optional<std::int32_t> gpu_id =
         bb::hle::video::resolve_gpu_id(options.device, d->window->GetWindowInfo().type, why,
                                        validation);
+    if (!gpu_id && options.device_fallback) {
+        // A card named in the config file that is gone: the game still starts.
+        bb::common::log(LogLevel::warn, channel, "device in the config file: {}; using the default",
+                        why);
+        gpu_id = -1;
+    }
     if (!gpu_id) {
         bb::common::log(LogLevel::error, channel, "--device: {}", why);
         end_run(2);
@@ -263,24 +274,21 @@ void open_display(const bb::tools::RunOptions& options) {
     Vulkan::RendererOptions renderer{*gpu_id, validation, Vulkan::PresentMode::Mailbox,
                                      options.fsr, options.rcas, options.rcas_attenuation,
                                      options.anisotropy};
-    const char* present_mode_name = "mailbox";
+    const char* const present_mode_name = bb::common::present_mode_name(options.present_mode);
     switch (options.present_mode) {
-    case bb::tools::PresentMode::fifo:
-        renderer.present_mode = Vulkan::PresentMode::Fifo;
-        present_mode_name = "fifo";
-        break;
-    case bb::tools::PresentMode::mailbox:
-        break;
+    case bb::tools::PresentMode::fifo: renderer.present_mode = Vulkan::PresentMode::Fifo; break;
+    case bb::tools::PresentMode::mailbox: break;
     case bb::tools::PresentMode::immediate:
         renderer.present_mode = Vulkan::PresentMode::Immediate;
-        present_mode_name = "immediate";
         break;
     }
     bb::common::log(LogLevel::info, channel, "renderer: device {}, present mode {}, validation {}",
                     *gpu_id, present_mode_name, options.validation ? "on" : "off");
-    bb::common::log(LogLevel::info, channel, "window {}x{}{}, FSR {}, RCAS {} ({} stops)",
+    bb::common::log(LogLevel::info, channel,
+                    "window {}x{}{} on display \"{}\", FSR {}, RCAS {} ({} stops)",
                     d->window->GetWidth(), d->window->GetHeight(),
-                    options.fullscreen ? " fullscreen" : "", options.fsr ? "on" : "off",
+                    options.fullscreen ? " fullscreen" : "", d->window->DisplayName(),
+                    options.fsr ? "on" : "off",
                     options.fsr && options.rcas ? "on" : "off", options.rcas_attenuation);
     if (options.anisotropy != 0) {
         bb::common::log(LogLevel::info, channel, "anisotropy {}x on linear mipmapped samplers",

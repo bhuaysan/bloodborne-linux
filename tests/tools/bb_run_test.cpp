@@ -59,6 +59,8 @@ TEST(RunOptions, Defaults) {
     EXPECT_TRUE(o.log_file);
     EXPECT_FALSE(o.headless);
     EXPECT_EQ(o.device, "");
+    EXPECT_FALSE(o.device_fallback);
+    EXPECT_EQ(o.display, "");
     EXPECT_FALSE(o.validation);
     EXPECT_FALSE(o.validation_sync);
     EXPECT_FALSE(o.validation_gpu);
@@ -113,6 +115,8 @@ TEST(RunOptions, ParsesTheRendererOptions) {
     EXPECT_EQ(parse_error({"--present-mode", "vsync"}),
               "--present-mode: expected fifo, mailbox or immediate");
     EXPECT_EQ(parse_error({"--present-mode"}), "--present-mode needs a value");
+    EXPECT_EQ(parse({"--display", "DELL"}).display, "DELL");
+    EXPECT_EQ(parse_error({"--display"}), "--display needs a value");
     EXPECT_EQ(parse_error({"--validation-sync"}),
               "--validation-sync and --validation-gpu need --validation");
     EXPECT_EQ(parse_error({"--validation-gpu"}),
@@ -382,6 +386,9 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     c.chromatic_aberration = false;
     c.chromatic_aberration_strength = 0.25f;
     c.fov = 58.0f;
+    c.present_mode = bb::common::PresentMode::immediate;
+    c.device = "Radeon";
+    c.display = "Lenovo";
     const RunOptions o = with_config(c, {});
     EXPECT_EQ(o.game_dir, std::filesystem::path("/g"));
     EXPECT_EQ(o.profile, "cfg");
@@ -400,6 +407,10 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     EXPECT_FALSE(o.chromatic_aberration);
     EXPECT_EQ(o.chromatic_aberration_strength, 0.25f);
     EXPECT_EQ(o.fov, 58.0f);
+    EXPECT_EQ(o.present_mode, PresentMode::immediate);
+    EXPECT_EQ(o.device, "Radeon");
+    EXPECT_TRUE(o.device_fallback);  // a card in the file that is gone doesn't stop the game
+    EXPECT_EQ(o.display, "Lenovo");
 }
 
 TEST(RunOptionsConfig, EmptyConfigKeepsTheDefaults) {
@@ -413,6 +424,10 @@ TEST(RunOptionsConfig, EmptyConfigKeepsTheDefaults) {
     EXPECT_EQ(o.frame_rate, d.frame_rate);
     EXPECT_EQ(o.fsr, d.fsr);
     EXPECT_EQ(o.anisotropy, 0u);
+    EXPECT_EQ(o.present_mode, d.present_mode);
+    EXPECT_EQ(o.device, "");
+    EXPECT_FALSE(o.device_fallback);
+    EXPECT_EQ(o.display, "");
 }
 
 TEST(RunOptionsConfig, CommandLineWinsOverTheFile) {
@@ -431,6 +446,15 @@ TEST(RunOptionsConfig, CommandLineWinsOverTheFile) {
     EXPECT_EQ(o.frame_rate, 30u);
     EXPECT_TRUE(o.fsr);  // from the file, so --no-rcas is allowed
     EXPECT_FALSE(o.rcas);
+    c.present_mode = bb::common::PresentMode::immediate;
+    c.device = "Radeon";
+    c.display = "Lenovo";
+    const RunOptions r =
+        with_config(c, {"--present-mode", "fifo", "--device", "llvmpipe", "--display", "DELL"});
+    EXPECT_EQ(r.present_mode, PresentMode::fifo);
+    EXPECT_EQ(r.device, "llvmpipe");
+    EXPECT_FALSE(r.device_fallback);  // --device that names no card still ends the run
+    EXPECT_EQ(r.display, "DELL");
 }
 
 TEST(RunOptionsConfig, ParsesSetup) {

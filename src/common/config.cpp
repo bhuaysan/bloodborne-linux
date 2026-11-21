@@ -226,6 +226,17 @@ ParsedConfig parse_config(std::string_view text, std::string_view source) {
             c.chromatic_aberration_strength = want_number(max_post_effect_strength);
         } else if (key == "fov") {
             c.fov = want_number(max_fov, min_fov);
+        } else if (key == "present_mode") {
+            c.present_mode = parse_present_mode(want_string());
+            if (!c.present_mode) {
+                p.fail(std::format("present_mode: \"{}\" is not fifo, mailbox or immediate",
+                                   v.text));
+            }
+        } else if (key == "device" || key == "display") {
+            if (want_string().empty()) {
+                p.fail(std::format("{}: the name is empty", key));
+            }
+            (key == "device" ? c.device : c.display) = v.text;
         } else {
             result.unknown_keys.push_back(key);
         }
@@ -315,6 +326,15 @@ std::string format_config(const Config& c) {
     }
     if (c.fov) {
         out += std::format("fov = {}\n", *c.fov);
+    }
+    if (c.present_mode) {
+        out += std::format("present_mode = \"{}\"\n", present_mode_name(*c.present_mode));
+    }
+    if (c.device) {
+        out += std::format("device = {}\n", quote_string(*c.device));
+    }
+    if (c.display) {
+        out += std::format("display = {}\n", quote_string(*c.display));
     }
     return out;
 }

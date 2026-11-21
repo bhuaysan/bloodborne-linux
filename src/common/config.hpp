@@ -6,7 +6,9 @@
 // comments. Tables and arrays are not supported. Every key is optional.
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
+#include <iterator>
 #include <functional>
 #include <optional>
 #include <stdexcept>
@@ -77,6 +79,22 @@ inline constexpr bool valid_resolution(unsigned width, unsigned height) {
     return sixteen_nine || is_wide_resolution(width, height);
 }
 
+// The swapchain's present modes (bb-run --present-mode, config key present_mode), in the order of
+// Vulkan::PresentMode, which bb-run maps them to. mailbox is bb-run's default.
+enum class PresentMode { fifo, mailbox, immediate };
+inline constexpr const char* present_mode_names[] = {"fifo", "mailbox", "immediate"};
+inline std::optional<PresentMode> parse_present_mode(std::string_view name) {
+    for (std::size_t i = 0; i < std::size(present_mode_names); ++i) {
+        if (name == present_mode_names[i]) {
+            return static_cast<PresentMode>(i);
+        }
+    }
+    return std::nullopt;
+}
+inline const char* present_mode_name(PresentMode mode) {
+    return present_mode_names[static_cast<std::size_t>(mode)];
+}
+
 inline constexpr bool valid_frame_rate(unsigned fps) {
     for (const unsigned rate : frame_rates) {
         if (fps == rate) {
@@ -105,6 +123,11 @@ struct Config {
     std::optional<bool> chromatic_aberration;       // chromatic_aberration
     std::optional<float> chromatic_aberration_strength;  // chromatic_aberration_strength: 0 to 1
     std::optional<float> fov;                       // fov: min_fov to max_fov degrees
+    std::optional<PresentMode> present_mode;        // present_mode = "fifo"|"mailbox"|"immediate"
+    // device: a part of the Vulkan device's name, display: of the SDL display's name, ignoring
+    // case (bb-run --device, --display). Not empty.
+    std::optional<std::string> device;
+    std::optional<std::string> display;
 
     bool operator==(const Config&) const = default;
 };

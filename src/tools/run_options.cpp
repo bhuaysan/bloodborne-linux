@@ -161,6 +161,12 @@ RunOptions options_from_config(const common::Config& config) {
     options.chromatic_aberration_strength =
         config.chromatic_aberration_strength.value_or(options.chromatic_aberration_strength);
     options.fov = config.fov.value_or(options.fov);
+    options.present_mode = config.present_mode.value_or(options.present_mode);
+    if (config.device) {
+        options.device = *config.device;
+        options.device_fallback = true;
+    }
+    options.display = config.display.value_or(options.display);
     return options;
 }
 
@@ -240,6 +246,9 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             options.headless = true;
         } else if (arg == "--device") {
             options.device = value();
+            options.device_fallback = false;
+        } else if (arg == "--display") {
+            options.display = value();
         } else if (arg == "--validation") {
             options.validation = true;
         } else if (arg == "--validation-sync") {
@@ -303,17 +312,12 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             options.rcas_attenuation = parse_rcas_attenuation(value());
             rcas_given = true;
         } else if (arg == "--present-mode") {
-            const std::string_view mode = value();
-            if (mode == "fifo") {
-                options.present_mode = PresentMode::fifo;
-            } else if (mode == "mailbox") {
-                options.present_mode = PresentMode::mailbox;
-            } else if (mode == "immediate") {
-                options.present_mode = PresentMode::immediate;
-            } else {
+            const std::optional<PresentMode> mode = common::parse_present_mode(value());
+            if (!mode) {
                 throw std::invalid_argument(
                     "--present-mode: expected fifo, mailbox or immediate");
             }
+            options.present_mode = *mode;
         } else {
             throw std::invalid_argument(std::format("unknown argument \"{}\"", arg));
         }

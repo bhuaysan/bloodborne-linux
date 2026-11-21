@@ -4,7 +4,7 @@
 // Changed for bloodborne-linux, 2026-11-11: the window creation and the native handles of the
 // WindowSDL constructor and OnResize; X11 and Wayland only. Open and PumpEvents are ours: no
 // input (the gamepad events go to a handler, syslibs/pad_input.cpp), camera, audio, fullscreen
-// switching or hotkeys.
+// switching or hotkeys. 2026-11-21: Open takes the display to open on (FindDisplay).
 // License texts: third_party/shadps4/LICENSES/
 
 #include "sdl_window.h"
@@ -12,20 +12,58 @@
 #include <SDL3/SDL.h>
 #include <imgui.h>
 
+#include <algorithm>
+#include <cctype>
+
 #include "imgui/renderer/imgui_core.h"
 
 namespace Frontend {
 
 namespace {
 WindowSDL::EventHandler gamepad_handler = nullptr;
+
+bool ContainsIgnoringCase(std::string_view text, std::string_view part) {
+    const auto lower = [](char c) { return std::tolower(static_cast<unsigned char>(c)); };
+    return std::search(text.begin(), text.end(), part.begin(), part.end(),
+                       [&](char a, char b) { return lower(a) == lower(b); }) != text.end();
 }
+
+// The display whose name contains `name`, ignoring case; 0 (the primary display) when `name` is
+// empty or matches none, `note` then naming the displays there are.
+SDL_DisplayID FindDisplay(std::string_view name, std::string& note) {
+    note.clear();
+    if (name.empty()) {
+        return 0;
+    }
+    int count = 0;
+    SDL_DisplayID* const ids = SDL_GetDisplays(&count);
+    SDL_DisplayID found = 0;
+    std::string names;
+    for (int i = 0; i < count && found == 0; ++i) {
+        const char* const display = SDL_GetDisplayName(ids[i]);
+        const std::string_view n = display != nullptr ? display : "";
+        if (ContainsIgnoringCase(n, name)) {
+            found = ids[i];
+        }
+        names += names.empty() ? "" : ", ";
+        names += n;
+    }
+    SDL_free(ids);
+    if (found == 0) {
+        note = "no display name contains \"" + std::string(name) + "\" (displays: " + names +
+               "), using the primary display";
+    }
+    return found;
+}
+}  // namespace
 
 void WindowSDL::SetGamepadEventHandler(EventHandler handler) {
     gamepad_handler = handler;
 }
 
 std::unique_ptr<WindowSDL> WindowSDL::Open(std::string_view title, s32 width_, s32 height_,
-                                           bool fullscreen, std::string& why) {
+                                           bool fullscreen, std::string_view display,
+                                           std::string& display_note, std::string& why) {
     // SDL would otherwise turn SIGINT and SIGTERM into SDL_EVENT_QUIT, so Ctrl-C would not end the
     // run.
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
@@ -38,8 +76,13 @@ std::unique_ptr<WindowSDL> WindowSDL::Open(std::string_view title, s32 width_, s
     }
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, std::string(title).c_str());
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, SDL_WINDOWPOS_CENTERED);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, SDL_WINDOWPOS_CENTERED);
+    // A position on the display (not an undefined one) also makes SDL's Wayland backend ask for
+    // fullscreen on that display's output.
+    const SDL_DisplayID on = FindDisplay(display, display_note);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER,
+                          SDL_WINDOWPOS_CENTERED_DISPLAY(on));
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER,
+                          SDL_WINDOWPOS_CENTERED_DISPLAY(on));
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, width_);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetNumberProperty(props, "flags", SDL_WINDOW_VULKAN);
@@ -83,6 +126,12 @@ std::unique_ptr<WindowSDL> WindowSDL::Open(std::string_view title, s32 width_, s
         return nullptr;  // the destructor closes the window and SDL
     }
     return result;
+}
+
+std::string WindowSDL::DisplayName() const {
+    const char* const name =
+        window != nullptr ? SDL_GetDisplayName(SDL_GetDisplayForWindow(window)) : nullptr;
+    return name != nullptr ? name : "";
 }
 
 WindowSDL::~WindowSDL() {

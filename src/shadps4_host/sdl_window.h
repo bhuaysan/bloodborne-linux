@@ -3,7 +3,8 @@
 // Source: shadPS4 src/sdl_window.h @11557f2eb60b3b00712c8887c30852de7615d6df
 // Changed for bloodborne-linux, 2026-11-11: the window and surface part only, over the SDL3
 // window bb-run opens (docs/design/renderer.md, "The window is ours, the surface is upstream's").
-// No input of its own, settings or fullscreen; Open and PumpEvents are ours.
+// No input of its own, settings or fullscreen; Open and PumpEvents are ours. 2026-11-21: Open
+// takes the display to open on.
 // License texts: third_party/shadps4/LICENSES/
 #pragma once
 
@@ -38,9 +39,12 @@ public:
     WindowSDL() = default;
     // Initialises SDL's video and opens a resizable Vulkan window of `width` x `height` on X11 or
     // Wayland; `fullscreen` makes it a borderless window covering its display, at the display's
-    // size. Nothing when SDL can't; `why` then gives SDL's error.
+    // size. The window is centred on the display whose name contains `display`, ignoring case,
+    // else on the primary display; `display_note` then says why (empty when nothing was asked or
+    // it matched). Nothing when SDL can't; `why` then gives SDL's error.
     static std::unique_ptr<WindowSDL> Open(std::string_view title, s32 width, s32 height,
-                                           bool fullscreen, std::string& why);
+                                           bool fullscreen, std::string_view display,
+                                           std::string& display_note, std::string& why);
     ~WindowSDL();
     WindowSDL(const WindowSDL&) = delete;
     WindowSDL& operator=(const WindowSDL&) = delete;
@@ -49,6 +53,8 @@ public:
     s32 GetWidth() const { return width; }
     s32 GetHeight() const { return height; }
     SDL_Window* GetSDLWindow() const { return window; }
+    // The name of the display the window is on, as SDL has it; empty when SDL doesn't know.
+    std::string DisplayName() const;
     WindowSystemInfo GetWindowInfo() const { return window_info; }
 
     // Handles the pending events on the thread that opened the window, after waiting up to

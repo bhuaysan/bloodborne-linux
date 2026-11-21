@@ -18,7 +18,7 @@ namespace bb::tools {
 
 inline constexpr std::string_view run_usage =
     "usage: bb-run [--config FILE] [--setup DIR] [--game-dir DIR] [--profile NAME] [--timeout SECONDS] [--stop-at-main-loop]\n"
-    "              [--log SPEC] [--no-log-file] [--headless] [--device NAME]\n"
+    "              [--log SPEC] [--no-log-file] [--headless] [--device NAME] [--display NAME]\n"
     "              [--validation] [--validation-sync] [--validation-gpu]\n"
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
     "              [--sync-pipelines] [--sync-recording] [--pad-input PATH]\n"
@@ -44,6 +44,9 @@ inline constexpr std::string_view run_usage =
     "  --device NAME        the Vulkan device whose name contains NAME, ignoring case\n"
     "                       (default: video_core's choice, a discrete GPU first); status 2 when\n"
     "                       none matches\n"
+    "  --display NAME       open the window centred on the display whose name contains NAME,\n"
+    "                       ignoring case, and cover it with --fullscreen (default: the primary\n"
+    "                       display); a warning and the primary display when none matches\n"
     "  --validation         load the Vulkan validation layer (core checks)\n"
     "  --validation-sync    with --validation: synchronization validation\n"
     "  --validation-gpu     with --validation: GPU-assisted validation\n"
@@ -110,7 +113,7 @@ using common::wide_resolutions;
 inline constexpr float max_load_hold = 12.0f;
 
 // --present-mode. Same order and meaning as Vulkan::PresentMode, which bb-run maps it to.
-enum class PresentMode { fifo, mailbox, immediate };
+using common::PresentMode;
 
 struct RunOptions {
     std::optional<std::filesystem::path> game_dir;  // --game-dir, else the environment
@@ -121,6 +124,10 @@ struct RunOptions {
     bool log_file = true;
     bool headless = false;  // --headless: no window and no presentation
     std::string device;     // --device: a device name part (resolve_gpu_id), empty for any
+    // The device came from the config file: when it names no device (the card is gone), bb-run
+    // warns and takes the default instead of ending the run. --device sets it to false.
+    bool device_fallback = false;
+    std::string display;  // --display: a display name part, empty for the primary display
     bool validation = false;       // --validation
     bool validation_sync = false;  // --validation-sync, only with --validation
     bool validation_gpu = false;   // --validation-gpu, only with --validation
