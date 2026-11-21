@@ -16,5 +16,15 @@ Built into the programs, each under its own license in this folder:
   and BSD-3-Clause parts).
 - The GNU C++ library and the GCC runtime, under the GCC Runtime Library Exception.
 
+The AppImage (not the tar.gz) also contains the AppImage runtime, an unchanged binary of
+https://github.com/AppImage/type2-runtime/releases/tag/20251108 (MIT, runtime-x86_64), built
+from https://github.com/AppImage/type2-runtime/tree/dd6cebedcbddde9c82f89b011e8e1d40b6e43868
+It has libfuse 3.15.0 (LGPL 2.1, source: https://github.com/libfuse/libfuse/tree/fuse-3.15.0),
+squashfuse (BSD-2-Clause), musl (MIT), zstd, zlib and mimalloc linked statically; their license
+texts are in licenses/appimage-runtime/ inside the image. The runtime is the start of the file and
+the squashfs image with the programs follows it, so the runtime can be replaced: the image starts
+at the offset printed by "<file>.AppImage --appimage-offset" (write another runtime, then the
+bytes from that offset on). "--appimage-extract" unpacks the image to look at it.
+
 The game itself is not part of this package: you need your own dump of Bloodborne (CUSA03173)
 with update 1.09.

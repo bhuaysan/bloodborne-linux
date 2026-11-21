@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Bloodborne Linux
+Comment=Bloodborne (PS4) on Linux
+Exec=bb-launcher
+Icon=bloodborne-linux
+Categories=Game;
+Terminal=false

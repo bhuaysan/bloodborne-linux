@@ -5,7 +5,8 @@
 #
 # Usage: tools/release/build-package.sh [OUTPUT_DIR]   (default: build/release-package)
 #
-# Needs podman and a network (the image, nasm, CMake and the pinned sources of cmake/*.cmake). The
+# Writes the tar.gz and the AppImage. Needs podman and a network (the image, nasm, squashfs-tools,
+# CMake, the AppImage runtime and the pinned sources of cmake/*.cmake). The
 # build runs on a clone of HEAD in a new directory under build/ (not $TMPDIR, which may be RAM
 # and count against the container's memory limit), removed afterwards. Uncommitted changes are not
 # built.
@@ -36,5 +37,5 @@ podman run --rm --memory 12g --memory-swap 12g \
         eval "$env"
         tools/package-portable.sh /work/out'
 mkdir -p "$out"
-cp "$work"/out/*.tar.gz "$out"/
+cp "$work"/out/*.tar.gz "$work"/out/*.AppImage "$out"/
 ls "$out"

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Entry point of the AppImage (tools/release/make-appimage.sh). The runtime sets APPDIR to the
+# mounted image; bb-launcher finds bb-run next to itself.
+here=$(dirname "$(readlink -f "$0")")
+exec "${APPDIR:-$here}/bb-launcher" "$@"

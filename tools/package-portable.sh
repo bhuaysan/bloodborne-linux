@@ -3,6 +3,9 @@
 # preset (SDL3, FFmpeg and libstdc++ linked statically, cmake/portable.cmake), installed into
 # Bloodborne-Linux/ and packed as Bloodborne-Linux-<version>-x86_64.tar.gz (docs/releasing.md).
 #
+# It also writes Bloodborne-Linux-<version>-x86_64.AppImage from the same install tree
+# (tools/release/make-appimage.sh: needs squashfs-tools, curl and a network for the pinned runtime).
+#
 # Usage: tools/package-portable.sh [OUTPUT_DIR]   (default: build/portable/package)
 # Needs what the release preset needs, plus the static libstdc++, the development headers SDL
 # builds its Wayland (with libdecor), X11 and audio (PipeWire, PulseAudio, ALSA) backends from, and
@@ -14,6 +17,12 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=$(realpath -m "${1:-$root/build/portable/package}")  # relative to the caller's directory
 cd "$root"
+
+# Fail before the long build, not after it.
+command -v mksquashfs >/dev/null || {
+    echo "package-portable: mksquashfs not found; install the package squashfs-tools" >&2
+    exit 1
+}
 
 cmake --preset portable
 cmake --build --preset portable --target bb-run bb-launcher
@@ -62,3 +71,7 @@ archive=$out/Bloodborne-Linux-$version-x86_64.tar.gz
 tar -C "$stage" --owner=0 --group=0 --numeric-owner --sort=name \
     --mtime="@$(git log -1 --format=%ct)" -cf - Bloodborne-Linux | gzip -n > "$archive"
 echo "$archive"
+
+# The AppImage: the same tree without game/, in a squashfs behind the pinned runtime.
+tools/release/make-appimage.sh "$folder" "$out/Bloodborne-Linux-$version-x86_64.AppImage" \
+    "$root/build/appimage-cache"
