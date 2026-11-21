@@ -11,7 +11,8 @@
 
 if(NOT VERSION)
     execute_process(
-        COMMAND git describe --tags --match "v[0-9]*" --dirty --always
+        COMMAND git describe --tags --match "v[0-9]*.[0-9]*.[0-9]*" --exclude "v*-*" --dirty
+            --always
         WORKING_DIRECTORY "${SOURCE_DIR}"
         OUTPUT_VARIABLE VERSION
         OUTPUT_STRIP_TRAILING_WHITESPACE

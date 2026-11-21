@@ -395,7 +395,6 @@ int start(const bb::tools::RunOptions& options) {
     } else {
         bb::common::set_log_filter_from_environment();  // before link: the call trace reads it
     }
-    bb::common::log(LogLevel::info, channel, "bloodborne-linux {}", bb::common::build_version());
     std::optional<fs::path> game_dir = options.game_dir;
     if (!game_dir) {
         game_dir = bb::common::game_dir("local.env");
@@ -414,6 +413,8 @@ int start(const bb::tools::RunOptions& options) {
         const fs::path log = bb::common::open_log_file(dirs);
         bb::common::log(LogLevel::info, channel, "log file {}", log.string());
     }
+    // After the log file is open, so a bug report's log names the build.
+    bb::common::log(LogLevel::info, channel, "bloodborne-linux {}", bb::common::build_version());
     bb::common::log(LogLevel::info, channel, "game {}, profile {}", game_dir->string(),
                     options.profile);
     if (config_used) {

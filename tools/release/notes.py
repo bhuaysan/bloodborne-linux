@@ -42,11 +42,22 @@ def is_ancestor(commit: str, of: str) -> bool:
 
 
 def previous_tag(at: str) -> str | None:
-    """The newest release tag before the commit at, None for the first release."""
+    """The highest release tag in the history before the commit at, None for the first release.
+
+    Only tags of the form vX.Y.Z count, so a stray v1 or v0.2.0-rc1 doesn't cut the list short.
+    """
     try:
-        return git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", f"{at}^")
-    except subprocess.CalledProcessError:
+        tags = git("tag", "--list", "v*", "--merged", f"{at}^").split()
+    except subprocess.CalledProcessError:  # at is the root commit
         return None
+    versions = [(tuple(int(n) for n in m.groups()), tag)
+                for tag in tags if (m := TAG.fullmatch(tag))]
+    return max(versions)[1] if versions else None
+
+
+def no_mentions(text: str) -> str:
+    """text with a zero-width space after each @, so a PR title pings nobody."""
+    return text.replace("@", "@\u200b")
 
 
 def merged_prs(repo: str, since: str) -> list[dict]:
@@ -82,7 +93,8 @@ def render(highlights: str, prs: list[dict], repo: str, tag: str, previous: str 
             group = [pr for pr in rest if pr["headRefName"].startswith(prefix)]
             rest = [pr for pr in rest if pr not in group]
             if group:
-                lines = "\n".join(f"- {pr['title']} (#{pr['number']})" for pr in group)
+                lines = "\n".join(f"- {no_mentions(pr['title'])} (#{pr['number']})"
+                                  for pr in group)
                 sections.append(f"### {title}\n\n{lines}")
         parts.append("## Changes\n\n" + ("\n\n".join(sections) if sections else "No merged PRs."))
         parts.append(f"**Full changelog**: https://github.com/{repo}/compare/{previous}...{tag}")

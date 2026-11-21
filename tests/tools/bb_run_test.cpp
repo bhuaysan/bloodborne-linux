@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 
 #include "common/config.hpp"
+#include "common/version.hpp"
 #include "support/game.hpp"
 #include "support/process.hpp"
 #include "tools/main_loop_probe.hpp"
@@ -530,6 +531,15 @@ TEST(RunOptions, SetupIgnoredArguments) {
                                              "--profile", "x"};
     EXPECT_EQ(bb::tools::setup_ignored_arguments(args),
               (std::vector<std::string>{"--fsr", "--profile", "x"}));
+}
+
+// --version reads nothing: a broken config file doesn't stop it, and it creates no user folder.
+TEST(BbRun, PrintsTheVersion) {
+    const TempDir dir;
+    const Result r = run_bb_run(dir, "--fsr maybe --version");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(r.output, std::format("bb-run {}\n", bb::common::build_version()));
+    EXPECT_FALSE(std::filesystem::exists(dir.path() / "user"));
 }
 
 TEST(BbRun, PrintsTheUsage) {

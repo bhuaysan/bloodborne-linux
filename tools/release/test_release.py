@@ -51,6 +51,11 @@ class Render(unittest.TestCase):
             "### Other changes\n\n- Record the rig (#7)\n\n"
             "**Full changelog**: https://github.com/owner/repo/compare/v0.1.0...v0.2.0\n"))
 
+    def test_titles_ping_nobody(self) -> None:
+        text = notes.render("", [pr(9, "fix/x", "a", "Fix what @someone saw")], "o/r", "v0.2.0",
+                            "v0.1.0")
+        self.assertIn("- Fix what @\u200bsomeone saw (#9)", text)
+
     def test_first_release_has_no_list(self) -> None:
         text = notes.render("## Highlights\n", [], "owner/repo", "v0.1.0", None)
         self.assertEqual(text, "## Highlights\n\nThe first release.\n")
@@ -105,6 +110,8 @@ class VersionScript(unittest.TestCase):
         self.assertEqual(self.version(), f"dev-{head}")
         self.git("tag", "r11")  # milestone tags don't count
         self.assertEqual(self.version(), f"dev-{head}")
+        self.git("tag", "v0.1.0-rc1")  # nor do tags outside vX.Y.Z
+        self.assertEqual(self.version(), f"dev-{head}")
         self.git("tag", "v0.1.0")
         self.assertEqual(self.version(), "v0.1.0")
         self.commit("two")
@@ -112,6 +119,23 @@ class VersionScript(unittest.TestCase):
         (self.repo / "file").write_text("changed")
         self.assertRegex(self.version(), r"^v0\.1\.0-1-g[0-9a-f]+-dirty$")
         self.assertEqual(self.version(override="v9.9.9"), "v9.9.9")
+
+    def test_previous_tag(self) -> None:
+        old_root = notes.ROOT
+        notes.ROOT = self.repo
+        self.addCleanup(setattr, notes, "ROOT", old_root)
+        self.git("tag", "v0.1.0")
+        self.assertIsNone(notes.previous_tag("v0.1.0"))  # the first release
+        self.commit("two")
+        self.git("tag", "v0.1.1")
+        self.git("tag", "v1")
+        self.commit("three")
+        self.git("tag", "v0.2.0-rc1")
+        self.commit("four")
+        self.assertEqual(notes.previous_tag("HEAD"), "v0.1.1")  # --at before the tag exists
+        self.git("tag", "v0.2.0")
+        self.assertEqual(notes.previous_tag("v0.2.0"), "v0.1.1")
+        self.assertIsNone(notes.previous_tag(self.git("rev-list", "--max-parents=0", "HEAD")))
 
     def test_without_git(self) -> None:
         plain = self.tmp / "plain"

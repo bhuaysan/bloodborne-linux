@@ -1,6 +1,6 @@
 # Releases
 
-Players get the game from the [Releases page](https://github.com/bhuaysan/bloodborne-linux/releases): the portable package of `docs/design/launcher.md` ("One portable folder"), its `SHA256SUMS` and notes on what changed. The maintainer chose this on 2026-11-21, so that players don't have to build from source.
+Players get the game from the [Releases page](https://github.com/bhuaysan/bloodborne-linux/releases): the portable package of `docs/design/launcher.md` ("One portable folder"), its `SHA256SUMS` and notes on what changed. The maintainer chose this on 2026-11-21 (#762), so that players don't have to build from source.
 
 ## Versions
 
@@ -30,7 +30,7 @@ Releases come from `main`, which always passes its tests. There are no release b
    ```
 
    The tag is lightweight: an annotated tag would carry the tagger's name and address.
-3. **Release (workflow).** `.github/workflows/release.yml` checks that the tag has the right form, is on `main` and has its highlights. It then builds the package with `tools/package-portable.sh` and checks that the programs report the tag as their version. That fails for a build that is not exactly the tagged commit. Finally it writes `SHA256SUMS` and publishes the release with the package, the checksums and the notes.
+3. **Release (workflow).** `.github/workflows/release.yml` checks that the tag has the right form, is lightweight, is on `main` and has its highlights, and that CI on `main` passed for the tagged commit. Tag a commit whose CI run has finished: a release that fails this check is re-run once CI is green. It then builds the package with `tools/package-portable.sh` and checks that the programs report the tag as their version. That fails for a build that is not exactly the tagged commit. Finally it writes `SHA256SUMS` and publishes the release with the package, the checksums and the notes.
 
 The notes (`tools/release/notes.py`) are the highlights, then every PR merged since the previous release, grouped by branch: `feat/` under Features, `fix/` under Fixes, the rest under Other changes. PR titles therefore have to read well on their own. A release with a wrong text is fixed by editing it on GitHub. A release with a wrong package is deleted together with its tag, and the next patch version is released.
 

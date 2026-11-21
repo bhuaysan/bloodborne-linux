@@ -31,6 +31,7 @@ jobs:
       image: fedora:44
     permissions:
       contents: write  # gh release create
+      actions: read    # the CI runs of the tagged commit
     env:
       TAG: ${{ github.ref_name }}
     steps:
@@ -68,6 +69,24 @@ jobs:
           fi
           if [[ ! -f docs/releases/$TAG.md ]]; then
               echo "::error::docs/releases/$TAG.md is missing"
+              exit 1
+          fi
+          # An annotated tag would publish the tagger's name and address (docs/releasing.md).
+          if [[ $(git cat-file -t "refs/tags/$TAG") != commit ]]; then
+              echo "::error::$TAG is an annotated tag: push a lightweight one"
+              exit 1
+          fi
+
+      # Only a commit whose CI run on main passed is released.
+      - name: Check CI on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
+              --event push --commit "$GITHUB_SHA" --json status,conclusion \
+              --jq '[.[] | select(.status == "completed")][0].conclusion // "none"')
+          if [[ $conclusion != success ]]; then
+              echo "::error::CI on main for $GITHUB_SHA: $conclusion (wait for it to pass, then re-run)"
               exit 1
           fi
 
