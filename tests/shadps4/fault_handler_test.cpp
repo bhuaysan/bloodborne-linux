@@ -38,7 +38,9 @@ volatile sig_atomic_t report_dispatch = 0;
 bool claim_tracked(void*, void* fault_address) {
     if (report_dispatch != 0) {
         static constexpr char line[] = "dispatched\n";
-        (void)::write(STDERR_FILENO, line, sizeof line - 1);
+        // GCC ignores a cast to void on a warn_unused_result call, so the result is kept.
+        const ssize_t written = ::write(STDERR_FILENO, line, sizeof line - 1);
+        (void)written;
     }
     const auto start = reinterpret_cast<std::uintptr_t>(tracked_page);
     const auto at = reinterpret_cast<std::uintptr_t>(fault_address);

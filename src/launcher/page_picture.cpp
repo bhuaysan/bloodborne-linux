@@ -202,7 +202,7 @@ private:
         } else {
             std::vector<std::string> labels;
             int index = 0;
-            for (const Size sz : sizes_) {
+            for (const Size& sz : sizes_) {
                 index = sz == now_.size ? static_cast<int>(labels.size()) : index;
                 labels.push_back(size_label(sz));
             }

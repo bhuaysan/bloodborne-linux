@@ -47,8 +47,9 @@ function(bb_add_test name)
     add_executable(${name} ${arg_SOURCES})
     target_link_libraries(${name} PRIVATE ${arg_LIBS} bbtestsupport GTest::gtest_main bb_warnings)
     # A skipped test must show as Skipped, never Passed (CMake sets this by default; stated here
-    # so that no CMake version drops it).
-    gtest_discover_tests(${name} PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
+    # so that no CMake version drops it). The trailing space keeps the regex from ending in a
+    # bracket, which CMake 4.5 writes into its test files as a bracket argument that doesn't parse.
+    gtest_discover_tests(${name} PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\] ")
 endfunction()
 
 add_subdirectory(common)

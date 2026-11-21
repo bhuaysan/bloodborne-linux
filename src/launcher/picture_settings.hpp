@@ -195,7 +195,7 @@ inline std::optional<Size> wide_frame(const PictureChoices& c, Size display) {
     if (sizes.empty()) {
         return std::nullopt;
     }
-    for (const Size s : sizes) {
+    for (const Size& s : sizes) {
         if (s.second >= display.second) {
             return s;
         }
@@ -211,12 +211,12 @@ inline std::vector<Size> resolution_choices(Size display, Size current) {
                                       {2560, 1440}, {3200, 1800}, {3840, 2160},
                                       {5120, 2880}, {7680, 4320}};
     std::vector<Size> out;
-    for (const Size s : common) {
+    for (const Size& s : common) {
         if (s == common[0] || (s.first <= display.first && s.second <= display.second)) {
             out.push_back(s);
         }
     }
-    for (const Size s : wide_sizes(shape_of(display))) {
+    for (const Size& s : wide_sizes(shape_of(display))) {
         if (s.first <= display.first && s.second <= display.second) {
             out.push_back(s);
         }

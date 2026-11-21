@@ -39,7 +39,7 @@ if(TARGET bbvideocore)
     add_executable(shadps4_syslibs_test syslibs_test.cpp)
     target_link_libraries(shadps4_syslibs_test PRIVATE bbsyslibs bbvideocore bbhle bbhlesystem
         bbvktest bbtestsupport GTest::gtest bb_warnings)
-    gtest_discover_tests(shadps4_syslibs_test PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
+    gtest_discover_tests(shadps4_syslibs_test PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\] ")
     # AvPlayer playing the game's opening movie, against FFmpeg's own decode (the test uses
     # FFmpeg's API itself). Skips without the game or an H.264 decoder.
     # The same FFmpeg the player links: the system's, or the portable build's own.
@@ -54,5 +54,5 @@ if(TARGET bbvideocore)
     add_executable(shadps4_avplayer_test avplayer_test.cpp)
     target_link_libraries(shadps4_avplayer_test PRIVATE bbsyslibs bbvideocore bbhle bbhlesystem
         bbvktest bbtestsupport GTest::gtest ${BB_TEST_FFMPEG_TARGET} bb_warnings)
-    gtest_discover_tests(shadps4_avplayer_test PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
+    gtest_discover_tests(shadps4_avplayer_test PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\] ")
 endif()
