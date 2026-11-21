@@ -1,4 +1,5 @@
 #include "common/config.hpp"
+#include "common/runtime_dirs.hpp"
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -6,6 +7,8 @@
 #include <cstdlib>
 #include <format>
 #include <fstream>
+#include <optional>
+#include <functional>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -330,6 +333,70 @@ TEST_F(ConfigFileTest, AGameDirInsideTheFolderIsStoredRelative) {
     fs::rename(folder, moved);
     EXPECT_EQ(bb::common::read_config(moved / "user/config.toml").config.game_dir,
               moved / "game/CUSA03173");
+}
+
+// In an AppImage the config file lies in the data folder itself and the dump is stored as
+// game/<dump>, so the folder and the dump can move together.
+TEST_F(ConfigFileTest, InAnAppImageTheDumpIsRelativeToTheDataFolder) {
+    // Sets a variable for this test and restores it at the end, also when an assertion throws.
+    struct EnvGuard {
+        EnvGuard(const char* name, const std::string& value) : name_(name) {
+            if (const char* old = std::getenv(name)) {
+                saved_ = old;
+            }
+            ::setenv(name, value.c_str(), 1);
+        }
+        ~EnvGuard() {
+            if (saved_) {
+                ::setenv(name_, saved_->c_str(), 1);
+            } else {
+                ::unsetenv(name_);
+            }
+        }
+        const char* name_;
+        std::optional<std::string> saved_;
+    };
+    const EnvGuard appimage("APPIMAGE", (dir_ / "x.AppImage").string());
+    const EnvGuard appdir("APPDIR", bb::common::executable_dir().string());
+    const fs::path data = dir_ / "Bloodborne-Linux-data";
+    const fs::path config = data / "config.toml";
+    Config c;
+    c.game_dir = data / "game/CUSA03173";
+    bb::common::write_config(config, c);
+    std::ifstream in(config);
+    std::string line;
+    std::getline(in, line);
+    EXPECT_EQ(line, "game_dir = \"game/CUSA03173\"");
+    const fs::path moved = dir_ / "moved";
+    fs::rename(data, moved);
+    EXPECT_EQ(bb::common::read_config(moved / "config.toml").config.game_dir,
+              moved / "game/CUSA03173");
+}
+
+// An APPIMAGE variable inherited from another AppImage doesn't make this program one: APPDIR
+// must hold the executable, else the dump stays relative to user/'s parent as in the tar.gz.
+TEST_F(ConfigFileTest, AnInheritedAppImageVariableKeepsTheTarGzRules) {
+    const char* old_image = std::getenv("APPIMAGE");
+    const char* old_dir = std::getenv("APPDIR");
+    const std::string saved_image = old_image != nullptr ? old_image : "";
+    const std::string saved_dir = old_dir != nullptr ? old_dir : "";
+    struct Restore {
+        std::function<void()> fn;
+        ~Restore() { fn(); }
+    } restore{[&] {
+        old_image != nullptr ? ::setenv("APPIMAGE", saved_image.c_str(), 1) : ::unsetenv("APPIMAGE");
+        old_dir != nullptr ? ::setenv("APPDIR", saved_dir.c_str(), 1) : ::unsetenv("APPDIR");
+    }};
+    ::setenv("APPIMAGE", (dir_ / "other.AppImage").c_str(), 1);
+    ::setenv("APPDIR", (dir_ / "other-mount").c_str(), 1);
+    const fs::path data = dir_ / "Bloodborne-Linux-data";
+    Config c;
+    c.game_dir = data / "game/CUSA03173";
+    bb::common::write_config(data / "config.toml", c);  // not in a user/ folder: stays absolute
+    std::ifstream in(data / "config.toml");
+    std::string line;
+    std::getline(in, line);
+    EXPECT_EQ(line, "game_dir = \"" + (data / "game/CUSA03173").string() + "\"");
 }
 
 TEST_F(ConfigFileTest, AGameDirOutsideTheFolderStaysAbsolute) {

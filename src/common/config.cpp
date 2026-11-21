@@ -345,17 +345,19 @@ std::string format_config(const Config& c) {
 }
 
 // `game_dir` relative to the folder of `config_path` when that folder is user/ of the portable
-// folder and `game_dir` lies inside the portable folder, else unchanged. A config file anywhere
-// else (bb-run --config) keeps absolute paths.
+// folder (in an AppImage: the data folder) and `game_dir` lies inside the portable folder, else
+// unchanged. A config file anywhere else (bb-run --config) keeps absolute paths.
 static fs::path relative_game_dir(const fs::path& config_path, const fs::path& game_dir) {
     if (!game_dir.is_absolute()) {
         return game_dir;
     }
     std::error_code ec;
     const fs::path config_dir = fs::weakly_canonical(fs::absolute(config_path), ec).parent_path();
-    const fs::path folder = config_dir.parent_path();
-    if (ec || config_dir.filename() != "user" || folder == config_dir ||
-        folder == folder.root_path()) {
+    // In an AppImage the config file lies in the data folder itself, which is the portable folder.
+    const bool appimage = running_from_appimage();
+    const fs::path folder = appimage ? config_dir : config_dir.parent_path();
+    if (ec || (!appimage && config_dir.filename() != "user") ||
+        (!appimage && folder == config_dir) || folder == folder.root_path()) {
         return game_dir;
     }
     const fs::path game = fs::weakly_canonical(game_dir, ec);  // both sides with symlinks resolved
@@ -425,6 +427,8 @@ void update_config(const fs::path& path, const std::function<void(Config&)>& cha
 std::optional<fs::path> default_config_path() {
     try {
         return RuntimeDirs::from_environment(default_profile, {}).config() / "config.toml";
+    } catch (const NoDataFolder&) {
+        throw;  // an AppImage without a data folder: the caller tells the player what to do
     } catch (const std::exception&) {
         return std::nullopt;
     }

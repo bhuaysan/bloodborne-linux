@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -19,7 +20,8 @@ namespace {
 namespace fs = std::filesystem;
 using bb::common::RuntimeDirs;
 
-constexpr std::array<const char*, 9> env_keys = {
+constexpr std::array<const char*, 11> env_keys = {
+    "APPIMAGE", "APPDIR",
     "HOME",         "XDG_DATA_HOME",         "XDG_CACHE_HOME",
     "XDG_CONFIG_HOME", "XDG_STATE_HOME",     "BB_USER_DIR",
     "BB_CACHE_DIR", "MESA_SHADER_CACHE_DIR", "__GL_SHADER_DISK_CACHE_PATH"};
@@ -286,6 +288,258 @@ TEST_F(RuntimeDirsTest, LibraryCachesAreRedirectedEvenWhenTheFolderIsReadOnly) {
     bb::common::redirect_library_caches(dirs);
     EXPECT_EQ(env("XDG_CACHE_HOME"), (dirs.cache() / "system").string());
     ::chmod((tmp_ / "ro").c_str(), 0700);
+}
+
+
+// ---- The AppImage's data folder (BB_USER_DIR, then the pointer file, never user/ in the mount) ----
+
+class AppImageDirsTest : public RuntimeDirsTest {
+protected:
+    void SetUp() override {
+        RuntimeDirsTest::SetUp();
+        ::unsetenv("BB_USER_DIR");
+        set("APPIMAGE", (tmp_ / "Bloodborne.AppImage").string());
+        // The tests run from the build directory, which stands in for the AppImage's mount.
+        set("APPDIR", bb::common::executable_dir().string());
+        set("XDG_CONFIG_HOME", (tmp_ / "config").string());
+        pointer_ = tmp_ / "config/bloodborne-linux/data-dir";
+    }
+    void write_pointer(const std::string& text) {
+        fs::create_directories(pointer_.parent_path());
+        std::ofstream(pointer_) << text;
+    }
+    fs::path pointer_;
+};
+
+TEST_F(AppImageDirsTest, RunningFromAppImageNeedsAnAbsoluteAppImageVariable) {
+    EXPECT_TRUE(bb::common::running_from_appimage());
+    set("APPIMAGE", "relative.AppImage");
+    EXPECT_FALSE(bb::common::running_from_appimage());
+    set("APPIMAGE", "");
+    EXPECT_FALSE(bb::common::running_from_appimage());
+    ::unsetenv("APPIMAGE");
+    EXPECT_FALSE(bb::common::running_from_appimage());
+}
+
+// The runtime exports APPIMAGE and APPDIR to every child: a program that doesn't run from the
+// mount (a tar.gz package started from another AppImage) must not take the AppImage's rules.
+TEST_F(AppImageDirsTest, AnAppImageVariableWithoutTheExecutableInAppDirIsNotAnAppImage) {
+    EXPECT_TRUE(bb::common::running_from_appimage());
+    set("APPDIR", (tmp_ / "other-mount").string());  // an AppImage that started this program
+    EXPECT_FALSE(bb::common::running_from_appimage());
+    set("APPDIR", "relative");
+    EXPECT_FALSE(bb::common::running_from_appimage());
+    set("APPDIR", "");
+    EXPECT_FALSE(bb::common::running_from_appimage());
+    ::unsetenv("APPDIR");
+    EXPECT_FALSE(bb::common::running_from_appimage());
+    // Not an AppImage: the pointer file is not read, and BB_USER_DIR-less user/ is the root.
+    set("APPDIR", (tmp_ / "other-mount").string());
+    fs::create_directories(tmp_ / "data");
+    write_pointer((tmp_ / "data").string() + "\n");
+    try {
+        make();
+    } catch (const bb::common::NoDataFolder&) {
+        FAIL() << "not an AppImage: no data folder question";
+    } catch (const std::runtime_error&) {
+        // the build directory lies in the source tree: the overlap message is not the pointer's
+    }
+}
+
+TEST(AppImagePredicate, NeedsAbsolutePathsAndTheExecutableInsideAppDir) {
+    using bb::common::is_appimage_environment;
+    EXPECT_TRUE(is_appimage_environment("/srv/BB.AppImage", "/srv/mnt/appdir",
+                                        "/srv/mnt/appdir/usr/bin"));
+    EXPECT_TRUE(is_appimage_environment("/srv/BB.AppImage", "/srv/mnt/appdir/",
+                                        "/srv/mnt/appdir"));
+    EXPECT_FALSE(is_appimage_environment("/srv/BB.AppImage", "/srv/mnt/appdir",
+                                         "/srv/mnt/appdir2"));
+    EXPECT_FALSE(is_appimage_environment("/srv/BB.AppImage", "/srv/mnt/appdir", "/srv/tar/bin"));
+    EXPECT_FALSE(is_appimage_environment("/srv/BB.AppImage", "", "/srv/mnt/appdir"));
+    EXPECT_FALSE(is_appimage_environment("/srv/BB.AppImage", "appdir", "/srv/mnt/appdir"));
+    EXPECT_FALSE(is_appimage_environment("", "/srv/mnt/appdir", "/srv/mnt/appdir"));
+    EXPECT_FALSE(is_appimage_environment("BB.AppImage", "/srv/mnt/appdir", "/srv/mnt/appdir"));
+}
+
+TEST_F(AppImageDirsTest, NoPointerFileThrowsNoDataFolder) {
+    try {
+        make();
+        FAIL() << "expected NoDataFolder";
+    } catch (const bb::common::NoDataFolder& e) {
+        EXPECT_NE(std::string(e.what()).find("bb-launcher"), std::string::npos);
+        EXPECT_NE(std::string(e.what()).find("BB_USER_DIR"), std::string::npos);
+    }
+}
+
+TEST_F(AppImageDirsTest, PointerFileGivesTheRootWithTheFinalNewlineRemoved) {
+    fs::create_directories(tmp_ / "data");
+    write_pointer((tmp_ / "data").string() + "\n");
+    RuntimeDirs dirs = make();
+    EXPECT_EQ(dirs.root(), tmp_ / "data");
+    EXPECT_EQ(dirs.cache(), tmp_ / "data/cache");
+}
+
+// Only the one newline of the writer goes: a folder name may end in a space.
+TEST_F(AppImageDirsTest, PointerFileKeepsTrailingSpacesOfTheFolderName) {
+    fs::create_directories(tmp_ / "data ");
+    write_pointer((tmp_ / "data ").string() + "\n");
+    EXPECT_EQ(bb::common::read_data_dir_pointer(), tmp_ / "data ");
+    EXPECT_EQ(make().root(), tmp_ / "data ");
+    write_pointer((tmp_ / "data").string());  // no newline at all is fine too
+    EXPECT_EQ(bb::common::read_data_dir_pointer(), tmp_ / "data");
+}
+
+TEST_F(AppImageDirsTest, BbUserDirBeatsThePointerFile) {
+    fs::create_directories(tmp_ / "data");
+    write_pointer((tmp_ / "data").string() + "\n");
+    set("BB_USER_DIR", (tmp_ / "other").string());
+    EXPECT_EQ(make().root(), tmp_ / "other");
+}
+
+// A pointer file that is empty, relative or has several lines sends the player back to the
+// first-start screen (NoDataFolder), and the message names the file.
+TEST_F(AppImageDirsTest, AnUnusablePointerFileIsNoDataFolderNamingTheFile) {
+    for (const char* text : {"data\n", "\n", "", "/srv/a\n/srv/b\n", "\n\n"}) {
+        write_pointer(text);
+        EXPECT_THROW(bb::common::read_data_dir_pointer(), std::runtime_error) << text;
+        try {
+            make();
+            FAIL() << "expected NoDataFolder for '" << text << "'";
+        } catch (const bb::common::NoDataFolder& e) {
+            EXPECT_EQ(e.reason(), bb::common::NoDataFolder::Reason::pointer_unusable);
+            EXPECT_NE(std::string(e.what()).find(pointer_.string()), std::string::npos) << e.what();
+            EXPECT_NE(std::string(e.what()).find("bb-launcher"), std::string::npos) << e.what();
+        }
+    }
+}
+
+// An unmounted USB stick: the folder is gone, and it is not made again behind the player's back.
+TEST_F(AppImageDirsTest, AMissingDataFolderIsNoDataFolderAndStaysMissing) {
+    const fs::path gone = tmp_ / "usb/Bloodborne-Linux-data";
+    write_pointer(gone.string() + "\n");
+    try {
+        make();
+        FAIL() << "expected NoDataFolder";
+    } catch (const bb::common::NoDataFolder& e) {
+        EXPECT_EQ(e.reason(), bb::common::NoDataFolder::Reason::folder_missing);
+        EXPECT_EQ(e.folder(), gone);
+        EXPECT_NE(std::string(e.what()).find(gone.string()), std::string::npos) << e.what();
+        EXPECT_NE(std::string(e.what()).find("bb-launcher"), std::string::npos) << e.what();
+    }
+    EXPECT_FALSE(fs::exists(tmp_ / "usb"));
+    fs::create_directories(tmp_ / "usb");
+    std::ofstream(gone) << "a file, not a folder";
+    EXPECT_THROW(make(), bb::common::NoDataFolder);
+}
+
+TEST_F(AppImageDirsTest, AnUnwritableDataFolderIsNoDataFolder) {
+    if (::geteuid() == 0) {
+        GTEST_SKIP() << "root writes anywhere";
+    }
+    const fs::path ro = tmp_ / "ro-data";
+    fs::create_directories(ro);
+    ::chmod(ro.c_str(), 0500);
+    write_pointer(ro.string() + "\n");
+    try {
+        make();
+        ::chmod(ro.c_str(), 0700);
+        FAIL() << "expected NoDataFolder";
+    } catch (const bb::common::NoDataFolder& e) {
+        ::chmod(ro.c_str(), 0700);
+        EXPECT_EQ(e.reason(), bb::common::NoDataFolder::Reason::folder_unwritable);
+        EXPECT_EQ(e.folder(), ro);
+    }
+}
+
+// A file that can't even be looked up (no access to its folder) is an error that names the file;
+// it is not "no data folder chosen yet", which would lead the player to overwrite a good choice.
+TEST_F(AppImageDirsTest, ALookupErrorOfThePointerFileNamesTheFile) {
+    if (::geteuid() == 0) {
+        GTEST_SKIP() << "root reads anywhere";
+    }
+    write_pointer((tmp_ / "data").string() + "\n");
+    ::chmod(pointer_.parent_path().c_str(), 0000);
+    try {
+        bb::common::read_data_dir_pointer();
+        ::chmod(pointer_.parent_path().c_str(), 0700);
+        FAIL() << "expected an error";
+    } catch (const bb::common::NoDataFolder&) {
+        ::chmod(pointer_.parent_path().c_str(), 0700);
+        FAIL() << "read_data_dir_pointer never throws NoDataFolder";
+    } catch (const std::runtime_error& e) {
+        ::chmod(pointer_.parent_path().c_str(), 0700);
+        EXPECT_NE(std::string(e.what()).find(pointer_.string()), std::string::npos) << e.what();
+    }
+}
+
+TEST_F(AppImageDirsTest, WithoutAppImageThePointerFileIsIgnored) {
+    ::unsetenv("APPIMAGE");
+    fs::create_directories(tmp_ / "data");
+    write_pointer((tmp_ / "data").string() + "\n");
+    set("BB_USER_DIR", (tmp_ / "home/user").string());
+    EXPECT_EQ(make().root(), tmp_ / "home/user");
+    ::unsetenv("BB_USER_DIR");
+    // user/ next to the test executable, as before. In a build directory inside the checkout that
+    // overlaps the source tree and throws: the message then names user/, never the pointed folder.
+    const fs::path expected = fs::weakly_canonical(bb::common::executable_dir() / "user");
+    try {
+        EXPECT_EQ(make().root(), expected);
+    } catch (const bb::common::NoDataFolder&) {
+        FAIL() << "the pointer file was read";
+    } catch (const std::runtime_error& e) {
+        const std::string what = e.what();
+        EXPECT_NE(what.find(expected.string()), std::string::npos) << what;
+        EXPECT_EQ(what.find((tmp_ / "data").string()), std::string::npos) << what;
+        EXPECT_EQ(what.find("data-dir"), std::string::npos) << what;
+    }
+}
+
+TEST_F(AppImageDirsTest, PointerRoundTripCreatesTheFolderPrivately) {
+    const fs::path folder = tmp_ / "chosen";
+    bb::common::write_data_dir_pointer(folder);
+    EXPECT_EQ(bb::common::data_dir_pointer_path(), pointer_);
+    EXPECT_EQ(mode(pointer_.parent_path()), 0700u);
+    EXPECT_EQ(bb::common::read_data_dir_pointer(), folder);
+    EXPECT_FALSE(fs::exists(pointer_.string() + ".tmp"));
+    bb::common::write_data_dir_pointer(tmp_ / "second");  // replaces the old content
+    EXPECT_EQ(bb::common::read_data_dir_pointer(), tmp_ / "second");
+    EXPECT_THROW(bb::common::write_data_dir_pointer("relative"), std::invalid_argument);
+}
+
+// The file holds exactly the path and one newline, and a folder name with a newline is refused:
+// the one-line file could not give it back.
+TEST_F(AppImageDirsTest, PointerFileHoldsOneLineAndRefusesANewlineInTheName) {
+    bb::common::write_data_dir_pointer(tmp_ / "a b ");
+    std::ifstream in(pointer_, std::ios::binary);
+    const std::string content((std::istreambuf_iterator<char>(in)),
+                              std::istreambuf_iterator<char>());
+    EXPECT_EQ(content, (tmp_ / "a b ").string() + "\n");
+    EXPECT_EQ(mode(pointer_), 0600u);
+    EXPECT_THROW(bb::common::write_data_dir_pointer(tmp_ / "bad\nname"), std::invalid_argument);
+    EXPECT_EQ(bb::common::read_data_dir_pointer(), tmp_ / "a b ");  // the old content stays
+}
+
+TEST_F(AppImageDirsTest, ConfigHomeFallsBackToHomeDotConfig) {
+    ::unsetenv("XDG_CONFIG_HOME");
+    set("HOME", (tmp_ / "h").string());
+    EXPECT_EQ(bb::common::data_dir_pointer_path(), tmp_ / "h/.config/bloodborne-linux/data-dir");
+    set("XDG_CONFIG_HOME", "relative");  // ignored: not absolute
+    EXPECT_EQ(bb::common::data_dir_pointer_path(), tmp_ / "h/.config/bloodborne-linux/data-dir");
+    ::unsetenv("HOME");
+    ::unsetenv("XDG_CONFIG_HOME");
+    EXPECT_THROW(bb::common::data_dir_pointer_path(), std::runtime_error);
+}
+
+TEST_F(AppImageDirsTest, OverlapChecksApplyToThePointedFolderButAllowGameInside) {
+    fs::create_directories(tmp_ / "data");
+    write_pointer((tmp_ / "data").string() + "\n");
+    EXPECT_THROW(make(bb::common::default_profile, {tmp_ / "data"}), std::runtime_error);
+    EXPECT_THROW(make(bb::common::default_profile, {tmp_ / "data/profiles"}), std::runtime_error);
+    EXPECT_THROW(make(bb::common::default_profile, {tmp_}), std::runtime_error);
+    EXPECT_NO_THROW(make(bb::common::default_profile, {tmp_ / "data/game/dump"}));
+    EXPECT_NO_THROW(bb::common::check_data_folder(tmp_ / "data", {tmp_ / "data/game"}));
+    EXPECT_THROW(bb::common::check_data_folder(tmp_ / "data", {tmp_ / "data/other"}),
+                 std::runtime_error);
 }
 
 }  // namespace

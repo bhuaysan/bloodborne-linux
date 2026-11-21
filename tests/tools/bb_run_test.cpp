@@ -553,6 +553,87 @@ TEST(BbRun, PrintsTheUsage) {
         << bad.output;
 }
 
+// bb-run as the AppImage's runtime starts it: APPIMAGE and APPDIR set (APPDIR holds the program
+// unless `appdir` says otherwise), the config home below dir/home, no data folder variables.
+// `pointer` is the content of the data-dir file; nothing is written for an empty string.
+Result run_in_appimage(const TempDir& dir, const std::string& args, const std::string& pointer,
+                       const std::string& appdir = "") {
+    const std::string d = dir.path().string();
+    if (!pointer.empty()) {
+        std::filesystem::create_directories(dir.path() / "home/.config/bloodborne-linux");
+        std::ofstream(dir.path() / "home/.config/bloodborne-linux/data-dir") << pointer;
+    }
+    const std::string mount = appdir.empty()
+                                  ? std::filesystem::path(BB_RUN_PATH).parent_path().string()
+                                  : appdir;
+    return bb::test::run(std::format(
+        "cd {} && env -u BB_LOG -u BB_CACHE_DIR -u BB_USER_DIR -u BB_GAME_DIR -u XDG_CONFIG_HOME "
+        "APPIMAGE={} APPDIR={} HOME={} {} {} 2>&1",
+        quote(d), quote(d + "/x.AppImage"), quote(mount), quote(d + "/home"), quote(BB_RUN_PATH),
+        args));
+}
+
+// In an AppImage without a data folder bb-run says so in one line: no usage, no log, status 2.
+TEST(BbRun, AnAppImageWithoutADataFolderAsksForTheLauncher) {
+    const TempDir dir;
+    const std::string d = dir.path().string();
+    const Result r = run_in_appimage(dir, "--game-dir " + quote(d), "");
+    EXPECT_EQ(r.status, 2) << r.output;
+    EXPECT_TRUE(r.output.starts_with("bb-run: no data folder chosen yet: start bb-launcher once"))
+        << r.output;
+    EXPECT_EQ(r.output.find("usage:"), std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(dir.path() / "home"));
+}
+
+// Without --game-dir and without a config file the old "set game_dir" text would send the player
+// to a file that does not exist: the AppImage says to start the launcher, also for --setup.
+TEST(BbRun, AnAppImageWithoutADataFolderAndGameDirAsksForTheLauncherToo) {
+    const TempDir dir;
+    const Result run = run_in_appimage(dir, "", "");
+    EXPECT_EQ(run.status, 2) << run.output;
+    EXPECT_TRUE(run.output.starts_with("bb-run: no data folder chosen yet: start bb-launcher once"))
+        << run.output;
+    EXPECT_EQ(run.output.find("set game_dir"), std::string::npos) << run.output;
+    const Result setup = run_in_appimage(dir, "--setup " + quote(dir.path().string()), "");
+    EXPECT_EQ(setup.status, 2) << setup.output;
+    EXPECT_NE(setup.output.find("start bb-launcher once"), std::string::npos) << setup.output;
+    EXPECT_EQ(setup.output.find("can't be found"), std::string::npos) << setup.output;
+}
+
+// --help prints the usage before any data folder exists, as it does with a broken config file.
+TEST(BbRun, AnAppImageWithoutADataFolderStillPrintsHelp) {
+    const TempDir dir;
+    const Result r = run_in_appimage(dir, "--help", "");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(r.output.find("usage:"), std::string::npos) << r.output;
+}
+
+// A data-dir file whose folder is gone (an unmounted drive): bb-run names the folder, asks for the
+// launcher and creates nothing.
+TEST(BbRun, AnAppImageWithAMissingDataFolderNamesItAndAsksForTheLauncher) {
+    const TempDir dir;
+    const std::string gone = dir.path().string() + "/usb/Bloodborne-Linux-data";
+    const Result r = run_in_appimage(dir, "--game-dir " + quote(dir.path().string()), gone + "\n");
+    EXPECT_EQ(r.status, 2) << r.output;
+    EXPECT_TRUE(r.output.starts_with("bb-run: the data folder " + gone)) << r.output;
+    EXPECT_NE(r.output.find("start bb-launcher once"), std::string::npos) << r.output;
+    EXPECT_FALSE(std::filesystem::exists(dir.path() / "usb"));
+    const Result broken = run_in_appimage(dir, "--game-dir " + quote(dir.path().string()), "rel\n");
+    EXPECT_EQ(broken.status, 2) << broken.output;
+    EXPECT_NE(broken.output.find("data-dir"), std::string::npos) << broken.output;
+    EXPECT_NE(broken.output.find("start bb-launcher once"), std::string::npos) << broken.output;
+}
+
+// APPIMAGE is inherited by every child of an AppImage; a bb-run that does not run from its mount
+// (APPDIR elsewhere) is the tar.gz one and neither asks for the launcher nor reads data-dir.
+TEST(BbRun, AnInheritedAppImageVariableDoesNotMakeItAnAppImage) {
+    const TempDir dir;
+    const Result r = run_in_appimage(dir, "", "/srv/never-used\n", dir.path().string() + "/other");
+    EXPECT_EQ(r.status, 2) << r.output;
+    EXPECT_NE(r.output.find("set BB_GAME_DIR"), std::string::npos) << r.output;
+    EXPECT_EQ(r.output.find("bb-launcher"), std::string::npos) << r.output;
+}
+
 TEST(BbRun, NeedsAGameDirectory) {
     const TempDir dir;  // no local.env in it, no BB_GAME_DIR
     const Result r = run_bb_run(dir, "");

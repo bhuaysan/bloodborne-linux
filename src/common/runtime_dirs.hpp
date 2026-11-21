@@ -1,10 +1,14 @@
 // The runtime's own directories: everything it writes lives in one portable folder, user/ next to
-// the binary, and the selected profile (docs/design/m3-core-os.md, "Runtime directories").
+// the binary (the data folder the player chose, inside an AppImage), and the selected profile
+// (docs/design/m3-core-os.md, "Runtime directories").
 #pragma once
 
 #include <filesystem>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace bb::common {
@@ -22,18 +26,76 @@ std::filesystem::path source_dir();
 // that link can't be read.
 std::filesystem::path executable_dir();
 
+// True when `appimage` (the APPIMAGE variable) and `appdir` (APPDIR) are absolute paths and the
+// directory `exe_dir` lies inside `appdir`, with symlinks resolved. The runtime exports both
+// variables to every child, so a program of another package started from an AppImage (Heroic, a
+// terminal) sees APPIMAGE as well; only one that runs from the mount counts.
+bool is_appimage_environment(std::string_view appimage, std::string_view appdir,
+                             const std::filesystem::path& exe_dir);
+
+// True when the program runs from an AppImage: is_appimage_environment for the real APPIMAGE and
+// APPDIR variables and executable_dir(). The AppImage's own folder is a read-only mount, so its
+// data folder is chosen by the player instead.
+bool running_from_appimage();
+
+// Thrown by RuntimeDirs::from_environment in an AppImage that has no usable data folder: none
+// chosen yet, or the pointer file is unusable, or the folder it names is gone or can't be written
+// (an unmounted USB stick, say). The player has to start bb-launcher once to choose one (or set
+// BB_USER_DIR); the launcher shows what() on its first-start screen's account of the reason.
+class NoDataFolder : public std::runtime_error {
+public:
+    enum class Reason { not_chosen, pointer_unusable, folder_missing, folder_unwritable };
+    NoDataFolder(Reason reason, const std::string& what, std::filesystem::path folder = {})
+        : std::runtime_error(what), reason_(reason), folder_(std::move(folder)) {}
+    Reason reason() const { return reason_; }
+    // The folder the pointer file names, for the last two reasons.
+    const std::filesystem::path& folder() const { return folder_; }
+
+private:
+    Reason reason_;
+    std::filesystem::path folder_;
+};
+
+// The pointer file of the AppImage's data folder: <config home>/bloodborne-linux/data-dir, where
+// the config home is XDG_CONFIG_HOME when that is an absolute path, else $HOME/.config. It is the
+// only thing the game writes outside its data folder, and only inside an AppImage. Throws
+// std::runtime_error when neither variable gives an absolute config home.
+std::filesystem::path data_dir_pointer_path();
+
+// The absolute folder the pointer file names (one final newline removed, nothing else: a folder
+// name may end in a space), nothing when the file doesn't exist. Throws std::runtime_error naming
+// the file when it can't be checked or read, is empty, holds more than one line or a relative
+// path. Reads the file whether or not this is an AppImage.
+std::optional<std::filesystem::path> read_data_dir_pointer();
+
+// Writes `folder` (absolute and without a newline, else std::invalid_argument) to the pointer
+// file: the folder around it is created with mode 0700, the content goes to a temporary file that
+// is flushed to disk, renamed over the old one, and the folder is flushed too. Throws
+// std::runtime_error when that fails.
+void write_data_dir_pointer(const std::filesystem::path& folder);
+
+// Throws std::runtime_error when the absolute `folder` and one of `forbidden` (the game directory)
+// or source_dir() lie inside one another. A game directory inside folder/game is allowed, as in
+// RuntimeDirs::from_environment.
+void check_data_folder(const std::filesystem::path& folder,
+                       const std::vector<std::filesystem::path>& forbidden);
+
 class RuntimeDirs {
 public:
     // The root is BB_USER_DIR when that is set to an absolute path (development, tests, the rig),
-    // else user/ in executable_dir(). config(), data() and state() are the root, cache() is
+    // else, in an AppImage (running_from_appimage), the folder in the pointer file (throws
+    // NoDataFolder when there is none, the file is unusable, or the folder is gone or can't be
+    // written: it is never created here), else user/ in executable_dir(); outside an AppImage the
+    // pointer file is never read. config(), data() and state() are the root, cache() is
     // root/cache, or BB_CACHE_DIR when that is set to an absolute path (the rig keeps a warm cache
     // apart from the per-run root). Empty values count as unset. XDG variables and HOME are not
     // read. Nothing is created here.
     //
     // Throws std::invalid_argument for an invalid profile name, and std::runtime_error for a
-    // relative BB_USER_DIR or BB_CACHE_DIR, when the executable's directory is needed but can't be
-    // read, or when one of the four directories and
-    // one of `forbidden` (the game directory) or source_dir() lie inside one another.
+    // relative BB_USER_DIR or BB_CACHE_DIR, when the executable's
+    // directory is needed but can't be read, or when one of the four directories and
+    // one of `forbidden` (the game directory) or source_dir() lie inside one another (in an
+    // AppImage a game directory inside root()/game is allowed).
     static RuntimeDirs from_environment(std::string_view profile,
                                         const std::vector<std::filesystem::path>& forbidden);
 

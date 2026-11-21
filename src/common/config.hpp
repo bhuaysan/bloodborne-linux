@@ -170,7 +170,8 @@ void write_config(const std::filesystem::path& path, const Config& config);
 void update_config(const std::filesystem::path& path, const std::function<void(Config&)>& change);
 
 // config.toml in RuntimeDirs::config() (user/ next to the binary, or BB_USER_DIR). Nothing when
-// that folder can't be determined.
+// that folder can't be determined. Throws NoDataFolder (runtime_dirs.hpp) in an AppImage that has
+// no usable data folder.
 std::optional<std::filesystem::path> default_config_path();
 
 }  // namespace bb::common

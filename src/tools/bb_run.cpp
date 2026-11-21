@@ -578,8 +578,13 @@ int main(int argc, char** argv) {
             config_used = config_file;
         }
         options = bb::tools::parse_run_options(args, base);
-    } catch (const bb::common::ConfigError& e) {
-        // --help works with a broken config file.
+    } catch (const std::runtime_error& e) {
+        // An AppImage that the launcher hasn't set up (NoDataFolder) or a broken config file
+        // (ConfigError): --help still works.
+        if (dynamic_cast<const bb::common::NoDataFolder*>(&e) == nullptr &&
+            dynamic_cast<const bb::common::ConfigError*>(&e) == nullptr) {
+            throw;
+        }
         const std::vector<std::string_view> args(argv + 1, argv + argc);
         if (std::ranges::find(args, "--help") != args.end() ||
             std::ranges::find(args, "-h") != args.end()) {
@@ -600,6 +605,10 @@ int main(int argc, char** argv) {
     stop_on_signals();
     try {
         return start(options);
+    } catch (const bb::common::NoDataFolder& e) {
+        // An AppImage that the launcher hasn't set up: one clear line, no log, no usage.
+        std::cerr << "bb-run: " << e.what() << '\n';
+        end_run(2);
     } catch (const std::exception& e) {
         bb::common::log(LogLevel::error, channel, "{}", e.what());
         end_run(1);
