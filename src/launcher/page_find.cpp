@@ -35,22 +35,20 @@ public:
 
     void draw(const Context& ctx, float) override {
         const float s = ctx.scale;
-        ImGui::PushTextWrapPos(ImGui::GetWindowContentRegionMax().x - 24 * s);
-        ImGui::TextUnformatted(find_text(ctx.lang).hint);
-        ImGui::PopTextWrapPos();
-        ImGui::Dummy(ImVec2(0, 8 * s));
-        const ImVec2 size(432 * s, 40 * s);
+        const float y = centred_text(find_text(ctx.lang).hint, ImGui::GetCursorPosY(), colour::dim,
+                                     432 * s, text_size * s);
+        ImGui::SetCursorPosY(y + 12 * s);
+        const ImVec2 size(432 * s, 42 * s);
         for (std::size_t i = 0; i < folders_.size(); ++i) {
             const auto& folder = folders_[i];
             ImGui::SetCursorPosX(24 * s);
             const std::string label = ellipsize_left(folder.string(), size.x - 16 * s);
             // Two hits can end in the same shortened label; the row number keeps their IDs apart.
             ImGui::PushID(static_cast<int>(i));
-            if (bevel_button(label.c_str(), size, false, i == 0 && !focused_)) {
+            if (menu_entry(label.c_str(), size, text_size * s, i == 0 && !focused_)) {
                 chosen_(folder);
             }
             ImGui::PopID();
-            ImGui::Dummy(ImVec2(0, 4 * s));
         }
         focused_ = true;
     }

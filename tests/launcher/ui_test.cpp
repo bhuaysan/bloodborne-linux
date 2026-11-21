@@ -150,10 +150,10 @@ const char* first_label(const Strings& t, Action a) {
     }
 }
 
-// Whether fontconfig matches "sans-serif" to a TrueType or CFF file, the fonts load_fonts uses.
-bool system_sans_available() {
+// Whether fontconfig matches "serif" to a TrueType or CFF file, the fonts load_fonts uses.
+bool system_serif_available() {
     bool found = false;
-    FcPattern* pattern = FcNameParse(reinterpret_cast<const FcChar8*>("sans-serif"));
+    FcPattern* pattern = FcNameParse(reinterpret_cast<const FcChar8*>("serif"));
     FcConfigSubstitute(nullptr, pattern, FcMatchPattern);
     FcDefaultSubstitute(pattern);
     FcResult result;
@@ -196,8 +196,8 @@ TEST(LauncherUi, DrawsTheMainScreenForEveryStateWithoutPressing) {
             ImGui::SetNextWindowSize(io.DisplaySize);
             ImGui::Begin("w");
             EXPECT_EQ(draw_main_screen(ctx, view), Action::none);
-            // The focus is on the state's own first button, in the context's language (a
-            // bevel_button's ID is its label's, then "##b").
+            // The focus is on the state's own first entry, in the context's language (a
+            // menu_entry's ID is its label's, then "##b").
             ImGui::PushID(first_label(*ctx.text, first_button(s)));
             const ImGuiID first = ImGui::GetID("##b");
             ImGui::PopID();
@@ -215,8 +215,8 @@ TEST(LauncherUi, DrawsTheMainScreenForEveryStateWithoutPressing) {
 }
 
 TEST(LauncherUi, FontsLoad) {
-    if (!system_sans_available()) {
-        GTEST_SKIP() << "fontconfig finds no TrueType or CFF sans-serif font on this machine";
+    if (!system_serif_available()) {
+        GTEST_SKIP() << "fontconfig finds no TrueType or CFF serif font on this machine";
     }
     ImGui::CreateContext();
     EXPECT_TRUE(load_fonts(16.0f));  // the system font, not the built-in fallback
@@ -247,7 +247,7 @@ Frame frame(const Context& ctx, const MainView& view, bool top_only = false) {
     return f;
 }
 
-TEST(LauncherUi, LongStatusPushesTheButtonsDown) {
+TEST(LauncherUi, LongStatusPushesTheMenuDown) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -263,12 +263,12 @@ TEST(LauncherUi, LongStatusPushesTheButtonsDown) {
     MainView view;
     view.status = "short";
     const float short_y = frame(ctx, view, true).below;
-    EXPECT_EQ(short_y, (header_height + 40) * ctx.scale);
+    EXPECT_EQ(short_y, 300 * ctx.scale);
     view.status = std::string(400, 'x') + " " + std::string(400, 'y');  // wraps to several lines
     const float long_y = frame(ctx, view, true).below;
     EXPECT_GT(long_y, short_y);
-    // The block ends below the text: at least three lines of it.
-    EXPECT_GE(long_y, header_height + 10 + 3 * ImGui::GetTextLineHeight());
+    // The menu starts below the text: at least three lines of it.
+    EXPECT_GE(long_y, 266 + 3 * text_size);
     ImGui::DestroyContext();
 }
 

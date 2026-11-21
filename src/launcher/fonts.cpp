@@ -11,11 +11,12 @@ namespace bb::launcher {
 
 namespace {
 
-// The file of the best "sans-serif" match, when it is a TrueType or CFF font; empty otherwise.
-std::string system_sans_file(int& index) {
+// The file of the best match for `family`, when it is a TrueType or CFF font; empty otherwise.
+// With `exact`, fontconfig's stand-in for a family that isn't installed doesn't count.
+std::string font_file(const char* family, bool exact, int& index) {
     std::string file;
     index = 0;
-    FcPattern* pattern = FcNameParse(reinterpret_cast<const FcChar8*>("sans-serif"));
+    FcPattern* pattern = FcNameParse(reinterpret_cast<const FcChar8*>(family));
     if (pattern != nullptr) {
         FcConfigSubstitute(nullptr, pattern, FcMatchPattern);
         FcDefaultSubstitute(pattern);
@@ -24,7 +25,11 @@ std::string system_sans_file(int& index) {
         if (match != nullptr) {
             FcChar8* path = nullptr;
             FcChar8* format = nullptr;
-            if (FcPatternGetString(match, FC_FILE, 0, &path) == FcResultMatch &&
+            FcChar8* found = nullptr;
+            const bool family_ok =
+                !exact || (FcPatternGetString(match, FC_FAMILY, 0, &found) == FcResultMatch &&
+                           FcStrCmpIgnoreCase(found, reinterpret_cast<const FcChar8*>(family)) == 0);
+            if (family_ok && FcPatternGetString(match, FC_FILE, 0, &path) == FcResultMatch &&
                 FcPatternGetString(match, FC_FONTFORMAT, 0, &format) == FcResultMatch &&
                 (std::strcmp(reinterpret_cast<char*>(format), "TrueType") == 0 ||
                  std::strcmp(reinterpret_cast<char*>(format), "CFF") == 0)) {
@@ -46,7 +51,14 @@ std::string system_sans_file(int& index) {
 bool load_fonts(float size) {
     ImGuiIO& io = ImGui::GetIO();
     int index = 0;
-    const std::string file = system_sans_file(index);
+    // A Garamond is closest to the game's menus; any serif font does.
+    std::string file = font_file("EB Garamond", true, index);
+    if (file.empty()) {
+        file = font_file("Cormorant Garamond", true, index);
+    }
+    if (file.empty()) {
+        file = font_file("serif", false, index);
+    }
     ImFontConfig file_config;
     file_config.FontNo = static_cast<ImU32>(index);
     file_config.Flags |= ImFontFlags_NoLoadError;

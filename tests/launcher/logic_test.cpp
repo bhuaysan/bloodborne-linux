@@ -122,8 +122,8 @@ TEST(LauncherText, GermanHasEveryStringAndMessage) {
     const char* const Strings::*fields[] = {
         &Strings::play,           &Strings::set_up,        &Strings::picture_sound,
         &Strings::saves,          &Strings::quit,
-        &Strings::back,           &Strings::status_no_game, &Strings::status_version,
-        &Strings::status_controller, &Strings::status_no_controller, &Strings::status_no_gpu,
+        &Strings::back,           &Strings::select,        &Strings::status_no_game, &Strings::status_version,
+        &Strings::status_no_controller, &Strings::status_no_gpu,
         &Strings::status_last_run_failed, &Strings::drop_hint, &Strings::set_up_first,
         &Strings::dialog_title};
     for (const auto field : fields) {

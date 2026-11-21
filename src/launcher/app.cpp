@@ -152,13 +152,10 @@ private:
         io.IniFilename = nullptr;  // nothing is written outside user/ in the game's folder
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
         ImGui::StyleColorsDark();
-        ImGuiStyle& style = ImGui::GetStyle();
-        style.WindowPadding = ImVec2(0, 0);
-        style.WindowBorderSize = 0;
-        style.Colors[ImGuiCol_WindowBg] = ImVec4(0.09f, 0.09f, 0.11f, 1);
+        apply_theme(ImGui::GetStyle());
         ImGui_ImplSDL3_InitForSDLRenderer(window_, renderer_);
         ImGui_ImplSDLRenderer3_Init(renderer_);
-        load_fonts(16.0f * scale_);
+        load_fonts(text_size * scale_);
     }
 
     void shutdown() {
@@ -266,19 +263,12 @@ private:
             return;  // the player was faster: a drop or the dialog
         }
         if (result->folders.size() == 1) {
-            take_found(result->folders[0]);
+            set_up_folder(result->folders[0]);
         } else if (result->folders.size() > 1) {
             close_page();  // an open page saves its choices first; the list replaces it
             page_ = make_find_page(result->folders, [this](const fs::path& f) { pending_choice_ = f; });
             focus_first_ = true;
             refocus_ = false;
-        }
-    }
-
-    void take_found(const fs::path& folder) {
-        set_up_folder(folder);
-        if (game_ready_) {
-            found_folder_ = game_dir_.string();
         }
     }
 
@@ -307,7 +297,6 @@ private:
 
     void set_up_folder(const fs::path& folder) {
         tried_folder_ = true;
-        found_folder_.clear();
         const common::SetupResult r = common::setup_game_folder(folder, config_path_);
         if (r.folder.ok() && !r.config_written) {
             notice_ = r.config_error;
@@ -485,7 +474,6 @@ private:
         v.state = select_state(in);
         v.header = shows_picture(v.state) ? header_ : nullptr;
         v.focus_first = focus_first_;
-        v.found_folder = game_ready_ ? found_folder_ : std::string();
         switch (v.state) {
         case MainState::no_folder:
             v.status = !notice_.empty() ? notice_
@@ -510,9 +498,6 @@ private:
             v.status_kind = StatusKind::warning;
             break;
         case MainState::ready:
-            v.status = std::format("{} {} \xc2\xb7 {}", t.status_version, display_version(version_),
-                                   t.status_controller);
-            v.status_kind = StatusKind::ok;
             break;
         }
         if (!notice_.empty() && game_ready_) {  // a refused folder while a good one is set
@@ -543,15 +528,11 @@ private:
         }
     }
 
-    void draw_page(const Context& ctx, const MainView& v) {
-        const float s = ctx.scale;
-        const float below = draw_top(ctx, v);
-        ImGui::SetCursorPos(ImVec2(24 * s, below + 8 * s));
-        ImGui::TextUnformatted(page_->title(ctx));
-        ImGui::SetCursorPosX(24 * s);
-        page_->draw(ctx, (window_height - 24 - 48) * s - ImGui::GetCursorPosY());
-        ImGui::SetCursorPos(ImVec2(24 * s, (window_height - 24 - 48) * s));
-        if (bevel_button(ctx.text->back, ImVec2(432 * s, 48 * s))) {
+    void draw_page(const Context& ctx) {
+        const bool back = draw_page_frame(ctx, page_->title(ctx));
+        ImGui::SetCursorPos(ImVec2(24 * ctx.scale, page_top * ctx.scale));
+        page_->draw(ctx, (page_bottom - page_top) * ctx.scale);
+        if (back) {
             close_page();
         }
     }
@@ -579,7 +560,7 @@ private:
             const fs::path chosen = *pending_choice_;
             pending_choice_.reset();
             close_page();
-            take_found(chosen);
+            set_up_folder(chosen);
         }
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
@@ -611,7 +592,7 @@ private:
                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
         Action action = Action::none;
         if (page_) {
-            draw_page(ctx, v);
+            draw_page(ctx);
             // Back closes an open choice list first, and the page only on the next press.
             const bool popup_was_open = popup_open_;
             popup_open_ = ImGui::IsPopupOpen(ImGuiID(0), ImGuiPopupFlags_AnyPopupId);
@@ -625,7 +606,7 @@ private:
         ImGui::End();
         focus_first_ = false;
         ImGui::Render();
-        SDL_SetRenderDrawColor(renderer_, 23, 23, 28, 255);
+        SDL_SetRenderDrawColor(renderer_, 6, 5, 5, 255);
         SDL_RenderClear(renderer_);
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer_);
         if (!shot_path_.empty()) {
@@ -662,7 +643,6 @@ private:
     std::shared_ptr<SearchBox> search_ = std::make_shared<SearchBox>();
     std::thread search_thread_;
     std::optional<fs::path> pending_choice_;  // picked from the list of several hits
-    std::string found_folder_;                // taken by the search, shown with its link
     bool tried_folder_ = false;  // a folder was set or chosen, whatever its check said
     bool gpu_ok_ = true;
     bool last_run_failed_ = false;

@@ -140,13 +140,18 @@ public:
         }
         const float side = 24 * s;  // the app's margin; the page is as wide as the Back button
         const float width = 432 * s;
-        const float button_h = 32 * s;
+        const float button_h = 40 * s;
         const float line = ImGui::GetFrameHeightWithSpacing();
         // The list takes what is left after the two button rows, the editor and the message.
         const float below = 2 * (button_h + 4 * s) + (editing_ == Edit::none ? 0 : line) + 2 * line;
         const float list_h = std::max(line * 2, height - below);
         ImGui::SetCursorPosX(side);
-        if (ImGui::BeginChild("profiles", ImVec2(width, list_h), ImGuiChildFlags_Borders)) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10 * s, 8 * s));
+        const bool list_open = ImGui::BeginChild(
+            "profiles", ImVec2(width, list_h),
+            ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
+        ImGui::PopStyleVar();
+        if (list_open) {
             for (std::size_t i = 0; i < profiles_.size(); ++i) {
                 const ProfileInfo& p = profiles_[i];
                 std::string label = p.name;
@@ -165,19 +170,19 @@ public:
 
         const ImVec2 size((width - 8 * s) / 2, button_h);
         ImGui::SetCursorPosX(side);
-        if (bevel_button(t.use, size)) {
+        if (menu_entry(t.use, size, text_size * s)) {
             choose(ctx);
         }
         ImGui::SameLine(0, 8 * s);
-        if (bevel_button(t.open_folder, size)) {
+        if (menu_entry(t.open_folder, size, text_size * s)) {
             open_folder(ctx);
         }
         ImGui::SetCursorPosX(side);
-        if (bevel_button(t.make_new, size)) {
+        if (menu_entry(t.make_new, size, text_size * s)) {
             start_edit(Edit::make, "");
         }
         ImGui::SameLine(0, 8 * s);
-        if (bevel_button(t.rename, size)) {
+        if (menu_entry(t.rename, size, text_size * s)) {
             if (selected_.empty()) {
                 message_ = t.choose_first;
             } else {

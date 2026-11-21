@@ -20,58 +20,61 @@ Bloodborne-Linux/
 
 Everything the launcher and `bb-run` write goes to `user/` (`docs/design/m3-core-os.md`, "Runtime directories"). Deleting the folder removes the game with its settings, saves, caches and logs; nothing stays in `~/.config`, `~/.local/share`, `~/.cache` or `~/.local/state`, and later nothing in AppData on Windows. The dump stays where the player keeps it, and only its path is stored. A dump inside the folder is stored relative to it, so the whole folder can be moved or renamed, for example onto a USB stick. We don't copy the dump in: it is large, and players keep it where they like (#728).
 
-A folder that can't be written (copied to `/usr/bin`, say) gets a status line that says so and asks to unpack the game into a folder of its own.
+A folder that can't be written (copied to `/usr/bin`, say) gets a line on the main screen that says so and asks to unpack the game into a folder of its own.
 
 What we can't control: the folder dialog runs through xdg-desktop-portal, which may add the chosen folder to the desktop's "recently used" list (dragging the folder onto the window doesn't); a crash may leave a core dump with systemd-coredump; a graphics driver that ignores the cache variables writes its cache where it likes; and a file manager that "Open folder" starts fresh inherits the launcher's redirected `XDG_CACHE_HOME`, so its own caches may land in `user/cache/system` (one that is already running keeps its own).
 
-## Layout: one window in the style of a late-90s autorun menu
+## Layout and look: the game's system menu
 
-A small window with a fixed size, the game's title picture at the top, a one-line status below it, then a single column of buttons. The first button is Play, and it is bigger than the others. Late-90s PC games opened with a menu like this. It needs no explaining: there is one obvious button, and everything else is a short list under it.
+A small window with a fixed size: the game's title picture at the top, fading into black, a thin line, then a short menu. The first entry is Play, and it is bigger than the others. The look follows the game's own system menu: near-black, serif type, entries without frames and a warm glow behind the chosen one. R9 drew a late-90s autorun menu with bevelled buttons; the maintainer found it amateurish and chose this look on 2026-11-21 (#742). The mock-ups also had ornaments in the game's style; plain lines won.
 
 ```
 +--------------------------------+
+|   title picture (pic1.png),    |
+|   fading into black            |
+|  ----------------------------  |
 |                                |
-|   title picture (pic1.png)     |
+|             Play               |   bigger, focused at start
+|       Picture and sound        |
+|             Saves              |
+|             Quit               |
 |                                |
-+--------------------------------+
-|  ok  Version 1.09 . controller |   status line
-+--------------------------------+
-| [          Play              ] |   bigger, focused at start
-| [     Picture and sound      ] |
-| [         Saves              ] |
-| [         Quit               ] |
+|  ----------------------------  |
+|                     (x) Select |
 +--------------------------------+
 ```
 
-- **Size:** 480 × 600 logical pixels, not resizable, scaled with the display's content scale (`SDL_GetDisplayContentScale`). The pages behind the buttons open in the same window, in the area of the button column, with a Back button. No second window.
-- **Title picture:** `sce_sys/pic1.png` from the player's game folder (1920 × 1080 in the dump), cropped to the header's aspect ratio around its centre. It is loaded at run time and never copied. We ship no game art, and every install still shows the game. Before the game folder is set up, the header shows the drop target instead (see First start).
+- **Size:** 480 × 600 logical pixels, not resizable, scaled with the display's content scale (`SDL_GetDisplayContentScale`). The pages behind the entries open in the same window, with their gold title between two lines. B, Escape or the Back hint leaves them. No second window.
+- **Title picture:** `sce_sys/pic1.png` from the player's game folder (1920 × 1080 in the dump), cropped to the header's aspect ratio around its centre. Its lower half fades into the window's black. It is loaded at run time and never copied. We ship no game art, and every install still shows the game. Before the game folder is set up, the header shows the drop hint instead (see First start).
 - **Window title:** the game's title from `sce_sys/param.sfo`, read at run time, plus "(bloodborne-linux)".
-- **Buttons:** bevelled, drawn with `ImDrawList` (light top and left edges, dark bottom and right edges). This is the one decorative element. Everything else is flat.
-- **Font:** the system's sans-serif font, found with fontconfig at run time, with ImGui's built-in font as the fallback. We don't copy a font into the repository: the OFL fonts in shadPS4's tree are not on the license allow-list (`docs/source-policy.md`).
+- **Entries:** centred text without a frame. The focused entry, or the one under the mouse, is light, with an amber glow behind it: an ellipse of vertex colours that fades out, drawn with `ImDrawList`.
+- **Lines and hints:** one-pixel lines that fade out at both ends, under the header and above the hints for the controller's buttons at the bottom right (Cross Select, Circle Back). The button symbols are drawn from circles and lines, so no font needs their glyphs. The Back hint is also the mouse's Back button.
+- **Colours:** near-black, bone-white text, gold titles, the amber glow; warnings amber, errors red. ImGui's own widgets on the pages (lists, choices, text fields) get the same colours from the theme in `widgets.cpp`. The choices of Picture and sound look like underlined words of their sentence.
+- **Font:** a serif font of the system, found with fontconfig at run time: EB Garamond, Cormorant Garamond, else what fontconfig matches to "serif" (Noto Serif on Fedora), with ImGui's built-in font as the fallback. A Garamond comes closest to the game's menus. We don't copy a font into the repository: the OFL fonts in shadPS4's tree are not on the license allow-list (`docs/source-policy.md`).
 - **Language:** English and German, chosen from the system locale, with English as the fallback. The main screen and the words every page shares live in one table per language (`src/launcher/text.cpp`). Each page keeps its own English and German strings in its own `page_*.cpp`, so pages added in parallel don't edit a shared table. The `Page` interface (draw, on_close) is documented in `src/launcher/page.hpp`. The scripted test input (`BB_LAUNCHER_SCRIPT`) is described in "Code layout and test input" below.
 
 ## States of the main screen
 
-| State | Header | Status line | First button |
+| State | Header | Under the line | First entry |
 |---|---|---|---|
-| No game folder yet | drop target | "No game found yet" | Set up game |
-| Game folder fails its check | drop target | the check's message, in words | Set up game |
-| Ready | title picture | "Version 1.09 · Controller connected" | Play |
+| No game folder yet | drop hint | "No game found yet" | Set up game |
+| Game folder fails its check | drop hint | the check's message, in words | Set up game |
+| Ready | title picture | nothing | Play |
 | Ready, no controller | title picture | "No controller. Plug one in before you play." | Play |
 | No usable Vulkan GPU | title picture | "Your graphics card can't run the game." | Play |
 | Last run ended with an error | title picture | "The game stopped unexpectedly." | Play |
 
-The status line replaces a checklist page: when everything is fine it is one quiet line, and when something is wrong it says exactly one thing, the most important one. The order of checks is game folder, GPU, controller.
+The line of text under the header replaces a checklist page: when everything is fine there is none, and when something is wrong it says exactly one thing, the most important one. The order of checks is game folder, GPU, controller.
 
 A missing controller doesn't block Play: the player may plug one in after pressing it. `bb-run` has no keyboard input for the game yet, so the hint is needed.
 
-Buttons are never disabled. A button that can't do anything yet says why when pressed (Saves before setup: "Set up the game first.").
+Entries are never disabled. An entry that can't do anything yet says why when pressed (Saves before setup: "Set up the game first.").
 
 ## First start
 
-1. **Search.** The launcher looks for the game folder on its own: directories that hold `eboot.bin` and `sce_sys/param.sfo` with title ID CUSA03173, first in `game/` inside the launcher's folder, then under `$HOME` (up to four levels deep, without hidden directories) and under the removable-media mount points (`/run/media/$USER`, `/media`). The search is limited to two seconds and runs off the UI thread. One hit that passes the check is taken, and the status line shows the folder with a "Choose another folder" link. Several hits become a list to pick from.
+1. **Search.** The launcher looks for the game folder on its own: directories that hold `eboot.bin` and `sce_sys/param.sfo` with title ID CUSA03173, first in `game/` inside the launcher's folder, then under `$HOME` (up to four levels deep, without hidden directories) and under the removable-media mount points (`/run/media/$USER`, `/media`). The search is limited to two seconds and runs off the UI thread. One hit that passes the check is taken. Several hits become a list to pick from.
 2. **Drop or choose.** Otherwise the header becomes the drop target: "Drag your game folder here (the one with eboot.bin)". Set up game opens the folder dialog (`SDL_ShowOpenFolderDialog`).
-3. **Check.** The setup check from #578 runs on the folder and its message goes to the status line in plain words (wrong folder, other game, base game without update 1.09, unknown version). The folder is written to the config file only when the check passes, relative to the launcher's folder when it lies inside it.
+3. **Check.** The setup check from #578 runs on the folder and its message goes under the line on the main screen in plain words (wrong folder, other game, base game without update 1.09, unknown version). The folder is written to the config file only when the check passes, relative to the launcher's folder when it lies inside it.
 
 The search goes first because "where did I put the dump" is the most common place for a non-technical player to get stuck.
 
@@ -101,7 +104,7 @@ The sentences say what the player gets, without technical terms. The second one 
 
 The strengths of motion blur and chromatic aberration (`--motion-blur-strength`, `--chromatic-aberration-strength`) have no choice; a strength in the file stays. Options that the shadow and draw-distance issues of R11 add get their place in the second sentence in their own issue. The two sentences need more than the page's height at a small display scale, so the page scrolls, and gamepad navigation scrolls it to the focused choice.
 
-Sound gets choices once `bb-run` has any (output device, volume). Until then the page is called "Picture and sound" anyway, so the button list doesn't change later.
+Sound gets choices once `bb-run` has any (output device, volume). Until then the page is called "Picture and sound" anyway, so the menu doesn't change later.
 
 Changes are saved when the page closes. There is no Apply button.
 
@@ -120,7 +123,7 @@ Changes are saved when the page closes. There is no Apply button.
 
 ## Controller
 
-Each part of the launcher can be used with the controller alone: ImGui's gamepad navigation (`ImGuiConfigFlags_NavEnableGamepad`) through its SDL3 backend. Focus starts on the first button. A (Cross) chooses, B (Circle) goes back. Mouse and keyboard work as well. This covers the couch and handheld PCs without a separate "big picture" mode.
+Each part of the launcher can be used with the controller alone: ImGui's gamepad navigation (`ImGuiConfigFlags_NavEnableGamepad`) through its SDL3 backend. Focus starts on the first entry. A (Cross) chooses, B (Circle) goes back. Mouse and keyboard work as well. This covers the couch and handheld PCs without a separate "big picture" mode.
 
 ## Technical choices
 

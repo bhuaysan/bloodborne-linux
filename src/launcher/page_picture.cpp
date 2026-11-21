@@ -12,6 +12,7 @@
 #include "common/config.hpp"
 #include "launcher/page.hpp"
 #include "launcher/picture_settings.hpp"
+#include "launcher/widgets.hpp"
 
 namespace bb::launcher {
 
@@ -43,7 +44,6 @@ struct Text {
     const char* comma;
     const char* and_;
     const char* see_tail;
-    const char* saved_note;
 };
 constexpr Text english{"Picture and sound", "I play in",       "a window",   "fullscreen",
                        "at",                "your screen's size", "at",       "frames per second,",
@@ -59,8 +59,7 @@ constexpr Text english{"Picture and sound", "I play in",       "a window",   "fu
                        {"colour fringes at the edges", "no colour fringes"},
                        ",",
                        "and",
-                       ".",
-                       "Changes are saved when you go back."};
+                       "."};
 constexpr Text german{"Bild und Ton", "Ich spiele", "im Fenster",  "im Vollbild",
                       "in",           "der Größe deines Bildschirms", "mit", "Bildern pro Sekunde",
                       "und einem",    "normalen",   "geschärften", "extra scharfen",
@@ -76,8 +75,7 @@ constexpr Text german{"Bild und Ton", "Ich spiele", "im Fenster",  "im Vollbild"
                       {"Farbsäumen am Rand", "keinen Farbsäumen"},
                       ",",
                       "und",
-                      ".",
-                      "Änderungen werden beim Zurückgehen gespeichert."};
+                      "."};
 
 const Text& text(const Context& ctx) {
     return ctx.lang == Lang::de ? german : english;
@@ -95,15 +93,26 @@ std::string size_label(Size s) {
     return std::format("{} \xC3\x97 {}", s.first, s.second);  // "x" as the multiplication sign
 }
 
-// A combo of `labels` at the width of its widest label. Returns true when the choice changed.
+// A combo of `labels` at the width of its widest label, drawn as an underlined word of the
+// sentence. Returns true when the choice changed.
 bool choice(const char* id, const std::vector<std::string>& labels, int& index, float scale) {
     float width = 0;
     for (const std::string& l : labels) {
         width = std::max(width, ImGui::CalcTextSize(l.c_str()).x);
     }
-    ImGui::SetNextItemWidth(width + (ImGui::GetFrameHeight() + 24 * scale));
+    width += 2 * ImGui::GetStyle().FramePadding.x;
+    ImGui::SetNextItemWidth(width);
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    const float bottom = at.y + ImGui::GetFrameHeight() - 2 * scale;
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(at.x, bottom), ImVec2(at.x + width, bottom),
+                                        colour::line, scale);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Text, colour::chosen);
+    const bool open = ImGui::BeginCombo(id, labels[static_cast<size_t>(index)].c_str(),
+                                        ImGuiComboFlags_NoArrowButton);
+    ImGui::PopStyleColor(2);
     bool changed = false;
-    if (ImGui::BeginCombo(id, labels[static_cast<size_t>(index)].c_str())) {
+    if (open) {
         for (int i = 0; i < static_cast<int>(labels.size()); ++i) {
             const bool selected = i == index;
             if (ImGui::Selectable(labels[static_cast<size_t>(i)].c_str(), selected)) {
@@ -193,9 +202,6 @@ public:
 
         ImGui::Dummy(ImVec2(0, gap / 2));
         draw_second_sentence(t, s);
-
-        ImGui::Dummy(ImVec2(0, gap / 2));
-        ImGui::TextDisabled("%s", t.saved_note);
         ImGui::EndChild();
         if (now_.fullscreen != was.fullscreen || now_.size != was.size) {
             now_.wide = wide_frame(now_, display_);

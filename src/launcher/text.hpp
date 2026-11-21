@@ -16,9 +16,9 @@ struct Strings {
     const char* saves;
     const char* quit;
     const char* back;
+    const char* select;  // the hint of the Cross button
     const char* status_no_game;
     const char* status_version;       // before the version number
-    const char* status_controller;    // "Controller connected"
     const char* status_no_controller;
     const char* status_no_gpu;
     const char* status_last_run_failed;

@@ -1,4 +1,4 @@
-// The main screen: header, status line and the column of buttons (docs/design/launcher.md).
+// The main screen and the frame of the pages (docs/design/launcher.md, "Layout").
 #pragma once
 
 #include <string>
@@ -13,23 +13,28 @@ namespace bb::launcher {
 
 // Logical size of the header; the title picture is cropped to this aspect ratio.
 inline constexpr int header_width = 480;
-inline constexpr int header_height = 216;
+inline constexpr int header_height = 262;
+// A page's content lies between these, in logical pixels.
+inline constexpr float page_top = 100;
+inline constexpr float page_bottom = 548;
 
 struct MainView {
     MainState state = MainState::no_folder;
-    std::string status;
+    std::string status;  // shown unless the state is ready
     StatusKind status_kind = StatusKind::warning;
-    SDL_Texture* header = nullptr;  // the title picture; null shows the drop target
-    bool focus_first = false;       // move the focus to the first button in this frame
-    std::string found_folder;       // the folder the first-start search took; empty otherwise
+    SDL_Texture* header = nullptr;  // the title picture; null shows the drop hint
+    bool focus_first = false;       // move the focus to the first entry in this frame
 };
 
-// Draws the whole window content and returns the action of the button that was pressed.
+// Draws the whole window content and returns the action of the entry that was pressed.
 Action draw_main_screen(const Context& ctx, const MainView& view);
 
-// The header and the status line only, for the pages. Returns the y of the area below them.
-// With `choose_another`, a found folder is shown under the status line with its link, and
-// *choose_another tells whether the link was pressed.
-float draw_top(const Context& ctx, const MainView& view, bool* choose_another = nullptr);
+// The header, the line under it and, without a game, the status. Returns the y below them in
+// ImGui units: the status text wraps and pushes the menu down.
+float draw_top(const Context& ctx, const MainView& view);
+
+// A page's frame: its gold title between two lines, the line above the button hints and the
+// hints. Returns true when the mouse pressed the Back hint.
+bool draw_page_frame(const Context& ctx, const char* title);
 
 }  // namespace bb::launcher
