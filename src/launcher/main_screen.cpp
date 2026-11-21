@@ -1,9 +1,12 @@
 #include "launcher/main_screen.hpp"
 
 #include <algorithm>
+#include <string_view>
 #include <vector>
 
 #include <imgui.h>
+
+#include "common/version.hpp"
 
 namespace bb::launcher {
 
@@ -35,6 +38,19 @@ void draw_header(const Context& ctx, const MainView& view) {
     dl->AddRectFilledMultiColor(ImVec2(p0.x, fade), ImVec2(p1.x, darker), clear, clear, dark, dark);
     dl->AddRectFilledMultiColor(ImVec2(p0.x, darker), p1, dark, dark, colour::background,
                                 colour::background);
+}
+
+// The build's version in the bottom right corner, small and dim, for bug reports.
+void draw_version(const Context& ctx) {
+    const float size = 13 * ctx.scale;
+    const std::string_view version = bb::common::build_version();
+    const char* const end = version.data() + version.size();
+    const ImVec2 extent = ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0, version.data(), end);
+    const ImVec2 p0 = ImGui::GetWindowPos();
+    const ImVec2 window = ImGui::GetWindowSize();
+    const ImVec2 at(p0.x + window.x - extent.x - 10 * ctx.scale,
+                    p0.y + window.y - extent.y - 8 * ctx.scale);
+    ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(), size, at, colour::dim, version.data(), end);
 }
 
 }  // namespace
@@ -74,6 +90,7 @@ Action draw_main_screen(const Context& ctx, const MainView& view) {
         }
         y += h;
     }
+    draw_version(ctx);
     return result;
 }
 

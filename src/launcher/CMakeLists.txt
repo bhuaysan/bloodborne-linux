@@ -36,10 +36,10 @@ target_include_directories(bblauncherui PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_include_directories(bblauncherui SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/stb)
 set_source_files_properties(stb_impl.cpp PROPERTIES COMPILE_OPTIONS -w)
 target_link_libraries(bblauncherui PUBLIC bblauncherlogic bb_launcher_imgui
-    PRIVATE PkgConfig::BB_FONTCONFIG Vulkan::Headers ${CMAKE_DL_LIBS} bb_warnings)
+    PRIVATE bbversion PkgConfig::BB_FONTCONFIG Vulkan::Headers ${CMAKE_DL_LIBS} bb_warnings)
 
 add_executable(bb-launcher main.cpp app.cpp)
-target_link_libraries(bb-launcher PRIVATE bblauncherui bb_warnings)
+target_link_libraries(bb-launcher PRIVATE bblauncherui bbversion bb_warnings)
 
 # Installation: the portable folder (docs/design/launcher.md, "One portable folder"). bb-run goes
 # next to bb-launcher, which starts the one in its own directory; user/ is created next to them on

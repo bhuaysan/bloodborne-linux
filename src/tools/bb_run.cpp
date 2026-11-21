@@ -38,6 +38,7 @@
 #include "common/config.hpp"
 #include "common/env.hpp"
 #include "common/game_folder.hpp"
+#include "common/version.hpp"
 #include "common/log.hpp"
 #include "common/runtime_dirs.hpp"
 #include "common/signal_stack.hpp"
@@ -394,6 +395,7 @@ int start(const bb::tools::RunOptions& options) {
     } else {
         bb::common::set_log_filter_from_environment();  // before link: the call trace reads it
     }
+    bb::common::log(LogLevel::info, channel, "bloodborne-linux {}", bb::common::build_version());
     std::optional<fs::path> game_dir = options.game_dir;
     if (!game_dir) {
         game_dir = bb::common::game_dir("local.env");
@@ -527,6 +529,11 @@ int start(const bb::tools::RunOptions& options) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // --version reads nothing: no config file, no game, no user folder.
+    if (std::find(argv + 1, argv + argc, std::string_view("--version")) != argv + argc) {
+        std::cout << "bb-run " << bb::common::build_version() << '\n';
+        return 0;
+    }
     bb::tools::RunOptions options;
     try {
         const std::vector<std::string_view> args(argv + 1, argv + argc);

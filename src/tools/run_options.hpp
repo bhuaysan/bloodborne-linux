@@ -17,7 +17,8 @@
 namespace bb::tools {
 
 inline constexpr std::string_view run_usage =
-    "usage: bb-run [--config FILE] [--setup DIR] [--game-dir DIR] [--profile NAME] [--timeout SECONDS] [--stop-at-main-loop]\n"
+    "usage: bb-run --version\n"
+    "       bb-run [--config FILE] [--setup DIR] [--game-dir DIR] [--profile NAME] [--timeout SECONDS] [--stop-at-main-loop]\n"
     "              [--log SPEC] [--no-log-file] [--headless] [--device NAME] [--display NAME]\n"
     "              [--validation] [--validation-sync] [--validation-gpu]\n"
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
@@ -32,6 +33,7 @@ inline constexpr std::string_view run_usage =
     "              [--fov DEGREES]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
+    "  --version            print the version of this build and exit\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
     "                       most 32 characters; default: default)\n"
     "  --timeout SECONDS    end the run with status 124 when the game still runs after SECONDS\n"

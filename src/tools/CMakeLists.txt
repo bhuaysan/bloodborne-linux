@@ -8,7 +8,7 @@ target_link_libraries(bbrunoptions PUBLIC bbcommon PRIVATE bb_warnings)
 # The game runtime. The OBJECT libraries hold static registrations (HLE modules, the eboot's TLS
 # reservation, the replacements in bbgame), so they are linked here as objects.
 add_executable(bb-run bb_run.cpp)
-target_link_libraries(bb-run PRIVATE bbrunoptions bbhle bbhlenet bbhlesystem bbhlevideo bbeboottls
+target_link_libraries(bb-run PRIVATE bbrunoptions bbversion bbhle bbhlenet bbhlesystem bbhlevideo bbeboottls
     bbgame bbhook bbloader bbcommon bb_warnings)
 # The window and video_core's presenter, where bbvideocore is built; otherwise bb-run is headless
 # only.
