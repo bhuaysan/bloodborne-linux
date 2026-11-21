@@ -1560,6 +1560,7 @@ TEST(GuestMemory, GuestWritesDuringAMergeAreNotLost) {
                 std::this_thread::yield();
             }
             VideoCore::ImageId id{};
+            const std::uint64_t before_merge = bb::shadps4::claimed_faults();
             gpu.liverpool->SendCommand<true>([&] {
                 VideoCore::TextureCache::ImageDesc both{group, texture};
                 both.info.resources.layers = 2;
@@ -1567,6 +1568,14 @@ TEST(GuestMemory, GuestWritesDuringAMergeAreNotLost) {
                 id = textures.FindImage(both);
                 merged += textures.GetImage(id).info.resources.layers == 2 ? 1 : 0;
             });
+            // The writers keep going until one of their writes hit the tracked first layer, so
+            // every round races a write against the merge, also on a slow machine where 2 ms
+            // weren't always enough (the Ubuntu CI job, 39 of 40 rounds).
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (bb::shadps4::claimed_faults() == before_merge &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             stop.store(true);
             for (auto& thread : threads) {
