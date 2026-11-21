@@ -46,11 +46,11 @@ The game is one folder. Nothing gets installed.
 
 The launcher works with the gamepad, too. Cross (A) chooses, Circle (B) goes back.
 
-**Picture and sound** sets window or fullscreen, resolution, frame rate, sharpening, field of view, texture filtering, motion blur and colour fringes. The defaults look like the PS4.
+**Settings → Picture and sound** sets window or fullscreen, monitor, graphics card, resolution, frame rate, VSync, sharpening, field of view, texture filtering, motion blur and colour fringes. The defaults look like the PS4. **Settings → Advanced** can shorten the loading screen after you die.
 
 **Saves** keeps separate profiles, for example one for testing and one for your playthrough. **Open folder** shows a profile's saves, so you can back them up.
 
-**Help with problems** explains the errors we know and copies a problem report. Paste it into an [issue](https://github.com/bhuaysan/bloodborne-linux/issues) if something breaks. The report leaves out your user name and folder paths.
+If the game stops unexpectedly, its output is in `user/logs/launcher-last-run.log`. Open an [issue](https://github.com/bhuaysan/bloodborne-linux/issues) and paste the end of it, after taking out your user name and folder paths.
 
 ## The folder
 
