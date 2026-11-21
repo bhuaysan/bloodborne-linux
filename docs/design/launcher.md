@@ -39,16 +39,14 @@ A small window with a fixed size: the game's title picture at the top, fading in
 |             Saves              |
 |             Quit               |
 |                                |
-|  ----------------------------  |
-|                     (x) Select |
 +--------------------------------+
 ```
 
-- **Size:** 480 × 600 logical pixels, not resizable, scaled with the display's content scale (`SDL_GetDisplayContentScale`). The pages behind the entries open in the same window, with their gold title between two lines. B, Escape or the Back hint leaves them. No second window.
+- **Size:** 480 × 600 logical pixels, not resizable, scaled with the display's content scale (`SDL_GetDisplayContentScale`). The pages behind the entries open in the same window, with their gold title between two lines and a Back entry at the bottom; B and Escape leave them too. No second window.
 - **Title picture:** `sce_sys/pic1.png` from the player's game folder (1920 × 1080 in the dump), cropped to the header's aspect ratio around its centre. Its lower half fades into the window's black. It is loaded at run time and never copied. We ship no game art, and every install still shows the game. Before the game folder is set up, the header shows the drop hint instead (see First start).
 - **Window title:** the game's title from `sce_sys/param.sfo`, read at run time, plus "(bloodborne-linux)".
 - **Entries:** centred text without a frame. The focused entry, or the one under the mouse, is light, with an amber glow behind it: an ellipse of vertex colours that fades out, drawn with `ImDrawList`.
-- **Lines and hints:** one-pixel lines that fade out at both ends, under the header and above the hints for the controller's buttons at the bottom right (Cross Select, Circle Back). The button symbols are drawn from circles and lines, so no font needs their glyphs. The Back hint is also the mouse's Back button.
+- **Lines:** one-pixel lines that fade out at both ends, under the header, around a page's title and above its Back entry. There is no legend of the controller's buttons: the launcher is meant for the mouse first, and the pad works without one (the maintainer, 2026-11-21).
 - **Colours:** near-black, bone-white text, gold titles, the amber glow; warnings amber, errors red. ImGui's own widgets on the pages (lists, dropdowns, sliders, checkboxes, text fields) get the same colours from the theme in `widgets.cpp`.
 - **Font:** a serif font of the system, found with fontconfig at run time: EB Garamond, Cormorant Garamond, else what fontconfig matches to "serif" (Noto Serif on Fedora), with ImGui's built-in font as the fallback. A Garamond comes closest to the game's menus. We don't copy a font into the repository: the OFL fonts in shadPS4's tree are not on the license allow-list (`docs/source-policy.md`).
 - **Language:** English and German, chosen from the system locale, with English as the fallback. The main screen and the words every page shares live in one table per language (`src/launcher/text.cpp`). Each page keeps its own English and German strings in its own `page_*.cpp`, so pages added in parallel don't edit a shared table. The `Page` interface (draw, on_close) is documented in `src/launcher/page.hpp`. The scripted test input (`BB_LAUNCHER_SCRIPT`) is described in "Code layout and test input" below.
@@ -102,8 +100,8 @@ A settings form like the ones in other games: one row per setting, its name on t
 | Resolution | dropdown; in fullscreen the text "Screen size" |
 | Frame rate | dropdown: 30, 60, 120, 144 FPS |
 | Sharpness | dropdown: Normal, Sharpened, Extra sharp |
-| Field of view | slider in whole degrees from 30° to 65°, the angle shown beside it; the game's is 43° |
-| Texture filtering | dropdown: As in the game, 2×, 4×, 8×, 16× |
+| Field of view | slider in whole degrees from 30° to 65°, the angle shown beside it; the game's 43° reads "43° (default)" |
+| Texture filtering | dropdown: Default (the game's own filtering), 2×, 4×, 8×, 16× |
 | Motion blur | checkbox |
 | Colour fringes | checkbox |
 
@@ -119,7 +117,7 @@ With the pad, up and down move between the rows, A opens a dropdown or flips a c
 | Sharpened | `--fsr`, RCAS at its default attenuation (0.25) |
 | Extra sharp | `--fsr --rcas-attenuation 0` |
 | field of view | `--fov`: no key at 43°, else the degrees (#666). A fractional angle in the file shows rounded and stays until the slider moves |
-| As in the game / 2× … 16× | `--anisotropy`: no key (the game's filtering), else the level (#658). A level set by hand (1×) is added to the list |
+| Default / 2× … 16× | `--anisotropy`: no key (the game's filtering), else the level (#658). A level set by hand (1×) is added to the list |
 | Motion blur on / off | `motion_blur = true / false` (`--no-motion-blur`, #665) |
 | Colour fringes on / off | `chromatic_aberration = true / false` (`--no-chromatic-aberration`, #665) |
 
@@ -144,7 +142,7 @@ Changes are saved when the page closes. There is no Apply button.
 
 ## Controller
 
-Each part of the launcher can be used with the controller alone: ImGui's gamepad navigation (`ImGuiConfigFlags_NavEnableGamepad`) through its SDL3 backend. Focus starts on the first entry. A (Cross) chooses, B (Circle) goes back. Mouse and keyboard work as well. This covers the couch and handheld PCs without a separate "big picture" mode.
+The launcher is meant for the mouse first. Each part of it can also be used with the controller alone: ImGui's gamepad navigation (`ImGuiConfigFlags_NavEnableGamepad`) through its SDL3 backend. Focus starts on the first entry. A (Cross) chooses, B (Circle) goes back, and the keyboard works the same way. This covers the couch and handheld PCs without a separate "big picture" mode.
 
 ## Technical choices
 

@@ -146,44 +146,6 @@ float centred_text(const char* text, float y, ImU32 colour, float width, float f
     return y;
 }
 
-bool button_hints(const char* select, const char* back, float scale) {
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImFont* font = ImGui::GetFont();
-    const float size = hint_size * scale;
-    const float r = 7.5f * scale;
-    const ImVec2 win = ImGui::GetWindowPos();
-    float x = win.x + ImGui::GetWindowWidth() - 18 * scale;
-    const float cy = win.y + ImGui::GetWindowHeight() - 20 * scale;
-    bool back_pressed = false;
-    // Right to left: Circle (back), then Cross (select).
-    for (int i = 0; i < 2; ++i) {
-        const char* label = i == 0 ? back : select;
-        if (label == nullptr) {
-            continue;
-        }
-        const ImVec2 text = font->CalcTextSizeA(size, FLT_MAX, 0, label);
-        x -= text.x;
-        dl->AddText(font, size, ImVec2(x, cy - text.y * 0.5f), colour::dim, label);
-        const ImVec2 c(x - 5 * scale - r, cy);
-        dl->AddCircle(c, r, IM_COL32(160, 150, 134, 255), 0, scale);
-        const float k = r * 0.45f;
-        if (i == 0) {
-            dl->AddCircle(c, k, colour::chosen, 0, scale);
-            // The mouse can go back here too: the hint is its Back button, a little larger than
-            // it looks so that it is easy to hit.
-            const ImVec2 min(c.x - r - 6 * scale, cy - 14 * scale);
-            ImGui::SetCursorScreenPos(min);
-            back_pressed =
-                ImGui::InvisibleButton("##back", ImVec2(x + text.x + 6 * scale - min.x, 28 * scale));
-        } else {
-            dl->AddLine(ImVec2(c.x - k, c.y - k), ImVec2(c.x + k, c.y + k), colour::chosen, scale);
-            dl->AddLine(ImVec2(c.x - k, c.y + k), ImVec2(c.x + k, c.y - k), colour::chosen, scale);
-        }
-        x = c.x - r - 14 * scale;
-    }
-    return back_pressed;
-}
-
 int prompt(const char* id, const char* title, const char* text,
            std::initializer_list<const char*> options, float scale) {
     const ImVec2 display = ImGui::GetIO().DisplaySize;

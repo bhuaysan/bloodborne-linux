@@ -33,8 +33,8 @@ Action draw_main_screen(const Context& ctx, const MainView& view);
 // ImGui units: the status text wraps and pushes the menu down.
 float draw_top(const Context& ctx, const MainView& view);
 
-// A page's frame: its gold title between two lines, the line above the button hints and the
-// hints. Returns true when the mouse pressed the Back hint.
+// A page's frame: its gold title between two lines, and a line with the Back entry under it.
+// Returns true when Back was pressed.
 bool draw_page_frame(const Context& ctx, const char* title);
 
 }  // namespace bb::launcher

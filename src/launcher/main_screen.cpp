@@ -10,7 +10,7 @@ namespace bb::launcher {
 namespace {
 
 constexpr float line_y = 252;    // the line under the header
-constexpr float bottom_y = 560;  // the line above the button hints
+constexpr float bottom_y = 560;  // the line above a page's Back entry
 constexpr float entry_h = 46;
 constexpr float first_entry_h = 54;
 constexpr float entry_w = 432;
@@ -74,8 +74,6 @@ Action draw_main_screen(const Context& ctx, const MainView& view) {
         }
         y += h;
     }
-    rule(bottom_y, s);
-    button_hints(t.select, nullptr, s);
     return result;
 }
 
@@ -85,7 +83,10 @@ bool draw_page_frame(const Context& ctx, const char* title) {
     centred_text(title, 36 * s, colour::gold, entry_w * s, 19 * s);
     rule(76, s);
     rule(bottom_y, s);
-    return button_hints(ctx.text->select, ctx.text->back, s);
+    // The launcher is for the mouse first: Back is an entry of its own (B and Escape work too).
+    const ImVec2 size(200 * s, 34 * s);
+    ImGui::SetCursorPos(ImVec2((header_width * s - size.x) * 0.5f, (bottom_y + 4) * s));
+    return menu_entry(ctx.text->back, size, entry_size * s);
 }
 
 }  // namespace bb::launcher

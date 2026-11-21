@@ -25,7 +25,6 @@ inline constexpr ImU32 error = IM_COL32(208, 112, 95, 255);
 inline constexpr float text_size = 17.0f;
 inline constexpr float entry_size = 18.5f;
 inline constexpr float first_entry_size = 22.0f;
-inline constexpr float hint_size = 13.0f;
 
 // The ImGui colours of the design, for the widgets the pages take from ImGui (combos, lists,
 // text fields).
@@ -44,10 +43,6 @@ void rule(float y, float scale);
 
 // `text` centred across the window from `y` down, wrapped to `width`. Returns the y below it.
 float centred_text(const char* text, float y, ImU32 colour, float width, float font_size);
-
-// The button hints at the bottom right: Cross with `select` (null: none) and Circle with
-// `back` (null: none). Returns true when the mouse pressed the back hint.
-bool button_hints(const char* select, const char* back, float scale);
 
 // A prompt over the window: a band with a gold title, a line of text and the options side by
 // side, the first one focused. Open it with ImGui::OpenPopup(id). Returns the index of the

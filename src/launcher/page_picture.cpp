@@ -30,8 +30,9 @@ struct Text {
     const char* sharpness;
     const char* sharpnesses[3];  // Sharpness
     const char* fov;
+    const char* fov_default;  // the game's angle, in degrees
     const char* textures;
-    const char* game_textures;  // anisotropy 0
+    const char* game_textures;  // anisotropy 0: the game's own filtering
     const char* motion_blur;
     const char* fringes;
 };
@@ -45,8 +46,9 @@ constexpr Text english{
     .sharpness = "Sharpness",
     .sharpnesses = {"Normal", "Sharpened", "Extra sharp"},
     .fov = "Field of view",
+    .fov_default = "{}\xC2\xB0 (default)",
     .textures = "Texture filtering",
-    .game_textures = "As in the game",
+    .game_textures = "Default",
     .motion_blur = "Motion blur",
     .fringes = "Colour fringes",
 };
@@ -60,8 +62,9 @@ constexpr Text german{
     .sharpness = "Bildsch\xc3\xa4rfe",
     .sharpnesses = {"Normal", "Gesch\xc3\xa4rft", "Extra scharf"},
     .fov = "Sichtfeld",
+    .fov_default = "{}\xC2\xB0 (Standard)",
     .textures = "Texturfilterung",
-    .game_textures = "Wie im Spiel",
+    .game_textures = "Standard",
     .motion_blur = "Bewegungsunsch\xc3\xa4rfe",
     .fringes = "Farbs\xc3\xa4ume",
 };
@@ -171,12 +174,18 @@ public:
         if (row(t.fov, s, [&] {
                 const int min = static_cast<int>(common::min_fov);
                 const int max = static_cast<int>(common::max_fov);
-                // The angle stands right of the slider, where the grab can't cover it.
-                const float value_w = 48 * s;
+                // The angle stands right of the slider, where the grab can't cover it, with room
+                // for the game's angle and its "(default)".
+                const int game = static_cast<int>(common::game_fov);
+                const auto label = [&](int d) {
+                    return d == game ? std::vformat(t.fov_default, std::make_format_args(d))
+                                     : std::format("{}\xC2\xB0", d);
+                };
+                const float value_w = ImGui::CalcTextSize(label(game).c_str()).x + 12 * s;
                 ImGui::SetNextItemWidth(control_w * s - value_w);
                 bool moved =
                     ImGui::SliderInt("##fov", &degrees, min, max, "", ImGuiSliderFlags_AlwaysClamp);
-                const std::string value = std::format("{}\xC2\xB0", degrees);
+                const std::string value = label(degrees);
                 const ImVec2 at = ImGui::GetItemRectMax();
                 const float text_w = ImGui::CalcTextSize(value.c_str()).x;
                 ImGui::GetWindowDrawList()->AddText(

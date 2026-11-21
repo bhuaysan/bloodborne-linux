@@ -18,7 +18,6 @@ struct Strings {
     const char* saves;
     const char* quit;
     const char* back;
-    const char* select;  // the hint of the Cross button
     const char* status_no_game;
     const char* status_version;  // before the version number
     // The prompts: title, text and the options.
