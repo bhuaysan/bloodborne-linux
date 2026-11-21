@@ -1,6 +1,6 @@
 # Releases
 
-Players get the game from the [Releases page](https://github.com/bhuaysan/bloodborne-linux/releases): the portable package of `docs/design/launcher.md` ("One portable folder"), its `SHA256SUMS` and notes on what changed. The maintainer chose this on 2026-11-21 (#762), so that players don't have to build from source.
+Players get the game from the [Releases page](https://github.com/bhuaysan/bloodborne-linux/releases): the portable package of `docs/design/launcher.md` ("One portable folder") as an AppImage, the recommended download, and as a tar.gz for systems without FUSE, their `SHA256SUMS` and notes on what changed. The maintainer chose this on 2026-11-21 (#762), so that players don't have to build from source.
 
 ## Versions
 
@@ -31,6 +31,8 @@ Releases come from `main`, which always passes its tests. There are no release b
 
    The tag is lightweight: an annotated tag would carry the tagger's name and address.
 3. **Release (workflow).** `.github/workflows/release.yml` checks that the tag has the right form, is lightweight, is on `main` and has its highlights, and that CI on `main` passed for the tagged commit. Tag a commit whose CI run has finished: a release that fails this check is re-run once CI is green. It then builds the package with `tools/package-portable.sh` on the build base below and checks that the programs report the tag as their version. That fails for a build that is not exactly the tagged commit. Finally it writes `SHA256SUMS` and publishes the release with the package, the checksums and the notes.
+
+   `tools/package-portable.sh` writes both files, `Bloodborne-Linux-<version>-x86_64.AppImage` and the `.tar.gz` (`tools/release/make-appimage.sh` builds the AppImage from the same install tree; it needs `squashfs-tools`, which `tools/release/sniper-setup.sh` installs). The workflow is to check that both exist, put both in `SHA256SUMS` and publish both, the AppImage first. That change touches `.github/` and follows in a separate PR that the maintainer merges (#758).
 
 ## Build base
 

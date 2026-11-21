@@ -56,11 +56,11 @@ All addresses refer to `eboot.bin` of CUSA03173 patch 1.09. Its SHA-256 is liste
 ## Task tracking
 
 - Work is tracked in GitHub issues on this repo, grouped by the milestones in `docs/roadmap.md`.
-- Labels: `loader`, `hle:kernel`, `hle:gnm`, `gpu` (renderer and shader translator), `launcher`, `packaging`, `formats`, `decomp`, `tooling`, `research`, `review`.
-- At the end of a work session that leaves its issue open, post a handoff comment on the issue: done, open, next step, gotchas. A session that closes its issue through a merged PR writes the gotchas into the PR body instead.
+- Labels: `loader`, `hle:kernel`, `hle:gnm`, `formats`, `decomp`, `tooling`, `research`, `review`.
+- At the end of every work session, post a handoff comment on the issue: done, open, next step, gotchas.
 - If an issue can only start after another one is merged, add a line `Depends on #N` to its body. An issue starts only once every issue it depends on is merged into `main`. If a dependency goes to the maintainer instead of merging, the issues that depend on it wait as well.
 - One issue per task with one checkable result, normally one PR. Per-function progress goes in `symbols/functions.csv`, not in issues.
-- Every task that changes what the game does names what it checks in the real game: a fault it reproduces, a measurement, or the reference result it has to match. It ends with a run that shows the result. Synthetic tests back this up and don't replace it. Tasks that don't touch the running game (tooling, packaging, CI, docs) name the check of their own result instead: the tool's output on real data, or the package started on the target system.
+- Every task names what it checks in the real game: a fault it reproduces, a measurement, or the reference result it has to match. It ends with a run that shows the result. Synthetic tests back this up and don't replace it.
 - Agents may create and comment on issues in this repository. Close issues through commits (`Fixes #N`).
 - Issue text follows the same privacy rules as commits.
 
@@ -83,7 +83,7 @@ Agents decide on their own how to cut and bundle issues and PRs, which models an
 
 Risky code is never reviewed only in the session that wrote it.
 
-1. **Automatic:** git hooks on every commit, and CI (build with sanitizers, unit and differential tests, privacy check).
+1. **Automatic:** git hooks on every commit. From M2, CI (build with sanitizers, unit and differential tests, privacy check, and formatting and lint once there is code).
 2. **Per decompiled function:** a differential test. Non-trivial functions also get an independent review that compares the C++ against the original disassembly without seeing the author's reasoning. Trivial means a leaf function of a few instructions that only reads or writes fields or returns a constant.
 3. **Per PR:** every change goes through a PR. The session that opens it picks the review class and names it in the PR body:
    - **Core** (shader translator, renderer, loader, ABI, guest memory and write tracking, decompiled functions, interfaces other issues build on): an independent review of the PR diff in a fresh context at high effort, up to two fix rounds.
@@ -121,7 +121,7 @@ The reference for what the game should do is the official shadPS4 v.0.21.0 Linux
 
 There are no separate dev and prod environments. The differences live in build presets and data locations.
 
-### Build presets (`CMakePresets.json`)
+### Build presets (from M2, `CMakePresets.json`)
 - `debug`: the everyday build. AddressSanitizer + UBSan, verbose logging of imported calls, extra checks in the test harness.
 - `relwithdebinfo`: optimized and debuggable. For playtesting and profiling.
 - `release`: optimized. What other people build.
@@ -129,15 +129,15 @@ There are no separate dev and prod environments. The differences live in build p
 ### Branches
 - `main` always builds and passes its tests.
 - Work happens on short-lived feature branches (`feat/…`, `fix/…`, `docs/…`) merged through PRs, so CI runs.
-- Agents create or push a tag only when the maintainer asks for that one tag; asking an agent to publish a release covers that release's tag. The milestone tags up to `r11` stay as they are; releases replace them.
+- Agents never create or push tags. The milestone tags up to `r11` stay as they are; releases replace them.
 - No long-lived `develop` branch.
 
 ### Releases
 Releases are on the GitHub Releases page, versioned `vMAJOR.MINOR.PATCH` (`docs/releasing.md`). Until the game is playable from start to an ending (R7) the major version is 0.
 - A milestone ends with a minor release (`v0.N.0`) after its review. A patch release (`v0.N.1`) takes fixes that matter to players at any time. Both come from `main`; there are no release branches.
-- An agent prepares a release in a PR that adds the highlights `docs/releases/<tag>.md`. The maintainer pushes the release tag, or an agent the maintainer asked to publish that release. The release workflow builds the portable package and publishes the release.
+- An agent prepares a release in a PR that adds the highlights `docs/releases/<tag>.md`. Only the maintainer pushes the release tag. The release workflow builds the portable package and publishes the release.
 
-### CI
+### CI (from M2)
 GitHub Actions builds every preset, runs the unit tests and the privacy checks. CI never has game files, so tests that need the game run locally only and must skip cleanly when `BB_GAME_DIR` is unset.
 
 ### Data locations
