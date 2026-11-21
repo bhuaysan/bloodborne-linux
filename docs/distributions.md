@@ -71,5 +71,5 @@ tools/distro-build.sh ubuntu      # or fedora, debian, arch
 
 Needs podman and a network. It installs the packages in a fresh official container, configures the
 `release` preset with warnings as errors, builds, and runs the unit tests (tests that need the game
-skip). It prints the compiler and the build time. CI is meant to call this script once per
-distribution.
+skip). It prints the compiler and the build time. CI runs it for Ubuntu, Debian and Arch on every
+push to `main` (`.github/workflows/ci.yml`, job `distros`); Fedora is the main CI build.

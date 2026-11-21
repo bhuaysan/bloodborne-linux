@@ -1,6 +1,6 @@
 # Builds the CMake presets (all three on main, debug and release on PRs),
 # runs the unit tests and checks the commits of a PR (or a push to main) with
-# tools/privacy-check.sh.
+# tools/privacy-check.sh. On main it also builds on Ubuntu, Debian and Arch.
 #
 # CI never has the game: BB_GAME_DIR is unset and the checkout has no
 # local.env, so tests that need the game skip.
@@ -149,6 +149,27 @@ jobs:
       - name: Test (C++)
         if: matrix.preset != 'debug'
         run: ctest --preset "${{ matrix.preset }}" --no-tests=error
+
+  # The release preset built from source with the packages of other distributions
+  # (docs/distributions.md, tools/distro-build.sh): another GCC and other system headers than
+  # Fedora's. On main only, as it takes long; a PR that changes the build runs it by hand
+  # (tools/distro-build.sh <distro>).
+  distros:
+    name: distro (${{ matrix.distro }})
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [ubuntu, debian, arch]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build and test
+        run: tools/distro-build.sh --jobs 4 "${{ matrix.distro }}"
 
   privacy:
     runs-on: ubuntu-24.04

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the release preset from source on a distribution's own packages, in a fresh rootless
-# podman container, and runs the unit tests. CI calls this once per distribution.
+# podman container, and runs the unit tests. CI runs it on main (ci.yml, job distros).
 #
 # Usage: tools/distro-build.sh [--keep] [--jobs N] <fedora|ubuntu|debian|arch>
 #        tools/distro-build.sh --install-line <fedora|ubuntu|debian|arch>
