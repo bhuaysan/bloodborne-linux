@@ -35,6 +35,8 @@ To build the same folder from source, run `tools/package-portable.sh` (see Build
 
 ## Building
 
+Install lines for Fedora, Ubuntu 24.04, Debian 13, Arch and Bazzite are in [docs/distributions.md](docs/distributions.md).
+
 The runtime is C++20, built with CMake (3.27 or newer) and Ninja. The unit tests use GoogleTest, which the build finds as an installed package (on Fedora: `cmake ninja-build gtest-devel libasan libubsan`; on Debian and Ubuntu: `cmake ninja-build libgtest-dev`).
 
 ```sh

@@ -1,0 +1,41 @@
+# Build dependencies on Ubuntu 24.04 (apt). Its default GCC 13 is too old for the shader translator
+# (g++-14, used with CC=gcc-14 CXX=g++-14), its Vulkan headers are older than the code needs and it has
+# no SDL3 package: CMake fetches pinned copies (cmake/headers.cmake, cmake/sdl3.cmake).
+git
+ca-certificates
+cmake
+ninja-build
+g++-14
+pkg-config
+python3
+libgtest-dev
+spirv-headers
+spirv-tools
+libvulkan-dev
+glslang-tools
+mesa-vulkan-drivers
+llvm
+libavcodec-dev
+libavformat-dev
+libavutil-dev
+libswscale-dev
+libswresample-dev
+libfontconfig-dev
+libwayland-dev
+wayland-protocols
+libxkbcommon-dev
+libdecor-0-dev
+libx11-dev
+libxext-dev
+libxcursor-dev
+libxi-dev
+libxfixes-dev
+libxrandr-dev
+libxtst-dev
+libpipewire-0.3-dev
+libpulse-dev
+libasound2-dev
+libegl-dev
+libdrm-dev
+libgbm-dev
+libudev-dev

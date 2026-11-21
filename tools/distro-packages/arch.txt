@@ -1,0 +1,19 @@
+# Build dependencies on Arch Linux (pacman).
+git
+cmake
+ninja
+gcc
+pkgconf
+python
+gtest
+spirv-headers
+spirv-tools
+vulkan-headers
+vulkan-icd-loader
+glslang
+vulkan-swrast
+llvm
+sdl3
+ffmpeg
+fontconfig
+ttf-dejavu

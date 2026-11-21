@@ -1,0 +1,18 @@
+# Build dependencies on Fedora (dnf). tools/distro-build.sh installs exactly these; docs/distributions.md
+# shows the same line (tests/test_distro_packages.py compares them).
+git
+cmake
+ninja-build
+gcc-c++
+gtest-devel
+python3
+spirv-headers-devel
+spirv-tools
+vulkan-headers
+vulkan-loader-devel
+glslang
+mesa-vulkan-drivers
+llvm
+SDL3-devel
+ffmpeg-free-devel
+fontconfig-devel
