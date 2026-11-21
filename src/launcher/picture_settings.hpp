@@ -32,10 +32,9 @@ struct PictureChoices {
     bool operator==(const PictureChoices&) const = default;
 };
 
-// The field-of-view choices: the game's angle, a wider and a much wider one (#666).
-inline constexpr float fov_choices[] = {common::game_fov, 52.0f, 60.0f};
-// The anisotropy choices: the game's filtering, sharper and the sharpest (#658).
-inline constexpr unsigned anisotropy_choices[] = {0, 4, 16};
+// The texture filtering choices: the game's filtering (0), then the levels bb-run takes above
+// none (#658). A level set by hand that is not here keeps its place in the list.
+inline constexpr unsigned anisotropy_choices[] = {0, 2, 4, 8, 16};
 
 // What the page shows for `config`. Missing keys read as bb-run's defaults. An FSR setting that
 // no choice stands for (RCAS off, an odd attenuation) shows as the nearest choice.

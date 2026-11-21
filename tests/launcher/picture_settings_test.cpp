@@ -37,7 +37,7 @@ TEST(PictureSettings, TheDefaultsLeaveTheConfigAlone) {
 }
 
 TEST(PictureSettings, R11ChoicesGoToTheConfigAndComeBack) {
-    for (const float fov : fov_choices) {
+    for (const float fov : {bb::common::game_fov, bb::common::min_fov, 52.0f, bb::common::max_fov}) {
         for (const unsigned level : anisotropy_choices) {
             for (const bool blur : {false, true}) {
                 for (const bool fringes : {false, true}) {

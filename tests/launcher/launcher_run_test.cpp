@@ -295,8 +295,9 @@ TEST(LauncherRunGame, SeveralSearchHitsSaveAnOpenPicturePage) {
     EXPECT_EQ(slurp(dir.path() / "user/config.toml"), "fullscreen = true\n");
 }
 
-// The Picture and sound page with the pad alone: fullscreen, 60 frames and extra sharp are chosen
-// with the d-pad and A, and Back writes them to the config file.
+// The Picture and sound form with the pad alone: fullscreen, 60 frames and extra sharp are chosen
+// in their dropdowns with the d-pad and A (the resolution row has no dropdown in fullscreen), and
+// Back writes them to the config file.
 TEST(LauncherRun, ThePicturePageSavesItsChoicesOnBack) {
     const Dir dir;
     std::string script = to_picture;
@@ -312,16 +313,17 @@ TEST(LauncherRun, ThePicturePageSavesItsChoicesOnBack) {
               "fullscreen = true\nfsr = true\nrcas_attenuation = 0\nframe_rate = 60\n");
 }
 
-// The second sentence with the pad alone: a much wider view, the sharpest textures, no motion blur
-// and no colour fringes (R11, #668).
+// The rest of the form with the pad alone: the view slider moves with right alone, then the
+// sharpest textures, no motion blur and no colour fringes (R11, #668, #746).
 TEST(LauncherRun, ThePicturePageSavesTheImageQualityChoices) {
     const Dir dir;
     std::string script = to_picture;
-    for (const char* step : {"down", "down", "down", "down",         // mode -> view
-                             "accept", "down", "down", "accept",     // the game's -> much wider
-                             "down", "accept", "down", "down", "accept",  // -> the sharpest
-                             "down", "accept", "down", "accept",     // no motion blur
-                             "down", "accept", "down", "accept"}) {  // no colour fringes
+    for (const char* step : {"down", "down", "down", "down",  // mode -> field of view
+                             "right", "right", "right", "right", "right", "right", "right", "right",
+                             "right",                                          // 43 -> 52 degrees
+                             "down", "accept", "down", "down", "down", "down", "accept",  // 16x
+                             "down", "accept",                                 // no motion blur
+                             "down", "accept"}) {                              // no colour fringes
         script += std::format("press {}\nwait 2\n", step);
     }
     const char* keep = std::getenv("BB_LAUNCHER_TEST_SHOT");  // a shot to look at, if asked for
@@ -330,7 +332,7 @@ TEST(LauncherRun, ThePicturePageSavesTheImageQualityChoices) {
     const auto r = run_script(dir, script);
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_EQ(slurp(dir.path() / "user/config.toml"),
-              "anisotropy = 16\nmotion_blur = false\nchromatic_aberration = false\nfov = 60\n");
+              "anisotropy = 16\nmotion_blur = false\nchromatic_aberration = false\nfov = 52\n");
 }
 
 TEST(LauncherRun, ABadScriptEndsWithAMessage) {

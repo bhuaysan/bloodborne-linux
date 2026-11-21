@@ -24,6 +24,7 @@ void apply_theme(ImGuiStyle& style) {
     style.PopupBorderSize = 1;
     style.FrameRounding = style.PopupRounding = style.ChildRounding = style.WindowRounding = 0;
     style.ScrollbarRounding = style.GrabRounding = 0;
+    style.FramePadding = ImVec2(8, 5);
     ImVec4* c = style.Colors;
     c[ImGuiCol_Text] = ImGui::ColorConvertU32ToFloat4(colour::text);
     c[ImGuiCol_TextDisabled] = ImGui::ColorConvertU32ToFloat4(colour::dim);
@@ -38,7 +39,10 @@ void apply_theme(ImGuiStyle& style) {
     c[ImGuiCol_ButtonHovered] = c[ImGuiCol_Header] = rgba(214, 160, 72, 0.28f);
     c[ImGuiCol_ButtonActive] = c[ImGuiCol_HeaderHovered] = rgba(214, 160, 72, 0.38f);
     c[ImGuiCol_HeaderActive] = rgba(214, 160, 72, 0.48f);
-    c[ImGuiCol_CheckMark] = c[ImGuiCol_NavCursor] = ImGui::ColorConvertU32ToFloat4(colour::gold);
+    c[ImGuiCol_CheckMark] = c[ImGuiCol_NavCursor] = c[ImGuiCol_SliderGrab] =
+        ImGui::ColorConvertU32ToFloat4(colour::gold);
+    c[ImGuiCol_SliderGrabActive] = ImGui::ColorConvertU32ToFloat4(colour::chosen);
+    c[ImGuiCol_CheckboxSelectedBg] = rgba(214, 160, 72, 0.22f);
     c[ImGuiCol_TextSelectedBg] = rgba(214, 160, 72, 0.35f);
     c[ImGuiCol_ScrollbarBg] = rgba(0, 0, 0, 0);
     c[ImGuiCol_ScrollbarGrab] = rgba(205, 196, 178, 0.25f);

@@ -49,7 +49,7 @@ A small window with a fixed size: the game's title picture at the top, fading in
 - **Window title:** the game's title from `sce_sys/param.sfo`, read at run time, plus "(bloodborne-linux)".
 - **Entries:** centred text without a frame. The focused entry, or the one under the mouse, is light, with an amber glow behind it: an ellipse of vertex colours that fades out, drawn with `ImDrawList`.
 - **Lines and hints:** one-pixel lines that fade out at both ends, under the header and above the hints for the controller's buttons at the bottom right (Cross Select, Circle Back). The button symbols are drawn from circles and lines, so no font needs their glyphs. The Back hint is also the mouse's Back button.
-- **Colours:** near-black, bone-white text, gold titles, the amber glow; warnings amber, errors red. ImGui's own widgets on the pages (lists, choices, text fields) get the same colours from the theme in `widgets.cpp`. The choices of Picture and sound look like underlined words of their sentence.
+- **Colours:** near-black, bone-white text, gold titles, the amber glow; warnings amber, errors red. ImGui's own widgets on the pages (lists, dropdowns, sliders, checkboxes, text fields) get the same colours from the theme in `widgets.cpp`.
 - **Font:** a serif font of the system, found with fontconfig at run time: EB Garamond, Cormorant Garamond, else what fontconfig matches to "serif" (Noto Serif on Fedora), with ImGui's built-in font as the fallback. A Garamond comes closest to the game's menus. We don't copy a font into the repository: the OFL fonts in shadPS4's tree are not on the license allow-list (`docs/source-policy.md`).
 - **Language:** English and German, chosen from the system locale, with English as the fallback. The main screen and the words every page shares live in one table per language (`src/launcher/text.cpp`). Each page keeps its own English and German strings in its own `page_*.cpp`, so pages added in parallel don't edit a shared table. The `Page` interface (draw, on_close) is documented in `src/launcher/page.hpp`. The scripted test input (`BB_LAUNCHER_SCRIPT`) is described in "Code layout and test input" below.
 
@@ -94,29 +94,36 @@ The folder and the controller moved here from the main screen's old status line,
 
 ## Picture and sound
 
-The settings read as two sentences with choices in them, not as a form:
+A settings form like the ones in other games: one row per setting, its name on the left and its control on the right, and the focused row lit by an amber band. Dropdowns for the lists, a slider for the field of view and checkboxes for the two effects. R9 and R11 had two sentences with choices in them instead; the maintainer asked for a form like the settings screens of other games on 2026-11-21 (#746).
 
-> I play in **[a window | fullscreen]** at **[1280 × 720 | 1920 × 1080 | 2560 × 1440 | …]**, at **[30 | 60 | 120]** frames per second, with a **[normal | sharpened | extra sharp]** picture.
->
-> I see it with **[the game's view | a wider view | a much wider view]**, **[textures as sharp as in the game | sharper distant textures | the sharpest distant textures]**, **[motion blur | no motion blur]** and **[colour fringes at the edges | no colour fringes]**.
+| Row | Control |
+|---|---|
+| Display mode | dropdown: Window, Fullscreen |
+| Resolution | dropdown; in fullscreen the text "Screen size" |
+| Frame rate | dropdown: 30, 60, 120, 144 FPS |
+| Sharpness | dropdown: Normal, Sharpened, Extra sharp |
+| Field of view | slider in whole degrees from 30° to 65°, the angle shown beside it; the game's is 43° |
+| Texture filtering | dropdown: As in the game, 2×, 4×, 8×, 16× |
+| Motion blur | checkbox |
+| Colour fringes | checkbox |
 
-The sentences say what the player gets, without technical terms. The second one holds the options of R11 (image quality). Its default choices are the game's own picture, and a choice the player left alone writes nothing, so the defaults leave the config file as it was. The mapping onto the config file from #577 (and so onto `bb-run`'s options):
+With the pad, up and down move between the rows, A opens a dropdown or flips a checkbox, and left and right move the slider directly, as in a game's settings. The defaults are the game's own picture, and a setting the player left alone writes nothing, so they leave the config file as it was. The mapping onto the config file from #577 (and so onto `bb-run`'s options):
 
 | Choice | Config / `bb-run` |
 |---|---|
-| a window / fullscreen | `--fullscreen` (borderless, at the display's size) |
-| resolution | `--window-size WxH`. The list holds the common 16:9 sizes up to the display's size, and on a 21:9 or 32:9 display (width at least twice, or three times, the height) the wide sizes of that shape that fit it (2560 × 1080 and 3440 × 1440, or 5120 × 1440). With fullscreen the sentence reads "at your screen's size" instead of a choice |
+| Window / Fullscreen | `--fullscreen` (borderless, at the display's size) |
+| resolution | `--window-size WxH`. The list holds the common 16:9 sizes up to the display's size, and on a 21:9 or 32:9 display (width at least twice, or three times, the height) the wide sizes of that shape that fit it (2560 × 1080 and 3440 × 1440, or 5120 × 1440). With fullscreen the row reads "Screen size" instead of a dropdown |
 | a wide size (window), or fullscreen on a 21:9 or 32:9 display | also `--resolution WxH`, the config key `resolution`: the game renders at the wide size (#667). In fullscreen it is the smallest wide size of the display's shape that is at least as tall as the display, else the largest, so FSR only scales up. A 16:9 choice removes a wide `resolution` again; a 16:9 `resolution` set by hand stays |
-| 30 / 60 / 120 | `--frame-rate` (the rates of `bb::common::frame_rates`) |
-| normal | no FSR |
-| sharpened | `--fsr`, RCAS at its default attenuation (0.25) |
-| extra sharp | `--fsr --rcas-attenuation 0` |
-| the game's / a wider / a much wider view | `--fov`: no key (43°), 52°, 60° (#666). Another value in the file shows as its degrees |
-| textures as in the game / sharper / the sharpest | `--anisotropy`: no key (the game's filtering), 4, 16 (#658). Another level shows as its factor |
-| motion blur / no motion blur | `motion_blur = true / false` (`--no-motion-blur`, #665) |
-| colour fringes / no colour fringes | `chromatic_aberration = true / false` (`--no-chromatic-aberration`, #665) |
+| frame rate | `--frame-rate` (the rates of `bb::common::frame_rates`) |
+| Normal | no FSR |
+| Sharpened | `--fsr`, RCAS at its default attenuation (0.25) |
+| Extra sharp | `--fsr --rcas-attenuation 0` |
+| field of view | `--fov`: no key at 43°, else the degrees (#666). A fractional angle in the file shows rounded and stays until the slider moves |
+| As in the game / 2× … 16× | `--anisotropy`: no key (the game's filtering), else the level (#658). A level set by hand (1×) is added to the list |
+| Motion blur on / off | `motion_blur = true / false` (`--no-motion-blur`, #665) |
+| Colour fringes on / off | `chromatic_aberration = true / false` (`--no-chromatic-aberration`, #665) |
 
-The strengths of motion blur and chromatic aberration (`--motion-blur-strength`, `--chromatic-aberration-strength`) have no choice; a strength in the file stays. Options that the shadow and draw-distance issues of R11 add get their place in the second sentence in their own issue. The two sentences need more than the page's height at a small display scale, so the page scrolls, and gamepad navigation scrolls it to the focused choice.
+The strengths of motion blur and chromatic aberration (`--motion-blur-strength`, `--chromatic-aberration-strength`) have no choice; a strength in the file stays. Options that the shadow and draw-distance issues of R11 add get a row of their own in their own issue. The rows fit the page at the design's scale; at a small one the form scrolls, and gamepad navigation scrolls it to the focused row.
 
 Sound gets choices once `bb-run` has any (output device, volume). Until then the page is called "Picture and sound" anyway, so the menu doesn't change later.
 
