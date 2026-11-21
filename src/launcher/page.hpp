@@ -1,5 +1,5 @@
 // A page of the launcher (Settings and the pages under it, Saves): it fills the window under its
-// title, in the same window. The app draws the frame (title, lines, button hints), opens the page
+// title, in the same window. The app draws the frame (title, lines, Back entry), opens the page
 // an action asks for and calls on_close when the page is left.
 #pragma once
 

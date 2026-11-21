@@ -644,12 +644,14 @@ private:
                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
         Action action = Action::none;
         if (!pages_.empty()) {
+            const std::size_t open = pages_.size();
             action = draw_page(ctx);
             // Back closes an open choice list or prompt first, and the page only on the next press.
             const bool popup_was_open = popup_open_;
             popup_open_ = ImGui::IsPopupOpen(ImGuiID(0), ImGuiPopupFlags_AnyPopupId) ||
                           prompt_ != Prompt::none;  // a prompt opens late in its first frame
-            if (!popup_was_open && !popup_open_ &&
+            // A click on the Back entry in the same frame has closed the page already.
+            if (!popup_was_open && !popup_open_ && pages_.size() == open &&
                 (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight))) {
                 close_page();
             }
