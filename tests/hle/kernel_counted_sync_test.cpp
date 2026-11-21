@@ -11,6 +11,7 @@
 
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
+#include "hle/kernel/counted_sync.hpp"
 #include "loader/dynamic.hpp"
 #include "support/hle.hpp"
 
@@ -31,6 +32,16 @@ auto* const post = fn<std::int32_t(std::uint64_t, std::int32_t)>("4czppHBiriw");
 
 constexpr int esrch = 3, eacces = 13, ebusy = 16, einval = 22, etimedout = 60,
               enametoolong = 63;
+
+// Waits until `n` requests are queued on `h`: a started thread may not have queued its request
+// yet, and a fixed sleep is too short on a loaded machine.
+void until_waiting(std::uint64_t h, std::size_t n) {
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (bb::hle::kernel::counted_sync_waiters(h) != n) {
+        ASSERT_LT(std::chrono::steady_clock::now(), deadline) << "waiting for " << n << " requests";
+        std::this_thread::sleep_for(1ms);
+    }
+}
 
 std::uint64_t make(std::int32_t initial, std::int32_t max, std::int32_t attribute = 1) {
     std::uint64_t handle = 0;
@@ -113,7 +124,7 @@ TEST(KernelCountedSync, PostWakesWaitersInTheOrderOfTheirRequests) {
             EXPECT_EQ(wait(h, needs[i], nullptr), 0);
             granted.add(i);
         });
-        std::this_thread::sleep_for(20ms);  // queue the requests in order
+        until_waiting(h, i + 1);  // queue the requests in order
     }
     // One unit doesn't cover the head's request, so the later ones wait behind it.
     EXPECT_EQ(post(h, 1), 0);
@@ -137,21 +148,17 @@ TEST(KernelCountedSync, PostWakesWaitersInTheOrderOfTheirRequests) {
 TEST(KernelCountedSync, TimedOutHeadLetsTheNextRequestThrough) {
     const std::uint64_t h = make(1, 5);
     std::atomic<int> result{-1};
-    const std::uint32_t timeout = 200000;
+    const std::uint32_t timeout = 1'000'000;
     std::atomic<bool> head_done{false};
     std::thread head([&] {
         EXPECT_EQ(wait(h, 3, &timeout), sce_error(etimedout));
         head_done = true;
     });
-    // The queued head holds back a request that the count would cover. Until the head is queued,
-    // try_wait takes the count: give it back and look again, or next would wait for good.
-    while (try_wait(h, 1) == 0) {
-        EXPECT_EQ(post(h, 1), 0);
-        std::this_thread::sleep_for(1ms);
-    }
+    // The queued head holds back a request that the count would cover.
+    until_waiting(h, 1);
     EXPECT_EQ(try_wait(h, 1), sce_error(ebusy));
     std::thread next([&] { result = wait(h, 1, nullptr); });
-    std::this_thread::sleep_for(20ms);
+    until_waiting(h, 2);
     EXPECT_FALSE(head_done);
     EXPECT_EQ(result, -1);
     head.join();
@@ -163,7 +170,7 @@ TEST(KernelCountedSync, TimedOutHeadLetsTheNextRequestThrough) {
 TEST(KernelCountedSync, DestroyWakesWaitersWithEacces) {
     const std::uint64_t h = make(0, 1);
     std::thread waiter([&] { EXPECT_EQ(wait(h, 1, nullptr), sce_error(eacces)); });
-    std::this_thread::sleep_for(20ms);
+    until_waiting(h, 1);
     EXPECT_EQ(destroy(h), 0);
     waiter.join();
 }

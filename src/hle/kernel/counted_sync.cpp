@@ -15,6 +15,7 @@
 #include "hle/handle_table.hpp"
 #include "hle/hle.hpp"
 #include "hle/kernel/abi.hpp"
+#include "hle/kernel/counted_sync.hpp"
 
 namespace bb::hle::kernel {
 namespace {
@@ -87,6 +88,11 @@ public:
         count_ += n;
         serve();
         return 0;
+    }
+
+    std::size_t waiters() {
+        const std::lock_guard lock(mutex_);
+        return queue_.size();
     }
 
     void close() {
@@ -187,6 +193,12 @@ std::int32_t counted_post(std::uint64_t handle, std::int32_t n) {
 }
 
 }  // namespace
+
+std::size_t counted_sync_waiters(std::uint64_t handle) {
+    const auto object = find(handle);
+    return object ? object->waiters() : 0;
+}
+
 }  // namespace bb::hle::kernel
 
 namespace k = bb::hle::kernel;
