@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -12,7 +13,20 @@
 
 namespace bb::launcher {
 
-enum class Sharpness { normal, sharpened, extra_sharp };
+// The sharpness slider: 0 is no FSR (the frame scaled bilinearly, bb-run's default), 1 FSR without
+// RCAS, and 2 to 10 FSR with RCAS from 2 stops of attenuation down to 0 (the sharpest) in steps of
+// a quarter stop. 9 is RCAS at bb-run's default attenuation.
+inline constexpr int sharpness_off = 0;
+inline constexpr int sharpness_no_rcas = 1;
+inline constexpr int max_sharpness = 10;
+inline constexpr float sharpness_stop = 0.25f;
+inline constexpr float default_rcas_attenuation = 0.25f;  // bb-run's, with --fsr alone
+inline constexpr float attenuation_of(int sharpness) {
+    return static_cast<float>(max_sharpness - sharpness) * sharpness_stop;
+}
+
+// The post effect sliders, in percent of the game's strength: 0 switches the effect off.
+inline constexpr int full_effect = 100;
 
 using Size = std::pair<unsigned, unsigned>;
 
@@ -20,15 +34,18 @@ struct PictureChoices {
     bool fullscreen = false;
     Size size{1280, 720};
     unsigned frame_rate = 30;  // 30, 60, 120 or 144
-    Sharpness sharpness = Sharpness::normal;
+    int sharpness = sharpness_off;  // 0 to max_sharpness, see above
     // The wide frame buffer (resolution, common::wide_resolutions) the game renders at; nothing
     // for bb-run's 16:9 frame. The page sets it from the window size or, in fullscreen, from the
     // display's shape (wide_frame).
     std::optional<Size> wide;
     unsigned anisotropy = 0;  // 0: the game's filtering, else common::valid_anisotropy
     float fov = common::game_fov;
-    bool motion_blur = true;
-    bool chromatic_aberration = true;
+    int motion_blur = full_effect;           // percent, 0 is off
+    int chromatic_aberration = full_effect;  // percent, 0 is off
+    common::PresentMode present_mode = common::PresentMode::mailbox;  // bb-run's default
+    std::string device;   // a Vulkan device's name; empty for bb-run's choice
+    std::string display;  // an SDL display's name; empty for the primary display
     bool operator==(const PictureChoices&) const = default;
 };
 
@@ -36,8 +53,25 @@ struct PictureChoices {
 // none (#658). A level set by hand that is not here is added at the end of the list.
 inline constexpr unsigned anisotropy_choices[] = {0, 2, 4, 8, 16};
 
-// What the page shows for `config`. Missing keys read as bb-run's defaults. An FSR setting that
-// no choice stands for (RCAS off, an odd attenuation) shows as the nearest choice.
+// The percent a post effect's slider shows for its two keys.
+inline int effect_percent(std::optional<bool> on, std::optional<float> strength) {
+    if (!on.value_or(true)) {
+        return 0;
+    }
+    return static_cast<int>(std::lround(strength.value_or(1.0f) * full_effect));
+}
+
+// Puts a moved post effect slider into its two keys: 0 % switches the effect off, 100 % is the
+// game's strength (no strength key), anything between is that strength.
+inline void apply_effect(int percent, std::optional<bool>& on, std::optional<float>& strength) {
+    on = percent > 0;
+    strength = percent > 0 && percent < full_effect
+                   ? std::optional(static_cast<float>(percent) / full_effect)
+                   : std::nullopt;
+}
+
+// What the page shows for `config`. Missing keys read as bb-run's defaults. A value between the
+// slider's steps (an odd attenuation or strength) shows as the nearest step.
 inline PictureChoices choices_from_config(const common::Config& config) {
     PictureChoices c;
     c.fullscreen = config.fullscreen.value_or(false);
@@ -52,13 +86,21 @@ inline PictureChoices choices_from_config(const common::Config& config) {
     }
     c.anisotropy = config.anisotropy.value_or(0);
     c.fov = config.fov.value_or(common::game_fov);
-    c.motion_blur = config.motion_blur.value_or(true);
-    c.chromatic_aberration = config.chromatic_aberration.value_or(true);
-    if (config.fsr.value_or(false) && config.rcas.value_or(true)) {
-        c.sharpness = config.rcas_attenuation && *config.rcas_attenuation == 0.0f
-                          ? Sharpness::extra_sharp
-                          : Sharpness::sharpened;
+    c.motion_blur = effect_percent(config.motion_blur, config.motion_blur_strength);
+    c.chromatic_aberration =
+        effect_percent(config.chromatic_aberration, config.chromatic_aberration_strength);
+    if (config.fsr.value_or(false)) {
+        if (!config.rcas.value_or(true)) {
+            c.sharpness = sharpness_no_rcas;
+        } else {
+            const float stops = config.rcas_attenuation.value_or(default_rcas_attenuation);
+            const int level = max_sharpness - static_cast<int>(std::lround(stops / sharpness_stop));
+            c.sharpness = std::clamp(level, sharpness_no_rcas + 1, max_sharpness);
+        }
     }
+    c.present_mode = config.present_mode.value_or(common::PresentMode::mailbox);
+    c.device = config.device.value_or("");
+    c.display = config.display.value_or("");
     return c;
 }
 
@@ -77,12 +119,15 @@ inline void apply_choices(common::Config& config, const PictureChoices& before,
         config.frame_rate = after.frame_rate;
     }
     if (after.sharpness != before.sharpness) {
-        // RCAS keys without fsr are an error in bb-run, so "normal" removes them too.
+        // RCAS keys without fsr are an error in bb-run, so "off" removes them too.
         config.rcas.reset();
         config.rcas_attenuation.reset();
-        config.fsr = after.sharpness != Sharpness::normal;
-        if (after.sharpness == Sharpness::extra_sharp) {
-            config.rcas_attenuation = 0.0f;
+        config.fsr = after.sharpness != sharpness_off;
+        if (after.sharpness == sharpness_no_rcas) {
+            config.rcas = false;
+        } else if (after.sharpness > sharpness_no_rcas &&
+                   attenuation_of(after.sharpness) != default_rcas_attenuation) {
+            config.rcas_attenuation = attenuation_of(after.sharpness);
         }
     }
     if (after.wide != before.wide) {
@@ -95,10 +140,25 @@ inline void apply_choices(common::Config& config, const PictureChoices& before,
         config.fov = after.fov == common::game_fov ? std::nullopt : std::optional(after.fov);
     }
     if (after.motion_blur != before.motion_blur) {
-        config.motion_blur = after.motion_blur;
+        apply_effect(after.motion_blur, config.motion_blur, config.motion_blur_strength);
     }
     if (after.chromatic_aberration != before.chromatic_aberration) {
-        config.chromatic_aberration = after.chromatic_aberration;
+        apply_effect(after.chromatic_aberration, config.chromatic_aberration,
+                     config.chromatic_aberration_strength);
+    }
+    if (after.present_mode != before.present_mode) {
+        config.present_mode = after.present_mode == common::PresentMode::mailbox
+                                  ? std::nullopt
+                                  : std::optional(after.present_mode);
+    }
+    const auto name = [](const std::string& n) {
+        return n.empty() ? std::nullopt : std::optional(n);
+    };
+    if (after.device != before.device) {
+        config.device = name(after.device);
+    }
+    if (after.display != before.display) {
+        config.display = name(after.display);
     }
 }
 

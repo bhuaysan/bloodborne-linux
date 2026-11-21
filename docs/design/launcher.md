@@ -92,38 +92,45 @@ The folder and the controller moved here from the main screen's old status line,
 
 ## Picture and sound
 
-A settings form like the ones in other games: one row per setting, its name on the left and its control on the right, and the focused row lit by an amber band. Dropdowns for the lists, a slider for the field of view and checkboxes for the two effects. R9 and R11 had two sentences with choices in them instead; the maintainer asked for a form like the settings screens of other games on 2026-11-21 (#746).
+A settings form like the ones in other games: one row per setting, its name on the left and its control on the right, and the focused row lit by an amber band. Dropdowns for the lists and sliders for the values. R9 and R11 had two sentences with choices in them instead; the maintainer asked for a form like the settings screens of other games on 2026-11-21 (#746), and on the same day for sliders in place of the effect checkboxes and the sharpness dropdown, and for rows for VSync, the graphics card and the monitor (#749).
 
 | Row | Control |
 |---|---|
 | Display mode | dropdown: Window, Fullscreen |
+| Monitor | dropdown: Main display, then the displays SDL lists, by name |
 | Resolution | dropdown; in fullscreen the text "Screen size" |
 | Frame rate | dropdown: 30, 60, 120, 144 FPS |
-| Sharpness | dropdown: Normal, Sharpened, Extra sharp |
-| Field of view | slider in whole degrees from 30° to 65°, drawn as a thin line with a diamond and a small tick at the game's 43°; the angle stands beside it, 43° reads "43° (default)" |
+| VSync | dropdown: Triple buffering, On, Off |
+| Graphics card | dropdown: Automatic, then the Vulkan devices by name |
+| Sharpness | slider: Off, 1 to 10 |
+| Field of view | slider in whole degrees from 30° to 65°; 43° reads "43° (default)" |
 | Texture filtering | dropdown: Default (the game's own filtering), 2×, 4×, 8×, 16× |
-| Motion blur | checkbox |
-| Colour fringes | checkbox |
+| Motion blur | slider from Off to 100 % |
+| Colour fringes | slider from Off to 100 % |
 
-With the pad, up and down move between the rows, A opens a dropdown or flips a checkbox, and left and right move the slider directly, as in a game's settings. The defaults are the game's own picture, and a setting the player left alone writes nothing, so they leave the config file as it was. The mapping onto the config file from #577 (and so onto `bb-run`'s options):
+Every slider is a thin line with a diamond and a small tick at the default, with its value in a column of its own to the right, as wide as the widest value, so all lines have the same length. Eleven rows of 40 logical pixels fill the page; at a small scale the form scrolls, and gamepad navigation scrolls it to the focused row.
+
+With the pad, up and down move between the rows, A opens a dropdown, and left and right move a slider directly, as in a game's settings: a degree, a step of sharpness or 5 %. The mouse drags a slider to any whole value. The defaults are the game's own picture and bb-run's defaults, and a setting the player left alone writes nothing, so they leave the config file as it was. A value in the file that lies between the slider's steps shows as the nearest step and stays until the slider moves. The mapping onto the config file from #577 (and so onto `bb-run`'s options):
 
 | Choice | Config / `bb-run` |
 |---|---|
 | Window / Fullscreen | `--fullscreen` (borderless, at the display's size) |
+| monitor | `display`, `--display NAME` (#748): the window opens centred on it and fullscreen covers it. No key for Main display. The resolution list and the wide frame below follow the chosen display's size. A display named in the file that is no longer connected stays at the end of the list, and bb-run takes the main display with a warning |
 | resolution | `--window-size WxH`. The list holds the common 16:9 sizes up to the display's size, and on a 21:9 or 32:9 display (width at least twice, or three times, the height) the wide sizes of that shape that fit it (2560 × 1080 and 3440 × 1440, or 5120 × 1440). With fullscreen the row reads "Screen size" instead of a dropdown |
 | a wide size (window), or fullscreen on a 21:9 or 32:9 display | also `--resolution WxH`, the config key `resolution`: the game renders at the wide size (#667). In fullscreen it is the smallest wide size of the display's shape that is at least as tall as the display, else the largest, so FSR only scales up. A 16:9 choice removes a wide `resolution` again; a 16:9 `resolution` set by hand stays |
 | frame rate | `--frame-rate` (the rates of `bb::common::frame_rates`) |
-| Normal | no FSR |
-| Sharpened | `--fsr`, RCAS at its default attenuation (0.25) |
-| Extra sharp | `--fsr --rcas-attenuation 0` |
-| field of view | `--fov`: no key at 43°, else the degrees (#666). A fractional angle in the file shows rounded and stays until the slider moves |
+| VSync | `present_mode`, `--present-mode` (#748): Triple buffering is mailbox, bb-run's default, so no key; On is fifo, Off is immediate (it may tear) |
+| graphics card | `device`, `--device NAME` (#748): no key for Automatic (bb-run takes a discrete GPU first). The list leaves out CPU devices such as llvmpipe: the game runs out of device memory on them. A card named in the file that is gone stays at the end of the list, and bb-run takes the default with a warning |
+| sharpness Off | no FSR: the frame is scaled bilinearly |
+| sharpness 1 | `--fsr --no-rcas`: FSR without its sharpening |
+| sharpness 2 to 10 | `--fsr` with RCAS at 2 stops of attenuation down to 0 (the sharpest) in quarter stops; 9 is RCAS's default of 0.25 stops and writes no `rcas_attenuation` |
+| field of view | `--fov`: no key at 43°, else the degrees (#666) |
 | Default / 2× … 16× | `--anisotropy`: no key (the game's filtering), else the level (#658). A level set by hand (1×) is added to the list |
-| Motion blur on / off | `motion_blur = true / false` (`--no-motion-blur`, #665) |
-| Colour fringes on / off | `chromatic_aberration = true / false` (`--no-chromatic-aberration`, #665) |
+| motion blur, colour fringes | Off writes `motion_blur = false` (`--no-motion-blur`, #665) and no strength; above 0 `motion_blur = true` and `motion_blur_strength` = the percent / 100; 100 % no strength key, the game's. The same for `chromatic_aberration` and `chromatic_aberration_strength` |
 
-The strengths of motion blur and chromatic aberration (`--motion-blur-strength`, `--chromatic-aberration-strength`) have no choice; a strength in the file stays. Options that the shadow and draw-distance issues of R11 add get a row of their own in their own issue. The rows fit the page at the design's scale; at a small one the form scrolls, and gamepad navigation scrolls it to the focused row.
+The sharpness slider counts steps instead of showing stops of attenuation, which mean nothing to a player, and puts FSR without RCAS below the RCAS steps because it is the softer of the two. The device and display names are stored whole; bb-run matches them as a part of the name, ignoring case, so the name of an identical second card or monitor picks the first one. Options that the shadow and draw-distance issues of R11 add get a row of their own in their own issue.
 
-Sound gets choices once `bb-run` has any (output device, volume). Until then the page is called "Picture and sound" anyway, so the menu doesn't change later.
+Sound gets a row once `bb-run` has a choice for it: the output device (#750), no volume, which the desktop's mixer has. Until then the page is called "Picture and sound" anyway, so the menu doesn't change later.
 
 Changes are saved when the page closes. There is no Apply button.
 

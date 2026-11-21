@@ -60,4 +60,8 @@ inline ImU32 status_colour(StatusKind kind) {
 // its end, the part the player recognises).
 std::string ellipsize_left(const std::string& text, float max_width);
 
+// `text` shortened from the right with "..." until it fits `max_width` (a device name keeps its
+// start).
+std::string ellipsize_right(const std::string& text, float max_width);
+
 }  // namespace bb::launcher

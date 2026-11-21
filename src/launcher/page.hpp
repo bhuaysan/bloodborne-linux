@@ -48,6 +48,9 @@ std::unique_ptr<Page> make_controller_page();
 std::unique_ptr<Page> make_picture_page();
 std::unique_ptr<Page> make_saves_page();
 
+// The strings of the Picture and sound page in `lang`, for the test that every one is there.
+std::vector<const char*> picture_strings(Lang lang);
+
 // The first-start search (page_find.cpp): its strings, and the list of several folders that
 // passed the check. `chosen` is called from draw() when the player picks one.
 struct FindText {

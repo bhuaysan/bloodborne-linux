@@ -14,12 +14,15 @@ TEST(PictureSettings, AnEmptyConfigShowsBbRunsDefaults) {
     EXPECT_FALSE(c.fullscreen);
     EXPECT_EQ(c.size, (Size{1280, 720}));
     EXPECT_EQ(c.frame_rate, 30u);
-    EXPECT_EQ(c.sharpness, Sharpness::normal);
+    EXPECT_EQ(c.sharpness, sharpness_off);
     EXPECT_FALSE(c.wide);
     EXPECT_EQ(c.anisotropy, 0u);
     EXPECT_EQ(c.fov, 43.0f);
-    EXPECT_TRUE(c.motion_blur);
-    EXPECT_TRUE(c.chromatic_aberration);
+    EXPECT_EQ(c.motion_blur, 100);
+    EXPECT_EQ(c.chromatic_aberration, 100);
+    EXPECT_EQ(c.present_mode, bb::common::PresentMode::mailbox);
+    EXPECT_EQ(c.device, "");
+    EXPECT_EQ(c.display, "");
 }
 
 // The defaults write nothing: the page leaves the file as it was.
@@ -39,8 +42,8 @@ TEST(PictureSettings, TheDefaultsLeaveTheConfigAlone) {
 TEST(PictureSettings, R11ChoicesGoToTheConfigAndComeBack) {
     for (const float fov : {bb::common::game_fov, bb::common::min_fov, 52.0f, bb::common::max_fov}) {
         for (const unsigned level : anisotropy_choices) {
-            for (const bool blur : {false, true}) {
-                for (const bool fringes : {false, true}) {
+            for (const int blur : {0, 35, 100}) {
+                for (const int fringes : {0, 5, 100}) {
                     PictureChoices want;
                     want.fov = fov;
                     want.anisotropy = level;
@@ -65,8 +68,8 @@ TEST(PictureSettings, MapsTheR11ChoicesOntoTheirKeys) {
     PictureChoices c = base;
     c.fov = 60.0f;
     c.anisotropy = 16;
-    c.motion_blur = false;
-    c.chromatic_aberration = false;
+    c.motion_blur = 0;
+    c.chromatic_aberration = 0;
     apply_choices(config, base, c);
     EXPECT_EQ(config.fov, 60.0f);
     EXPECT_EQ(config.anisotropy, 16u);
@@ -78,6 +81,58 @@ TEST(PictureSettings, MapsTheR11ChoicesOntoTheirKeys) {
     EXPECT_FALSE(config.anisotropy);
     EXPECT_EQ(config.motion_blur, true);
     EXPECT_EQ(config.chromatic_aberration, true);
+    EXPECT_FALSE(config.motion_blur_strength);  // 100 % is the game's strength
+    EXPECT_FALSE(config.chromatic_aberration_strength);
+}
+
+TEST(PictureSettings, MapsTheEffectSlidersOntoStrengths) {
+    Config config;
+    const PictureChoices base;
+    PictureChoices c = base;
+    c.motion_blur = 35;
+    c.chromatic_aberration = 0;
+    apply_choices(config, base, c);
+    EXPECT_EQ(config.motion_blur, true);
+    EXPECT_EQ(config.motion_blur_strength, 0.35f);
+    EXPECT_EQ(config.chromatic_aberration, false);
+    EXPECT_FALSE(config.chromatic_aberration_strength);
+    EXPECT_EQ(bb::common::format_config(config),
+              "motion_blur = true\nmotion_blur_strength = 0.35\nchromatic_aberration = false\n");
+    // Off, then on again at a strength: the old strength doesn't come back.
+    PictureChoices d = c;
+    d.motion_blur = 0;
+    apply_choices(config, c, d);
+    EXPECT_EQ(config.motion_blur, false);
+    EXPECT_FALSE(config.motion_blur_strength);
+    // A strength of 0 with the effect on reads as off.
+    Config zero;
+    zero.motion_blur_strength = 0.0f;
+    EXPECT_EQ(choices_from_config(zero).motion_blur, 0);
+}
+
+TEST(PictureSettings, MapsSyncDeviceAndDisplay) {
+    Config config;
+    const PictureChoices base;
+    PictureChoices c = base;
+    c.present_mode = bb::common::PresentMode::fifo;
+    c.device = "AMD Radeon RX 7800 XT (RADV NAVI32)";
+    c.display = "Lenovo Group Limited C27-35";
+    apply_choices(config, base, c);
+    EXPECT_EQ(config.present_mode, bb::common::PresentMode::fifo);
+    EXPECT_EQ(config.device, "AMD Radeon RX 7800 XT (RADV NAVI32)");
+    EXPECT_EQ(config.display, "Lenovo Group Limited C27-35");
+    EXPECT_EQ(choices_from_config(config), c);
+    // The defaults again remove the keys.
+    apply_choices(config, c, base);
+    EXPECT_EQ(config, Config{});
+    // A card or monitor named in the file that is gone stays until the player picks another.
+    config.device = "Gone";
+    const PictureChoices gone = choices_from_config(config);
+    EXPECT_EQ(gone.device, "Gone");
+    PictureChoices other = gone;
+    other.frame_rate = 60;
+    apply_choices(config, gone, other);
+    EXPECT_EQ(config.device, "Gone");
 }
 
 TEST(PictureSettings, OddR11ValuesAndStrengthsSurvive) {
@@ -91,15 +146,26 @@ TEST(PictureSettings, OddR11ValuesAndStrengthsSurvive) {
     EXPECT_EQ(before.fov, 47.5f);
     EXPECT_EQ(before.anisotropy, 1u);
     EXPECT_FALSE(before.wide);
+    EXPECT_EQ(before.motion_blur, 50);
+    EXPECT_EQ(before.chromatic_aberration, 25);
     PictureChoices after = before;
-    after.motion_blur = false;
+    after.motion_blur = 0;
     apply_choices(config, before, after);
     EXPECT_EQ(config.fov, 47.5f);
     EXPECT_EQ(config.anisotropy, 1u);
-    EXPECT_EQ(config.motion_blur_strength, 0.5f);
-    EXPECT_EQ(config.chromatic_aberration_strength, 0.25f);
+    EXPECT_FALSE(config.motion_blur_strength);  // the slider moved: off has no strength
+    EXPECT_EQ(config.chromatic_aberration_strength, 0.25f);  // left alone
     EXPECT_EQ(config.resolution, (Size{2560, 1440}));
     EXPECT_EQ(config.motion_blur, false);
+    // A strength between the slider's whole percents shows rounded and stays.
+    Config odd;
+    odd.chromatic_aberration_strength = 0.333f;
+    const PictureChoices shown = choices_from_config(odd);
+    EXPECT_EQ(shown.chromatic_aberration, 33);
+    PictureChoices moved = shown;
+    moved.fov = 50.0f;
+    apply_choices(odd, shown, moved);
+    EXPECT_EQ(odd.chromatic_aberration_strength, 0.333f);
 }
 
 TEST(PictureSettings, DisplayShapes) {
@@ -174,8 +240,7 @@ TEST(PictureSettings, FullscreenRendersAtTheDisplaysShape) {
 TEST(PictureSettings, ChoicesGoToTheConfigAndComeBack) {
     for (const bool fullscreen : {false, true}) {
         for (const unsigned rate : {30u, 60u, 120u}) {
-            for (const Sharpness sharp :
-                 {Sharpness::normal, Sharpness::sharpened, Sharpness::extra_sharp}) {
+            for (int sharp = sharpness_off; sharp <= max_sharpness; ++sharp) {
                 PictureChoices want;
                 want.fullscreen = fullscreen;
                 want.size = {1920, 1080};
@@ -190,24 +255,39 @@ TEST(PictureSettings, ChoicesGoToTheConfigAndComeBack) {
 }
 
 TEST(PictureSettings, MapsSharpnessOntoFsrAndRcas) {
+    const auto keys = [](int level) {
+        Config config;
+        PictureChoices c;
+        c.sharpness = level;
+        apply_choices(config, PictureChoices{}, c);
+        return bb::common::format_config(config);
+    };
+    EXPECT_EQ(keys(1), "fsr = true\nrcas = false\n");
+    EXPECT_EQ(keys(2), "fsr = true\nrcas_attenuation = 2\n");
+    EXPECT_EQ(keys(8), "fsr = true\nrcas_attenuation = 0.5\n");
+    EXPECT_EQ(keys(9), "fsr = true\n");  // RCAS at bb-run's default attenuation
+    EXPECT_EQ(keys(10), "fsr = true\nrcas_attenuation = 0\n");
+
+    // Back to off removes the RCAS keys: bb-run refuses them without fsr.
     Config config;
-    PictureChoices base;
-    PictureChoices c = base;
-    c.sharpness = Sharpness::sharpened;
-    apply_choices(config, base, c);
-    EXPECT_EQ(config.fsr, true);
-    EXPECT_FALSE(config.rcas_attenuation);  // RCAS at its default attenuation
-
-    PictureChoices d = c;
-    d.sharpness = Sharpness::extra_sharp;
-    apply_choices(config, c, d);
-    EXPECT_EQ(config.fsr, true);
-    EXPECT_EQ(config.rcas_attenuation, 0.0f);
-
-    apply_choices(config, d, base);
+    PictureChoices sharp;
+    sharp.sharpness = 1;
+    apply_choices(config, PictureChoices{}, sharp);
+    apply_choices(config, sharp, PictureChoices{});
     EXPECT_EQ(config.fsr, false);
-    EXPECT_FALSE(config.rcas_attenuation);  // bb-run refuses RCAS keys without fsr
+    EXPECT_FALSE(config.rcas_attenuation);
     EXPECT_FALSE(config.rcas);
+
+    // What the slider shows for keys set by hand: the nearest quarter stop.
+    Config odd;
+    odd.fsr = true;
+    odd.rcas_attenuation = 0.3f;
+    EXPECT_EQ(choices_from_config(odd).sharpness, 9);
+    odd.rcas = false;  // RCAS off wins over an attenuation
+    EXPECT_EQ(choices_from_config(odd).sharpness, 1);
+    Config no_fsr;
+    no_fsr.rcas_attenuation = 0.0f;  // without fsr bb-run refuses it; shows as off
+    EXPECT_EQ(choices_from_config(no_fsr).sharpness, 0);
 }
 
 TEST(PictureSettings, SettingsThePageDidntWriteSurvive) {
@@ -219,7 +299,7 @@ TEST(PictureSettings, SettingsThePageDidntWriteSurvive) {
     config.rcas_attenuation = 0.5f;
     const PictureChoices before = choices_from_config(config);
     EXPECT_EQ(before.size, (Size{1366, 768}));
-    EXPECT_EQ(before.sharpness, Sharpness::sharpened);
+    EXPECT_EQ(before.sharpness, 8);
 
     PictureChoices after = before;
     after.frame_rate = 60;  // only the frame rate changes

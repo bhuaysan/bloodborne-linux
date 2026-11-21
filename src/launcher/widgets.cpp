@@ -210,4 +210,22 @@ std::string ellipsize_left(const std::string& text, float max_width) {
     return "...";
 }
 
+std::string ellipsize_right(const std::string& text, float max_width) {
+    if (ImGui::CalcTextSize(text.c_str()).x <= max_width) {
+        return text;
+    }
+    std::size_t keep = text.size();
+    while (keep > 0) {
+        --keep;
+        while (keep > 0 && (static_cast<unsigned char>(text[keep]) & 0xc0) == 0x80) {
+            --keep;  // stay on a UTF-8 character boundary
+        }
+        const std::string shorter = text.substr(0, keep) + "...";
+        if (ImGui::CalcTextSize(shorter.c_str()).x <= max_width) {
+            return shorter;
+        }
+    }
+    return "...";
+}
+
 }  // namespace bb::launcher

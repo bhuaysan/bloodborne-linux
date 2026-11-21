@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -304,6 +305,29 @@ TEST(LauncherUi, EnterPressesTheFirstButtonOfEachState) {
         frame(ctx, view);
     }
     ImGui::DestroyContext();
+}
+
+// Every string of the pages that keep their own tables is there in both languages, and German
+// has its own words except where the two languages share them.
+TEST(LauncherText, PagesHaveEveryStringInBothLanguages) {
+    const std::string same[] = {"VSync"};
+    for (auto strings_of : {picture_strings}) {
+        const std::vector<const char*> en = strings_of(Lang::en);
+        const std::vector<const char*> de = strings_of(Lang::de);
+        ASSERT_EQ(en.size(), de.size());
+        int differ = 0;
+        for (size_t i = 0; i < en.size(); ++i) {
+            ASSERT_NE(en[i], nullptr) << i;
+            ASSERT_NE(de[i], nullptr) << i;
+            EXPECT_STRNE(en[i], "") << i;
+            EXPECT_STRNE(de[i], "") << i;
+            if (std::find(std::begin(same), std::end(same), en[i]) == std::end(same)) {
+                EXPECT_STRNE(de[i], en[i]) << i;
+            }
+            differ += std::strcmp(en[i], de[i]) != 0;
+        }
+        EXPECT_GT(differ, 0);
+    }
 }
 
 }  // namespace
