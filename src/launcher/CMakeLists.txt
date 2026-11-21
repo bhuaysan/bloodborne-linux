@@ -50,10 +50,23 @@ target_link_libraries(bblauncherui PUBLIC bblauncherlogic bb_launcher_imgui
 add_executable(bb-launcher main.cpp app.cpp)
 target_link_libraries(bb-launcher PRIVATE bblauncherui bb_warnings)
 
-# Installation (#581): bb-run goes next to bb-launcher, which starts the one in its own directory.
-include(GNUInstallDirs)
-install(TARGETS bb-launcher bb-run RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES ${PROJECT_SOURCE_DIR}/packaging/bloodborne-linux.desktop
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
-install(FILES ${PROJECT_SOURCE_DIR}/packaging/bloodborne-linux.svg
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+# Installation: the portable folder (docs/design/launcher.md, "One portable folder"). bb-run goes
+# next to bb-launcher, which starts the one in its own directory; user/ is created next to them on
+# first use. Nothing goes into the system: no menu entry, no icon theme. tools/package-portable.sh
+# installs this into Bloodborne-Linux/ and packs it.
+install(TARGETS bb-launcher bb-run RUNTIME DESTINATION .)
+install(FILES ${PROJECT_SOURCE_DIR}/packaging/game-README.txt DESTINATION game RENAME README.txt)
+install(FILES ${PROJECT_SOURCE_DIR}/packaging/bloodborne-linux.svg DESTINATION .)
+install(FILES ${PROJECT_SOURCE_DIR}/LICENSE DESTINATION licenses RENAME bloodborne-linux-GPL-2.0)
+# The notices of the third-party code built into the binaries.
+install(DIRECTORY ${PROJECT_SOURCE_DIR}/third_party/ DESTINATION licenses/third_party
+    FILES_MATCHING REGEX "/(LICENSE|COPYING|COPYRIGHT)[^/]*$|/LICENSES/[^/]+$")
+FetchContent_GetProperties(zydis SOURCE_DIR BB_ZYDIS_DIR)
+install(FILES ${BB_ZYDIS_DIR}/LICENSE DESTINATION licenses/third_party/zydis)
+install(FILES ${BB_ZYDIS_DIR}/dependencies/zycore/LICENSE DESTINATION licenses/third_party/zycore)
+install(FILES ${BB_LAUNCHER_IMGUI_DIR}/LICENSE.txt DESTINATION licenses/third_party/imgui)
+if(BB_PORTABLE)
+    install(FILES ${sdl3_SOURCE_DIR}/LICENSE.txt DESTINATION licenses RENAME SDL3-zlib.txt)
+    install(FILES ${CMAKE_BINARY_DIR}/ffmpeg-build/src/bb_ffmpeg_build/COPYING.LGPLv2.1
+        DESTINATION licenses RENAME FFmpeg-LGPL-2.1.txt)
+endif()

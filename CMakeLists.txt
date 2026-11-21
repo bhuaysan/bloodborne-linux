@@ -16,6 +16,7 @@ option(BB_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" 
 option(BB_WERROR "Treat compiler warnings as errors" OFF)
 option(BB_FRAME_POINTERS "Keep frame pointers, so perf can unwind with --call-graph fp" OFF)
 option(BB_BUILD_TESTS "Build the unit tests" ON)
+option(BB_PORTABLE "Portable package: SDL3, FFmpeg and libstdc++ built in statically" OFF)
 
 # Warning flags for our own targets. Link it to every library and executable.
 add_library(bb_warnings INTERFACE)
@@ -37,6 +38,10 @@ endif()
 
 # The pipeline cache keys on the executable's build id (vk_pipeline_serialization.cpp).
 add_link_options(-Wl,--build-id=sha1)
+
+if(BB_PORTABLE)
+    include(cmake/portable.cmake)
+endif()
 
 add_subdirectory(src)
 

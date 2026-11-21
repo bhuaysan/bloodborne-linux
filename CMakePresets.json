@@ -25,12 +25,19 @@
       "inherits": "base",
       "displayName": "Optimized",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "portable",
+      "inherits": "release",
+      "displayName": "Portable package: SDL3, FFmpeg and libstdc++ linked statically",
+      "cacheVariables": { "BB_PORTABLE": "ON", "BB_BUILD_TESTS": "OFF" }
     }
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "debug" },
     { "name": "relwithdebinfo", "configurePreset": "relwithdebinfo" },
-    { "name": "release", "configurePreset": "release" }
+    { "name": "release", "configurePreset": "release" },
+    { "name": "portable", "configurePreset": "portable" }
   ],
   "testPresets": [
     { "name": "debug", "configurePreset": "debug", "output": { "outputOnFailure": true } },

@@ -10,11 +10,13 @@ The game is one folder that the player unpacks anywhere they can write. Nothing 
 
 ```
 Bloodborne-Linux/
-├── bb-launcher, bb-run
-├── lib/        libraries not linked statically (RPATH $ORIGIN/lib)
-├── game/       optional: the dump put here is found without setup
-└── user/       config.toml, profiles/<name>/savedata/, cache/, logs/
+├── bb-launcher, bb-run, bloodborne-linux.svg
+├── game/       optional: the dump put here is found without setup (README.txt says so)
+├── licenses/   the GPL, and the notices of SDL3, FFmpeg and the code in third_party/
+└── user/       config.toml, profiles/<name>/savedata/, cache/, logs/ (made on first start)
 ```
+
+`tools/package-portable.sh` builds it with the `portable` preset (`cmake/portable.cmake`) and packs it as `Bloodborne-Linux-<commit>.tar.gz` (#731). SDL3, a minimal FFmpeg (only the decoders and demuxers the game's movies and sounds need, LGPL) and libstdc++ are built in statically, so `bb-run` needs only glibc and the Vulkan driver, and `bb-launcher` also fontconfig. SDL's Wayland, X11 and sound backends (PipeWire, PulseAudio, ALSA) and libdecor stay dynamic: SDL opens what the system has, so one package fits desktops with different sound servers. The build checks that their headers are there, because SDL would otherwise leave a backend out with only a warning. Not yet covered: the oldest glibc the package runs on is the build machine's (a build on an older base is #737).
 
 Everything the launcher and `bb-run` write goes to `user/` (`docs/design/m3-core-os.md`, "Runtime directories"). Deleting the folder removes the game with its settings, saves, caches and logs; nothing stays in `~/.config`, `~/.local/share`, `~/.cache` or `~/.local/state`, and later nothing in AppData on Windows. The dump stays where the player keeps it, and only its path is stored. A dump inside the folder is stored relative to it, so the whole folder can be moved or renamed, for example onto a USB stick. We don't copy the dump in: it is large, and players keep it where they like (#728).
 

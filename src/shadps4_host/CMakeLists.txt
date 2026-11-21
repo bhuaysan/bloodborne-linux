@@ -134,9 +134,15 @@ if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
     # The system libraries (docs/design/os-libraries.md): Pad, AudioOut, Ajm, AvPlayer, ImeDialog
     # and CommonDialog on the host headers here. They draw through the ImGui core and play through
     # SDL3, so they build where bbvideocore does. Codecs: LibAtrac9 and the system FFmpeg.
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(BB_FFMPEG REQUIRED IMPORTED_TARGET
-        libavcodec libavformat libavutil libswscale libswresample)
+    # The portable package builds its own minimal FFmpeg (cmake/portable.cmake).
+    if(TARGET bb_ffmpeg)
+        set(BB_FFMPEG_TARGET bb_ffmpeg)
+    else()
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(BB_FFMPEG REQUIRED IMPORTED_TARGET
+            libavcodec libavformat libavutil libswscale libswresample)
+        set(BB_FFMPEG_TARGET PkgConfig::BB_FFMPEG)
+    endif()
     file(GLOB BB_ATRAC9_SOURCES ${BB_3P}/LibAtrac9/C/src/*.c)
     add_library(bb_atrac9 STATIC ${BB_ATRAC9_SOURCES})
     target_include_directories(bb_atrac9 SYSTEM PUBLIC ${BB_3P}/LibAtrac9/C/src)
@@ -156,7 +162,7 @@ if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
         syslibs/file_sys.cpp syslibs/left_out.cpp syslibs/thread.cpp syslibs/pad_input.cpp)
     target_link_libraries(bbsyslibs
         PUBLIC bbvideocore bbshadps4
-        PRIVATE bb_atrac9 PkgConfig::BB_FFMPEG SDL3::SDL3 bbcommon bb_warnings)
+        PRIVATE bb_atrac9 ${BB_FFMPEG_TARGET} SDL3::SDL3 bbcommon bb_warnings)
     # Our HLE headers (src/hle) for the registry, guest threads and paths. bbhle is an OBJECT
     # library that executables link, so this takes only its compile settings.
     target_link_libraries(bbsyslibs PRIVATE $<COMPILE_ONLY:bbhle>)
