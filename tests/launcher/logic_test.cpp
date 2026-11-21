@@ -56,12 +56,6 @@ TEST(LauncherLogic, SelectsTheStateInTheOrderOfTheDesign) {
     EXPECT_EQ(select_state(in), MainState::check_failed);
     in.folder_ok = true;
     EXPECT_EQ(select_state(in), MainState::ready);
-    in.controller = false;
-    EXPECT_EQ(select_state(in), MainState::no_controller);
-    in.last_run_failed = true;
-    EXPECT_EQ(select_state(in), MainState::last_run_failed);
-    in.gpu_ok = false;
-    EXPECT_EQ(select_state(in), MainState::no_gpu);
     in.folder_ok = false;
     EXPECT_EQ(select_state(in), MainState::check_failed);
     in.have_folder = false;
@@ -72,12 +66,17 @@ TEST(LauncherLogic, FirstButtonAndHeaderPerState) {
     EXPECT_EQ(first_button(MainState::no_folder), Action::set_up);
     EXPECT_EQ(first_button(MainState::check_failed), Action::set_up);
     EXPECT_EQ(first_button(MainState::ready), Action::play);
-    EXPECT_EQ(first_button(MainState::no_controller), Action::play);
-    EXPECT_EQ(first_button(MainState::no_gpu), Action::play);
-    EXPECT_EQ(first_button(MainState::last_run_failed), Action::play);
     EXPECT_FALSE(shows_picture(MainState::no_folder));
     EXPECT_FALSE(shows_picture(MainState::check_failed));
-    EXPECT_TRUE(shows_picture(MainState::no_gpu));
+    EXPECT_TRUE(shows_picture(MainState::ready));
+}
+
+// The GPU is checked before the controller: without a GPU, a controller doesn't help.
+TEST(LauncherLogic, PlayAsksAboutTheGpuThenTheController) {
+    EXPECT_EQ(before_play(true, true), Prompt::none);
+    EXPECT_EQ(before_play(true, false), Prompt::no_controller);
+    EXPECT_EQ(before_play(false, true), Prompt::no_gpu);
+    EXPECT_EQ(before_play(false, false), Prompt::no_gpu);
 }
 
 TEST(LauncherLogic, BbRunGetsTheConfigAndNothingElse) {
@@ -88,8 +87,8 @@ TEST(LauncherLogic, BbRunGetsTheConfigAndNothingElse) {
 TEST(LauncherScript, ParsesEveryStep) {
     const auto steps = parse_script(
         "# a comment\n\nwait 5\n  drop /a b/c  \npress accept\npress back\nshot /s.png\n"
-        "config /c.toml\nwaitgame 90\nquit\r\n");
-    ASSERT_EQ(steps.size(), 8u);
+        "config /c.toml\nwaitgame 90\nnopad\nquit\r\n");
+    ASSERT_EQ(steps.size(), 9u);
     EXPECT_EQ(steps[0].kind, StepKind::wait);
     EXPECT_EQ(steps[0].number, 5);
     EXPECT_EQ(steps[1].kind, StepKind::drop);
@@ -100,7 +99,8 @@ TEST(LauncherScript, ParsesEveryStep) {
     EXPECT_EQ(steps[5].kind, StepKind::config);
     EXPECT_EQ(steps[6].kind, StepKind::waitgame);
     EXPECT_EQ(steps[6].number, 90);
-    EXPECT_EQ(steps[7].kind, StepKind::quit);
+    EXPECT_EQ(steps[7].kind, StepKind::nopad);
+    EXPECT_EQ(steps[8].kind, StepKind::quit);
 }
 
 TEST(LauncherScript, RefusesBadLinesWithTheirNumber) {
@@ -120,18 +120,21 @@ TEST(LauncherText, GermanHasEveryStringAndMessage) {
     const Strings& de = strings(Lang::de);
     const Strings& en = strings(Lang::en);
     const char* const Strings::*fields[] = {
-        &Strings::play,           &Strings::set_up,        &Strings::picture_sound,
-        &Strings::saves,          &Strings::quit,
-        &Strings::back,           &Strings::select,        &Strings::status_no_game, &Strings::status_version,
-        &Strings::status_no_controller, &Strings::status_no_gpu,
-        &Strings::status_last_run_failed, &Strings::drop_hint, &Strings::set_up_first,
-        &Strings::dialog_title};
+        &Strings::play,           &Strings::set_up,        &Strings::settings,
+        &Strings::picture_sound,  &Strings::controller,    &Strings::saves,
+        &Strings::quit,           &Strings::back,          &Strings::select,
+        &Strings::status_no_game, &Strings::status_version, &Strings::no_controller_title,
+        &Strings::no_controller_text, &Strings::play_anyway, &Strings::cancel,
+        &Strings::no_gpu_title,   &Strings::status_no_gpu, &Strings::status_last_run_failed,
+        &Strings::run_failed_text, &Strings::notice_title, &Strings::ok,
+        &Strings::drop_hint,      &Strings::set_up_first,  &Strings::dialog_title};
     for (const auto field : fields) {
         ASSERT_NE(de.*field, nullptr);
         ASSERT_NE(en.*field, nullptr);
         EXPECT_STRNE(de.*field, "");
-        // The version label is the same word in both languages.
-        if (field != &Strings::status_version) {
+        // These are the same words in both languages.
+        if (field != &Strings::status_version && field != &Strings::controller &&
+            field != &Strings::ok) {
             EXPECT_STRNE(de.*field, en.*field) << en.*field;
         }
     }

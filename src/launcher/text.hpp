@@ -12,16 +12,26 @@ namespace bb::launcher {
 struct Strings {
     const char* play;
     const char* set_up;
+    const char* settings;
     const char* picture_sound;
+    const char* controller;
     const char* saves;
     const char* quit;
     const char* back;
     const char* select;  // the hint of the Cross button
     const char* status_no_game;
-    const char* status_version;       // before the version number
-    const char* status_no_controller;
+    const char* status_version;  // before the version number
+    // The prompts: title, text and the options.
+    const char* no_controller_title;
+    const char* no_controller_text;
+    const char* play_anyway;
+    const char* cancel;
+    const char* no_gpu_title;
     const char* status_no_gpu;
     const char* status_last_run_failed;
+    const char* run_failed_text;
+    const char* notice_title;
+    const char* ok;
     const char* drop_hint;
     const char* set_up_first;         // Saves before the game is set up
     const char* dialog_title;

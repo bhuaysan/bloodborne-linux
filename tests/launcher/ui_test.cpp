@@ -185,8 +185,7 @@ TEST(LauncherUi, DrawsTheMainScreenForEveryStateWithoutPressing) {
         Context ctx;
         ctx.lang = lang;
         ctx.text = &strings(lang);
-        for (MainState s : {MainState::no_folder, MainState::check_failed, MainState::ready,
-                            MainState::no_controller, MainState::no_gpu, MainState::last_run_failed}) {
+        for (MainState s : {MainState::no_folder, MainState::check_failed, MainState::ready}) {
             MainView view;
             view.state = s;
             view.status = "status";
@@ -206,7 +205,8 @@ TEST(LauncherUi, DrawsTheMainScreenForEveryStateWithoutPressing) {
             ImGui::Render();
             EXPECT_GT(ImGui::GetDrawData()->CmdListsCount, 0);
         }
-        for (auto make : {make_picture_page, make_saves_page}) {
+        for (auto make : {make_settings_page, make_game_folder_page, make_controller_page,
+                          make_picture_page, make_saves_page}) {
             auto page = make();
             EXPECT_NE(std::string(page->title(ctx)), "");
         }
@@ -286,8 +286,7 @@ TEST(LauncherUi, EnterPressesTheFirstButtonOfEachState) {
     io.Fonts->GetTexDataAsRGBA32(&pixels, &fw, &fh);
     Context ctx;
     ctx.text = &strings(Lang::en);
-    for (MainState s : {MainState::no_folder, MainState::check_failed, MainState::ready,
-                        MainState::no_controller, MainState::no_gpu, MainState::last_run_failed}) {
+    for (MainState s : {MainState::no_folder, MainState::check_failed, MainState::ready}) {
         MainView view;
         view.state = s;
         view.status = "status";

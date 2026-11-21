@@ -43,7 +43,7 @@ float draw_top(const Context& ctx, const MainView& view) {
     const float s = ctx.scale;
     draw_header(ctx, view);
     rule(line_y, s);
-    if (view.state == MainState::ready) {
+    if (shows_picture(view.state)) {
         return 306 * s;
     }
     const float below = centred_text(view.status.c_str(), 266 * s, status_colour(view.status_kind),
@@ -58,7 +58,7 @@ Action draw_main_screen(const Context& ctx, const MainView& view) {
     const Action first = first_button(view.state);
     const std::vector<std::pair<Action, const char*>> entries{
         {first, first == Action::play ? t.play : t.set_up},
-        {Action::picture, t.picture_sound},
+        {Action::settings, t.settings},
         {Action::saves, t.saves},
         {Action::quit, t.quit}};
     Action result = Action::none;

@@ -132,7 +132,7 @@ class PicturePage : public Page {
 public:
     const char* title(const Context& ctx) const override { return text(ctx).title; }
 
-    void draw(const Context& ctx, float height) override {
+    Action draw(const Context& ctx, float height) override {
         const bool first_frame = !loaded_;
         load(ctx);
         const Text& t = text(ctx);
@@ -206,6 +206,7 @@ public:
         if (now_.fullscreen != was.fullscreen || now_.size != was.size) {
             now_.wide = wide_frame(now_, display_);
         }
+        return Action::none;
     }
 
     void on_close(const Context& ctx) override {

@@ -48,6 +48,10 @@ bb::test::Result run_script(const Dir& dir, const std::string& script) {
         quote(d + "/user"), quote(BB_LAUNCHER_PATH)));
 }
 
+// From the main screen to Picture and sound: Settings, then its second entry.
+constexpr const char* to_picture =
+    "wait 3\npress down\nwait 2\npress accept\nwait 3\npress down\nwait 2\npress accept\nwait 3\n";
+
 bool is_png(const fs::path& file) {
     std::ifstream in(file, std::ios::binary);
     char magic[4] = {};
@@ -75,7 +79,8 @@ std::string slurp(const fs::path& file) {
 // Runs a copy of bb-launcher next to a fake bb-run that records its arguments and directory,
 // prints one line to stdout and one to stderr and exits with `exit_code`. The script drops the dump, presses Play and takes a shot afterwards.
 std::string play_with_fake_bb_run(const Dir& dir, const fs::path& game, int exit_code,
-                                  bb::test::Result& result, const std::string& before_play = "") {
+                                  bb::test::Result& result, const std::string& before_play = "",
+                                  const std::string& play = "press accept\nwaitgame 20\n") {
     const fs::path bin = dir.path() / "bin";
     fs::create_directories(bin);
     fs::copy_file(BB_LAUNCHER_PATH, bin / "bb-launcher");
@@ -85,8 +90,8 @@ std::string play_with_fake_bb_run(const Dir& dir, const fs::path& game, int exit
         quote((dir.path() / "record.txt").string()), exit_code);
     fs::permissions(bin / "bb-run", fs::perms::owner_all);
     std::ofstream(dir.path() / "script.txt") << std::format(
-        "wait 3\ndrop {}\nwait 3\n{}press accept\nwaitgame 20\nwait 3\nshot {}\nquit\n",
-        game.string(), before_play, (dir.path() / "shot.png").string());
+        "wait 3\ndrop {}\nwait 3\n{}{}wait 3\nshot {}\nquit\n", game.string(), before_play, play,
+        (dir.path() / "shot.png").string());
     const std::string d = dir.path().string();
     result = bb::test::run(std::format(
         "cd {} && env -u BB_GAME_DIR -u BB_CACHE_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
@@ -123,6 +128,23 @@ TEST(LauncherRunGame, PlayWorksAfterAPageWasOpenedAndClosed) {
         dir, game, 0, r, "press down\nwait 2\npress accept\nwait 3\npress back\nwait 3\n");
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_NE(rec.find("args=--config "), std::string::npos) << r.output;
+}
+
+// Play without a controller asks first: Cancel (B) starts nothing, Play anyway (A on the first
+// option) starts the game.
+TEST(LauncherRunGame, PlayWithoutAControllerAsksFirst) {
+    BB_REQUIRE_GAME(game);
+    const Dir cancelled;
+    const Dir anyway;
+    bb::test::Result rc, ra;
+    const std::string rec_cancelled = play_with_fake_bb_run(
+        cancelled, game, 0, rc, "nopad\n", "press accept\nwait 3\npress back\nwait 3\n");
+    const std::string rec_anyway = play_with_fake_bb_run(
+        anyway, game, 0, ra, "nopad\n", "press accept\nwait 3\npress accept\nwaitgame 20\n");
+    EXPECT_EQ(rc.status, 0) << rc.output;
+    EXPECT_EQ(ra.status, 0) << ra.output;
+    EXPECT_EQ(rec_cancelled, "");
+    EXPECT_NE(rec_anyway.find("args=--config "), std::string::npos) << ra.output;
 }
 
 // The output and the end of the run are kept in user/logs.
@@ -247,8 +269,7 @@ TEST(LauncherRunGame, SeveralSearchHitsSaveAnOpenPicturePage) {
         fs::create_directories(dir.path() / "home/Pad" / std::to_string(i) / "x");
     }
     const auto r = run_script(
-        dir, "wait 3\npress down\nwait 2\npress accept\nwait 3\npress accept\nwait 2\npress down\nwait 2\n"
-             "press accept\nwait 400\nquit\n");
+        dir, std::string(to_picture) + "press accept\nwait 2\npress down\nwait 2\npress accept\nwait 400\nquit\n");
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_NE(r.output.find("2 hit(s)"), std::string::npos) << r.output;
     EXPECT_EQ(slurp(dir.path() / "user/config.toml"), "fullscreen = true\n");
@@ -258,7 +279,7 @@ TEST(LauncherRunGame, SeveralSearchHitsSaveAnOpenPicturePage) {
 // with the d-pad and A, and Back writes them to the config file.
 TEST(LauncherRun, ThePicturePageSavesItsChoicesOnBack) {
     const Dir dir;
-    std::string script = "wait 3\npress down\nwait 2\npress accept\nwait 3\n";
+    std::string script = to_picture;
     for (const char* step : {"accept", "down", "accept",              // window -> fullscreen
                              "down", "accept", "down", "accept",      // 30 -> 60
                              "down", "accept", "down", "down", "accept"}) {  // normal -> extra sharp
@@ -275,7 +296,7 @@ TEST(LauncherRun, ThePicturePageSavesItsChoicesOnBack) {
 // and no colour fringes (R11, #668).
 TEST(LauncherRun, ThePicturePageSavesTheImageQualityChoices) {
     const Dir dir;
-    std::string script = "wait 3\npress down\nwait 2\npress accept\nwait 3\n";
+    std::string script = to_picture;
     for (const char* step : {"down", "down", "down", "down",         // mode -> view
                              "accept", "down", "down", "accept",     // the game's -> much wider
                              "down", "accept", "down", "down", "accept",  // -> the sharpest

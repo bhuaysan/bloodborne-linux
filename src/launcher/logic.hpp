@@ -30,23 +30,31 @@ struct CropRect {
 // centre. An empty rectangle for sizes of zero or less.
 CropRect crop_around_centre(int image_w, int image_h, int target_w, int target_h);
 
-// The state of the main screen. The order of the checks is game folder, GPU, last run, controller.
-enum class MainState { no_folder, check_failed, ready, no_controller, no_gpu, last_run_failed };
+// The state of the main screen: only the game folder changes it. Other problems show as a
+// prompt when they matter (see before_play).
+enum class MainState { no_folder, check_failed, ready };
 
 struct StateInput {
     bool have_folder = false;  // a game folder is set in the config file or was just chosen
     bool folder_ok = false;    // and it passed the check
-    bool gpu_ok = true;        // the Vulkan loader lists a physical device
-    bool controller = true;
-    bool last_run_failed = false;
 };
 MainState select_state(const StateInput& in);
 
-enum class Action { none, set_up, play, picture, saves, quit, choose_another };
+// set_up and choose_another open the folder dialog; settings, game_folder, picture, controller
+// and saves open a page; play_anyway is Play after the no-controller prompt.
+enum class Action {
+    none, set_up, play, play_anyway, settings, saves, quit, choose_another, game_folder, picture,
+    controller
+};
 // The first button of a state.
 Action first_button(MainState state);
 // The header shows the title picture, not the drop target.
 bool shows_picture(MainState state);
+
+// The prompts over the window. Play checks the GPU, then the controller; a failed run and a
+// notice while the game is set up come up on their own.
+enum class Prompt { none, no_gpu, no_controller, run_failed, notice };
+Prompt before_play(bool gpu_ok, bool controller);
 
 // What Play runs: `bb_run --config <config>` and nothing else.
 std::vector<std::string> bb_run_arguments(const std::filesystem::path& bb_run,
@@ -55,9 +63,9 @@ std::vector<std::string> bb_run_arguments(const std::filesystem::path& bb_run,
 // ---- The scripted input of a test run (BB_LAUNCHER_SCRIPT, see app.cpp) ----------------------------
 // One step per line: `wait N` (frames), `drop PATH`, `press accept|back|up|down|left|right`,
 // `shot PATH` (the rendered frame as a PNG), `config PATH` (Play uses this config file from now
-// on), `waitgame SECONDS` (waits for the game, then ends it) and `quit`. Empty lines and lines
-// that start with # are skipped.
-enum class StepKind { wait, drop, press, shot, config, waitgame, quit };
+// on), `waitgame SECONDS` (waits for the game, then ends it), `nopad` (acts as if no controller
+// were connected from now on) and `quit`. Empty lines and lines that start with # are skipped.
+enum class StepKind { wait, drop, press, shot, config, waitgame, nopad, quit };
 enum class PadButton { accept, back, up, down, left, right };
 struct ScriptStep {
     StepKind kind = StepKind::quit;

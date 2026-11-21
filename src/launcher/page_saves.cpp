@@ -128,7 +128,7 @@ class SavesPage : public Page {
 public:
     const char* title(const Context& ctx) const override { return text(ctx).title; }
 
-    void draw(const Context& ctx, float height) override {
+    Action draw(const Context& ctx, float height) override {
         const Text& t = text(ctx);
         const float s = ctx.scale;
         if (!loaded_) {
@@ -136,7 +136,7 @@ public:
         }
         if (data_dir_.empty()) {
             ImGui::TextWrapped("%s", message_.empty() ? t.no_dirs : message_.c_str());
-            return;
+            return Action::none;
         }
         const float side = 24 * s;  // the app's margin; the page is as wide as the Back button
         const float width = 432 * s;
@@ -199,6 +199,7 @@ public:
             ImGui::TextWrapped("%s", message_.c_str());
             ImGui::PopTextWrapPos();
         }
+        return Action::none;
     }
 
 private:

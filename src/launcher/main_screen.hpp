@@ -20,7 +20,7 @@ inline constexpr float page_bottom = 548;
 
 struct MainView {
     MainState state = MainState::no_folder;
-    std::string status;  // shown unless the state is ready
+    std::string status;  // shown only without a game
     StatusKind status_kind = StatusKind::warning;
     SDL_Texture* header = nullptr;  // the title picture; null shows the drop hint
     bool focus_first = false;       // move the focus to the first entry in this frame

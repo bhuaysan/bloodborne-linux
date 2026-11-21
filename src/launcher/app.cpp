@@ -265,8 +265,9 @@ private:
         if (result->folders.size() == 1) {
             set_up_folder(result->folders[0]);
         } else if (result->folders.size() > 1) {
-            close_page();  // an open page saves its choices first; the list replaces it
-            page_ = make_find_page(result->folders, [this](const fs::path& f) { pending_choice_ = f; });
+            close_pages();  // open pages save their choices first; the list replaces them
+            pages_.push_back(
+                make_find_page(result->folders, [this](const fs::path& f) { pending_choice_ = f; }));
             focus_first_ = true;
             refocus_ = false;
         }
@@ -282,7 +283,6 @@ private:
             version_ = r.app_version;
             game_ready_ = true;
             notice_.clear();
-            last_run_failed_ = false;
             if (header_ != nullptr) {
                 SDL_DestroyTexture(header_);
             }
@@ -378,7 +378,7 @@ private:
         const int rc = posix_spawn(&pid, argv[0], &actions, nullptr, argv.data(), environ);
         posix_spawn_file_actions_destroy(&actions);
         if (rc != 0) {
-            last_run_failed_ = true;
+            prompt_ = Prompt::run_failed;
             write_run_status(std::format("could not start bb-run ({})", strerror(rc)));
             return;
         }
@@ -405,7 +405,9 @@ private:
         }
         // Any result other than the child's own exit with status 0 is a failed run.
         write_run_status(waited == pid ? describe_wait_status(status) : "wait failed");
-        last_run_failed_ = waited != pid || !(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        if (waited != pid || !(WIFEXITED(status) && WEXITSTATUS(status) == 0)) {
+            prompt_ = Prompt::run_failed;
+        }
         SDL_ShowWindow(window_);
         SDL_RaiseWindow(window_);
         focus_first_ = true;
@@ -437,18 +439,31 @@ private:
         case StepKind::shot: shot_path_ = step.text; break;
         case StepKind::config: play_config_ = step.text; break;
         case StepKind::waitgame: break;  // only counts while the game runs
+        case StepKind::nopad: script_pad_ = false; break;
         case StepKind::quit: running_ = false; break;
         }
     }
 
+    // Leaves the page on top; the one under it, or the main screen, shows again.
     void close_page() {
-        if (!page_) {
+        if (pages_.empty()) {
             return;
         }
         popup_open_ = false;
-        page_->on_close(context());
-        page_.reset();
-        refocus_ = true;  // the next frame puts the focus on the first button
+        pages_.back()->on_close(context());
+        pages_.pop_back();
+        refocus_ = true;  // the next frame puts the focus on the first entry
+    }
+
+    void close_pages() {
+        while (!pages_.empty()) {
+            close_page();
+        }
+    }
+
+    // A script decides on its own, whatever is plugged into the machine that runs it.
+    bool controller() const {
+        return script_.empty() ? SDL_HasGamepad() : script_pad_;
     }
 
     Context context() const {
@@ -459,63 +474,54 @@ private:
         ctx.config_path = config_path_;
         ctx.game_ready = game_ready_;
         ctx.game_dir = game_dir_;
+        ctx.version = version_;
+        ctx.notice = notice_;
+        ctx.controller = controller();
+        ctx.focus_first = focus_first_;
         return ctx;
     }
 
     MainView view() const {
-        const Strings& t = strings(lang_);
         StateInput in;
         in.have_folder = game_ready_ || tried_folder_;
         in.folder_ok = game_ready_;
-        in.gpu_ok = gpu_ok_;
-        in.controller = SDL_HasGamepad() || !script_.empty();
-        in.last_run_failed = last_run_failed_;
         MainView v;
         v.state = select_state(in);
         v.header = shows_picture(v.state) ? header_ : nullptr;
         v.focus_first = focus_first_;
-        switch (v.state) {
-        case MainState::no_folder:
-            v.status = !notice_.empty() ? notice_
-                       : searching_ ? find_text(lang_).searching
-                                    : t.status_no_game;
-            v.status_kind = notice_.empty() ? StatusKind::warning : StatusKind::error;
-            break;
-        case MainState::check_failed:
+        if (v.state == MainState::no_folder && notice_.empty()) {
+            v.status = searching_ ? find_text(lang_).searching : strings(lang_).status_no_game;
+            v.status_kind = StatusKind::warning;
+        } else if (!game_ready_) {
             v.status = notice_;
             v.status_kind = StatusKind::error;
-            break;
-        case MainState::no_gpu:
-            v.status = t.status_no_gpu;
-            v.status_kind = StatusKind::error;
-            break;
-        case MainState::last_run_failed:
-            v.status = t.status_last_run_failed;
-            v.status_kind = StatusKind::error;
-            break;
-        case MainState::no_controller:
-            v.status = t.status_no_controller;
-            v.status_kind = StatusKind::warning;
-            break;
-        case MainState::ready:
-            break;
-        }
-        if (!notice_.empty() && game_ready_) {  // a refused folder while a good one is set
-            v.status = notice_;
-            v.status_kind = StatusKind::warning;
         }
         return v;
+    }
+
+    void open(std::unique_ptr<Page> page) {
+        pages_.push_back(std::move(page));
+        focus_first_ = true;  // a page's popups must keep the focus too
     }
 
     void act(Action a) {
         switch (a) {
         case Action::set_up:
         case Action::choose_another: open_folder_dialog(); break;
-        case Action::play: play(); break;
-        case Action::picture: page_ = make_picture_page(); break;
+        case Action::play:
+            prompt_ = before_play(gpu_ok_, controller());
+            if (prompt_ == Prompt::none) {
+                play();
+            }
+            break;
+        case Action::play_anyway: play(); break;
+        case Action::settings: open(make_settings_page()); break;
+        case Action::game_folder: open(make_game_folder_page()); break;
+        case Action::picture: open(make_picture_page()); break;
+        case Action::controller: open(make_controller_page()); break;
         case Action::saves:
             if (game_ready_) {
-                page_ = make_saves_page();
+                open(make_saves_page());
             } else {
                 notice_ = strings(lang_).set_up_first;
             }
@@ -523,18 +529,53 @@ private:
         case Action::quit: running_ = false; break;
         case Action::none: break;
         }
-        if (page_ && a != Action::none) {  // a page just opened; its popups must keep the focus
-            focus_first_ = true;
-        }
     }
 
-    void draw_page(const Context& ctx) {
-        const bool back = draw_page_frame(ctx, page_->title(ctx));
+    Action draw_page(const Context& ctx) {
+        Page& page = *pages_.back();
+        const bool back = draw_page_frame(ctx, page.title(ctx));
         ImGui::SetCursorPos(ImVec2(24 * ctx.scale, page_top * ctx.scale));
-        page_->draw(ctx, (page_bottom - page_top) * ctx.scale);
+        const Action a = page.draw(ctx, (page_bottom - page_top) * ctx.scale);
         if (back) {
             close_page();
         }
+        return a;
+    }
+
+    // The prompt over the window, if one is up. Returns Play when the player plays anyway.
+    Action draw_prompt() {
+        if (prompt_ == Prompt::none) {
+            return Action::none;
+        }
+        const Strings& t = strings(lang_);
+        constexpr const char* id = "##prompt";
+        if (!ImGui::IsPopupOpen(id)) {
+            ImGui::OpenPopup(id);
+        }
+        int chosen = -1;
+        switch (prompt_) {
+        case Prompt::no_controller:
+            chosen = prompt(id, t.no_controller_title, t.no_controller_text,
+                            {t.play_anyway, t.cancel}, scale_);
+            break;
+        case Prompt::no_gpu:
+            chosen = prompt(id, t.no_gpu_title, t.status_no_gpu, {t.ok}, scale_);
+            break;
+        case Prompt::run_failed:
+            chosen = prompt(id, t.status_last_run_failed, t.run_failed_text, {t.ok}, scale_);
+            break;
+        case Prompt::notice:
+            chosen = prompt(id, t.notice_title, prompted_notice_.c_str(), {t.ok}, scale_);
+            break;
+        case Prompt::none: break;
+        }
+        if (chosen < 0) {
+            return Action::none;
+        }
+        const bool anyway = prompt_ == Prompt::no_controller && chosen == 0;
+        prompt_ = Prompt::none;
+        refocus_ = true;
+        return anyway ? Action::play_anyway : Action::none;
     }
 
     void frame() {
@@ -562,6 +603,13 @@ private:
             close_page();
             set_up_folder(chosen);
         }
+        // A problem while a game is set up (a refused drop, say) comes up once as a prompt;
+        // without a game the main screen and the game folder page show it.
+        if (game_ready_ && !notice_.empty() && notice_ != prompted_notice_ &&
+            prompt_ == Prompt::none) {
+            prompted_notice_ = notice_;
+            prompt_ = Prompt::notice;
+        }
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         if (!script_.empty()) {
@@ -570,11 +618,11 @@ private:
             run_script();
         }
         ImGui::NewFrame();
-        const Context ctx = context();
         if (refocus_) {
             focus_first_ = true;
             refocus_ = false;
         }
+        const Context ctx = context();
         MainView v = view();
         if (v.state != last_state_) {  // the first button is another one now
             last_state_ = v.state;
@@ -591,9 +639,9 @@ private:
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
         Action action = Action::none;
-        if (page_) {
-            draw_page(ctx);
-            // Back closes an open choice list first, and the page only on the next press.
+        if (!pages_.empty()) {
+            action = draw_page(ctx);
+            // Back closes an open choice list or prompt first, and the page only on the next press.
             const bool popup_was_open = popup_open_;
             popup_open_ = ImGui::IsPopupOpen(ImGuiID(0), ImGuiPopupFlags_AnyPopupId);
             if (!popup_was_open && !popup_open_ &&
@@ -602,6 +650,9 @@ private:
             }
         } else {
             action = draw_main_screen(ctx, v);
+        }
+        if (const Action a = draw_prompt(); a != Action::none) {
+            action = a;
         }
         ImGui::End();
         focus_first_ = false;
@@ -645,11 +696,13 @@ private:
     std::optional<fs::path> pending_choice_;  // picked from the list of several hits
     bool tried_folder_ = false;  // a folder was set or chosen, whatever its check said
     bool gpu_ok_ = true;
-    bool last_run_failed_ = false;
-    std::string notice_;  // the last problem, shown in the status line
-    std::unique_ptr<Page> page_;
+    Prompt prompt_ = Prompt::none;
+    std::string prompted_notice_;  // the notice the last notice prompt showed
+    std::string notice_;  // the last problem: in the status line without a game, else a prompt
+    std::vector<std::unique_ptr<Page>> pages_;  // the open pages, the one shown last
     std::shared_ptr<DialogMailbox> dialog_ = std::make_shared<DialogMailbox>();
     std::vector<ScriptStep> script_;
+    bool script_pad_ = true;  // a script plays a controller until its nopad step
     std::size_t step_ = 0;
     int wait_left_ = 0;
     ImGuiKey release_key_ = ImGuiKey_None;

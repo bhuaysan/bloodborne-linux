@@ -63,16 +63,7 @@ MainState select_state(const StateInput& in) {
     if (!in.have_folder) {
         return MainState::no_folder;
     }
-    if (!in.folder_ok) {
-        return MainState::check_failed;
-    }
-    if (!in.gpu_ok) {
-        return MainState::no_gpu;
-    }
-    if (in.last_run_failed) {
-        return MainState::last_run_failed;
-    }
-    return in.controller ? MainState::ready : MainState::no_controller;
+    return in.folder_ok ? MainState::ready : MainState::check_failed;
 }
 
 Action first_button(MainState state) {
@@ -86,7 +77,14 @@ Action first_button(MainState state) {
 }
 
 bool shows_picture(MainState state) {
-    return state != MainState::no_folder && state != MainState::check_failed;
+    return state == MainState::ready;
+}
+
+Prompt before_play(bool gpu_ok, bool controller) {
+    if (!gpu_ok) {
+        return Prompt::no_gpu;
+    }
+    return controller ? Prompt::none : Prompt::no_controller;
 }
 
 std::vector<std::string> bb_run_arguments(const std::filesystem::path& bb_run,
@@ -158,8 +156,8 @@ std::vector<ScriptStep> parse_script(std::string_view text) {
             } else {
                 fail("press needs accept, back, up, down, left or right");
             }
-        } else if (word == "quit") {
-            step.kind = StepKind::quit;
+        } else if (word == "nopad" || word == "quit") {
+            step.kind = word == "nopad" ? StepKind::nopad : StepKind::quit;
         } else {
             fail(std::format("unknown step \"{}\"", word));
         }

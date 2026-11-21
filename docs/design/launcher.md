@@ -35,7 +35,7 @@ A small window with a fixed size: the game's title picture at the top, fading in
 |  ----------------------------  |
 |                                |
 |             Play               |   bigger, focused at start
-|       Picture and sound        |
+|           Settings             |
 |             Saves              |
 |             Quit               |
 |                                |
@@ -60,23 +60,37 @@ A small window with a fixed size: the game's title picture at the top, fading in
 | No game folder yet | drop hint | "No game found yet" | Set up game |
 | Game folder fails its check | drop hint | the check's message, in words | Set up game |
 | Ready | title picture | nothing | Play |
-| Ready, no controller | title picture | "No controller. Plug one in before you play." | Play |
-| No usable Vulkan GPU | title picture | "Your graphics card can't run the game." | Play |
-| Last run ended with an error | title picture | "The game stopped unexpectedly." | Play |
 
-The line of text under the header replaces a checklist page: when everything is fine there is none, and when something is wrong it says exactly one thing, the most important one. The order of checks is game folder, GPU, controller.
+The line of text under the header replaces a checklist page. Without a game it says exactly one thing, the most important one; with a game there is no text at all. The maintainer wanted the main screen to show nothing but the menu (2026-11-21), so the other problems come up as a prompt when they matter: a band over the dimmed window with a gold title, one line of text and the options side by side.
 
-A missing controller doesn't block Play: the player may plug one in after pressing it. `bb-run` has no keyboard input for the game yet, so the hint is needed.
+| When | Prompt | Options |
+|---|---|---|
+| Play, without a usable Vulkan GPU | "No usable graphics card" | OK |
+| Play, without a controller | "No controller connected" | Play anyway, Cancel |
+| The game ended with an error | "The game stopped unexpectedly." and where its output is | OK |
+| A problem while a game is set up (a refused drop, say) | "Note" and the message | OK |
+
+Play checks the GPU first: without one, a controller doesn't help. A missing controller doesn't block Play: the player may plug one in after pressing it. `bb-run` has no keyboard input for the game yet, so the prompt is needed. B or Escape picks the last option.
 
 Entries are never disabled. An entry that can't do anything yet says why when pressed (Saves before setup: "Set up the game first.").
 
 ## First start
 
-1. **Search.** The launcher looks for the game folder on its own: directories that hold `eboot.bin` and `sce_sys/param.sfo` with title ID CUSA03173, first in `game/` inside the launcher's folder, then under `$HOME` (up to four levels deep, without hidden directories) and under the removable-media mount points (`/run/media/$USER`, `/media`). The search is limited to two seconds and runs off the UI thread. One hit that passes the check is taken. Several hits become a list to pick from.
+1. **Search.** The launcher looks for the game folder on its own: directories that hold `eboot.bin` and `sce_sys/param.sfo` with title ID CUSA03173, first in `game/` inside the launcher's folder, then under `$HOME` (up to four levels deep, without hidden directories) and under the removable-media mount points (`/run/media/$USER`, `/media`). The search is limited to two seconds and runs off the UI thread. One hit that passes the check is taken; Settings, Set up game shows it with "Choose another folder". Several hits become a list to pick from.
 2. **Drop or choose.** Otherwise the header becomes the drop target: "Drag your game folder here (the one with eboot.bin)". Set up game opens the folder dialog (`SDL_ShowOpenFolderDialog`).
-3. **Check.** The setup check from #578 runs on the folder and its message goes under the line on the main screen in plain words (wrong folder, other game, base game without update 1.09, unknown version). The folder is written to the config file only when the check passes, relative to the launcher's folder when it lies inside it.
+3. **Check.** The setup check from #578 runs on the folder and its message goes under the line on the main screen (or into a prompt while another game is set up) in plain words (wrong folder, other game, base game without update 1.09, unknown version). The folder is written to the config file only when the check passes, relative to the launcher's folder when it lies inside it.
 
 The search goes first because "where did I put the dump" is the most common place for a non-technical player to get stuck.
+
+## Settings
+
+A menu like the main one, with three entries:
+
+- **Set up game:** the folder in use and the game's version, and "Choose another folder", which opens the folder dialog. Without a game, how to drop the folder and "Choose folder". The last refused folder's message shows here too.
+- **Picture and sound:** the page below.
+- **Controller:** whether a controller is connected, with the names SDL reports, or how to connect one.
+
+The folder and the controller moved here from the main screen's old status line, so the main screen shows only the menu.
 
 ## Picture and sound
 
@@ -136,7 +150,7 @@ Each part of the launcher can be used with the controller alone: ImGui's gamepad
 
 The code is in `src/launcher/`: `app.cpp` (window and loop), `main_screen.cpp`, one `page_*.cpp` per page behind the `Page` interface of `page.hpp`, shared widgets in `widgets.hpp`, and the pure logic (states, crop, language, `bb-run` arguments, script parsing) in `logic.cpp`, which `tests/launcher` covers. The main screen and the common words have one string table per language (`text.cpp`). Each page keeps its own English and German strings in its own file, so pages can be built in parallel. Play looks for `bb-run` next to the launcher.
 
-For the checks and the tests, `BB_LAUNCHER_SCRIPT` names a file with one step per line (`wait N`, `drop PATH`, `press accept|back|up|down|left|right`, `shot PATH`, `config PATH`, `waitgame SECONDS`, `quit`). The steps feed drops and gamepad presses, save the rendered frame as a PNG, point Play at another config file and end the game after a time. `waitgame` only counts as the step directly after the `press` that starts the game; any other step in between leaves the game running without a limit. With a script, the launcher acts as if a controller were connected. `BB_LAUNCHER_URL_LOG` names a file that gets the folder URLs of the Saves page instead of a file manager window.
+For the checks and the tests, `BB_LAUNCHER_SCRIPT` names a file with one step per line (`wait N`, `drop PATH`, `press accept|back|up|down|left|right`, `shot PATH`, `config PATH`, `waitgame SECONDS`, `nopad`, `quit`). The steps feed drops and gamepad presses, save the rendered frame as a PNG, point Play at another config file and end the game after a time. `waitgame` only counts as the step directly after the `press` that starts the game; any other step in between leaves the game running without a limit. With a script, the launcher acts as if a controller were connected until a `nopad` step, whatever is plugged into the machine, so the prompt for a missing controller can be tested. `BB_LAUNCHER_URL_LOG` names a file that gets the folder URLs of the Saves page instead of a file manager window.
 
 ## Not in scope
 

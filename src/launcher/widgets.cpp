@@ -178,6 +178,52 @@ bool button_hints(const char* select, const char* back, float scale) {
     return back_pressed;
 }
 
+int prompt(const char* id, const char* title, const char* text,
+           std::initializer_list<const char*> options, float scale) {
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const float height = 200 * scale;
+    ImGui::SetNextWindowPos(ImVec2(0, (display.y - height) * 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(display.x, height));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(8, 7, 6, 245));
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 0.0f);
+    const bool open = ImGui::BeginPopupModal(id, nullptr,
+                                             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    if (!open) {
+        return -1;
+    }
+    const bool appearing = ImGui::IsWindowAppearing();
+    rule(0, scale);
+    const float width = display.x - 80 * scale;
+    centred_text(title, 26 * scale, colour::gold, width, 19 * scale);
+    centred_text(text, 62 * scale, colour::text, width, text_size * scale);
+    int chosen = -1;
+    const ImVec2 size(200 * scale, 40 * scale);
+    const auto count = static_cast<float>(options.size());
+    ImGui::SetCursorPos(ImVec2((display.x - count * size.x) * 0.5f, 132 * scale));
+    int i = 0;
+    for (const char* option : options) {
+        if (i > 0) {
+            ImGui::SameLine(0, 0);
+        }
+        if (menu_entry(option, size, 17.5f * scale, appearing && i == 0)) {
+            chosen = i;
+        }
+        ++i;
+    }
+    rule(height / scale - 1, scale);
+    if (!appearing && chosen < 0 &&
+        (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight))) {
+        chosen = static_cast<int>(options.size()) - 1;
+    }
+    if (chosen >= 0) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+    return chosen;
+}
+
 std::string ellipsize_left(const std::string& text, float max_width) {
     if (ImGui::CalcTextSize(text.c_str()).x <= max_width) {
         return text;

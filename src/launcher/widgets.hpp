@@ -2,6 +2,7 @@
 // (docs/design/launcher.md, "Look"). Sizes are logical pixels times `scale`.
 #pragma once
 
+#include <initializer_list>
 #include <string>
 
 #include <imgui.h>
@@ -47,6 +48,12 @@ float centred_text(const char* text, float y, ImU32 colour, float width, float f
 // The button hints at the bottom right: Cross with `select` (null: none) and Circle with
 // `back` (null: none). Returns true when the mouse pressed the back hint.
 bool button_hints(const char* select, const char* back, float scale);
+
+// A prompt over the window: a band with a gold title, a line of text and the options side by
+// side, the first one focused. Open it with ImGui::OpenPopup(id). Returns the index of the
+// option pressed, the last option for B or Escape, and -1 while it stays open.
+int prompt(const char* id, const char* title, const char* text,
+           std::initializer_list<const char*> options, float scale);
 
 enum class StatusKind { ok, warning, error };
 inline ImU32 status_colour(StatusKind kind) {

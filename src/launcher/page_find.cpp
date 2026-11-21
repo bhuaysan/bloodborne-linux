@@ -33,7 +33,7 @@ public:
 
     const char* title(const Context& ctx) const override { return find_text(ctx.lang).title; }
 
-    void draw(const Context& ctx, float) override {
+    Action draw(const Context& ctx, float) override {
         const float s = ctx.scale;
         const float y = centred_text(find_text(ctx.lang).hint, ImGui::GetCursorPosY(), colour::dim,
                                      432 * s, text_size * s);
@@ -51,6 +51,7 @@ public:
             ImGui::PopID();
         }
         focused_ = true;
+        return Action::none;
     }
 
 private:
