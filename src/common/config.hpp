@@ -87,8 +87,9 @@ inline constexpr bool valid_frame_rate(unsigned fps) {
 }
 
 struct Config {
-    // game_dir: absolute, "~/..." for $HOME, or relative to the config file's folder (read_config
-    // resolves it; parse_config keeps it relative).
+    // game_dir: absolute, "~/..." for $HOME, or relative to the config file's folder, symlinks
+    // resolved (read_config resolves it; parse_config keeps it relative). write_config writes it
+    // relative only for user/config.toml and a dump inside the folder around user/.
     std::optional<std::filesystem::path> game_dir;
     std::optional<std::string> profile;             // profile: valid_profile_name
     std::optional<std::pair<unsigned, unsigned>> window_size;  // window_size = "WIDTHxHEIGHT"

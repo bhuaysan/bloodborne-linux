@@ -301,6 +301,34 @@ TEST_F(ConfigFileTest, AGameDirOutsideTheFolderStaysAbsolute) {
     EXPECT_EQ(line, "game_dir = \"/games/bb\"");
 }
 
+// Only user/config.toml of a portable folder: a config file elsewhere keeps absolute paths.
+TEST_F(ConfigFileTest, AConfigOutsideUserKeepsAnAbsoluteGameDir) {
+    const fs::path config = dir_ / "x/cfg.toml";
+    Config c;
+    c.game_dir = dir_ / "Games/bb";
+    bb::common::write_config(config, c);
+    std::ifstream in(config);
+    std::string line;
+    std::getline(in, line);
+    EXPECT_EQ(line, std::format("game_dir = \"{}\"", fs::weakly_canonical(dir_ / "Games/bb").string()));
+}
+
+// user/ linked to another place: what is written relative reads back as the same folder.
+TEST_F(ConfigFileTest, ALinkedUserFolderReadsBackTheSameGameDir) {
+    fs::create_directories(dir_ / "data/user");
+    fs::create_directories(dir_ / "Portable");
+    fs::create_directory_symlink(dir_ / "data/user", dir_ / "Portable/user");
+    const fs::path config = dir_ / "Portable/user/config.toml";
+    for (const fs::path& game : {dir_ / "data/game/CUSA03173", dir_ / "Portable/game/CUSA03173"}) {
+        fs::create_directories(game);
+        Config c;
+        c.game_dir = game;
+        bb::common::write_config(config, c);
+        EXPECT_EQ(fs::weakly_canonical(*bb::common::read_config(config).config.game_dir),
+                  fs::weakly_canonical(game));
+    }
+}
+
 TEST_F(ConfigFileTest, NewFoldersGetMode0700) {
     ::umask(022);
     bb::common::write_config(dir_ / "a/user/config.toml", Config{});

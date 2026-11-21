@@ -244,8 +244,13 @@ ParsedConfig read_config(const fs::path& path) {
     if (parsed.config.game_dir && parsed.config.game_dir->is_relative()) {
         // The portable folder: a dump in game/ next to user/ is stored as ../game/<dump>, so the
         // whole folder can be moved (docs/design/launcher.md, "One portable folder").
-        parsed.config.game_dir =
-            (fs::absolute(path).parent_path() / *parsed.config.game_dir).lexically_normal();
+        // Resolved from the config folder's real path, as write_config computed it.
+        std::error_code ec;
+        fs::path dir = fs::weakly_canonical(fs::absolute(path), ec).parent_path();
+        if (ec) {
+            dir = fs::absolute(path).parent_path();
+        }
+        parsed.config.game_dir = (dir / *parsed.config.game_dir).lexically_normal();
     }
     return parsed;
 }
@@ -314,8 +319,9 @@ std::string format_config(const Config& c) {
     return out;
 }
 
-// `game_dir` relative to the folder of `config_path` when it lies inside the folder that holds
-// that folder (the portable folder around user/), else unchanged.
+// `game_dir` relative to the folder of `config_path` when that folder is user/ of the portable
+// folder and `game_dir` lies inside the portable folder, else unchanged. A config file anywhere
+// else (bb-run --config) keeps absolute paths.
 static fs::path relative_game_dir(const fs::path& config_path, const fs::path& game_dir) {
     if (!game_dir.is_absolute()) {
         return game_dir;
@@ -323,7 +329,8 @@ static fs::path relative_game_dir(const fs::path& config_path, const fs::path& g
     std::error_code ec;
     const fs::path config_dir = fs::weakly_canonical(fs::absolute(config_path), ec).parent_path();
     const fs::path folder = config_dir.parent_path();
-    if (ec || folder == config_dir || folder == folder.root_path()) {
+    if (ec || config_dir.filename() != "user" || folder == config_dir ||
+        folder == folder.root_path()) {
         return game_dir;
     }
     const fs::path game = fs::weakly_canonical(game_dir, ec);  // both sides with symlinks resolved
