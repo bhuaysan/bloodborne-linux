@@ -6,8 +6,9 @@
 # Usage: tools/release/build-package.sh [OUTPUT_DIR]   (default: build/release-package)
 #
 # Needs podman and a network (the image, nasm, CMake and the pinned sources of cmake/*.cmake). The
-# build runs on a clone of HEAD outside the checkout, $BB_PACKAGE_WORK (default: a new directory
-# under $TMPDIR), removed afterwards. Uncommitted changes are not built.
+# build runs on a clone of HEAD in a new directory under build/ (not $TMPDIR, which may be RAM
+# and count against the container's memory limit), removed afterwards. Uncommitted changes are not
+# built.
 set -euo pipefail
 
 # The image the release workflow uses (.github/workflows/release.yml), pinned by digest.
@@ -17,7 +18,8 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 out=$(realpath -m "${1:-$root/build/release-package}")
 command -v podman >/dev/null || { echo "build-package: podman not found" >&2; exit 1; }
 
-work=${BB_PACKAGE_WORK:-$(mktemp -d "${TMPDIR:-/tmp}/bb-package.XXXXXX")}
+mkdir -p "$root/build"
+work=$(mktemp -d "$root/build/package-work.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 # A clone with the tags, so the version (cmake/version.cmake) is HEAD's.
 git clone -q --no-hardlinks "$root" "$work/src"
@@ -30,7 +32,8 @@ podman run --rm --memory 12g --memory-swap 12g \
         set -euo pipefail
         git config --global --add safe.directory /work/src
         cd /work/src
-        eval "$(tools/release/sniper-setup.sh)"
+        env=$(tools/release/sniper-setup.sh)
+        eval "$env"
         tools/package-portable.sh /work/out'
 mkdir -p "$out"
 cp "$work"/out/*.tar.gz "$out"/

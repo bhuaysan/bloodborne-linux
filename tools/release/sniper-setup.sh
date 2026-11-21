@@ -3,7 +3,8 @@
 # (docs/releasing.md, "Build base"). Runs inside that image as root: the release workflow's job
 # container, or tools/release/build-package.sh locally.
 #
-# Usage: eval "$(tools/release/sniper-setup.sh)"
+# Usage: env=$(tools/release/sniper-setup.sh) && eval "$env"
+#        (not eval "$(...)", which would hide a failure of this script)
 #
 # The image has GCC 14 (as g++-14) and the headers of every SDL backend, on glibc 2.31. It lacks
 # nasm (FFmpeg's x86 assembly; from the image's Debian archive) and a CMake new enough for

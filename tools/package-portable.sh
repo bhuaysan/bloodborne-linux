@@ -44,6 +44,7 @@ done
 # sets it.
 glibc=$(objdump -T "$folder/bb-run" "$folder/bb-launcher" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' |
     sed 's/^GLIBC_//' | sort -Vu | tail -1)
+[[ -n $glibc ]] || { echo "package-portable: no glibc symbol versions found" >&2; exit 1; }
 echo "package-portable: needs glibc $glibc or newer" >&2
 newest=$(printf '%s\n' "$glibc" "${BB_GLIBC_MAX:-$glibc}" | sort -V | tail -1)
 if [[ $newest != "${BB_GLIBC_MAX:-$glibc}" ]]; then

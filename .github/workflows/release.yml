@@ -95,7 +95,10 @@ jobs:
       # package-portable.sh fail for a package that needs a newer glibc.
       - name: Build the package
         run: |
-          eval "$(tools/release/sniper-setup.sh)"
+          # In two steps: eval "$(...)" would hide the script's failure.
+          env=$(tools/release/sniper-setup.sh)
+          eval "$env"
+          test -n "${BB_GLIBC_MAX:-}"
           tools/package-portable.sh dist
 
       # The programs report the tag as their version: a clean build of exactly the tagged commit.
@@ -111,6 +114,7 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 7
+          overwrite: true  # "Re-run all jobs" uploads it again
 
   publish:
     needs: package
