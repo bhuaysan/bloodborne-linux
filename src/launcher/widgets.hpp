@@ -8,7 +8,7 @@
 namespace bb::launcher {
 
 // A bevelled button (light top and left edges, dark bottom and right edges), as in a late-90s
-// autorun menu. `accent` gives it the accent colour (Play, and Help after a failed run).
+// autorun menu. `accent` gives it the accent colour (Play).
 // `focus_now` moves the gamepad focus to it. Returns true when it was pressed.
 bool bevel_button(const char* label, ImVec2 size, bool accent = false, bool focus_now = false);
 

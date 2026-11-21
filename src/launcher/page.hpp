@@ -1,4 +1,4 @@
-// A page of the launcher (Picture and sound, Saves, Help with problems): drawn in the area of the
+// A page of the launcher (Picture and sound, Saves): drawn in the area of the
 // button column, under the status line, in the same window. The app draws the Back button below
 // it and calls on_close when the page is left.
 #pragma once
@@ -9,7 +9,6 @@
 #include <string>
 #include <vector>
 
-#include "common/game_folder.hpp"
 #include "launcher/logic.hpp"
 #include "launcher/text.hpp"
 
@@ -24,13 +23,6 @@ struct Context {
     std::filesystem::path config_path;  // the config file, the only state of the launcher
     bool game_ready = false;            // a game folder passed its check
     std::filesystem::path game_dir;     // empty unless game_ready
-    // What the Help page needs to tell which problem applies now.
-    std::filesystem::path state_dir;    // the runtime's state directory (user/); the last run's log is below it
-    bool have_folder = false;           // a game folder is set, whether or not it passed
-    common::FolderCheck folder_check = common::FolderCheck::ok;
-    bool gpu_ok = true;
-    bool last_run_failed = false;
-    std::string gpu_description;        // for the report; empty: ask the Vulkan loader
 };
 
 class Page {
@@ -47,7 +39,6 @@ public:
 // One factory per page, each defined in its page_*.cpp.
 std::unique_ptr<Page> make_picture_page();
 std::unique_ptr<Page> make_saves_page();
-std::unique_ptr<Page> make_help_page();
 
 // The first-start search (page_find.cpp): its strings, and the list of several folders that
 // passed the check. `chosen` is called from draw() when the player picks one.
@@ -61,8 +52,5 @@ struct FindText {
 const FindText& find_text(Lang lang);
 std::unique_ptr<Page> make_find_page(std::vector<std::filesystem::path> folders,
                                      std::function<void(const std::filesystem::path&)> chosen);
-// The text the Help page's button copies: versions, system, GPU and the last run with its log,
-// scrubbed of the home directory and the user name (defined in page_help.cpp).
-std::string collect_problem_report(const Context& ctx);
 
 }  // namespace bb::launcher

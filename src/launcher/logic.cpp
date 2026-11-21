@@ -80,15 +80,9 @@ Action first_button(MainState state) {
     case MainState::no_folder:
     case MainState::check_failed:
         return Action::set_up;
-    case MainState::no_gpu:
-        return Action::help;
     default:
         return Action::play;
     }
-}
-
-bool help_highlighted(MainState state) {
-    return state == MainState::last_run_failed;
 }
 
 bool shows_picture(MainState state) {

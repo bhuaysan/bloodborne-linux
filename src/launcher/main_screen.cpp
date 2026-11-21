@@ -84,24 +84,18 @@ Action draw_main_screen(const Context& ctx, const MainView& view) {
         case Action::play: return t.play;
         case Action::picture: return t.picture_sound;
         case Action::saves: return t.saves;
-        case Action::help: return t.help;
         default: return t.quit;
         }
     };
     const Action first = first_button(view.state);
-    std::vector<Action> list{first, Action::picture, Action::saves};
-    if (first != Action::help) {
-        list.push_back(Action::help);
-    }
-    list.push_back(Action::quit);
+    const std::vector<Action> list{first, Action::picture, Action::saves, Action::quit};
     Action result = another ? Action::choose_another : Action::none;
     ImGui::SetCursorPos(ImVec2(margin * s, below + 8 * s));
     for (std::size_t i = 0; i < list.size(); ++i) {
         const bool primary = i == 0;
         const ImVec2 size((header_width - 2 * margin) * s, (primary ? 64 : 48) * s);
         ImGui::SetCursorPosX(margin * s);
-        const bool accent = primary ? first == Action::play
-                                    : list[i] == Action::help && help_highlighted(view.state);
+        const bool accent = primary && first == Action::play;
         if (bevel_button(label(list[i]), size, accent, primary && view.focus_first)) {
             result = list[i];
         }

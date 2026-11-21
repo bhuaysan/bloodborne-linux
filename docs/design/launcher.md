@@ -39,7 +39,6 @@ A small window with a fixed size, the game's title picture at the top, a one-lin
 | [          Play              ] |   bigger, focused at start
 | [     Picture and sound      ] |
 | [         Saves              ] |
-| [    Help with problems      ] |
 | [         Quit               ] |
 +--------------------------------+
 ```
@@ -59,8 +58,8 @@ A small window with a fixed size, the game's title picture at the top, a one-lin
 | Game folder fails its check | drop target | the check's message, in words | Set up game |
 | Ready | title picture | "Version 1.09 · Controller connected" | Play |
 | Ready, no controller | title picture | "No controller. Plug one in before you play." | Play |
-| No usable Vulkan GPU | title picture | "Your graphics card can't run the game." | Help with problems |
-| Last run ended with an error | title picture | "The game stopped unexpectedly." | Play (Help with problems is highlighted) |
+| No usable Vulkan GPU | title picture | "Your graphics card can't run the game." | Play |
+| Last run ended with an error | title picture | "The game stopped unexpectedly." | Play |
 
 The status line replaces a checklist page: when everything is fine it is one quiet line, and when something is wrong it says exactly one thing, the most important one. The order of checks is game folder, GPU, controller.
 
@@ -112,18 +111,11 @@ Changes are saved when the page closes. There is no Apply button.
 - "Open folder" opens the profile's save folder in the file manager (`SDL_OpenURL` with a `file://` URL), so players can make backups without knowing where in the folder their saves are.
 - Deleting a profile is not offered. Players who really want to delete one can do it in the file manager.
 
-## Help with problems
-
-- The messages for the problems we know, in words, each with what to do: game folder moved or unreadable, wrong version, no Vulkan GPU or driver too old, game stopped unexpectedly.
-- **Copy problem report:** copies to the clipboard the launcher and `bb-run` versions, distribution, kernel, GPU and driver, the last run's exit status and the last 200 lines of its log. Home-directory paths are replaced with `~` and the user name never appears. The player can paste the report into an issue.
-- **Open log folder.**
-
-The page lists the four problems with what to do and puts the ones that apply now first (the check of the game folder, the GPU probe, the last run's status). Play sends the output of `bb-run` to `user/logs/launcher-last-run.log` and writes how it ended to `launcher-last-run.status` next to it, because `bb-run` has no log file of its own when it stops early. The report takes the last 200 lines of that capture, then replaces the launcher's folder with `<folder>`, the home directory and any `/home/<name>` with `~` and every whole word equal to the user name with `<user>`. The launcher has no version number yet, so the report gives the commit it was built from; `bb-run` is built with it.
-
 ## Starting the game
 
 - Play starts `bb-run` from the launcher's own directory (found via `/proc/self/exe`) as a separate process, with `--config <path>` and nothing else. The launcher holds no settings of its own: the config file is the only state.
 - The launcher hides its window while the game runs and waits for the process to end. On exit code 0 it comes back to the main screen. On any other exit it comes back with the error state above.
+- Play sends the output of `bb-run` to `user/logs/launcher-last-run.log` and writes how it ended to `launcher-last-run.status` next to it, because `bb-run` has no log file of its own when it stops early.
 - The launcher never writes into the game folder, and nothing outside `user/` in its own folder.
 
 ## Controller
@@ -141,7 +133,7 @@ Each part of the launcher can be used with the controller alone: ImGui's gamepad
 
 The code is in `src/launcher/`: `app.cpp` (window and loop), `main_screen.cpp`, one `page_*.cpp` per page behind the `Page` interface of `page.hpp`, shared widgets in `widgets.hpp`, and the pure logic (states, crop, language, `bb-run` arguments, script parsing) in `logic.cpp`, which `tests/launcher` covers. The main screen and the common words have one string table per language (`text.cpp`). Each page keeps its own English and German strings in its own file, so pages can be built in parallel. Play looks for `bb-run` next to the launcher.
 
-For the checks and the tests, `BB_LAUNCHER_SCRIPT` names a file with one step per line (`wait N`, `drop PATH`, `press accept|back|up|down|left|right`, `shot PATH`, `config PATH`, `waitgame SECONDS`, `quit`). The steps feed drops and gamepad presses, save the rendered frame as a PNG, point Play at another config file and end the game after a time. `waitgame` only counts as the step directly after the `press` that starts the game; any other step in between leaves the game running without a limit. With a script, the launcher acts as if a controller were connected. `BB_LAUNCHER_URL_LOG` and `BB_LAUNCHER_CLIPBOARD_LOG` name files that get the folder URLs of the Saves page and the report of the Help page instead of a file manager window and the clipboard.
+For the checks and the tests, `BB_LAUNCHER_SCRIPT` names a file with one step per line (`wait N`, `drop PATH`, `press accept|back|up|down|left|right`, `shot PATH`, `config PATH`, `waitgame SECONDS`, `quit`). The steps feed drops and gamepad presses, save the rendered frame as a PNG, point Play at another config file and end the game after a time. `waitgame` only counts as the step directly after the `press` that starts the game; any other step in between leaves the game running without a limit. With a script, the launcher acts as if a controller were connected. `BB_LAUNCHER_URL_LOG` names a file that gets the folder URLs of the Saves page instead of a file manager window.
 
 ## Not in scope
 
@@ -150,3 +142,4 @@ For the checks and the tests, `BB_LAUNCHER_SCRIPT` names a file with one step pe
 - Downloads and updates of any kind, including of the launcher itself.
 - Keyboard input for the game. That belongs in `bb-run`, as an issue of its own.
 - Themes, news, mod lists: they would make the launcher less simple.
+- A help page with the known problems and a copyable problem report. R9 had one; the maintainer dropped it on 2026-11-21 (#741) to keep the launcher to its few entries. Problems show where they happen, and the run log stays in `user/logs`.

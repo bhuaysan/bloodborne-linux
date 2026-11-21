@@ -14,7 +14,6 @@ struct Strings {
     const char* set_up;
     const char* picture_sound;
     const char* saves;
-    const char* help;
     const char* quit;
     const char* back;
     const char* status_no_game;

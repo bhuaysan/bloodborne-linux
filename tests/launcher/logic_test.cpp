@@ -73,10 +73,8 @@ TEST(LauncherLogic, FirstButtonAndHeaderPerState) {
     EXPECT_EQ(first_button(MainState::check_failed), Action::set_up);
     EXPECT_EQ(first_button(MainState::ready), Action::play);
     EXPECT_EQ(first_button(MainState::no_controller), Action::play);
-    EXPECT_EQ(first_button(MainState::no_gpu), Action::help);
+    EXPECT_EQ(first_button(MainState::no_gpu), Action::play);
     EXPECT_EQ(first_button(MainState::last_run_failed), Action::play);
-    EXPECT_TRUE(help_highlighted(MainState::last_run_failed));
-    EXPECT_FALSE(help_highlighted(MainState::ready));
     EXPECT_FALSE(shows_picture(MainState::no_folder));
     EXPECT_FALSE(shows_picture(MainState::check_failed));
     EXPECT_TRUE(shows_picture(MainState::no_gpu));
@@ -123,7 +121,7 @@ TEST(LauncherText, GermanHasEveryStringAndMessage) {
     const Strings& en = strings(Lang::en);
     const char* const Strings::*fields[] = {
         &Strings::play,           &Strings::set_up,        &Strings::picture_sound,
-        &Strings::saves,          &Strings::help,          &Strings::quit,
+        &Strings::saves,          &Strings::quit,
         &Strings::back,           &Strings::status_no_game, &Strings::status_version,
         &Strings::status_controller, &Strings::status_no_controller, &Strings::status_no_gpu,
         &Strings::status_last_run_failed, &Strings::drop_hint, &Strings::set_up_first,

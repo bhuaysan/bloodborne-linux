@@ -35,10 +35,10 @@
 #include "launcher/fonts.hpp"
 #include "launcher/gpu_probe.hpp"
 #include "launcher/header_image.hpp"
-#include "launcher/help_report.hpp"
 #include "launcher/logic.hpp"
 #include "launcher/main_screen.hpp"
 #include "launcher/page.hpp"
+#include "launcher/run_log.hpp"
 #include "launcher/text.hpp"
 #include "launcher/widgets.hpp"
 
@@ -285,7 +285,6 @@ private:
     // Takes the result of a check of `folder`: a passing folder becomes the game, a failing one
     // becomes the message of the status line.
     void accept_check(const common::FolderResult& r, const fs::path& folder) {
-        folder_check_ = r.kind;
         if (r.ok()) {
             std::error_code ec;
             game_dir_ = fs::canonical(folder, ec);
@@ -378,8 +377,8 @@ private:
         posix_spawn_file_actions_t actions;
         posix_spawn_file_actions_init(&actions);
         posix_spawn_file_actions_addchdir_np(&actions, dir.c_str());
-        // The output of bb-run goes to a log the Help page can read; it may have no log file of
-        // its own when it stops early. No O_CLOEXEC: the log has to stay open as bb-run's fd 1.
+        // The output of bb-run goes to a log: it may have no log file of its own when it stops
+        // early. No O_CLOEXEC: the log has to stay open as bb-run's fd 1.
         const fs::path log = prepare_run_log();
         if (!log.empty()) {
             posix_spawn_file_actions_addopen(&actions, 1, log.c_str(), O_WRONLY | O_CREAT | O_TRUNC,
@@ -471,11 +470,6 @@ private:
         ctx.config_path = config_path_;
         ctx.game_ready = game_ready_;
         ctx.game_dir = game_dir_;
-        ctx.state_dir = state_dir();
-        ctx.have_folder = game_ready_ || tried_folder_;
-        ctx.folder_check = folder_check_;
-        ctx.gpu_ok = gpu_ok_;
-        ctx.last_run_failed = last_run_failed_;
         return ctx;
     }
 
@@ -534,7 +528,6 @@ private:
         case Action::choose_another: open_folder_dialog(); break;
         case Action::play: play(); break;
         case Action::picture: page_ = make_picture_page(); break;
-        case Action::help: page_ = make_help_page(); break;
         case Action::saves:
             if (game_ready_) {
                 page_ = make_saves_page();
@@ -660,7 +653,6 @@ private:
     bool refocus_ = false;  // a page was closed in the last frame
     bool popup_open_ = false;  // a choice list of the page was open in the last frame
     fs::path config_path_;
-    common::FolderCheck folder_check_ = common::FolderCheck::ok;
     fs::path play_config_;  // set by a script's config step
     fs::path game_dir_;
     std::string title_;

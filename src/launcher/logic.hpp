@@ -42,11 +42,9 @@ struct StateInput {
 };
 MainState select_state(const StateInput& in);
 
-enum class Action { none, set_up, play, picture, saves, help, quit, choose_another };
+enum class Action { none, set_up, play, picture, saves, quit, choose_another };
 // The first button of a state.
 Action first_button(MainState state);
-// Whether Help with problems is drawn highlighted.
-bool help_highlighted(MainState state);
 // The header shows the title picture, not the drop target.
 bool shows_picture(MainState state);
 

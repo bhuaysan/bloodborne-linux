@@ -3,18 +3,12 @@
 #include <dlfcn.h>
 
 #include <cstdint>
-#include <format>
-#include <string>
-#include <vector>
 
 #include <vulkan/vulkan_core.h>
 
 namespace bb::launcher {
 
-namespace {
-
-// Opens the loader and lists the devices. `summary` (optional) gets one line per device.
-bool probe(std::string* summary) {
+bool vulkan_gpu_usable() {
     void* lib = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
     if (lib == nullptr) {
         return false;
@@ -39,27 +33,6 @@ bool probe(std::string* summary) {
             std::uint32_t count = 0;
             usable = enumerate != nullptr && enumerate(instance, &count, nullptr) == VK_SUCCESS &&
                      count > 0;
-            const auto properties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
-                get(instance, "vkGetPhysicalDeviceProperties2"));
-            if (usable && summary != nullptr && properties2 != nullptr) {
-                std::vector<VkPhysicalDevice> devices(count);
-                if (enumerate(instance, &count, devices.data()) == VK_SUCCESS) {
-                    for (std::uint32_t i = 0; i < count; ++i) {
-                        VkPhysicalDeviceDriverProperties driver{};
-                        driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
-                        VkPhysicalDeviceProperties2 props{};
-                        props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-                        props.pNext = &driver;
-                        properties2(devices[i], &props);
-                        const auto& p = props.properties;
-                        *summary += std::format(
-                            "{}{} (Vulkan {}.{}.{}, driver {} {})", summary->empty() ? "" : "; ",
-                            p.deviceName, VK_API_VERSION_MAJOR(p.apiVersion),
-                            VK_API_VERSION_MINOR(p.apiVersion), VK_API_VERSION_PATCH(p.apiVersion),
-                            driver.driverName, driver.driverInfo);
-                    }
-                }
-            }
             if (destroy != nullptr) {
                 destroy(instance, nullptr);
             }
@@ -67,18 +40,6 @@ bool probe(std::string* summary) {
     }
     // The loader stays mapped: unloading drivers is not worth the risk for one probe.
     return usable;
-}
-
-}  // namespace
-
-bool vulkan_gpu_usable() {
-    return probe(nullptr);
-}
-
-std::string vulkan_gpu_summary() {
-    std::string summary;
-    probe(&summary);
-    return summary.empty() ? "no Vulkan device found" : summary;
 }
 
 }  // namespace bb::launcher

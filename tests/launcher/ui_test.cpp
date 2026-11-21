@@ -146,7 +146,6 @@ const char* first_label(const Strings& t, Action a) {
     switch (a) {
     case Action::set_up: return t.set_up;
     case Action::play: return t.play;
-    case Action::help: return t.help;
     default: return "";
     }
 }
@@ -207,7 +206,7 @@ TEST(LauncherUi, DrawsTheMainScreenForEveryStateWithoutPressing) {
             ImGui::Render();
             EXPECT_GT(ImGui::GetDrawData()->CmdListsCount, 0);
         }
-        for (auto make : {make_picture_page, make_saves_page, make_help_page}) {
+        for (auto make : {make_picture_page, make_saves_page}) {
             auto page = make();
             EXPECT_NE(std::string(page->title(ctx)), "");
         }

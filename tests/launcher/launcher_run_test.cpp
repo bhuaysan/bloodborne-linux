@@ -37,16 +37,14 @@ private:
     fs::path path_;
 };
 
-// The Help page's copied report goes to <dir>/clipboard.txt, never to the clipboard.
 bb::test::Result run_script(const Dir& dir, const std::string& script) {
     std::ofstream(dir.path() / "script.txt") << script;
     const std::string d = dir.path().string();
     return bb::test::run(std::format(
         "cd {} && env -u BB_GAME_DIR -u BB_CACHE_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
         "SDL_VIDEO_DRIVER=offscreen SDL_RENDER_DRIVER=software BB_LAUNCHER_SCRIPT={} "
-        "BB_LAUNCHER_CLIPBOARD_LOG={} "
         "HOME={} BB_USER_DIR={} timeout 60 {} 2>&1",
-        quote(d), quote(d + "/script.txt"), quote(d + "/clipboard.txt"), quote(d + "/home"),
+        quote(d), quote(d + "/script.txt"), quote(d + "/home"),
         quote(d + "/user"), quote(BB_LAUNCHER_PATH)));
 }
 
@@ -127,7 +125,7 @@ TEST(LauncherRunGame, PlayWorksAfterAPageWasOpenedAndClosed) {
     EXPECT_NE(rec.find("args=--config "), std::string::npos) << r.output;
 }
 
-// The output and the end of the run are kept for the Help page.
+// The output and the end of the run are kept in user/logs.
 TEST(LauncherRunGame, TheRunsOutputAndStatusAreCaptured) {
     BB_REQUIRE_GAME(game);
     const Dir dir;
@@ -254,24 +252,6 @@ TEST(LauncherRunGame, SeveralSearchHitsSaveAnOpenPicturePage) {
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_NE(r.output.find("2 hit(s)"), std::string::npos) << r.output;
     EXPECT_EQ(slurp(dir.path() / "user/config.toml"), "fullscreen = true\n");
-}
-
-// The Help page puts the pad's focus on its first button: A copies the report at once, and the
-// button shows it.
-TEST(LauncherRun, TheHelpPageTakesAOnItsFirstButton) {
-    const Dir dir;
-    const auto before = dir.path() / "before.png";
-    const auto after = dir.path() / "after.png";
-    const auto r = run_script(
-        dir, std::format("wait 3\npress down\nwait 2\npress down\nwait 2\npress down\nwait 2\n"
-                         "press accept\nwait 5\nshot {}\nwait 2\npress accept\nwait 5\nshot {}\n"
-                         "wait 2\nquit\n",
-                         before.string(), after.string()));
-    EXPECT_EQ(r.status, 0) << r.output;
-    EXPECT_NE(slurp(before), slurp(after));
-    // A pressed Copy, the first button: the report was handed over.
-    EXPECT_NE(slurp(dir.path() / "clipboard.txt").find("bloodborne-linux problem report"),
-              std::string::npos);
 }
 
 // The Picture and sound page with the pad alone: fullscreen, 60 frames and extra sharp are chosen
