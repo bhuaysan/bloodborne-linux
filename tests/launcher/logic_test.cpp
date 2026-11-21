@@ -87,8 +87,8 @@ TEST(LauncherLogic, BbRunGetsTheConfigAndNothingElse) {
 TEST(LauncherScript, ParsesEveryStep) {
     const auto steps = parse_script(
         "# a comment\n\nwait 5\n  drop /a b/c  \npress accept\npress back\nshot /s.png\n"
-        "config /c.toml\nwaitgame 90\nnopad\nquit\r\n");
-    ASSERT_EQ(steps.size(), 9u);
+        "config /c.toml\nwaitgame 90\nnopad\nsearch\nquit\r\n");
+    ASSERT_EQ(steps.size(), 10u);
     EXPECT_EQ(steps[0].kind, StepKind::wait);
     EXPECT_EQ(steps[0].number, 5);
     EXPECT_EQ(steps[1].kind, StepKind::drop);
@@ -100,7 +100,8 @@ TEST(LauncherScript, ParsesEveryStep) {
     EXPECT_EQ(steps[6].kind, StepKind::waitgame);
     EXPECT_EQ(steps[6].number, 90);
     EXPECT_EQ(steps[7].kind, StepKind::nopad);
-    EXPECT_EQ(steps[8].kind, StepKind::quit);
+    EXPECT_EQ(steps[8].kind, StepKind::search);
+    EXPECT_EQ(steps[9].kind, StepKind::quit);
 }
 
 TEST(LauncherScript, RefusesBadLinesWithTheirNumber) {

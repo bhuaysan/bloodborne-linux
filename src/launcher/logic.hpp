@@ -64,8 +64,10 @@ std::vector<std::string> bb_run_arguments(const std::filesystem::path& bb_run,
 // One step per line: `wait N` (frames), `drop PATH`, `press accept|back|up|down|left|right`,
 // `shot PATH` (the rendered frame as a PNG), `config PATH` (Play uses this config file from now
 // on), `waitgame SECONDS` (waits for the game, then ends it), `nopad` (acts as if no controller
-// were connected from now on) and `quit`. Empty lines and lines that start with # are skipped.
-enum class StepKind { wait, drop, press, shot, config, waitgame, nopad, quit };
+// were connected from now on), `search` (a script with this step holds back the first-start
+// search's result until the step, which waits for the search to end and hands the result over)
+// and `quit`. Empty lines and lines that start with # are skipped.
+enum class StepKind { wait, drop, press, shot, config, waitgame, nopad, search, quit };
 enum class PadButton { accept, back, up, down, left, right };
 struct ScriptStep {
     StepKind kind = StepKind::quit;

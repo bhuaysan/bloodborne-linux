@@ -107,6 +107,8 @@ public:
             const auto bytes = common::read_file(path);
             script_ = parse_script(std::string_view(reinterpret_cast<const char*>(bytes.data()),
                                                     bytes.size()));
+            hold_search_ = std::ranges::any_of(
+                script_, [](const ScriptStep& s) { return s.kind == StepKind::search; });
         }
     }
 
@@ -246,7 +248,7 @@ private:
     }
 
     void poll_search() {
-        if (!searching_) {
+        if (!searching_ || hold_search_) {
             return;
         }
         std::optional<FindResult> result;
@@ -257,7 +259,9 @@ private:
         if (!result) {
             return;
         }
-        search_thread_.join();
+        if (search_thread_.joinable()) {
+            search_thread_.join();
+        }
         searching_ = false;
         std::cerr << std::format("bb-launcher: game folder search took {} ms, {} hit(s){}\n",
                                  result->elapsed.count(), result->folders.size(),
@@ -447,6 +451,13 @@ private:
         case StepKind::config: play_config_ = step.text; break;
         case StepKind::waitgame: break;  // only counts while the game runs
         case StepKind::nopad: script_pad_ = false; break;
+        case StepKind::search:  // the test chooses when the result comes, not the disk
+            hold_search_ = false;
+            if (search_thread_.joinable()) {
+                search_thread_.join();
+            }
+            poll_search();
+            break;
         case StepKind::quit: running_ = false; break;
         }
     }
@@ -725,6 +736,7 @@ private:
     std::shared_ptr<DialogMailbox> dialog_ = std::make_shared<DialogMailbox>();
     std::vector<ScriptStep> script_;
     bool script_pad_ = true;  // a script plays a controller until its nopad step
+    bool hold_search_ = false;  // a script with a search step: the result waits for that step
     std::size_t step_ = 0;
     int wait_left_ = 0;
     ImGuiKey release_key_ = ImGuiKey_None;

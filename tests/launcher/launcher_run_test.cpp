@@ -301,11 +301,10 @@ TEST(LauncherRunGame, SeveralSearchHitsSaveAnOpenPicturePage) {
         fs::create_symlink(fs::canonical(game) / "eboot.bin", folder / "eboot.bin");
         fs::create_symlink(fs::canonical(game) / "sce_sys/param.sfo", folder / "sce_sys/param.sfo");
     }
-    for (int i = 0; i < 1500; ++i) {  // keeps the search busy until the page is open
-        fs::create_directories(dir.path() / "home/Pad" / std::to_string(i) / "x");
-    }
-    const auto r = run_script(
-        dir, std::string(to_picture) + "press accept\nwait 2\npress down\nwait 2\npress accept\nwait 400\nquit\n");
+    // The search step hands the result over once fullscreen is chosen on the open page.
+    const auto r = run_script(dir, std::string(to_picture) +
+                                       "press accept\nwait 2\npress down\nwait 2\npress accept\n"
+                                       "wait 3\nsearch\nwait 3\nquit\n");
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_NE(r.output.find("2 hit(s)"), std::string::npos) << r.output;
     EXPECT_EQ(slurp(dir.path() / "user/config.toml"), "fullscreen = true\n");

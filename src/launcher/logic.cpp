@@ -156,8 +156,10 @@ std::vector<ScriptStep> parse_script(std::string_view text) {
             } else {
                 fail("press needs accept, back, up, down, left or right");
             }
-        } else if (word == "nopad" || word == "quit") {
-            step.kind = word == "nopad" ? StepKind::nopad : StepKind::quit;
+        } else if (word == "nopad" || word == "search" || word == "quit") {
+            step.kind = word == "nopad"    ? StepKind::nopad
+                        : word == "search" ? StepKind::search
+                                           : StepKind::quit;
         } else {
             fail(std::format("unknown step \"{}\"", word));
         }
