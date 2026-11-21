@@ -165,10 +165,12 @@ bool button_hints(const char* select, const char* back, float scale) {
         const float k = r * 0.45f;
         if (i == 0) {
             dl->AddCircle(c, k, colour::chosen, 0, scale);
-            // The mouse can go back here too: the hint is its Back button.
-            const ImVec2 min(c.x - r, cy - r);
+            // The mouse can go back here too: the hint is its Back button, a little larger than
+            // it looks so that it is easy to hit.
+            const ImVec2 min(c.x - r - 6 * scale, cy - 14 * scale);
             ImGui::SetCursorScreenPos(min);
-            back_pressed = ImGui::InvisibleButton("##back", ImVec2(x + text.x - min.x, 2 * r));
+            back_pressed =
+                ImGui::InvisibleButton("##back", ImVec2(x + text.x + 6 * scale - min.x, 28 * scale));
         } else {
             dl->AddLine(ImVec2(c.x - k, c.y - k), ImVec2(c.x + k, c.y + k), colour::chosen, scale);
             dl->AddLine(ImVec2(c.x - k, c.y + k), ImVec2(c.x + k, c.y - k), colour::chosen, scale);

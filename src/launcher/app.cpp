@@ -118,6 +118,7 @@ public:
         while (running_) {
             frame();
         }
+        close_pages();  // a page left open at the end saves its choices too
         shutdown();
         return 0;
     }
@@ -509,6 +510,9 @@ private:
         case Action::set_up:
         case Action::choose_another: open_folder_dialog(); break;
         case Action::play:
+            if (prompt_ != Prompt::none) {
+                break;  // a prompt came up in the frame of the press; it goes first
+            }
             prompt_ = before_play(gpu_ok_, controller());
             if (prompt_ == Prompt::none) {
                 play();
@@ -605,9 +609,9 @@ private:
         }
         // A problem while a game is set up (a refused drop, say) comes up once as a prompt;
         // without a game the main screen and the game folder page show it.
-        if (game_ready_ && !notice_.empty() && notice_ != prompted_notice_ &&
-            prompt_ == Prompt::none) {
-            prompted_notice_ = notice_;
+        if (game_ready_ && !notice_.empty() && prompt_ == Prompt::none) {
+            prompted_notice_ = std::move(notice_);  // shown now; the same problem again shows again
+            notice_.clear();
             prompt_ = Prompt::notice;
         }
         ImGui_ImplSDLRenderer3_NewFrame();
@@ -643,7 +647,8 @@ private:
             action = draw_page(ctx);
             // Back closes an open choice list or prompt first, and the page only on the next press.
             const bool popup_was_open = popup_open_;
-            popup_open_ = ImGui::IsPopupOpen(ImGuiID(0), ImGuiPopupFlags_AnyPopupId);
+            popup_open_ = ImGui::IsPopupOpen(ImGuiID(0), ImGuiPopupFlags_AnyPopupId) ||
+                          prompt_ != Prompt::none;  // a prompt opens late in its first frame
             if (!popup_was_open && !popup_open_ &&
                 (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight))) {
                 close_page();
@@ -697,7 +702,7 @@ private:
     bool tried_folder_ = false;  // a folder was set or chosen, whatever its check said
     bool gpu_ok_ = true;
     Prompt prompt_ = Prompt::none;
-    std::string prompted_notice_;  // the notice the last notice prompt showed
+    std::string prompted_notice_;  // the text of the notice prompt
     std::string notice_;  // the last problem: in the status line without a game, else a prompt
     std::vector<std::unique_ptr<Page>> pages_;  // the open pages, the one shown last
     std::shared_ptr<DialogMailbox> dialog_ = std::make_shared<DialogMailbox>();

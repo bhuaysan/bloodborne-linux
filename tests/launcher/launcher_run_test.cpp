@@ -130,6 +130,26 @@ TEST(LauncherRunGame, PlayWorksAfterAPageWasOpenedAndClosed) {
     EXPECT_NE(rec.find("args=--config "), std::string::npos) << r.output;
 }
 
+// A refused drop while a game is set up comes up as a prompt, and the same drop again shows it
+// again: the shots with the prompt match, the one after OK differs.
+TEST(LauncherRunGame, ARefusedDropWhileReadyPromptsEveryTime) {
+    BB_REQUIRE_GAME(game);
+    const Dir dir;
+    const fs::path empty = dir.path() / "empty";
+    fs::create_directories(empty);
+    const fs::path first = dir.path() / "first.png";
+    const fs::path closed = dir.path() / "closed.png";
+    const fs::path again = dir.path() / "again.png";
+    const auto r = run_script(
+        dir, std::format("wait 3\ndrop {}\nwait 3\ndrop {}\nwait 4\nshot {}\npress accept\nwait 4\n"
+                         "shot {}\ndrop {}\nwait 4\nshot {}\nquit\n",
+                         game.string(), empty.string(), first.string(), closed.string(),
+                         empty.string(), again.string()));
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(slurp(first), slurp(again));
+    EXPECT_NE(slurp(first), slurp(closed));
+}
+
 // Play without a controller asks first: Cancel (B) starts nothing, Play anyway (A on the first
 // option) starts the game.
 TEST(LauncherRunGame, PlayWithoutAControllerAsksFirst) {

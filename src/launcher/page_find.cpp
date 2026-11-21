@@ -13,7 +13,6 @@ constexpr FindText english{
     .title = "Game folders found",
     .hint = "Several copies of Bloodborne were found. Pick the one to play.",
     .searching = "Looking for your game...",
-    .found = "Found:",
     .choose_another = "Choose another folder",
 };
 
@@ -21,7 +20,6 @@ constexpr FindText german{
     .title = "Gefundene Spielordner",
     .hint = "Es wurden mehrere Kopien von Bloodborne gefunden. W\xc3\xa4hle die zum Spielen.",
     .searching = "Suche nach deinem Spiel...",
-    .found = "Gefunden:",
     .choose_another = "Anderen Ordner w\xc3\xa4hlen",
 };
 

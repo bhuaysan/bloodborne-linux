@@ -54,7 +54,6 @@ struct FindText {
     const char* title;           // the list's heading
     const char* hint;            // above the list
     const char* searching;       // status line while the search runs
-    const char* found;           // before the folder on the game folder page
     const char* choose_another;  // the entry under it
 };
 const FindText& find_text(Lang lang);
