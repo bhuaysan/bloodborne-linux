@@ -79,6 +79,9 @@ namespace {
 // `value` and a small tick at `mark` (the default). The diamond sits where ImGui puts its grab,
 // so clicks and drags land under it.
 void draw_line_slider(int value, int min, int max, int mark, float s, bool lit) {
+    if (max <= min) {
+        return;  // nothing to slide; no division by an empty range
+    }
     const ImVec2 lo = ImGui::GetItemRectMin();
     const ImVec2 hi = ImGui::GetItemRectMax();
     constexpr float padding = 2.0f;  // ImGui's grab padding

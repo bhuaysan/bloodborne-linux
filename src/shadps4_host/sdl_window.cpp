@@ -39,10 +39,15 @@ SDL_DisplayID FindDisplay(std::string_view name, std::string& note) {
     SDL_DisplayID* const ids = SDL_GetDisplays(&count);
     SDL_DisplayID found = 0;
     std::string names;
-    for (int i = 0; i < count && found == 0; ++i) {
+    // The whole name first (the launcher writes it), then the first name that contains it.
+    for (int i = 0; i < count; ++i) {
         const char* const display = SDL_GetDisplayName(ids[i]);
         const std::string_view n = display != nullptr ? display : "";
-        if (ContainsIgnoringCase(n, name)) {
+        if (n == name) {
+            found = ids[i];
+            break;
+        }
+        if (found == 0 && ContainsIgnoringCase(n, name)) {
             found = ids[i];
         }
         names += names.empty() ? "" : ", ";

@@ -176,17 +176,27 @@ std::optional<std::int32_t> resolve_gpu_id(std::string_view selector,
         why = "vkEnumeratePhysicalDevices: " + vk::to_string(result);
         return std::nullopt;
     }
+    // The whole name first: the launcher writes it, and it is also a part of a longer name
+    // ("RTX 3060" of "RTX 3060 Ti" listed before it).
     std::string names;
+    std::optional<std::size_t> part;
     for (std::size_t i = 0; i < devices.size(); ++i) {
         const vk::PhysicalDeviceProperties properties = devices[i].getProperties();
         const std::string_view name = properties.deviceName.data();
-        if (contains_ignoring_case(name, selector)) {
-            common::log(common::LogLevel::info, channel, "--device {}: GPU {} ({})", selector, i,
-                        name);
-            return static_cast<std::int32_t>(i);
+        if (name == selector) {
+            part = i;
+            break;
+        }
+        if (!part && contains_ignoring_case(name, selector)) {
+            part = i;
         }
         names += names.empty() ? "" : ", ";
         names += name;
+    }
+    if (part) {
+        common::log(common::LogLevel::info, channel, "--device {}: GPU {} ({})", selector, *part,
+                    devices[*part].getProperties().deviceName.data());
+        return static_cast<std::int32_t>(*part);
     }
     why = "no Vulkan device name contains \"" + std::string(selector) + "\" (devices: " + names +
           ")";
