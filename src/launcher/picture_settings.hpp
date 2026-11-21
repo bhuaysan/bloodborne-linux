@@ -33,7 +33,7 @@ struct PictureChoices {
 };
 
 // The texture filtering choices: the game's filtering (0), then the levels bb-run takes above
-// none (#658). A level set by hand that is not here keeps its place in the list.
+// none (#658). A level set by hand that is not here is added at the end of the list.
 inline constexpr unsigned anisotropy_choices[] = {0, 2, 4, 8, 16};
 
 // What the page shows for `config`. Missing keys read as bb-run's defaults. An FSR setting that

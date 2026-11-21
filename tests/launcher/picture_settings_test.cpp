@@ -83,19 +83,19 @@ TEST(PictureSettings, MapsTheR11ChoicesOntoTheirKeys) {
 TEST(PictureSettings, OddR11ValuesAndStrengthsSurvive) {
     Config config;
     config.fov = 47.5f;
-    config.anisotropy = 2;
+    config.anisotropy = 1;  // a level the list has no entry for
     config.motion_blur_strength = 0.5f;
     config.chromatic_aberration_strength = 0.25f;
     config.resolution = std::pair{2560u, 1440u};  // a 16:9 frame set by hand
     const PictureChoices before = choices_from_config(config);
     EXPECT_EQ(before.fov, 47.5f);
-    EXPECT_EQ(before.anisotropy, 2u);
+    EXPECT_EQ(before.anisotropy, 1u);
     EXPECT_FALSE(before.wide);
     PictureChoices after = before;
     after.motion_blur = false;
     apply_choices(config, before, after);
     EXPECT_EQ(config.fov, 47.5f);
-    EXPECT_EQ(config.anisotropy, 2u);
+    EXPECT_EQ(config.anisotropy, 1u);
     EXPECT_EQ(config.motion_blur_strength, 0.5f);
     EXPECT_EQ(config.chromatic_aberration_strength, 0.25f);
     EXPECT_EQ(config.resolution, (Size{2560, 1440}));

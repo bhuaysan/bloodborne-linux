@@ -202,7 +202,7 @@ public:
 
         std::vector<unsigned> levels(std::begin(anisotropy_choices), std::end(anisotropy_choices));
         if (std::find(levels.begin(), levels.end(), now_.anisotropy) == levels.end()) {
-            levels.push_back(now_.anisotropy);  // a level set by hand keeps its place
+            levels.push_back(now_.anisotropy);  // a level set by hand goes at the end
         }
         std::vector<std::string> filters;
         int level = 0;
@@ -255,7 +255,9 @@ private:
             ImGui::SetKeyboardFocusHere();
         }
         const bool changed = draw();
-        const bool lit = ImGui::IsItemFocused() || ImGui::IsItemHovered() || ImGui::IsItemActive();
+        // Plain text (the resolution in fullscreen) has no ID and never lights up.
+        const bool lit = ImGui::GetItemID() != 0 &&
+                         (ImGui::IsItemFocused() || ImGui::IsItemHovered() || ImGui::IsItemActive());
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const ImVec2 win = ImGui::GetWindowPos();
         const float top = win.y + y - ImGui::GetScrollY();
