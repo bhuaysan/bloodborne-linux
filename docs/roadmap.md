@@ -34,7 +34,10 @@ Each step is a GitHub milestone, and tasks are tracked as issues.
 |---|---|---|
 | **R7 Playthrough** | The complete game is playable | The game can be played from the start to an ending on the reference machine, without a crash or a rendering fault that blocks play. The work goes area by area, and every fault found gets an issue |
 | **R12 Distributions** | The game runs on the common Linux distributions | The portable package runs and plays on Fedora, Ubuntu, Debian, Arch and Bazzite, and the source builds on them (`docs/distributions.md`) |
+| **R13 Heavy-area performance** | 120 FPS in the heaviest areas | Every segment of the heaviest areas that misses 8.33 ms at 120 FPS (#654) holds it, or has a measured bound outside the GPU thread (the main loop or the GPU) with an issue of its own. 30 and 60 FPS stay as they are |
 | **Decomp** (continuous, as needed) | Replace game code where that helps | No end state of its own. A function is decompiled when an issue needs it for a bug, a crash, a bottleneck or a limit such as the frame rate. It passes its differential test and is hooked in. Progress is tracked in `symbols/functions.csv` |
+
+R13 starts with a measurement (#654): it names what bounds a frame in the heaviest areas, and the other issues start only where the numbers support them. The cheap cuts on the GPU thread come first (user data uploads only when they change, staging copies on copy threads, the write-fault window); precomputing draws ahead of the GPU thread follows only if they don't reach 8.33 ms, and splitting the GPU thread into two stages with one owner per cache is assessed, not built (#779). R13 runs alongside R7, which keeps priority.
 
 R10 and R11 ran alongside R7, which kept priority: a fault that blocks play comes before any option (maintainer decision, 2026-11-19). Both started with research issues that found the engine's own parameters (vblank rate, frame-rate assumptions, post-processing, camera, shadows, draw distance); the options built on what they found. Each option keeps the game's own behaviour as the default, so 30 FPS and 1x stay as they are on `main`.
 
