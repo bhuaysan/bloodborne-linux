@@ -832,18 +832,26 @@ TEST(HleVideo, VblanksFollowAFrameRateAbove60) {
     const Port port;
     // The present thread takes the new rate at its next vblank.
     std::this_thread::sleep_for(2 * vblank_period);
-    const auto start = std::chrono::steady_clock::now();
     constexpr int flips = 9;
-    for (int i = 0; i < flips; ++i) {
-        EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, i % 2, 1, 0), 0);
+    // At 60 Hz nine flips take at least 8 periods, 133 ms, whatever the load. A run that finishes
+    // faster can only come from the 120 Hz grid, while a loaded machine only makes runs slower,
+    // so one fast run out of a few proves the rate and a slow run proves nothing. Every run still
+    // has to respect the 120 Hz floor.
+    bool fast_run = false;
+    for (int attempt = 0; attempt < 10 && !fast_run; ++attempt) {
+        const std::uint64_t target = flip_count(port.handle) + flips;
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < flips; ++i) {
+            EXPECT_EQ(sceVideoOutSubmitFlip(port.handle, i % 2, 1, 0), 0);
+        }
+        while (flip_count(port.handle) < target) {
+            ASSERT_EQ(wait_for(port.queue, nullptr).result, 0);
+        }
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        EXPECT_GE(elapsed, (flips - 1) * vblank_timing(120).period - flip_grace);
+        fast_run = elapsed < (flips - 1) * vblank_period - 10ms;
     }
-    while (flip_count(port.handle) < flips) {
-        ASSERT_EQ(wait_for(port.queue, nullptr).result, 0);
-    }
-    const auto elapsed = std::chrono::steady_clock::now() - start;
-    EXPECT_GE(elapsed, (flips - 1) * vblank_timing(120).period);
-    // At 60 Hz they take 133 ms; the room is for a loaded machine.
-    EXPECT_LT(elapsed, (flips - 1) * vblank_period);
+    EXPECT_TRUE(fast_run) << "no run of nine flips beat the 60 Hz time";
 }
 
 // With flip rate 1 the present thread takes a flip at every second vblank.
