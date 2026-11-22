@@ -42,10 +42,10 @@ that distribution on an AMD GPU (RADV) under KDE Plasma on Wayland (`docs/test-r
 | Distribution | Oldest version | What to install | Known limits |
 |---|---|---|---|
 | Fedora | 44 | nothing on a desktop | The reference machine |
-| Ubuntu | VERSIONS_UBUNTU | `mesa-vulkan-drivers` (AMD and Intel) | UBUNTU_LIMITS |
-| Debian | VERSIONS_DEBIAN | `mesa-vulkan-drivers` (AMD and Intel) | DEBIAN_LIMITS |
-| Arch Linux | rolling | `vulkan-radeon` (AMD) or `vulkan-intel` | ARCH_LIMITS |
-| Bazzite | stable image | nothing | BAZZITE_LIMITS |
+| Ubuntu | 22.04 | `mesa-vulkan-drivers` (AMD and Intel) | none known |
+| Debian | 12 | `mesa-vulkan-drivers` (AMD and Intel); on Debian 13 from `trixie-backports` | Debian 13's own Mesa 25.0.7 hangs the GPU in the intro after the character editor; the backports driver doesn't (#793) |
+| Arch Linux | rolling | `vulkan-radeon` (AMD) or `vulkan-intel` | none known |
+| Bazzite | stable image | nothing | none known |
 
 A system without a desktop (a server or container image) also needs the libraries a desktop
 brings: on Ubuntu and Debian `libxkbcommon0 libwayland-cursor0 libwayland-egl1 libxext6

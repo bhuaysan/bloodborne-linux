@@ -100,23 +100,38 @@ the package folder read-only. It replaces bwrap, which rootless podman can't run
 in the run's scope (`--cgroups=disabled`), so the memory limit, the samplers and the stop reach
 `bb-run` in it. Distrobox itself is not used: its first start installs about 60 packages, the Vulkan
 drivers, fontconfig and the X11 libraries among them, which would hide what the package needs. The
-image is the distribution's official one with only what the README's table names installed
-(`--no-install-recommends`). Bazzite's image links `/home` to `var/home` but has no `/var/home`, so
+image is the distribution's official one with only what the README names installed (the driver and
+the libraries a desktop brings, `--no-install-recommends`). Bazzite's image links `/home` to `var/home` but has no `/var/home`, so
 its image adds that folder and nothing else.
 
 Each image ran `main-menu` with `SDL_AUDIO_DRIVER=pulseaudio` (the logos and the title with sound)
 and `new-game-to-clinic` with `SDL_AUDIO_DRIVER=pipewire` (a new game to first control in the
-clinic), on the package of #737 (RESULTS_PACKAGE). Sound counted when `pw-dump` showed a running
+clinic), on the package of #737 (`v0.1.0-17-gd8170ae9`). Sound counted when `pw-dump` showed a running
 output stream of `bb-run` with the forced driver's API during the run (`pipewire-pulse` for
 PulseAudio, none for PipeWire's own).
 
-RESULTS_TABLE
+| Image | Mesa (RADV) | Logos and title, PulseAudio | Clinic, PipeWire | Clinic shot vs host | Peak maps (title / clinic) |
+|---|---|---|---|---|---|
+| Fedora 44 (host) | 26.2.6 | – | yes | 0 | – / 1642 |
+| Ubuntu 24.04 | 25.2.8 | yes | yes | 0.30 | 881 / 1876 |
+| Ubuntu 22.04 | 23.2.1 | yes | yes | 0.46 | 874 / 1862 |
+| Debian 13 | 25.0.7 | yes | no: GPU ring timeout in the intro after the character editor, 3 of 3 runs (#793) | – | 832 / – |
+| Debian 13, Mesa from `trixie-backports` | 26.1.6 | yes | yes | 0.63 | 813 / 1866 |
+| Debian 12 | 22.3.6 | yes | yes | 0.42 | 843 / 1844 |
+| Arch Linux | 26.3.1 | yes | yes | 0.28 | 570 / 1532 |
+| Bazzite (stable) | 26.2.7 | yes | yes | 0.41 | 537 / 1579 |
+
+"Yes" means the scenario finished, its shots show the scenario (the title menu, the hunter in the
+clinic) and the sound check above held. The shot difference is `compare.difference` of the clinic
+shot against the host run's (mean absolute difference per channel, of 255); the title shots differ by
+at most 0.02. Ubuntu 24.04 with
+only the driver and the display libraries reached the title without sound, as the README says.
 
 **Memory mappings.** The kernel refuses new mappings of a process above `vm.max_map_count`, 65530 by
 default on older distributions (Fedora, Arch and Ubuntu 24.04 ship 1048576). The rig records the
 most mappings one process of the target had (`peak_maps`, sampled once a second). The package's
 `bb-run` on the host had at most 1642 on the clinic route and 1606 on the Central Yharnam route
-(`yharnam-route`), and RESULTS_MAPS in the containers. That is 40 times below the old default, so
+(`yharnam-route`), and 1532 to 1939 in the containers (other libraries). That is 40 times below the old default, so
 `bb-run` doesn't check the limit at start. A route that comes near 30000 should add the check.
 
 ## Load times (#655)
