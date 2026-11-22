@@ -100,10 +100,12 @@ DataFolderResult adopt_data_folder(const std::filesystem::path& folder,
 // PATH, as Change on the Advanced page would) and `movedefault` (Back to default), `shot PATH` (the rendered frame as a PNG), `config PATH` (Play uses this config file from now
 // on), `waitgame SECONDS` (waits for the game, then ends it), `nopad` (acts as if no controller
 // were connected from now on), `search` (a script with this step holds back the first-start
-// search's result until the step, which waits for the search to end and hands the result over)
-// and `quit`. Empty lines and lines that start with # are skipped.
+// search's result until the step, which waits for the search to end and hands the result over),
+// `otherpad up|down|left|right|accept|back` (plugs in a virtual controller that holds that button,
+// as a pad someone uses next to the test run would; the script's own presses must win) and
+// `quit`. Empty lines and lines that start with # are skipped.
 enum class StepKind { wait, drop, press, shot, config, waitgame, nopad, search, quit, datafolder,
-                      datadefault, movedata, movedefault };
+                      datadefault, movedata, movedefault, otherpad };
 enum class PadButton { accept, back, up, down, left, right };
 struct ScriptStep {
     StepKind kind = StepKind::quit;

@@ -92,6 +92,17 @@ fs::path own_directory() {
     }
 }
 
+SDL_GamepadButton sdl_button(PadButton b) {
+    switch (b) {
+    case PadButton::accept: return SDL_GAMEPAD_BUTTON_SOUTH;
+    case PadButton::back: return SDL_GAMEPAD_BUTTON_EAST;
+    case PadButton::up: return SDL_GAMEPAD_BUTTON_DPAD_UP;
+    case PadButton::down: return SDL_GAMEPAD_BUTTON_DPAD_DOWN;
+    case PadButton::left: return SDL_GAMEPAD_BUTTON_DPAD_LEFT;
+    default: return SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
+    }
+}
+
 ImGuiKey gamepad_key(PadButton b) {
     switch (b) {
     case PadButton::accept: return ImGuiKey_GamepadFaceDown;
@@ -162,6 +173,11 @@ private:
         ImGui::StyleColorsDark();
         apply_theme(ImGui::GetStyle());
         ImGui_ImplSDL3_InitForSDLRenderer(window_, renderer_);
+        if (!script_.empty()) {
+            // A script is the only controller: a real pad on the machine that runs the tests
+            // (someone playing next to them, say) would move the focus under the script.
+            ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_Manual, nullptr, 0);
+        }
         ImGui_ImplSDLRenderer3_Init(renderer_);
         load_fonts(text_size * scale_);
     }
@@ -170,6 +186,9 @@ private:
         if (search_thread_.joinable()) {
             search_->cancel = true;
             search_thread_.join();
+        }
+        if (other_pad_ != nullptr) {
+            SDL_CloseJoystick(other_pad_);
         }
         ImGui_ImplSDLRenderer3_Shutdown();
         ImGui_ImplSDL3_Shutdown();
@@ -644,6 +663,7 @@ private:
         case StepKind::config: play_config_ = step.text; break;
         case StepKind::waitgame: break;  // only counts while the game runs
         case StepKind::nopad: script_pad_ = false; break;
+        case StepKind::otherpad: attach_other_pad(sdl_button(step.button)); break;
         case StepKind::search:  // the test chooses when the result comes, not the disk
             hold_search_ = false;
             if (search_thread_.joinable()) {
@@ -653,6 +673,29 @@ private:
             break;
         case StepKind::quit: running_ = false; break;
         }
+    }
+
+    // A virtual controller that holds `button` down until the end, plugged in as a real one would
+    // be: the tests' stand-in for a pad that someone uses next to the run.
+    void attach_other_pad(SDL_GamepadButton button) {
+        if (other_pad_ != nullptr) {
+            SDL_SetJoystickVirtualButton(other_pad_, button, true);
+            return;
+        }
+        SDL_VirtualJoystickDesc desc;
+        SDL_INIT_INTERFACE(&desc);
+        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+        desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+        desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+        desc.name = "bb-launcher test pad";
+        const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
+        other_pad_ = id != 0 ? SDL_OpenJoystick(id) : nullptr;
+        if (other_pad_ == nullptr) {
+            std::cerr << "bb-launcher: no virtual controller: " << SDL_GetError() << '\n';
+            running_ = false;
+            return;
+        }
+        SDL_SetJoystickVirtualButton(other_pad_, button, true);
     }
 
     // Leaves the page on top; the one under it, or the main screen, shows again.
@@ -859,6 +902,9 @@ private:
         if (!script_.empty()) {
             // Without a real controller ImGui would ignore the scripted gamepad keys.
             ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_HasGamepad;
+            // The script counts frames, so ImGui's clock does too: its timed effects (the fade
+            // of a prompt's dimmed background, say) then look the same however busy the machine.
+            ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
             run_script();
         }
         ImGui::NewFrame();
@@ -975,6 +1021,7 @@ private:
     std::vector<std::unique_ptr<Page>> pages_;  // the open pages, the one shown last
     std::shared_ptr<DialogMailbox> dialog_ = std::make_shared<DialogMailbox>();
     std::vector<ScriptStep> script_;
+    SDL_Joystick* other_pad_ = nullptr;  // a script's otherpad step
     bool script_pad_ = true;  // a script plays a controller until its nopad step
     bool hold_search_ = false;  // a script with a search step: the result waits for that step
     std::size_t step_ = 0;

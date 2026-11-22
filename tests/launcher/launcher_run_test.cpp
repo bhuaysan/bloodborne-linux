@@ -39,14 +39,15 @@ private:
     fs::path path_;
 };
 
-bb::test::Result run_script(const Dir& dir, const std::string& script) {
+bb::test::Result run_script(const Dir& dir, const std::string& script,
+                            const std::string& more_env = "") {
     std::ofstream(dir.path() / "script.txt") << script;
     const std::string d = dir.path().string();
     return bb::test::run(std::format(
         "cd {} && env -u BB_GAME_DIR -u BB_CACHE_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
-        "SDL_VIDEO_DRIVER=offscreen SDL_RENDER_DRIVER=software BB_LAUNCHER_SCRIPT={} "
+        "SDL_VIDEO_DRIVER=offscreen SDL_RENDER_DRIVER=software {}BB_LAUNCHER_SCRIPT={} "
         "HOME={} BB_USER_DIR={} timeout 60 {} 2>&1",
-        quote(d), quote(d + "/script.txt"), quote(d + "/home"),
+        quote(d), more_env, quote(d + "/script.txt"), quote(d + "/home"),
         quote(d + "/user"), quote(BB_LAUNCHER_PATH)));
 }
 
@@ -434,6 +435,21 @@ TEST(LauncherRunGame, SeveralSearchHitsSaveAnOpenPicturePage) {
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_NE(r.output.find("2 hit(s)"), std::string::npos) << r.output;
     EXPECT_EQ(slurp(dir.path() / "user/config.toml"), "fullscreen = true\n");
+}
+
+// A controller on the machine that runs the tests (someone playing next to them) holds the d-pad
+// down from the start: the script's presses alone move the focus, so Window -> Fullscreen is
+// still chosen and saved (#788). SDL sees only the virtual pad (vendor and product 0), so the
+// run is the same whatever is plugged into the machine.
+TEST(LauncherRun, AControllerNextToTheRunDoesNotMoveTheScript) {
+    const Dir dir;
+    const auto r = run_script(dir,
+                              std::string("otherpad down\nwait 3\n") + to_picture +
+                                  "press accept\nwait 2\npress down\nwait 2\npress accept\n"
+                                  "wait 3\npress back\nwait 3\nquit\n",
+                              "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT=0x0000/0x0000 ");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(slurp(dir.path() / "user/config.toml"), "fullscreen = true\n") << r.output;
 }
 
 // The Picture and sound form with the pad alone: fullscreen, 60 frames and VSync on are chosen in

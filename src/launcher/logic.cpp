@@ -239,8 +239,8 @@ std::vector<ScriptStep> parse_script(std::string_view text) {
                         : word == "movedata" ? StepKind::movedata
                                            : StepKind::datafolder;
             step.text = std::string(arg);
-        } else if (word == "press") {
-            step.kind = StepKind::press;
+        } else if (word == "press" || word == "otherpad") {
+            step.kind = word == "press" ? StepKind::press : StepKind::otherpad;
             if (arg == "accept") {
                 step.button = PadButton::accept;
             } else if (arg == "back") {
@@ -254,7 +254,7 @@ std::vector<ScriptStep> parse_script(std::string_view text) {
             } else if (arg == "right") {
                 step.button = PadButton::right;
             } else {
-                fail("press needs accept, back, up, down, left or right");
+                fail(std::format("{} needs accept, back, up, down, left or right", word));
             }
         } else if (word == "nopad" || word == "search" || word == "quit" ||
                    word == "datadefault" || word == "movedefault") {
