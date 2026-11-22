@@ -66,6 +66,9 @@
 #include "loader/load_set.hpp"
 #include "tools/main_loop_probe.hpp"
 #include "tools/run_options.hpp"
+#if defined(BB_HAVE_WINDOW) && defined(BB_HAVE_VIDEO_CORE)
+#include "tools/system_check.hpp"
+#endif
 #ifdef BB_HAVE_VIDEO_CORE
 #include "core/libraries/libs.h"
 #include "core/libraries/pad_input.h"
@@ -600,6 +603,27 @@ int main(int argc, char** argv) {
     if (options.help) {
         std::cout << bb::tools::run_usage;
         return 0;
+    }
+    if (options.check_system) {
+        // Reads neither the game nor the user folder; logs to standard error only. _exit, as
+        // end_run: no static destructors under SDL's and the Vulkan driver's threads.
+        // Errors only, unless --log or BB_LOG ask for more: the parts' lines are the output.
+        if (options.log_spec) {
+            bb::common::set_log_filter(bb::common::LogFilter::parse(*options.log_spec));
+        } else if (std::getenv("BB_LOG") != nullptr) {
+            bb::common::set_log_filter_from_environment();
+        } else {
+            bb::common::set_log_filter(bb::common::LogFilter::parse("error"));
+        }
+#if defined(BB_HAVE_WINDOW) && defined(BB_HAVE_VIDEO_CORE)
+        const int status = bb::tools::check_system(options);
+#else
+        std::cerr << "bb-run: --check-system: built without the window and video_core\n";
+        const int status = 1;
+#endif
+        std::cout.flush();
+        std::fflush(nullptr);
+        _exit(status);
     }
     bb::common::set_thread_name("bb-run");
     stop_on_signals();

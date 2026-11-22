@@ -22,3 +22,7 @@ if(TARGET bbvideocore)
     target_link_libraries(bb-run PRIVATE bbvideocore bbsyslibs)
     target_compile_definitions(bb-run PRIVATE BB_HAVE_VIDEO_CORE)
 endif()
+# --check-system needs both.
+if(TARGET bbvideopresenter AND TARGET bbvideocore)
+    target_sources(bb-run PRIVATE system_check.cpp)
+endif()

@@ -18,6 +18,7 @@ namespace bb::tools {
 
 inline constexpr std::string_view run_usage =
     "usage: bb-run --version\n"
+    "       bb-run --check-system [--headless] [--device NAME] [--display NAME] [--validation]\n"
     "       bb-run [--config FILE] [--setup DIR] [--game-dir DIR] [--profile NAME] [--timeout SECONDS] [--stop-at-main-loop]\n"
     "              [--log SPEC] [--no-log-file] [--headless] [--device NAME] [--display NAME]\n"
     "              [--validation] [--validation-sync] [--validation-gpu]\n"
@@ -34,6 +35,11 @@ inline constexpr std::string_view run_usage =
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --version            print the version of this build and exit\n"
+    "  --check-system       check what the game needs of this system without the game: guest\n"
+    "                       memory, the FFmpeg decoders, SDL's window and sound, the Vulkan\n"
+    "                       device; print one line per part and exit with status 1 at the first\n"
+    "                       failure; with --headless on SDL's offscreen video and dummy sound\n"
+    "                       (for machines without a display or sound server)\n"
     "  --profile NAME       save data and temporary files of profile NAME ([A-Za-z0-9_-], at\n"
     "                       most 32 characters; default: default)\n"
     "  --timeout SECONDS    end the run with status 124 when the game still runs after SECONDS\n"
@@ -155,6 +161,7 @@ struct RunOptions {
     float chromatic_aberration_strength = 1.0f;  // --chromatic-aberration-strength: 0 to 1
     float fov = common::game_fov;  // --fov: common::min_fov to common::max_fov degrees
     bool help = false;  // -h or --help: print run_usage and exit 0
+    bool check_system = false;  // --check-system: check the system and exit (system_check.hpp)
 };
 
 // Parses the arguments after argv[0]. Throws std::invalid_argument, naming the argument, for an

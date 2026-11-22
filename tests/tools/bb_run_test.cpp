@@ -69,6 +69,14 @@ TEST(RunOptions, Defaults) {
     EXPECT_TRUE(o.pipeline_cache);
     EXPECT_TRUE(o.async_pipelines);
     EXPECT_FALSE(o.help);
+    EXPECT_FALSE(o.check_system);
+}
+
+TEST(RunOptions, CheckSystem) {
+    const RunOptions o = parse({"--check-system", "--headless", "--device", "llvmpipe"});
+    EXPECT_TRUE(o.check_system);
+    EXPECT_TRUE(o.headless);
+    EXPECT_EQ(o.device, "llvmpipe");
 }
 
 TEST(RunOptions, NoPipelineCacheTurnsTheDiskCacheOff) {
@@ -551,6 +559,76 @@ TEST(BbRun, PrintsTheUsage) {
     EXPECT_EQ(bad.status, 2);
     EXPECT_TRUE(bad.output.starts_with("bb-run: unknown argument \"--frobnicate\"\nusage: "))
         << bad.output;
+}
+
+// bb-run as the AppImage's runtime starts it: APPIMAGE and APPDIR set (APPDIR holds the program
+// The lavapipe ICD file, where the Vulkan driver package puts it, or empty.
+std::string lavapipe_icd() {
+    for (const char* dir : {"/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d"}) {
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+            if (entry.path().filename().string().starts_with("lvp_icd")) {
+                return entry.path().string();
+            }
+        }
+    }
+    return {};
+}
+
+// --check-system --headless on lavapipe needs no game, display or sound server: every part is
+// checked and passes, nothing is written, and the lines are all of the standard output.
+TEST(BbRun, ChecksTheSystemHeadless) {
+    if (lavapipe_icd().empty()) {
+        GTEST_SKIP() << "no lavapipe";
+    }
+    const TempDir dir;
+    const std::string d = dir.path().string();
+    const Result r = bb::test::run(std::format(
+        "cd {} && env -u BB_LOG -u BB_GAME_DIR -u WAYLAND_DISPLAY -u DISPLAY "
+        "VK_LOADER_DRIVERS_SELECT='*lvp*' BB_USER_DIR={} {} --check-system --headless 2>/dev/null",
+        quote(d), quote(d + "/user"), quote(BB_RUN_PATH)));
+    ASSERT_EQ(r.status, 0) << r.output;
+    std::vector<std::string> parts;
+    std::istringstream lines(r.output);
+    for (std::string line; std::getline(lines, line);) {
+        const std::size_t colon = line.find(": ok, ");
+        ASSERT_NE(colon, std::string::npos) << line;
+        parts.push_back(line.substr(0, colon));
+    }
+    EXPECT_EQ(parts, (std::vector<std::string>{"guest memory", "ffmpeg", "video", "audio",
+                                               "vulkan"}));
+    EXPECT_NE(r.output.find("vulkan: ok, llvmpipe"), std::string::npos) << r.output;
+    EXPECT_FALSE(std::filesystem::exists(dir.path() / "user"));
+}
+
+// A part that fails ends the check with status 1 and a line that says why; the later parts are
+// not checked.
+TEST(BbRun, CheckSystemStopsAtTheFirstFailure) {
+    if (lavapipe_icd().empty()) {
+        GTEST_SKIP() << "no lavapipe";
+    }
+    const TempDir dir;
+    const std::string d = dir.path().string();
+    const Result r = bb::test::run(std::format(
+        "cd {} && env -u BB_LOG -u WAYLAND_DISPLAY -u DISPLAY VK_LOADER_DRIVERS_SELECT='*lvp*' "
+        "BB_USER_DIR={} {} --check-system --headless --device 'no such device 0x5ca1ab1e' "
+        "2>/dev/null",
+        quote(d), quote(d + "/user"), quote(BB_RUN_PATH)));
+    EXPECT_EQ(r.status, 1) << r.output;
+    EXPECT_NE(r.output.find("audio: ok, "), std::string::npos) << r.output;
+    EXPECT_NE(r.output.find("vulkan: failed, --device: no Vulkan device name contains"),
+              std::string::npos)
+        << r.output;
+    // Without a display and without --headless, the video part fails and Vulkan is not reached.
+    const Result windowed = bb::test::run(std::format(
+        "cd {} && env -u BB_LOG -u WAYLAND_DISPLAY -u DISPLAY BB_USER_DIR={} {} --check-system "
+        "2>/dev/null",
+        quote(d), quote(d + "/user"), quote(BB_RUN_PATH)));
+    EXPECT_EQ(windowed.status, 1) << windowed.output;
+    EXPECT_NE(windowed.output.find("video: failed, neither WAYLAND_DISPLAY nor DISPLAY is set"),
+              std::string::npos)
+        << windowed.output;
+    EXPECT_EQ(windowed.output.find("vulkan:"), std::string::npos) << windowed.output;
 }
 
 // bb-run as the AppImage's runtime starts it: APPIMAGE and APPDIR set (APPDIR holds the program

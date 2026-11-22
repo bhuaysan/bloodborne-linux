@@ -159,7 +159,8 @@ if(Vulkan_FOUND AND SDL3_FOUND AND BB_GLSLANG)
     endif()
 
     add_library(bbsyslibs STATIC ${BB_SYSLIBS_SOURCES} syslibs/libs.cpp syslibs/kernel.cpp
-        syslibs/file_sys.cpp syslibs/left_out.cpp syslibs/thread.cpp syslibs/pad_input.cpp)
+        syslibs/file_sys.cpp syslibs/left_out.cpp syslibs/thread.cpp syslibs/pad_input.cpp
+        syslibs/media_check.cpp)
     target_link_libraries(bbsyslibs
         PUBLIC bbvideocore bbshadps4
         PRIVATE bb_atrac9 ${BB_FFMPEG_TARGET} SDL3::SDL3 bbcommon bb_warnings)

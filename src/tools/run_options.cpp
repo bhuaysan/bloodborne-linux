@@ -243,6 +243,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             options.log_spec = spec;
         } else if (arg == "--no-log-file") {
             options.log_file = false;
+        } else if (arg == "--check-system") {
+            options.check_system = true;
         } else if (arg == "--headless") {
             options.headless = true;
         } else if (arg == "--device") {
