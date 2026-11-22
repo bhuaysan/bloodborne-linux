@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_scheduler.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-19
+// Changed for bloodborne-linux, 2026-11-22
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/assert.h"
@@ -20,12 +20,21 @@ Scheduler::Scheduler(const Instance& instance, Recording recording_)
       work_semaphore{instance}, command_pool{instance, &work_semaphore} {
     BeginPrimary();
     dynamic_state.Invalidate();
-    if (recording == Recording::Threaded) {
+    if (recording != Recording::Direct) {
+        // Ours (#777): every hand-over carries the copy jobs its records read, also when the
+        // chunk is replayed at once (--sync-recording), so the replay waits for them.
         recorder.SetHandOver([this](RecordedChunk&& chunk) {
             Work work{};
             work.chunk = std::move(chunk);
-            Enqueue(std::move(work));
+            work.copy_ticket = copies.Issued();
+            if (recording == Recording::Threaded) {
+                Enqueue(std::move(work));
+            } else {
+                Process(work);
+            }
         });
+    }
+    if (recording == Recording::Threaded) {
         recording_thread = std::thread([this] { RecordingLoop(); });
     }
 }
@@ -219,6 +228,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     work.submit = true;
     work.info = info;
     work.signal_value = signal_value;
+    work.copy_ticket = copies.Issued();
     if (recording == Recording::Threaded) {
         Enqueue(std::move(work));
     } else {
@@ -243,6 +253,8 @@ void Scheduler::Enqueue(Work&& work) {
 // Replays a chunk into the primary command buffer, or ends and submits it and begins the next.
 // On the recording thread, or on the GPU thread without one.
 void Scheduler::Process(Work& work) {
+    // The staging space these records read is filled once its copy jobs are done (#777).
+    copies.Wait(work.copy_ticket);
     if (work.chunk.data) {
         CommandRecorder::ReplayChunk(primary, work.chunk);
         recorder.Recycle(std::move(work.chunk));

@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -29,6 +30,7 @@
 #include "sdl_window.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/cache_storage.h"
+#include "video_core/renderer_vulkan/vk_copy_queue.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
@@ -691,6 +693,143 @@ TEST(VideoCore, SparseBindWhileChunksAreQueued) {
     for (const vk::DeviceMemory memory_page : pages) {
         device.freeMemory(memory_page);
     }
+    liverpool.reset();
+}
+
+// The copy threads' tickets (#777): jobs finish out of order across threads, and Completed()
+// moves past a ticket only once it and every earlier one are done.
+TEST(CopyQueue, CompletesTicketsInOrder) {
+    Vulkan::CopyQueue copies{2};
+    EXPECT_EQ(copies.Issued(), 0u);
+    copies.Wait(0); // nothing to wait for
+    std::atomic<bool> release_first{false};
+    std::atomic<bool> second_ran{false};
+    const u64 first = copies.Push([&] {
+        while (!release_first.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+    const u64 second = copies.Push([&] { second_ran = true; });
+    EXPECT_EQ(first, 1u);
+    EXPECT_EQ(second, 2u);
+    EXPECT_EQ(copies.Issued(), 2u);
+    while (!second_ran.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_EQ(copies.Completed(), 0u); // the second is done, the first is not
+    std::thread waiter([&] { copies.Wait(second); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    release_first = true;
+    waiter.join();
+    EXPECT_EQ(copies.Completed(), 2u);
+}
+
+// A queue destroyed with jobs queued runs them all before its threads stop.
+TEST(CopyQueue, RunsQueuedJobsAtShutdown) {
+    std::atomic<int> ran{0};
+    {
+        Vulkan::CopyQueue copies{2};
+        for (int i = 0; i < 64; ++i) {
+            copies.Push([&] {
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+                ++ran;
+            });
+        }
+    }
+    EXPECT_EQ(ran.load(), 64);
+}
+
+// The replay of a chunk waits for the copy jobs pushed before its hand-over (#777): a copy from
+// staging space a job fills reads what the job wrote, in every recording mode. With a recording
+// thread the GPU thread's flush does not wait for the job; with --sync-recording (Deferred) the
+// hand-over on the GPU thread does.
+TEST(VideoCore, ReplayWaitsForItsCopies) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    Core::MemoryManager memory;
+    auto liverpool = std::make_unique<AmdGpu::Liverpool>(memory);
+    Frontend::WindowSDL window;
+    Vulkan::Instance instance{window, -1};
+    start_imgui(instance);
+    const VmaAllocator allocator = instance.GetAllocator();
+    constexpr u32 bytes = 64 * 1024;
+    struct HostBuffer {
+        VkBuffer buffer{};
+        VmaAllocation allocation{};
+        u8* mapped{};
+    };
+    const auto host_buffer = [&](VkBufferUsageFlags usage) {
+        VkBufferCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        ci.size = bytes;
+        ci.usage = usage;
+        VmaAllocationCreateInfo alloc{};
+        alloc.flags =
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        alloc.usage = VMA_MEMORY_USAGE_AUTO;
+        alloc.requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        HostBuffer b;
+        VmaAllocationInfo info{};
+        EXPECT_EQ(vmaCreateBuffer(allocator, &ci, &alloc, &b.buffer, &b.allocation, &info),
+                  VK_SUCCESS);
+        b.mapped = static_cast<u8*>(info.pMappedData);
+        return b;
+    };
+    HostBuffer staging = host_buffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    HostBuffer readback = host_buffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+
+    for (const auto mode : {Vulkan::Recording::Direct, Vulkan::Recording::Deferred,
+                            Vulkan::Recording::Threaded}) {
+        SCOPED_TRACE(static_cast<int>(mode));
+        std::memset(staging.mapped, 0, bytes);
+        std::memset(readback.mapped, 0, bytes);
+        const u8 fill = 0x40 + static_cast<u8>(mode);
+        Vulkan::Scheduler scheduler{instance, mode};
+        std::atomic<bool> release{false};
+        std::atomic<bool> copied{false};
+        scheduler.Copies().Push([&] {
+            while (!release.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            std::memset(staging.mapped, fill, bytes);
+            copied = true;
+        });
+        auto cmdbuf = scheduler.CommandBuffer();
+        cmdbuf.copyBuffer(vk::Buffer{staging.buffer}, vk::Buffer{readback.buffer},
+                          vk::BufferCopy{0, 0, bytes});
+        const vk::MemoryBarrier2 barrier{.srcStageMask = vk::PipelineStageFlagBits2::eAllTransfer,
+                                         .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+                                         .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+                                         .dstAccessMask = vk::AccessFlagBits2::eHostRead};
+        cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &barrier});
+        std::thread releaser;
+        if (mode == Vulkan::Recording::Threaded) {
+            // The flush only queues the chunk and the submit: the GPU thread goes on.
+            scheduler.Flush();
+            EXPECT_FALSE(copied.load());
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            EXPECT_FALSE(scheduler.IsFree(scheduler.CurrentTick() - 1));
+            release = true;
+        } else {
+            // The flush replays or submits on this thread, so it waits for the job.
+            releaser = std::thread([&] {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                release = true;
+            });
+            scheduler.Flush();
+            EXPECT_TRUE(copied.load());
+        }
+        scheduler.Finish();
+        if (releaser.joinable()) {
+            releaser.join();
+        }
+        EXPECT_EQ(readback.mapped[0], fill);
+        EXPECT_EQ(readback.mapped[bytes - 1], fill);
+    }
+    vmaDestroyBuffer(allocator, staging.buffer, staging.allocation);
+    vmaDestroyBuffer(allocator, readback.buffer, readback.allocation);
     liverpool.reset();
 }
 

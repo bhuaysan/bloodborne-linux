@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/buffer_cache.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-19
+// Changed for bloodborne-linux, 2026-11-22
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -30,6 +30,21 @@ namespace VideoCore {
 static constexpr size_t GDS_BUFFER_SIZE = 64_KB;
 static constexpr size_t NULL_INDEX_BUFFER_SIZE = 16;
 static constexpr size_t STREAM_BUFFER_SIZE = 128_MB;
+
+// Ours (#777): uploads from this size on are copied on the scheduler's copy threads. Below it the
+// hand-over costs more than the memmove it saves the GPU thread.
+static constexpr size_t AsyncSyncBytes = 16_KB;
+
+// The memmoves of one upload, run on a copy thread.
+struct CopyJob {
+    struct Range {
+        VAddr guest;
+        u64 offset; // in the staging space
+        u64 size;
+    };
+    Vulkan::StagingBufferRef staging;
+    boost::container::small_vector<Range, 4> ranges;
+};
 constexpr std::optional<u32> CmaskColorExpandedValue(u32 num_samples) {
     switch (num_samples) {
     case 1:
@@ -115,7 +130,10 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     }
 }
 
-BufferCache::~BufferCache() = default;
+// Ours (#777): the copy jobs write into the staging pool's buffers, which go before the scheduler.
+BufferCache::~BufferCache() {
+    scheduler.Copies().WaitIdle();
+}
 
 // With readbacks off (upstream's default and the reference's setting), upstream marks the range CPU
 // modified and nothing more. The next sync then uploads the whole page from guest memory, also over
@@ -478,12 +496,33 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
     });
     if (!copies.empty()) {
         const auto staging = staging_pool.Request(total_size_bytes, MemoryType::HostUncached);
+        // Ours (#777): a large upload's memmove goes to the scheduler's copy threads, and the
+        // replay of the copy below waits for it. The pages were protected again above, so a CPU
+        // write during the job marks them modified and the next draw syncs them again.
+        if (total_size_bytes >= AsyncSyncBytes) {
+            CopyJob job{.staging = staging};
+            job.ranges.reserve(copies.size());
+            for (const auto& copy : copies) {
+                job.ranges.push_back({copy.dstOffset, copy.srcOffset, copy.size});
+            }
+            scheduler.Copies().Push([this, job = std::move(job)] {
+                for (const auto& range : job.ranges) {
+                    memory.CopySparseMemory(range.guest, job.staging.mapped + range.offset,
+                                            range.size);
+                }
+                job.staging.Flush();
+            });
+        } else {
+            for (const auto& copy : copies) {
+                memory.CopySparseMemory(copy.dstOffset, staging.mapped + copy.srcOffset,
+                                        copy.size);
+            }
+            staging.Flush();
+        }
         for (auto& copy : copies) {
-            memory.CopySparseMemory(copy.dstOffset, staging.mapped + copy.srcOffset, copy.size);
             copy.srcOffset += staging.offset;
             copy.dstOffset -= arena->cpu_addr;
         }
-        staging.Flush();
         runtime.CopyBuffer(staging.buffer, arena, copies);
     }
     if (is_texel_buffer && !is_written) {

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_scheduler.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-19
+// Changed for bloodborne-linux, 2026-11-22
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -18,6 +18,7 @@
 #include "video_core/amdgpu/regs_color.h"
 #include "video_core/amdgpu/regs_primitive.h"
 #include "video_core/renderer_vulkan/vk_command_recorder.h"
+#include "video_core/renderer_vulkan/vk_copy_queue.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 #include "vulkan/vulkan.hpp"
@@ -415,6 +416,12 @@ public:
     /// Returns once the recording thread has processed everything handed to it.
     void Drain();
 
+    /// The copy threads that fill staging space for commands recorded here (#777). Replay and
+    /// submit wait for the jobs pushed before a chunk or submit was handed over.
+    CopyQueue& Copies() noexcept {
+        return copies;
+    }
+
     /// Returns the current command buffer tick.
     [[nodiscard]] u64 CurrentTick() const noexcept {
         return work_semaphore.CurrentTick();
@@ -444,12 +451,15 @@ public:
     static std::mutex submit_mutex;
 
 private:
+    static constexpr unsigned CopyThreads = 2;
+
     // Work for the recording thread, in the order the GPU thread handed it over.
     struct Work {
         RecordedChunk chunk{};     // records to replay, or none
         bool submit = false;       // then ends the command buffer and submits it
         SubmitInfo info{};
         u64 signal_value = 0;
+        u64 copy_ticket = 0;       // the copy jobs to wait for before replay or submit
     };
 
     void SubmitExecution(SubmitInfo& info);
@@ -462,6 +472,7 @@ private:
     const Instance& instance;
     const Recording recording;
     CommandRecorder recorder;
+    CopyQueue copies{CopyThreads};
     Semaphore work_semaphore;
     CommandPool command_pool;
     DynamicState dynamic_state;

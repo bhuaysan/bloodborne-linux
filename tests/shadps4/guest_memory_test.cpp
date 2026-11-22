@@ -52,6 +52,7 @@
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/texture_cache/texture_cache.h"
 
 namespace {
@@ -1092,6 +1093,107 @@ TEST(GuestMemory, ACpuWriteKeepsWhatTheGpuWroteOnThePage) {
         gpu_fill(3, 'J');
         d.unmap();
         EXPECT_FALSE(gpu.tracker().IsRegionGpuModified(addr(base), d.length));
+    }
+}
+
+// A guest write during a copy job (#777). The buffer cache protects the CPU modified pages again
+// and hands their memmove into staging space to the scheduler's copy threads. A write that comes
+// before the job runs faults and marks its page modified again, so the next sync uploads it once
+// more; the copy recorded for the draw waits for the job.
+TEST(GuestMemory, ACpuWriteDuringACopyIsSyncedAgain) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        constexpr u64 pages = 16; // one fault's run, 64 KiB: a copy job, not an inline copy
+        Direct d(2 * pages / pages_per_kernel_page);
+        char* const base = in_one_region(d, pages);
+        const std::uintptr_t start = addr(base);
+        constexpr u64 size = pages * tp;
+        auto& buffers = gpu.rasterizer.GetBufferCache();
+        std::memset(base, 'a', size);
+        std::pair<const VideoCore::Buffer*, u64> arena;
+        // As above: the buffer cache's sparse buffer needs a GPU that can create it.
+        try {
+            [[maybe_unused]] const NoLeakCheck no_leak_check;
+            arena = buffers.ObtainBuffer(start, size, VideoCore::ObtainBufferFlags::IgnoreStreamBuffer);
+        } catch (const std::exception& e) {
+            if (std::string(e.what()).find("ErrorOutOfDeviceMemory") == std::string::npos) {
+                throw;
+            }
+            d.unmap();
+            GTEST_SKIP() << "no sparse buffer of the buffer cache on this device: " << e.what();
+        }
+        gpu.rasterizer.Finish();
+        ASSERT_FALSE(gpu.tracker().IsRegionCpuModified(start, size));
+        std::memset(base, 'b', size); // one fault, then the run is writable
+
+        // Both copy threads wait, so the sync's job stays queued.
+        auto& copies = gpu.scheduler.Copies();
+        std::atomic<bool> release{false};
+        std::atomic<int> waiting{0};
+        for (int i = 0; i < 2; ++i) {
+            copies.Push([&] {
+                ++waiting;
+                while (!release.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+            });
+        }
+        while (waiting.load() < 2) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const u64 before = copies.Issued();
+        {
+            [[maybe_unused]] const NoLeakCheck no_leak_check;
+            arena = buffers.ObtainBuffer(start, size, VideoCore::ObtainBufferFlags::IgnoreStreamBuffer);
+        }
+        EXPECT_EQ(copies.Issued(), before + 1);
+        EXPECT_LT(copies.Completed(), copies.Issued());
+        EXPECT_FALSE(gpu.tracker().IsRegionCpuModified(start, size));
+        EXPECT_FALSE(writable(base));
+
+        const std::uint64_t claimed = bb::shadps4::claimed_faults();
+        static_cast<volatile char*>(base)[5] = 'c';
+        EXPECT_EQ(bb::shadps4::claimed_faults(), claimed + 1);
+        EXPECT_TRUE(gpu.tracker().IsRegionCpuModified(start, tp));
+        release = true;
+
+        // The draw's copy from staging waits for the job, which ran after the write.
+        auto& staging_pool = gpu.runtime.GetStagingPool();
+        const auto readback = staging_pool.Request(size, VideoCore::MemoryType::HostCached);
+        auto cmdbuf = gpu.scheduler.CommandBuffer();
+        const vk::MemoryBarrier2 to_transfer{
+            .srcStageMask = vk::PipelineStageFlagBits2::eAllTransfer,
+            .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eAllTransfer,
+            .dstAccessMask = vk::AccessFlagBits2::eMemoryRead};
+        cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &to_transfer});
+        cmdbuf.copyBuffer(arena.first->Handle(), readback.buffer->Handle(),
+                          vk::BufferCopy{arena.second, readback.offset, size});
+        const vk::MemoryBarrier2 to_host{.srcStageMask = vk::PipelineStageFlagBits2::eAllTransfer,
+                                         .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+                                         .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+                                         .dstAccessMask = vk::AccessFlagBits2::eHostRead};
+        cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &to_host});
+        gpu.rasterizer.Finish();
+        readback.Invalidate();
+        EXPECT_EQ(copies.Completed(), copies.Issued());
+        const auto* const copied = reinterpret_cast<const char*>(readback.mapped);
+        EXPECT_EQ(copied[0], 'b');
+        EXPECT_EQ(copied[5], 'c');
+        EXPECT_EQ(copied[size - 1], 'b');
+
+        // The written page is synced again, and then nothing is left.
+        EXPECT_TRUE(gpu.tracker().IsRegionCpuModified(start, tp));
+        {
+            [[maybe_unused]] const NoLeakCheck no_leak_check;
+            buffers.ObtainBuffer(start, size, VideoCore::ObtainBufferFlags::IgnoreStreamBuffer);
+        }
+        EXPECT_FALSE(gpu.tracker().IsRegionCpuModified(start, size));
+        gpu.rasterizer.Finish();
+        d.unmap();
     }
 }
 
