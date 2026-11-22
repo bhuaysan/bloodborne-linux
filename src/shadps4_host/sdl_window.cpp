@@ -158,8 +158,8 @@ void WindowSDL::SyncTextInput() {
         return;
     }
     text_input_active = wanted;
+    ImGui::Sdl::ClearInput();  // nothing held carries into the dialog or out of it
     if (wanted) {
-        ImGui::Sdl::ClearInput();
         SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "0");
         SDL_StartTextInput(window);
     } else {

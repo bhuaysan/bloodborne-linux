@@ -429,6 +429,8 @@ ImeDialogUi::ImeDialogUi(ImeDialogUi&& other) noexcept
     : state(other.state), status(other.status), result(other.result),
       first_render(other.first_render), accept_armed(other.accept_armed),
       native_input_active(other.native_input_active), typed_ahead(std::move(other.typed_ahead)),
+      input_field_active(other.input_field_active),
+      keyboard_accept_pending(other.keyboard_accept_pending),
       pointer_navigation_active(other.pointer_navigation_active),
       edit_menu_popup(other.edit_menu_popup), menu_activate_armed(other.menu_activate_armed),
       l2_shortcut_armed(other.l2_shortcut_armed), request_input_focus(other.request_input_focus),
@@ -538,6 +540,8 @@ ImeDialogUi& ImeDialogUi::operator=(ImeDialogUi&& other) {
     accept_armed = other.accept_armed;
     native_input_active = other.native_input_active;
     typed_ahead = std::move(other.typed_ahead);
+    input_field_active = other.input_field_active;
+    keyboard_accept_pending = other.keyboard_accept_pending;
     pointer_navigation_active = other.pointer_navigation_active;
     edit_menu_popup = other.edit_menu_popup;
     menu_activate_armed = other.menu_activate_armed;
@@ -1830,13 +1834,19 @@ void ImeDialogUi::Draw() {
 
         Dummy({metrics.kb_size.x, metrics.kb_size.y + metrics.padding_bottom});
 
-        // A physical keyboard: Enter is Done (a newline in a multi-line field), Escape is Cancel.
+        // A physical keyboard: Enter is Done in a single-line field (ImGui types it as a newline in
+        // a multi-line one), Escape is Cancel. Done waits until the text typed ahead is in the field.
         if (edit_menu_popup == EditMenuPopup::None && !text_select_mode && !accept_pressed &&
             !cancel_pressed) {
             if (IsKeyPressed(ImGuiKey_Escape, false)) {
                 cancel_pressed = true;
-            } else if (IsKeyPressed(ImGuiKey_KeypadEnter, false) ||
-                       (!state->is_multi_line && IsKeyPressed(ImGuiKey_Enter, false))) {
+                keyboard_accept_pending = false;
+            } else if (!state->is_multi_line && (IsKeyPressed(ImGuiKey_Enter, false) ||
+                                                 IsKeyPressed(ImGuiKey_KeypadEnter, false))) {
+                keyboard_accept_pending = true;
+            }
+            if (keyboard_accept_pending && typed_ahead.empty()) {
+                keyboard_accept_pending = false;
                 accept_pressed = true;
             }
         }
@@ -1857,9 +1867,10 @@ void ImeDialogUi::Draw() {
     first_render = false;
 }
 
-// Text typed on a physical keyboard while the PS4 keyboard has the input switches to the text
-// field, as a click on it does. The field becomes active a frame later, so the typed text waits in
-// typed_ahead until then, along with what is typed meanwhile, to keep its order.
+// Text typed on a physical keyboard switches to the text field, as a click on it does. The field
+// becomes active a frame later (and again after anything else deactivated it), so the typed text
+// waits in typed_ahead until then, along with what is typed meanwhile, to keep its order. While
+// text is selected or the edit menu is open, typing does nothing, as on the PS4 keyboard.
 void ImeDialogUi::TakeTypedAhead() {
     ImGuiIO& io = GetIO();
     if (!native_input_active) {
@@ -1867,9 +1878,13 @@ void ImeDialogUi::TakeTypedAhead() {
         if (io.InputQueueCharacters.empty()) {
             return;
         }
+        if (text_select_mode || edit_menu_popup != EditMenuPopup::None) {
+            io.InputQueueCharacters.clear();
+            return;
+        }
         native_input_active = true;
         state->caret_dirty = true;  // keeps the caret where it was, not ImGui's select-all
-    } else if (typed_ahead.empty()) {
+    } else if (typed_ahead.empty() && (input_field_active || io.InputQueueCharacters.empty())) {
         return;
     }
     for (const ImWchar c : io.InputQueueCharacters) {
@@ -1982,6 +1997,7 @@ bool ImeDialogUi::DrawInputText(const Libraries::Ime::ImePanelMetrics& metrics,
     PopItemFlag();
     PopStyleColor(4);
     const ImRect frame_rect = {GetItemRectMin(), GetItemRectMax()};
+    input_field_active = IsItemActive();
     if (!IsItemActive()) {
         DrawInactiveCaretOverlay(frame_rect, state->current_text.begin(), input_cursor_byte,
                                  input_selection_start_byte, input_selection_end_byte, false);
@@ -2077,6 +2093,7 @@ bool ImeDialogUi::DrawMultiLineInputText(const Libraries::Ime::ImePanelMetrics& 
     PopItemFlag();
     PopStyleColor(4);
     const ImRect frame_rect = {GetItemRectMin(), GetItemRectMax()};
+    input_field_active = IsItemActive();
     if (!IsItemActive()) {
         DrawInactiveCaretOverlay(frame_rect, state->current_text.begin(), input_cursor_byte,
                                  input_selection_start_byte, input_selection_end_byte, true);

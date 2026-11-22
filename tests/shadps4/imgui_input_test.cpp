@@ -2,6 +2,7 @@
 // on the thread that pumps them, handed to ImGui's input queue in the next NewFrame
 // (src/shadps4_host/imgui_impl_sdl3.cpp). Needs no window or GPU.
 
+#include <chrono>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -158,19 +159,74 @@ TEST_F(ImGuiInput, ClearInputDropsEarlierEvents) {
     EXPECT_NE(FindKey(Events(), ImGuiKey_Escape), nullptr);
 }
 
-// Events queued on another thread arrive whole.
-TEST_F(ImGuiInput, QueuedFromAnotherThread) {
+SDL_Event TextEvent(const char* text) {
+    SDL_Event e{};
+    e.type = SDL_EVENT_TEXT_INPUT;
+    e.text.text = text;
+    return e;
+}
+
+// Events queued on another thread while frames drain the queue all arrive, once and in order.
+TEST_F(ImGuiInput, QueuedWhileFramesDrain) {
+    static constexpr int count = 500;  // below the queue's bound, so nothing may be dropped
     std::thread pump([] {
-        for (int i = 0; i < 100; ++i) {
-            SDL_Event e{};
-            e.type = SDL_EVENT_TEXT_INPUT;
-            e.text.text = "a";
+        for (int i = 0; i < count; ++i) {
+            const char letter[2] = {static_cast<char>('a' + i % 26), 0};
+            const SDL_Event e = TextEvent(letter);
             ImGui::Sdl::ProcessEvent(&e);
         }
     });
+    std::u32string text;
+    const auto drain = [&] {
+        ImGui::Sdl::NewFrame(false);
+        for (const ImGuiInputEvent& e : Events()) {
+            text += static_cast<char32_t>(e.Text.Char);
+        }
+        ImGui::GetIO().ClearEventsQueue();
+    };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (text.size() < count && std::chrono::steady_clock::now() < deadline) {
+        drain();  // runs while the other thread queues
+    }
     pump.join();
+    drain();
+    ASSERT_EQ(text.size(), static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        EXPECT_EQ(text[i], static_cast<char32_t>('a' + i % 26)) << i;
+    }
+}
+
+// Without frames the queue keeps the newest 1024 events.
+TEST_F(ImGuiInput, TheQueueIsBounded) {
+    for (int i = 0; i < 1100; ++i) {
+        const SDL_Event e = TextEvent(i == 1099 ? "z" : "a");
+        ImGui::Sdl::ProcessEvent(&e);
+    }
     ImGui::Sdl::NewFrame(false);
-    EXPECT_EQ(Events().Size, 100);
+    ASSERT_EQ(Events().Size, 1024);
+    EXPECT_EQ(Events().back().Text.Char, static_cast<unsigned int>('z'));
+}
+
+// A clear outlasts an overflowing queue: it is not an event the bound can drop.
+TEST_F(ImGuiInput, ClearSurvivesAFullQueue) {
+    ImGui::GetKeyData(ImGuiKey_Enter)->Down = true;
+    ImGui::Sdl::ClearInput();
+    for (int i = 0; i < 1100; ++i) {
+        const SDL_Event e = TextEvent("a");
+        ImGui::Sdl::ProcessEvent(&e);
+    }
+    ImGui::Sdl::NewFrame(false);
+    EXPECT_FALSE(ImGui::GetKeyData(ImGuiKey_Enter)->Down);
+    EXPECT_EQ(Events().Size, 1024);
+}
+
+// The desktop's key repeats are not taken: a key held while the dialog opens must not press.
+TEST_F(ImGuiInput, KeyRepeatsAreDropped) {
+    SDL_Event repeat = KeyEvent(true, SDLK_RETURN);
+    repeat.key.repeat = true;
+    EXPECT_FALSE(ImGui::Sdl::ProcessEvent(&repeat));
+    ImGui::Sdl::NewFrame(false);
+    EXPECT_EQ(FindKey(Events(), ImGuiKey_Enter), nullptr);
 }
 
 // Other events are not ImGui's.

@@ -28,7 +28,7 @@ namespace {
 
 // One input event from ProcessEvent, waiting for NewFrame.
 struct QueuedInput {
-    enum class Kind { Clear, Key, Text, MousePos, MouseButton, MouseWheel, Focus };
+    enum class Kind { Key, Text, MousePos, MouseButton, MouseWheel, Focus };
     Kind kind{};
     ImGuiKey key = ImGuiKey_None;
     SDL_Keymod mods = 0;
@@ -43,6 +43,7 @@ struct QueuedInput {
 constexpr std::size_t max_queued_inputs = 1024;
 std::mutex input_mutex;
 std::vector<QueuedInput> input_queue;
+bool input_clear_pending = false;  // ClearInput's release of every key, kept apart from the queue
 
 void Queue(QueuedInput input) {
     std::scoped_lock lock{input_mutex};
@@ -53,6 +54,7 @@ void Queue(QueuedInput input) {
 }
 
 // The keys text editing needs (letters for the Ctrl shortcuts); typed text comes as text events.
+// No Tab: ImGui's keyboard navigation would take the text field's focus away.
 ImGuiKey KeyEventToImGuiKey(SDL_Keycode keycode, SDL_Scancode scancode) {
     if (scancode == SDL_SCANCODE_KP_ENTER) {
         return ImGuiKey_KeypadEnter;
@@ -61,8 +63,6 @@ ImGuiKey KeyEventToImGuiKey(SDL_Keycode keycode, SDL_Scancode scancode) {
         return static_cast<ImGuiKey>(ImGuiKey_A + (keycode - SDLK_A));
     }
     switch (keycode) {
-    case SDLK_TAB:
-        return ImGuiKey_Tab;
     case SDLK_LEFT:
         return ImGuiKey_LeftArrow;
     case SDLK_RIGHT:
@@ -118,17 +118,19 @@ void UpdateKeyModifiers(ImGuiIO& io, SDL_Keymod sdl_key_mods) {
 // Hands the queued events to ImGui, on the presenter's thread before ImGui::NewFrame.
 void ApplyQueuedInput(ImGuiIO& io) {
     std::vector<QueuedInput> inputs;
+    bool clear = false;
     {
         std::scoped_lock lock{input_mutex};
         inputs.swap(input_queue);
+        clear = std::exchange(input_clear_pending, false);
+    }
+    if (clear) {
+        io.ClearEventsQueue();
+        io.ClearInputKeys();
+        io.ClearInputMouse();
     }
     for (const QueuedInput& input : inputs) {
         switch (input.kind) {
-        case QueuedInput::Kind::Clear:
-            io.ClearEventsQueue();
-            io.ClearInputKeys();
-            io.ClearInputMouse();
-            break;
         case QueuedInput::Kind::Key:
             UpdateKeyModifiers(io, input.mods);
             if (input.key != ImGuiKey_None) {
@@ -184,6 +186,7 @@ void Shutdown() {
     {
         std::scoped_lock lock{input_mutex};
         input_queue.clear();
+        input_clear_pending = false;
     }
     SdlData* bd = GetBackendData();
     if (bd == nullptr) {
@@ -260,6 +263,9 @@ bool ProcessEvent(const SDL_Event* event) {
         break;
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
+        if (event->key.repeat) {
+            return false;  // ImGui repeats held keys itself; a repeat after ClearInput would press
+        }
         input.kind = Kind::Key;
         input.key = KeyEventToImGuiKey(event->key.key, event->key.scancode);
         input.mods = event->key.mod;
@@ -280,9 +286,7 @@ bool ProcessEvent(const SDL_Event* event) {
 void ClearInput() {
     std::scoped_lock lock{input_mutex};
     input_queue.clear();
-    QueuedInput clear;
-    clear.kind = QueuedInput::Kind::Clear;
-    input_queue.push_back(std::move(clear));
+    input_clear_pending = true;
 }
 
 void OnResize() {
