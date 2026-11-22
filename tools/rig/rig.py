@@ -128,24 +128,47 @@ def build_layer(destination: Path | None = None) -> Path:
     return destination
 
 
-def wrap_command(argv: list[str], game_dir: Path, unit: str, seconds: int, memory: str) -> list[str]:
-    """The target's command under memory limit, time limit and read-only game directory."""
-    return ["systemd-run", "--user", "--scope", "-q", f"--unit={unit}",
-            "-p", f"MemoryMax={memory}", "-p", "MemorySwapMax=0", "-p", "TimeoutStopSec=15", "--",
-            *read_only_game_prefix(game_dir),
-            "timeout", "-k", "10", str(seconds), *argv]
+def wrap_command(argv: list[str], game_dir: Path, unit: str, seconds: int, memory: str,
+                 container: list[str] | None = None) -> list[str]:
+    """The target's command under memory limit, time limit and read-only game directory. With a
+    container prefix (container_prefix), the container makes the game directory read-only."""
+    scope = ["systemd-run", "--user", "--scope", "-q", f"--unit={unit}",
+             "-p", f"MemoryMax={memory}", "-p", "MemorySwapMax=0", "-p", "TimeoutStopSec=15", "--"]
+    if container is not None:
+        # timeout signals podman, which passes the signal on to bb-run in the container.
+        return [*scope, "timeout", "-k", "10", str(seconds), *container, *argv]
+    return [*scope, *read_only_game_prefix(game_dir), "timeout", "-k", "10", str(seconds), *argv]
 
 
 def read_only_game_prefix(game_dir: Path) -> list[str]:
     return ["bwrap", "--dev-bind", "/", "/", "--ro-bind", str(game_dir), str(game_dir), "--"]
 
 
-def check_game_read_only(game_dir: Path) -> None:
-    """Refuses to run when the sandbox would not make the game directory read-only."""
+def container_prefix(image: str, game_dir: Path, package: Path, workdir: Path,
+                     environ: Mapping[str, str]) -> list[str]:
+    """podman run for a target inside a container of another distribution (#755): what distrobox
+    shares with the host (home, the runtime directory with the Wayland, PipeWire and PulseAudio
+    sockets, X11, the GPU, the host's network and IPC, the caller's user id) and the game and the
+    package directory read-only, but none of the packages distrobox installs, so the image decides
+    what the package finds. The container stays in the caller's cgroup (--cgroups=disabled), so the
+    scope's memory limit, the samplers and the stop reach the target. It replaces bwrap: rootless
+    podman can't set up its user namespace inside bwrap's."""
+    home, runtime = environ["HOME"], environ["XDG_RUNTIME_DIR"]
+    return ["podman", "run", "--rm", "--cgroups=disabled", "--userns=keep-id",
+            "--security-opt", "label=disable", "--network", "host", "--ipc", "host",
+            "--device", "/dev/dri",
+            "-v", f"{home}:{home}", "-v", f"{runtime}:{runtime}", "-v", "/tmp/.X11-unix:/tmp/.X11-unix",
+            "-v", f"{package}:{package}:ro", "-v", f"{game_dir}:{game_dir}:ro",
+            "--env-host", "-w", str(workdir), image]
+
+
+def check_game_read_only(game_dir: Path, prefix: list[str] | None = None) -> None:
+    """Refuses to run when the sandbox (bwrap, or the container's prefix) would not make the game
+    directory read-only."""
     # `test` only asks the kernel, so the probe can't write into the game directory. It exits 0
     # when the directory is not writable, and any other status (bwrap failing too) refuses.
-    probe = subprocess.run([*read_only_game_prefix(game_dir), "sh", "-c", 'test ! -w "$1"', "_",
-                            str(game_dir)])
+    probe = subprocess.run([*(prefix or read_only_game_prefix(game_dir)), "sh", "-c",
+                            'test ! -w "$1"', "_", str(game_dir)])
     if probe.returncode != 0:
         raise SystemExit("the sandbox does not make the game directory read-only")
 
@@ -572,6 +595,11 @@ def check_target_options(args: argparse.Namespace) -> None:
                                        or getattr(args, "bb_run_config", None)):
         raise SystemExit("--log, --perf, --frame-rate, --bb-run-args and --bb-run-config only "
                          "apply to the bb-run target")
+    if getattr(args, "container", None) and (args.target == "reference"
+                                             or not getattr(args, "bb_run", None)
+                                             or getattr(args, "perf", False)):
+        raise SystemExit("--container needs the bb-run target and --bb-run (the package's "
+                         "bb-run), and can't be used with --perf")
     if getattr(args, "bb_run_config", None) and getattr(args, "user_from", None):
         # bb-run takes the profile from the config file, while the save goes to and comes back
         # from the rig's own profile.
@@ -591,14 +619,22 @@ def run_target(args: argparse.Namespace) -> int:
         raise SystemExit("this scenario uses pictures, which need the layer")
     seconds = args.time or scenario.time_limit or DEFAULT_TIME
     memory = args.memory or scenario.memory_limit or DEFAULT_MEMORY
-    check_game_read_only(game_dir)
     check_target_options(args)
+    if getattr(args, "container", None):
+        check_game_read_only(game_dir, container_prefix(
+            args.container, game_dir, args.bb_run.resolve().parent, game_dir, os.environ))
+    else:
+        check_game_read_only(game_dir)
 
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
     run = rig_dir() / "runs" / f"{stamp}-{args.target}-{scenario_name}"
     (run / "shots").mkdir(parents=True)
     os.mkfifo(run / "ctl")
 
+    container = None
+    if getattr(args, "container", None):
+        container = container_prefix(args.container, game_dir, args.bb_run.resolve().parent, run,
+                                     os.environ)
     layer = build_layer()
     work_root = None
     if args.target == "reference":
@@ -630,7 +666,7 @@ def run_target(args: argparse.Namespace) -> int:
     if not args.no_layer:
         env |= {"VK_LAYER_PATH": layer_path(layer, os.environ), "VK_INSTANCE_LAYERS": LAYER_NAME}
     unit = f"bb-rig-{stamp}"
-    command = wrap_command(program.argv, game_dir, unit, seconds, memory)
+    command = wrap_command(program.argv, game_dir, unit, seconds, memory, container)
     pad: vpad.Pad | None = None
     if scenario.uses_pad():
         pad = (vpad.VirtualPad() if args.target == "reference" else open_stream_pad(run / "pad"))
@@ -815,6 +851,9 @@ def main(argv: list[str] | None = None) -> int:
                      help='bb-run: more options, shell-quoted (--bb-run-args="--fsr --fullscreen")')
     run.add_argument("--perf", action="store_true",
                      help="bb-run: sample it with perf record into the run's perf.data")
+    run.add_argument("--container", metavar="IMAGE",
+                     help="bb-run (a package's, given with --bb-run) inside a container of this "
+                          "image, for distribution checks")
     run.add_argument("--no-layer", action="store_true",
                      help="without the Vulkan layer, so no frame times and no picture steps")
     compared = commands.add_parser("compare", help="compare menu captures with the reference")

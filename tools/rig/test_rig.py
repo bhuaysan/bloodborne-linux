@@ -6,6 +6,7 @@ No test here starts the game or needs a GPU, /dev/uinput or systemd.
 
 from __future__ import annotations
 
+import argparse
 import os
 import shutil
 import struct
@@ -35,6 +36,34 @@ class CommandTests(unittest.TestCase):
         at = command.index("timeout")
         self.assertEqual(command[at:], ["timeout", "-k", "10", "600", "/bin/game", "-x"])
 
+    def test_container_replaces_bwrap_and_mounts_the_game_read_only(self) -> None:
+        prefix = rig.container_prefix("img", Path("/games/bb"), Path("/pkg"), Path("/runs/r"),
+                                      {"HOME": "/h", "XDG_RUNTIME_DIR": "/rt"})
+        self.assertEqual(prefix[:2], ["podman", "run"])
+        self.assertEqual(prefix[-1], "img")
+        self.assertIn("--cgroups=disabled", prefix)  # in the scope: limits and samplers reach it
+        self.assertIn("/games/bb:/games/bb:ro", prefix)
+        self.assertIn("/pkg:/pkg:ro", prefix)
+        self.assertEqual(prefix[prefix.index("-w") + 1], "/runs/r")
+        command = rig.wrap_command(["/pkg/bb-run", "-x"], Path("/games/bb"), "bb-rig-1", 600, "8G",
+                                   prefix)
+        self.assertNotIn("bwrap", command)
+        self.assertIn("MemoryMax=8G", command)
+        at = command.index("timeout")
+        self.assertEqual(command[at:at + 4], ["timeout", "-k", "10", "600"])
+        self.assertEqual(command[at + 4:], [*prefix, "/pkg/bb-run", "-x"])
+
+    def test_container_needs_a_package_bb_run(self) -> None:
+        base = dict(log=None, perf=False, frame_rate=None, bb_run_args=None, bb_run_config=None,
+                    user_from=None, container="img")
+        for bad in (dict(target="reference", bb_run=Path("/pkg/bb-run")),
+                    dict(target="bb-run", bb_run=None),
+                    dict(target="bb-run", bb_run=Path("/pkg/bb-run"), perf=True)):
+            with self.assertRaises(SystemExit):
+                rig.check_target_options(argparse.Namespace(**{**base, **bad}))
+        rig.check_target_options(argparse.Namespace(**{**base, "target": "bb-run",
+                                                       "bb_run": Path("/pkg/bb-run")}))
+
     def test_read_only_check_refuses_a_writable_game_dir(self) -> None:
         with unittest.mock.patch("subprocess.run") as run_mock:
             run_mock.return_value = subprocess.CompletedProcess([], 1)
@@ -42,6 +71,8 @@ class CommandTests(unittest.TestCase):
                 rig.check_game_read_only(Path("/games/bb"))
             run_mock.return_value = subprocess.CompletedProcess([], 0)
             rig.check_game_read_only(Path("/games/bb"))
+            rig.check_game_read_only(Path("/games/bb"), ["podman", "run", "img"])
+            self.assertEqual(run_mock.call_args.args[0][:4], ["podman", "run", "img", "sh"])
 
     def test_kernel_log_failure_is_not_an_empty_log(self) -> None:
         with unittest.mock.patch("subprocess.run") as run_mock:
