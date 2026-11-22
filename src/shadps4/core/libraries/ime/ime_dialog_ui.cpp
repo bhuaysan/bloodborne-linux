@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/ime/ime_dialog_ui.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-12; 2026-11-22: typing on a physical keyboard activates
+// the text field, Enter is Done and Escape is Cancel (#795)
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -427,7 +428,7 @@ ImeDialogUi::~ImeDialogUi() {
 ImeDialogUi::ImeDialogUi(ImeDialogUi&& other) noexcept
     : state(other.state), status(other.status), result(other.result),
       first_render(other.first_render), accept_armed(other.accept_armed),
-      native_input_active(other.native_input_active),
+      native_input_active(other.native_input_active), typed_ahead(std::move(other.typed_ahead)),
       pointer_navigation_active(other.pointer_navigation_active),
       edit_menu_popup(other.edit_menu_popup), menu_activate_armed(other.menu_activate_armed),
       l2_shortcut_armed(other.l2_shortcut_armed), request_input_focus(other.request_input_focus),
@@ -536,6 +537,7 @@ ImeDialogUi& ImeDialogUi::operator=(ImeDialogUi&& other) {
     first_render = other.first_render;
     accept_armed = other.accept_armed;
     native_input_active = other.native_input_active;
+    typed_ahead = std::move(other.typed_ahead);
     pointer_navigation_active = other.pointer_navigation_active;
     edit_menu_popup = other.edit_menu_popup;
     menu_activate_armed = other.menu_activate_armed;
@@ -674,6 +676,7 @@ void ImeDialogUi::Draw() {
 
     const auto& ctx = *GetCurrentContext();
     const auto& io = ctx.IO;
+    TakeTypedAhead();
     const bool imgui_typing_mode_active =
         native_input_active || request_input_focus || pending_input_selection_apply;
     const bool ps4_typing_mode_active = !imgui_typing_mode_active;
@@ -1827,6 +1830,17 @@ void ImeDialogUi::Draw() {
 
         Dummy({metrics.kb_size.x, metrics.kb_size.y + metrics.padding_bottom});
 
+        // A physical keyboard: Enter is Done (a newline in a multi-line field), Escape is Cancel.
+        if (edit_menu_popup == EditMenuPopup::None && !text_select_mode && !accept_pressed &&
+            !cancel_pressed) {
+            if (IsKeyPressed(ImGuiKey_Escape, false)) {
+                cancel_pressed = true;
+            } else if (IsKeyPressed(ImGuiKey_KeypadEnter, false) ||
+                       (!state->is_multi_line && IsKeyPressed(ImGuiKey_Enter, false))) {
+                accept_pressed = true;
+            }
+        }
+
         if (accept_pressed) {
             LOG_INFO(Lib_ImeDialog, "ImeDialog OK text(len={}): \"{}\"", state->current_text.size(),
                      state->current_text.begin());
@@ -1841,6 +1855,46 @@ void ImeDialogUi::Draw() {
     End();
 
     first_render = false;
+}
+
+// Text typed on a physical keyboard while the PS4 keyboard has the input switches to the text
+// field, as a click on it does. The field becomes active a frame later, so the typed text waits in
+// typed_ahead until then, along with what is typed meanwhile, to keep its order.
+void ImeDialogUi::TakeTypedAhead() {
+    ImGuiIO& io = GetIO();
+    if (!native_input_active) {
+        typed_ahead.clear();
+        if (io.InputQueueCharacters.empty()) {
+            return;
+        }
+        native_input_active = true;
+        state->caret_dirty = true;  // keeps the caret where it was, not ImGui's select-all
+    } else if (typed_ahead.empty()) {
+        return;
+    }
+    for (const ImWchar c : io.InputQueueCharacters) {
+        typed_ahead.push_back(c);
+    }
+    io.InputQueueCharacters.clear();
+}
+
+// Called right before the text field is drawn: activates it while text waits, then hands the text
+// to it once it is active.
+void ImeDialogUi::InjectTypedAhead() {
+    if (typed_ahead.empty()) {
+        return;
+    }
+    // The field is NoNav, so SetKeyboardFocusHere does not reach it; activate it by its ID.
+    const ImGuiID id = GetID("##ImeDialogInput");
+    if (GetActiveID() != id) {
+        ActivateItemByID(id);
+        return;
+    }
+    ImGuiIO& io = GetIO();
+    for (const ImWchar c : typed_ahead) {
+        io.InputQueueCharacters.push_back(c);
+    }
+    typed_ahead.clear();
 }
 
 bool ImeDialogUi::DrawInputText(const Libraries::Ime::ImePanelMetrics& metrics,
@@ -1905,6 +1959,7 @@ bool ImeDialogUi::DrawInputText(const Libraries::Ime::ImePanelMetrics& metrics,
                    Libraries::Ime::ImeColorToImVec4(state->style_config.color_preedit));
     PushStyleColor(ImGuiCol_Text, Libraries::Ime::ImeColorToImVec4(state->style_config.color_text));
     PushItemFlag(ImGuiItemFlags_NoNav, true);
+    InjectTypedAhead();
     if (InputTextEx("##ImeDialogInput", placeholder, state->current_text.begin(),
                     state->max_text_length * 4 + 1, input_size, flags, InputTextCallback, this)) {
         state->input_changed = true;
@@ -1999,6 +2054,7 @@ bool ImeDialogUi::DrawMultiLineInputText(const Libraries::Ime::ImePanelMetrics& 
                    Libraries::Ime::ImeColorToImVec4(state->style_config.color_preedit));
     PushStyleColor(ImGuiCol_Text, Libraries::Ime::ImeColorToImVec4(state->style_config.color_text));
     PushItemFlag(ImGuiItemFlags_NoNav, true);
+    InjectTypedAhead();
     if (InputTextEx("##ImeDialogInput", placeholder, state->current_text.begin(),
                     state->max_text_length * 4 + 1, input_size, flags, InputTextCallback, this)) {
         state->input_changed = true;

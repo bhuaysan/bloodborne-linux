@@ -5,7 +5,8 @@
 // WindowSDL constructor and OnResize; X11 and Wayland only. Open and PumpEvents are ours: no
 // input (the gamepad events go to a handler, syslibs/pad_input.cpp), camera, audio, fullscreen
 // switching or hotkeys. 2026-11-21: Open takes the display to open on (FindDisplay). 2026-11-22:
-// PumpEvents ends the run when Back and Start are held together (common/quit_chord.hpp, #757).
+// PumpEvents ends the run when Back and Start are held together (common/quit_chord.hpp, #757),
+// and hands keyboard, text and mouse events to ImGui while the IME dialog is open (#795).
 // License texts: third_party/shadps4/LICENSES/
 
 #include "sdl_window.h"
@@ -17,6 +18,7 @@
 #include <cctype>
 
 #include "imgui/renderer/imgui_core.h"
+#include "imgui_impl_sdl3.h"
 
 namespace Frontend {
 
@@ -147,9 +149,32 @@ WindowSDL::~WindowSDL() {
     }
 }
 
+// The keyboard and mouse belong to ImGui only while the IME dialog holds the input capture: the
+// game reads neither, and events from before the dialog must not type into it. Text input runs
+// only then too, without SDL's on-screen keyboard: the dialog draws its own for the pad.
+void WindowSDL::SyncTextInput() {
+    const bool wanted = ImGui::Core::IsGamepadInputCaptured();
+    if (wanted == text_input_active) {
+        return;
+    }
+    text_input_active = wanted;
+    if (wanted) {
+        ImGui::Sdl::ClearInput();
+        SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "0");
+        SDL_StartTextInput(window);
+    } else {
+        SDL_StopTextInput(window);
+    }
+}
+
 bool WindowSDL::PumpEvents(s32 timeout_ms) {
     SDL_Event event;
+    SyncTextInput();
     for (bool got = SDL_WaitEventTimeout(&event, timeout_ms); got; got = SDL_PollEvent(&event)) {
+        SyncTextInput();
+        if (text_input_active) {
+            ImGui::Sdl::ProcessEvent(&event);
+        }
         switch (event.type) {
         case SDL_EVENT_QUIT:
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:

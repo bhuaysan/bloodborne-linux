@@ -21,6 +21,10 @@ if(TARGET bbvideocore)
         SOURCES video_core_test.cpp cache_storage_test.cpp command_recorder_test.cpp
             pipeline_workers_test.cpp spec_reuse_test.cpp
         LIBS bbvideocore bbvideopresenter bbhle bbvktest)
+    # The keyboard, text and mouse events the window hands to ImGui for the IME dialog (#795);
+    # needs no window or Vulkan device.
+    bb_add_test(shadps4_imgui_input_test SOURCES imgui_input_test.cpp
+        LIBS bbvideocore bbhle bbvktest)
     # Maps guest memory in the guest window (tests/support/guest_window_asan.cpp).
     bb_add_test(shadps4_guest_memory_test
         SOURCES guest_memory_test.cpp

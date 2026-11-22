@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/ime/ime_dialog_ui.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-12; 2026-11-22: typed_ahead, TakeTypedAhead,
+// InjectTypedAhead (#795)
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -117,6 +118,8 @@ class ImeDialogUi final : public ImGui::Layer {
     bool first_render = true;
     bool accept_armed = false;
     bool native_input_active = false;
+    // Text typed on a physical keyboard before the text field was active, for its first frame.
+    ImVector<ImWchar> typed_ahead;
     bool pointer_navigation_active = true;
     EditMenuPopup edit_menu_popup = EditMenuPopup::None;
     bool menu_activate_armed = true;
@@ -190,6 +193,8 @@ private:
     void FinishDialog(OrbisImeDialogEndStatus endstatus, bool restore_original, const char* reason);
     void Free();
 
+    void TakeTypedAhead();
+    void InjectTypedAhead();
     bool DrawInputText(const Libraries::Ime::ImePanelMetrics& metrics,
                        bool pointer_selection_enabled);
     bool DrawMultiLineInputText(const Libraries::Ime::ImePanelMetrics& metrics,

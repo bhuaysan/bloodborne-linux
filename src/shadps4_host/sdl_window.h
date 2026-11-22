@@ -4,7 +4,8 @@
 // Changed for bloodborne-linux, 2026-11-11: the window and surface part only, over the SDL3
 // window bb-run opens (docs/design/renderer.md, "The window is ours, the surface is upstream's").
 // No input of its own, settings or fullscreen; Open and PumpEvents are ours. 2026-11-21: Open
-// takes the display to open on. 2026-11-22: PumpEvents ends the run on the controller's quit chord.
+// takes the display to open on. 2026-11-22: PumpEvents ends the run on the controller's quit chord;
+// SyncTextInput (#795).
 // License texts: third_party/shadps4/LICENSES/
 #pragma once
 
@@ -70,12 +71,14 @@ public:
 
 private:
     void OnResize();
+    void SyncTextInput();
 
     SDL_Window* window = nullptr;
     std::atomic<s32> width{0};
     std::atomic<s32> height{0};
     WindowSystemInfo window_info{};
     bb::common::QuitChord quit_chord;
+    bool text_input_active = false;  // only touched by the thread that pumps the events
 };
 
 }  // namespace Frontend
