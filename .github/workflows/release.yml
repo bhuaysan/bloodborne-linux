@@ -1,8 +1,8 @@
 # Publishes the GitHub release of a release tag vX.Y.Z (docs/releasing.md): checks the tag and
 # CI, builds the portable package in the Steam Runtime 3 "sniper" SDK with
-# tools/package-portable.sh, writes SHA256SUMS and the notes (tools/release/notes.py:
-# docs/releases/<tag>.md, then the PRs since the previous release) and creates the release with
-# both files.
+# tools/package-portable.sh (the AppImage and the tar.gz), writes SHA256SUMS and the notes
+# (tools/release/notes.py: docs/releases/<tag>.md, then the PRs since the previous release) and
+# creates the release with the AppImage first, the tar.gz and SHA256SUMS.
 #
 # Only the maintainer pushes release tags. A failed run publishes nothing; re-run it once the
 # cause is fixed on the tagged commit's side (a flaky download, CI still running), or move the tag.
@@ -105,8 +105,10 @@ jobs:
       - name: Check the version
         run: |
           ls dist
+          test -f "dist/Bloodborne-Linux-$TAG-x86_64.AppImage"
           test -f "dist/Bloodborne-Linux-$TAG-x86_64.tar.gz"
-          (cd dist && sha256sum -- *.tar.gz > SHA256SUMS && cat SHA256SUMS)
+          (cd dist && sha256sum -- "Bloodborne-Linux-$TAG-x86_64.AppImage" \
+              "Bloodborne-Linux-$TAG-x86_64.tar.gz" > SHA256SUMS && cat SHA256SUMS)
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
@@ -144,4 +146,5 @@ jobs:
         run: |
           (cd dist && sha256sum -c SHA256SUMS)
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" \
-              --notes-file notes.md "dist/Bloodborne-Linux-$TAG-x86_64.tar.gz" dist/SHA256SUMS
+              --notes-file notes.md "dist/Bloodborne-Linux-$TAG-x86_64.AppImage" \
+              "dist/Bloodborne-Linux-$TAG-x86_64.tar.gz" dist/SHA256SUMS
