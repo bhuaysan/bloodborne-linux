@@ -108,7 +108,12 @@ fs::path data_dir_pointer_path() {
 }
 
 std::optional<fs::path> read_data_dir_pointer() {
-    const fs::path file = data_dir_pointer_path();
+    return read_data_dir_pointer(data_dir_pointer_path());
+}
+
+fs::path program_data_dir_path(const fs::path& exe_dir) { return exe_dir / "data-dir"; }
+
+std::optional<fs::path> read_data_dir_pointer(const fs::path& file) {
     std::error_code ec;
     const bool exists = fs::exists(file, ec);
     if (ec) {
@@ -175,13 +180,16 @@ void sync_directory(const fs::path& dir) {
 }  // namespace
 
 void write_data_dir_pointer(const fs::path& folder) {
+    write_data_dir_pointer(folder, data_dir_pointer_path());
+}
+
+void write_data_dir_pointer(const fs::path& folder, const fs::path& file) {
     if (!folder.is_absolute()) {
         throw std::invalid_argument("the data folder must be an absolute path: " + folder.string());
     }
     if (folder.string().find('\n') != std::string::npos) {
         throw std::invalid_argument("the data folder's name must not contain a newline");
     }
-    const fs::path file = data_dir_pointer_path();
     const fs::path dir = file.parent_path();
     std::error_code ec;
     fs::create_directories(dir.parent_path(), ec);
@@ -226,8 +234,62 @@ fs::path executable_dir() {
     return exe.parent_path();
 }
 
+namespace {
+
+// The folder a pointer file names, after the checks of an AppImage's data folder. A folder that is
+// gone (an unmounted drive) is not recreated: the player decides.
+fs::path pointed_root(const fs::path& pointer) {
+    std::error_code ec;
+    if (!fs::is_directory(pointer, ec)) {
+        throw NoDataFolder(NoDataFolder::Reason::folder_missing,
+                           "the data folder " + pointer.string() +
+                               " does not exist (an unmounted drive?): start bb-launcher once "
+                               "to choose it again, or set BB_USER_DIR",
+                           pointer);
+    }
+    if (::access(pointer.c_str(), W_OK | X_OK) != 0) {
+        throw NoDataFolder(NoDataFolder::Reason::folder_unwritable,
+                           "the data folder " + pointer.string() +
+                               " can't be written: start bb-launcher once to choose another, "
+                               "or set BB_USER_DIR",
+                           pointer);
+    }
+    return pointer;
+}
+
+// read_data_dir_pointer(file) with an unusable file reported as NoDataFolder.
+std::optional<fs::path> read_pointer_or_throw(const fs::path& file) {
+    try {
+        return read_data_dir_pointer(file);
+    } catch (const std::runtime_error& e) {
+        throw NoDataFolder(NoDataFolder::Reason::pointer_unusable,
+                           std::string(e.what()) +
+                               "; start bb-launcher once to choose the data folder again, or "
+                               "set BB_USER_DIR");
+    }
+}
+
+}  // namespace
+
+bool default_data_folder_usable(const fs::path& exe_dir) {
+    return ::access(exe_dir.c_str(), W_OK | X_OK) == 0 ||
+           ::access((exe_dir / "user").c_str(), W_OK | X_OK) == 0;
+}
+
 RuntimeDirs RuntimeDirs::from_environment(std::string_view profile,
                                           const std::vector<fs::path>& forbidden) {
+    Package package;
+    package.appimage = running_from_appimage();
+    const char* user = std::getenv("BB_USER_DIR");
+    if (!user || !*user) {
+        package.exe_dir = executable_dir();  // only needed without BB_USER_DIR
+    }
+    return from_environment(profile, forbidden, package);
+}
+
+RuntimeDirs RuntimeDirs::from_environment(std::string_view profile,
+                                          const std::vector<fs::path>& forbidden,
+                                          const Package& package) {
     if (!valid_profile_name(profile)) {
         throw std::invalid_argument("invalid profile name '" + std::string(profile) +
                                     "': use 1 to 32 characters from A-Z, a-z, 0-9, _ and -");
@@ -238,45 +300,43 @@ RuntimeDirs RuntimeDirs::from_environment(std::string_view profile,
     const auto cache_dir = absolute_env("BB_CACHE_DIR");
     fs::path root;
     std::string_view hint = "; set BB_USER_DIR to a directory outside both";
+    const auto no_choice = [] {
+        return NoDataFolder(
+            NoDataFolder::Reason::not_chosen,
+            "no data folder chosen yet: start bb-launcher once to choose where the game keeps "
+            "its data, or set BB_USER_DIR");
+    };
     if (user_dir) {
         root = *user_dir;
         hint = "";
-    } else if (running_from_appimage()) {
+    } else if (package.appimage) {
+        const auto pointer = read_pointer_or_throw(data_dir_pointer_path());
+        if (!pointer) {
+            throw no_choice();
+        }
+        root = pointed_root(*pointer);
+        hint = pointer_hint;
+    } else if (const auto next_to = read_pointer_or_throw(program_data_dir_path(package.exe_dir))) {
+        root = pointed_root(*next_to);
+        hint = "; remove the data-dir file next to the program to use user/ again";
+    } else if (default_data_folder_usable(package.exe_dir)) {
+        root = package.exe_dir / "user";
+    } else {
+        // A folder that can't be written (copied to /usr/bin, say): the config folder's pointer,
+        // which only the launcher's choice writes, else the launcher asks.
         std::optional<fs::path> pointer;
         try {
-            pointer = read_data_dir_pointer();
-        } catch (const std::runtime_error& e) {
-            throw NoDataFolder(NoDataFolder::Reason::pointer_unusable,
-                               std::string(e.what()) +
-                                   "; start bb-launcher once to choose the data folder again, or "
-                                   "set BB_USER_DIR");
+            pointer = read_pointer_or_throw(data_dir_pointer_path());
+        } catch (const NoDataFolder&) {
+            throw;
+        } catch (const std::runtime_error&) {
+            // no HOME and no XDG_CONFIG_HOME: nowhere to keep a choice either
         }
         if (!pointer) {
-            throw NoDataFolder(
-                NoDataFolder::Reason::not_chosen,
-                "no data folder chosen yet: start bb-launcher once to choose where the game keeps "
-                "its data, or set BB_USER_DIR");
+            throw no_choice();
         }
-        // A folder that is gone (an unmounted drive) is not recreated: the player decides.
-        std::error_code ec;
-        if (!fs::is_directory(*pointer, ec)) {
-            throw NoDataFolder(NoDataFolder::Reason::folder_missing,
-                               "the data folder " + pointer->string() +
-                                   " does not exist (an unmounted drive?): start bb-launcher once "
-                                   "to choose it again, or set BB_USER_DIR",
-                               *pointer);
-        }
-        if (::access(pointer->c_str(), W_OK | X_OK) != 0) {
-            throw NoDataFolder(NoDataFolder::Reason::folder_unwritable,
-                               "the data folder " + pointer->string() +
-                                   " can't be written: start bb-launcher once to choose another, "
-                                   "or set BB_USER_DIR",
-                               *pointer);
-        }
-        root = *pointer;
+        root = pointed_root(*pointer);
         hint = pointer_hint;
-    } else {
-        root = executable_dir() / "user";
     }
     dirs.root_ = real(root);
     dirs.data_ = dirs.root_;
@@ -291,7 +351,7 @@ RuntimeDirs RuntimeDirs::from_environment(std::string_view profile,
     for (const fs::path& other : refused) {
         // In an AppImage a dump may lie in game/ inside the data folder (the game never writes
         // there), so the root may contain it.
-        if (!(running_from_appimage() && is_within(real(other), dirs.root_ / "game"))) {
+        if (!(package.appimage && is_within(real(other), dirs.root_ / "game"))) {
             check_not_overlapping(dirs.root_, other, hint);
         }
         check_not_overlapping(dirs.cache_, other, cache_dir ? "" : hint);

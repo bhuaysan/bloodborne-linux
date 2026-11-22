@@ -542,4 +542,144 @@ TEST_F(AppImageDirsTest, OverlapChecksApplyToThePointedFolderButAllowGameInside)
                  std::runtime_error);
 }
 
+// ---- The tar.gz's data folder (BB_USER_DIR, `data-dir` next to the program, the config folder's
+// pointer only when the program's folder can't hold user/, then user/) ---------------------------
+
+class TarGzDirsTest : public RuntimeDirsTest {
+protected:
+    void SetUp() override {
+        RuntimeDirsTest::SetUp();
+        ::unsetenv("BB_USER_DIR");
+        set("XDG_CONFIG_HOME", (tmp_ / "config").string());
+        exe_ = tmp_ / "pkg";
+        fs::create_directories(exe_);
+        config_pointer_ = tmp_ / "config/bloodborne-linux/data-dir";
+    }
+    void TearDown() override {
+        ::chmod(exe_.c_str(), 0700);
+        RuntimeDirsTest::TearDown();
+    }
+    RuntimeDirs make_tar(bool appimage = false) const {
+        return RuntimeDirs::from_environment("default", {}, RuntimeDirs::Package{exe_, appimage});
+    }
+    void write_to(const fs::path& file, const std::string& text) const {
+        fs::create_directories(file.parent_path());
+        std::ofstream(file) << text;
+    }
+    // The program's folder can't be written (copied to /usr/bin, say).
+    bool lock_program_folder() const {
+        ::chmod(exe_.c_str(), 0500);
+        return ::geteuid() != 0;
+    }
+    fs::path exe_;
+    fs::path config_pointer_;
+};
+
+TEST_F(TarGzDirsTest, AWritableFolderUsesUserNextToTheProgram) {
+    EXPECT_EQ(make_tar().root(), exe_ / "user");
+    EXPECT_EQ(make_tar().cache(), exe_ / "user/cache");
+}
+
+TEST_F(TarGzDirsTest, TheFileNextToTheProgramGivesTheFolder) {
+    fs::create_directories(tmp_ / "saves");
+    write_to(bb::common::program_data_dir_path(exe_), (tmp_ / "saves").string() + "\n");
+    EXPECT_EQ(make_tar().root(), tmp_ / "saves");
+}
+
+// The config folder's pointer belongs to an AppImage: a tar.gz that can write its own folder
+// never reads it.
+TEST_F(TarGzDirsTest, AWritableFolderIgnoresTheConfigFoldersPointer) {
+    fs::create_directories(tmp_ / "appimage-data");
+    write_to(config_pointer_, (tmp_ / "appimage-data").string() + "\n");
+    EXPECT_EQ(make_tar().root(), exe_ / "user");
+}
+
+TEST_F(TarGzDirsTest, TheFileNextToTheProgramBeatsTheConfigFoldersPointer) {
+    fs::create_directories(tmp_ / "one");
+    fs::create_directories(tmp_ / "two");
+    write_to(config_pointer_, (tmp_ / "one").string() + "\n");
+    write_to(bb::common::program_data_dir_path(exe_), (tmp_ / "two").string() + "\n");
+    EXPECT_EQ(make_tar().root(), tmp_ / "two");
+    ::chmod(exe_.c_str(), 0500);  // also when the program's folder is read-only
+    EXPECT_EQ(make_tar().root(), tmp_ / "two");
+}
+
+TEST_F(TarGzDirsTest, BbUserDirBeatsBothFiles) {
+    fs::create_directories(tmp_ / "one");
+    write_to(config_pointer_, (tmp_ / "one").string() + "\n");
+    write_to(bb::common::program_data_dir_path(exe_), (tmp_ / "one").string() + "\n");
+    set("BB_USER_DIR", (tmp_ / "dev").string());
+    EXPECT_EQ(make_tar().root(), tmp_ / "dev");
+}
+
+TEST_F(TarGzDirsTest, AFolderThatCantBeWrittenUsesTheConfigFoldersPointer) {
+    fs::create_directories(tmp_ / "chosen");
+    write_to(config_pointer_, (tmp_ / "chosen").string() + "\n");
+    if (!lock_program_folder()) {
+        GTEST_SKIP() << "root writes anywhere";
+    }
+    EXPECT_EQ(make_tar().root(), tmp_ / "chosen");
+}
+
+TEST_F(TarGzDirsTest, AFolderThatCantBeWrittenAndHasNoChoiceAsksTheLauncher) {
+    if (!lock_program_folder()) {
+        GTEST_SKIP() << "root writes anywhere";
+    }
+    try {
+        make_tar();
+        FAIL() << "no data folder was accepted";
+    } catch (const bb::common::NoDataFolder& e) {
+        EXPECT_EQ(e.reason(), bb::common::NoDataFolder::Reason::not_chosen);
+    }
+}
+
+// An administrator who made user/ for the player keeps the old behaviour.
+TEST_F(TarGzDirsTest, AWritableUserFolderInAProtectedFolderIsUsed) {
+    fs::create_directories(exe_ / "user");
+    if (!lock_program_folder()) {
+        GTEST_SKIP() << "root writes anywhere";
+    }
+    EXPECT_EQ(make_tar().root(), exe_ / "user");
+}
+
+TEST_F(TarGzDirsTest, AChosenFolderThatIsGoneOrBrokenIsNoDataFolder) {
+    write_to(bb::common::program_data_dir_path(exe_), (tmp_ / "usb").string() + "\n");
+    try {
+        make_tar();
+        FAIL() << "a missing folder was accepted";
+    } catch (const bb::common::NoDataFolder& e) {
+        EXPECT_EQ(e.reason(), bb::common::NoDataFolder::Reason::folder_missing);
+        EXPECT_EQ(e.folder(), tmp_ / "usb");
+    }
+    EXPECT_FALSE(fs::exists(tmp_ / "usb"));
+    write_to(bb::common::program_data_dir_path(exe_), "relative/folder\n");
+    try {
+        make_tar();
+        FAIL() << "a relative path was accepted";
+    } catch (const bb::common::NoDataFolder& e) {
+        EXPECT_EQ(e.reason(), bb::common::NoDataFolder::Reason::pointer_unusable);
+        EXPECT_NE(std::string(e.what()).find(bb::common::program_data_dir_path(exe_).string()),
+                  std::string::npos) << e.what();
+    }
+}
+
+// The AppImage keeps its rules: the config folder's pointer, never a file next to the program.
+TEST_F(TarGzDirsTest, AnAppImageReadsOnlyTheConfigFoldersPointer) {
+    fs::create_directories(tmp_ / "one");
+    fs::create_directories(tmp_ / "two");
+    write_to(config_pointer_, (tmp_ / "one").string() + "\n");
+    write_to(bb::common::program_data_dir_path(exe_), (tmp_ / "two").string() + "\n");
+    EXPECT_EQ(make_tar(true).root(), tmp_ / "one");
+    fs::remove(config_pointer_);
+    EXPECT_THROW(make_tar(true), bb::common::NoDataFolder);
+}
+
+TEST_F(TarGzDirsTest, ThePointerFileCanBeWrittenAnywhere) {
+    const fs::path file = bb::common::program_data_dir_path(exe_);
+    EXPECT_EQ(file, exe_ / "data-dir");
+    bb::common::write_data_dir_pointer(tmp_ / "somewhere", file);
+    EXPECT_EQ(bb::common::read_data_dir_pointer(file), tmp_ / "somewhere");
+    EXPECT_FALSE(fs::exists(config_pointer_));
+}
+
 }  // namespace
