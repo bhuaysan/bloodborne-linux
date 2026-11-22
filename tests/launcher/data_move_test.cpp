@@ -424,38 +424,59 @@ TEST(DataMoveInner, Run) {
 
 std::string exe_path() { return fs::read_symlink("/proc/self/exe").string(); }
 
-// Every copied file is flushed before the first old file is deleted, and the pointer's folder too.
+// Every copied file is flushed, and the pointer is switched, before the first old file is deleted.
 TEST_F(DataMoveTest, TheCopyIsFlushedBeforeTheOldFilesGo) {
-    const fs::path log = tmp_ / "strace.log";
-    const std::string cmd = "ASAN_OPTIONS=detect_leaks=0 BB_MOVE_INNER=" + tmp_.string() + " BB_MOVE_MODE=flush strace -f -qq " +
-                            "-e trace=fsync,syncfs,unlinkat -o " + log.string() + " " + exe_path() +
-                            " --gtest_filter=DataMoveInner.Run > /dev/null 2>&1";
-    if (std::system("strace -V > /dev/null 2>&1") != 0 || std::system(cmd.c_str()) != 0 ||
-        !fs::exists(log)) {
+    if (std::system("strace -e trace=none true > /dev/null 2>&1") != 0) {
         GTEST_SKIP() << "strace is not usable here";
     }
+    const fs::path log = tmp_ / "strace.log";
+    const std::string cmd = "ASAN_OPTIONS=detect_leaks=0 BB_MOVE_INNER=" + tmp_.string() +
+                            " BB_MOVE_MODE=flush strace -f -y -qq "
+                            "-e trace=fsync,syncfs,unlinkat,rename,renameat,renameat2 -o " +
+                            log.string() + " " + exe_path() +
+                            " --gtest_filter=DataMoveInner.Run > /dev/null 2>&1";
+    ASSERT_EQ(std::system(cmd.c_str()), 0) << "the move failed in the child";
     std::ifstream in(log);
     std::string line;
-    int flushed = 0;
+    int file_fsyncs = 0;
+    bool pointer_renamed = false;
     bool deleted = false;
     while (std::getline(in, line)) {
         if (line.find("unlinkat") != std::string::npos) {
             deleted = true;  // nothing is deleted before the old files go (no undo here)
             break;
         }
-        flushed += line.find("fsync(") != std::string::npos ? 1 : 0;
+        if (line.find("rename") != std::string::npos &&
+            line.find("data-dir") != std::string::npos) {
+            pointer_renamed = true;
+        }
+        // strace -y prints the path of the descriptor: fsync(3</...>); folders end in a slash-less
+        // name too, so a file is told by being one of the copied names.
+        if (line.find("fsync(") != std::string::npos &&
+            (line.find("config.toml") != std::string::npos ||
+             line.find("param.sfo") != std::string::npos ||
+             line.find("sdimg_0") != std::string::npos ||
+             line.find("bb-run.log") != std::string::npos)) {
+            ++file_fsyncs;
+        }
     }
     EXPECT_TRUE(deleted);
-    // 5 files, the folders (data, profiles, ...), the pointer file and its folder.
-    EXPECT_GE(flushed, 5 + 1 + 2) << "files and folders are flushed first";
+    EXPECT_GE(file_fsyncs, 5) << "each of the 5 copied files is flushed first";
+    EXPECT_TRUE(pointer_renamed) << "the pointer is switched before the old files go";
     EXPECT_TRUE(fs::exists(tmp_ / "data/logs/bb-run.log"));
 }
 
 // A second mount of the old cache (or of the folder around it) leads into the old folder under
 // another name: the textual check can't see it, the device and inode can.
 TEST_F(DataMoveTest, ATargetReachedThroughAnotherMountIsRefused) {
-    if (std::system("unshare -Urm true > /dev/null 2>&1") != 0) {
-        GTEST_SKIP() << "no user and mount namespaces here";
+    // Some CI sandboxes allow the namespace but refuse the bind mount: probe the mount itself.
+    const std::string probe = tmp_.string() + "/probe";
+    fs::create_directories(probe + "/x");
+    fs::create_directories(probe + "/y");
+    if (std::system(("unshare -Urm sh -c 'mount --bind " + probe + "/x " + probe +
+                     "/y' > /dev/null 2>&1")
+                        .c_str()) != 0) {
+        GTEST_SKIP() << "no user and mount namespaces with bind mounts here";
     }
     fs::create_directories(tmp_ / "alias");
     fs::create_directories(tmp_ / "aliasparent");

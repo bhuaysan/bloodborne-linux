@@ -157,6 +157,9 @@ void copy_config(const fs::path& src, const fs::path& dst, const MoveRequest& re
     }
     try {
         common::write_config(dst, old_config);
+        // write_config doesn't flush: the rewritten file and its folder go to disk here.
+        flush_path(dst, true);
+        flush_path(dst.parent_path(), false);
         const auto written = common::read_config(dst).config.game_dir;
         std::error_code ec;
         if (!written || fs::weakly_canonical(*written, ec) !=
