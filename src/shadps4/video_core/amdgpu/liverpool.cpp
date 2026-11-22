@@ -80,9 +80,9 @@ void Liverpool::ProcessCeQueue() {
     task.resume();
     if (task.done()) {
         task.destroy();
+        WaitCopies(); // ours (#777), before the lock a guest's submit takes
         std::scoped_lock lock{queue.m_access};
         ce_submits.pop();
-        WaitCopies(); // ours (#777)
         --num_submits;
         std::scoped_lock lock2{submit_mutex};
         submit_cv.notify_all();
@@ -144,11 +144,11 @@ void Liverpool::Process(std::stop_token stoken) {
 
             if (task.done()) {
                 task.destroy();
+                WaitCopies(); // ours (#777), before the lock a guest's submit takes
 
                 std::scoped_lock lock{queue.m_access};
                 queue.submits.pop();
 
-                WaitCopies(); // ours (#777)
                 --num_submits;
                 std::scoped_lock lock2{submit_mutex};
                 submit_cv.notify_all();

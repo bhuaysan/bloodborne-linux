@@ -1222,6 +1222,11 @@ TEST(GuestMemory, ALabelWaitsForEarlierCopies) {
             });
         }
         copies.Push([&] { copied = true; });
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (waiting.load() < 2 && std::chrono::steady_clock::now() < until) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        ASSERT_EQ(waiting.load(), 2);
 
         // EVENT_WRITE_EOP: write 0x77 to the label, no interrupt.
         const std::uint64_t label = addr(dwords) + 0x800;
@@ -1233,13 +1238,12 @@ TEST(GuestMemory, ALabelWaitsForEarlierCopies) {
                                                0};
         gpu.liverpool->SubmitGfx(eop, {});
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        EXPECT_EQ(waiting.load(), 2);
         EXPECT_EQ(std::atomic_ref(dwords[0x200]).load(), 0u);
         EXPECT_FALSE(gpu.liverpool->IsGpuIdle());
         release = true;
-        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        const auto label_until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (std::atomic_ref(dwords[0x200]).load() != 0x77u &&
-               std::chrono::steady_clock::now() < until) {
+               std::chrono::steady_clock::now() < label_until) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         EXPECT_EQ(std::atomic_ref(dwords[0x200]).load(), 0x77u);
