@@ -31,6 +31,30 @@ export BB_GAME_DIR=/path/to/your/CUSA03173
 
 Download `Bloodborne-Linux-<version>-x86_64.tar.gz` from the [Releases page](https://github.com/bhuaysan/bloodborne-linux/releases), check it with `sha256sum -c --ignore-missing SHA256SUMS`, unpack it into a folder you can write and start `bb-launcher` in `Bloodborne-Linux/`. On the first start the launcher looks for your game folder, the one that holds `eboot.bin`. If it finds none, press "Set up game" and choose the folder of your own dump, or drag it onto the window. Then press Play. Everything the game writes stays in `Bloodborne-Linux/user/`. The `BB_GAME_DIR` setup above is for developers.
 
+### Supported distributions
+
+The package brings its own SDL, FFmpeg and C++ library. It takes the Vulkan driver, the display
+libraries and the sound libraries from the system, which every desktop install has. Each line below
+played the rig's route from a new game to first control in the clinic, with sound, in a container of
+that distribution on an AMD GPU (RADV) under KDE Plasma on Wayland (`docs/test-rig.md`,
+"Distributions").
+
+| Distribution | Oldest version | What to install | Known limits |
+|---|---|---|---|
+| Fedora | 44 | nothing on a desktop | The reference machine |
+| Ubuntu | VERSIONS_UBUNTU | `mesa-vulkan-drivers` (AMD and Intel) | UBUNTU_LIMITS |
+| Debian | VERSIONS_DEBIAN | `mesa-vulkan-drivers` (AMD and Intel) | DEBIAN_LIMITS |
+| Arch Linux | rolling | `vulkan-radeon` (AMD) or `vulkan-intel` | ARCH_LIMITS |
+| Bazzite | stable image | nothing | BAZZITE_LIMITS |
+
+A system without a desktop (a server or container image) also needs the libraries a desktop
+brings: on Ubuntu and Debian `libxkbcommon0 libwayland-cursor0 libwayland-egl1 libxext6
+libasound2t64 libpulse0 libpipewire-0.3-0t64 pipewire-bin libfontconfig1` (on Ubuntu 22.04 and
+Debian 12 `libasound2` and `libpipewire-0.3-0`), on Arch `libxkbcommon libxext alsa-lib libpulse
+pipewire fontconfig`. Without the display libraries the window does not open; without the sound ones the game plays silently. NVIDIA's driver and Intel GPUs
+are not checked yet. The game needs fewer than 2000 memory mappings, so the older `vm.max_map_count`
+default of 65530 is enough.
+
 To build the same folder from source, run `tools/package-portable.sh` (see Building; the script names what it needs). Versions and how releases are made are in [docs/releasing.md](docs/releasing.md).
 
 ## Building

@@ -116,7 +116,9 @@ def setup_reference(root: Path | None = None) -> Path:
 
 def build_layer(destination: Path | None = None) -> Path:
     """Compiles the Vulkan layer if its source is newer than the binary. Returns its directory."""
-    destination = destination or rig_dir() / "layer"
+    # Not "layer": that folder holds the builds without -static-libstdc++ of older checkouts, which
+    # rebuild it there.
+    destination = destination or rig_dir() / "layer-static"
     source = HERE / "layer" / "bb_rig_layer.cpp"
     binary = destination / "libVkLayer_bb_rig.so"
     if not binary.exists() or binary.stat().st_mtime < source.stat().st_mtime:

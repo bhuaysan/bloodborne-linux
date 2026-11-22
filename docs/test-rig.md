@@ -17,7 +17,7 @@ tools/rig/rig.py perf yharnam-route --runs 5 --bb-user USER --reference-user USE
 tools/rig/rig.py perf --branch RUN... --main RUN... --reference RUN...   # the same report from finished runs
 ```
 
-A run writes `target.log`, `events.csv` (what the rig did, tied to places in the log), `frames.csv` (one line per present), `memory.csv` (`peak_program_bytes` in the summary leaves out the page cache of the game's files), `threads.csv` (the user and system time of every thread of the target, once a second; `tools/rig/thread_cpu.py` reads it), `shots/*.png`, `kernel.log` and `summary.json`. For `bb-run`, `builds` and `segment_builds` in the summary spread the time its GPU thread spent on new pipelines (the `Pipeline build` and `Pipeline wait` lines in the log) over the frame intervals: the longest interval with a build in it and the most build time within one interval. The exit status is 0 when the scenario finished with no kernel GPU fault and an unchanged game directory. It is 1 after an out-of-memory kill, an unreadable kernel log, a target that exits before the scenario ends, a `shot` step without its picture, and a run with the layer in which the reference or a windowed `bb-run` presented no frame (a headless `bb-run` never presents).
+A run writes `target.log`, `events.csv` (what the rig did, tied to places in the log), `frames.csv` (one line per present), `memory.csv` (`peak_program_bytes` in the summary leaves out the page cache of the game's files; `peak_maps` is the most memory mappings one process of the target had, see "Distributions"), `threads.csv` (the user and system time of every thread of the target, once a second; `tools/rig/thread_cpu.py` reads it), `shots/*.png`, `kernel.log` and `summary.json`. For `bb-run`, `builds` and `segment_builds` in the summary spread the time its GPU thread spent on new pipelines (the `Pipeline build` and `Pipeline wait` lines in the log) over the frame intervals: the longest interval with a build in it and the most build time within one interval. The exit status is 0 when the scenario finished with no kernel GPU fault and an unchanged game directory. It is 1 after an out-of-memory kill, an unreadable kernel log, a target that exits before the scenario ends, a `shot` step without its picture, and a run with the layer in which the reference or a windowed `bb-run` presented no frame (a headless `bb-run` never presents).
 
 Scenario steps are documented at the top of `tools/rig/scenario.py`, and scenarios live in `tools/rig/scenarios/`.
 
@@ -89,6 +89,35 @@ Per segment and column the report gives the median over the runs of the p50, p95
 `yharnam-fight.scn` continues from a second hand-made save just before a group of living enemies (`analysis/rig/manual/yharnam-enemies/work/user`). The hunter walks out until they notice (`play-walk`), locks on and backs toward the arch (`play-lockon`), and fights in short exchanges of a swing and a roll (`play-fight-first`, `play-fight-strong` with `R2`, `play-fight-last`), with a blood vial between them (`play-heal`, `play-heal-again`) and a sprint at the end (`play-sprint`). About 100 s of play. The route is blind, so how long the enemies stay in contact differs between runs. It ends its load wait with `expect_level min=33 max=45`, a step that fails the run when the picture's mean luma is outside the band: in about 1 of 5 runs an enemy killed the hunter during the wait, and the run measured a loading page and the lantern route instead (#538). The band fits this save's lighting only; another save needs its own.
 
 `yharnam-death.scn` continues from the same save, walks 4 s toward the enemies and stands until they kill the hunter. YOU DIED, the load and the respawn at the lantern follow, and the shots after it show the hunter from behind. The scenario has no check step of its own: its shots are compared by eye against a reference run, the hunter and his weapon whole and no large flat polygon of one colour anywhere (#537).
+
+## Distributions (#755)
+
+`run bb-run --container IMAGE --bb-run PACKAGE/bb-run` plays a portable package inside a container
+of another distribution: its user space, the host's kernel and GPU. The container gets what
+distrobox shares with the host (the home folder, the runtime folder with the Wayland, PipeWire and
+PulseAudio sockets, X11, `/dev/dri`, the host's network and IPC, your own user id) and the game and
+the package folder read-only. It replaces bwrap, which rootless podman can't run inside, and stays
+in the run's scope (`--cgroups=disabled`), so the memory limit, the samplers and the stop reach
+`bb-run` in it. Distrobox itself is not used: its first start installs about 60 packages, the Vulkan
+drivers, fontconfig and the X11 libraries among them, which would hide what the package needs. The
+image is the distribution's official one with only what the README's table names installed
+(`--no-install-recommends`). Bazzite's image links `/home` to `var/home` but has no `/var/home`, so
+its image adds that folder and nothing else.
+
+Each image ran `main-menu` with `SDL_AUDIO_DRIVER=pulseaudio` (the logos and the title with sound)
+and `new-game-to-clinic` with `SDL_AUDIO_DRIVER=pipewire` (a new game to first control in the
+clinic), on the package of #737 (RESULTS_PACKAGE). Sound counted when `pw-dump` showed a running
+output stream of `bb-run` with the forced driver's API during the run (`pipewire-pulse` for
+PulseAudio, none for PipeWire's own).
+
+RESULTS_TABLE
+
+**Memory mappings.** The kernel refuses new mappings of a process above `vm.max_map_count`, 65530 by
+default on older distributions (Fedora, Arch and Ubuntu 24.04 ship 1048576). The rig records the
+most mappings one process of the target had (`peak_maps`, sampled once a second). The package's
+`bb-run` on the host had at most 1642 on the clinic route and 1606 on the Central Yharnam route
+(`yharnam-route`), and RESULTS_MAPS in the containers. That is 40 times below the old default, so
+`bb-run` doesn't check the limit at start. A route that comes near 30000 should add the check.
 
 ## Load times (#655)
 
