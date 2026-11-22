@@ -419,7 +419,9 @@ bool AvPlayerSource::GetAudioData(AvPlayerFrameInfo& audio_info) {
         return false;
     }
 
-    if (m_audio_frames.Size() == 0) {
+    // A single locked pop: Stop() may empty the queue between a size check and the pop (#539).
+    auto frame = m_audio_frames.Pop();
+    if (!frame.has_value()) {
         return false;
     }
 
@@ -429,7 +431,6 @@ bool AvPlayerSource::GetAudioData(AvPlayerFrameInfo& audio_info) {
         m_audio_buffers_cv.Notify();
     }
 
-    auto frame = m_audio_frames.Pop();
     m_last_audio_ts = frame->info.timestamp;
     m_last_data_time = std::chrono::high_resolution_clock::now();
     m_pause_duration = std::chrono::high_resolution_clock::duration(0);
