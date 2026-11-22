@@ -181,7 +181,7 @@ Each part is `part=<us> us/<calls>` of the time since the previous line, summed 
 | `draw` | `Rasterizer` draw and dispatch calls |
 | `pipeline` | pipeline lookup (shader translation and waiting for a build are inside) |
 | `bind` | binding the resources of a draw: `buffer` and `texture` are inside |
-| `buffer`, `sync`, `resident` | buffer cache: obtaining a buffer; copying CPU-modified guest memory into it; making sparse blocks resident |
+| `buffer`, `sync`, `resident` | buffer cache: obtaining a buffer; copying CPU-modified guest memory into it (uploads of 64 KiB or more only hand their `memmove` to the two copy threads `shadPS4:GpuCopy`, #777); making sparse blocks resident |
 | `texture`, `upload`, `detile`, `upload_new` | texture cache work of a draw; refreshing a dirty image from guest memory; detiling it; the share of `upload` that is the first upload of a cache image object (a new texture, or one evicted and created again; not a re-upload of a changed image) |
 | `render`, `vertex`, `state` | render pass setup; vertex and index buffer binding; dynamic state and descriptor writes |
 | `copy`, `irq`, `queue` | buffer copies and fills; interrupt handlers signalled on the GPU thread; callbacks queued to it |

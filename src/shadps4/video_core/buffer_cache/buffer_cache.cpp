@@ -31,9 +31,10 @@ static constexpr size_t GDS_BUFFER_SIZE = 64_KB;
 static constexpr size_t NULL_INDEX_BUFFER_SIZE = 16;
 static constexpr size_t STREAM_BUFFER_SIZE = 128_MB;
 
-// Ours (#777): uploads from this size on are copied on the scheduler's copy threads. Below it the
-// hand-over costs more than the memmove it saves the GPU thread.
-static constexpr size_t AsyncSyncBytes = 16_KB;
+// Ours (#777): uploads from this size on are copied on the scheduler's copy threads. In
+// yharnam-route at 60 they carry almost all of the memmove time (about 1000 a second, 350 KiB
+// on average); smaller ones take about a microsecond, as long as the hand-over.
+static constexpr size_t AsyncSyncBytes = 64_KB;
 
 // The memmoves of one upload, run on a copy thread.
 struct CopyJob {

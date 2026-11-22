@@ -58,7 +58,7 @@ private:
         u64 ticket;
     };
 
-    void Loop(unsigned index);
+    void Loop();
     void Finish(u64 ticket);
 
     const unsigned num_threads;

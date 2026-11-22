@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copy threads for staging uploads (#777); see vk_copy_queue.h.
 
-#include <fmt/format.h>
-
 #include "common/thread.h"
 #include "video_core/renderer_vulkan/vk_copy_queue.h"
 
@@ -27,7 +25,7 @@ u64 CopyQueue::Push(Job&& job) {
         std::scoped_lock lk{mutex};
         if (threads.empty()) {
             for (unsigned i = 0; i < num_threads; ++i) {
-                threads.emplace_back([this, i] { Loop(i); });
+                threads.emplace_back([this] { Loop(); });
             }
         }
         queue.push_back({std::move(job), ticket});
@@ -46,8 +44,9 @@ void CopyQueue::Wait(u64 ticket) {
     done_cv.wait(lk, [&] { return Completed() >= ticket; });
 }
 
-void CopyQueue::Loop(unsigned index) {
-    Common::SetCurrentThreadName(fmt::format("shadPS4:GpuCopy{}", index).c_str());
+void CopyQueue::Loop() {
+    // Thread names end at 15 characters, so the threads share one; thread_cpu.py sums them.
+    Common::SetCurrentThreadName("shadPS4:GpuCopy");
     std::unique_lock lk{mutex};
     while (true) {
         work_cv.wait(lk, [this] { return stop || !queue.empty(); });

@@ -26,7 +26,7 @@ enum class Part : unsigned {
     pipeline,  // pipeline lookup, with shader translation or a wait for a build inside
     bind,      // binding the resources of one draw or dispatch
     buffer,    // buffer cache: obtaining a buffer and synchronizing it with guest memory
-    sync,      // buffer cache: copying CPU-modified guest memory into a buffer (inside buffer)
+    sync,      // buffer cache: copying CPU-modified guest memory into a buffer (inside buffer; large copies run on copy threads, #777)
     resident,  // buffer cache: making arena blocks resident, sparse binds (inside buffer)
     texture,   // texture cache: finding and updating the images of a draw
     render,    // render state and render pass setup of a draw
