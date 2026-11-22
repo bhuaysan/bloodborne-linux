@@ -200,6 +200,20 @@ class CommandTests(unittest.TestCase):
             self.assertIn("Save Migration", (Path(temp) / "zenity-calls.txt").read_text())
 
 
+class MapCountTests(unittest.TestCase):
+    def test_the_largest_process_counts_and_gone_ones_are_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = Path(tmp)
+            for pid, lines in (("10", 3), ("11", 70000)):
+                (proc / pid).mkdir()
+                (proc / pid / "maps").write_text("00400000-00401000 r-xp 0 0:0 0\n" * lines)
+            self.assertEqual(rig.count_maps(["10", "11", "12"], proc), 70000)
+            self.assertEqual(rig.count_maps([], proc), 0)
+
+    def test_own_process_has_mappings(self) -> None:
+        self.assertGreater(rig.count_maps([str(os.getpid())]), 0)
+
+
 class OutputFailureTests(unittest.TestCase):
     STATS = {"frames": 5}
 

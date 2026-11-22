@@ -364,8 +364,23 @@ class Events:
         print(f"[{stamp}] {kind}: {text}", flush=True)
 
 
+def count_maps(pids: list[str], proc: Path = Path("/proc")) -> int:
+    """The most memory mappings any one of the processes has (lines of /proc/PID/maps). The kernel
+    refuses new mappings of a process above vm.max_map_count, 65530 by default on older
+    distributions (#755)."""
+    most = 0
+    for pid in pids:
+        try:
+            with (proc / pid / "maps").open("rb") as maps:
+                most = max(most, sum(1 for _ in maps))
+        except OSError:
+            continue  # the process has exited, or is not ours to read
+    return most
+
+
 class MemorySampler(threading.Thread):
-    """Samples the target's cgroup once a second into memory.csv and keeps the peak."""
+    """Samples the target's cgroup once a second into memory.csv and keeps the peaks: memory, and
+    the mapping count of its largest process."""
 
     def __init__(self, unit: str, path: Path):
         super().__init__(daemon=True)
@@ -373,6 +388,7 @@ class MemorySampler(threading.Thread):
         self.peak = 0
         self.peak_program = 0
         self.oom_kills = 0
+        self.peak_maps = 0
         self.stopping = threading.Event()
 
     def _cgroup(self) -> Path | None:
@@ -383,7 +399,7 @@ class MemorySampler(threading.Thread):
 
     def run(self) -> None:
         with self.path.open("w", buffering=1) as out:
-            out.write("mono_ns,current,peak,program\n")
+            out.write("mono_ns,current,peak,program,maps\n")
             cgroup = None
             while not self.stopping.wait(1.0):
                 cgroup = cgroup or self._cgroup()
@@ -401,10 +417,12 @@ class MemorySampler(threading.Thread):
                     events = dict(line.split() for line in
                                   (cgroup / "memory.events").read_text().splitlines())
                     self.oom_kills = max(self.oom_kills, int(events.get("oom_kill", 0)))
+                    maps = count_maps((cgroup / "cgroup.procs").read_text().split())
+                    self.peak_maps = max(self.peak_maps, maps)
                 except (OSError, ValueError):
                     cgroup = None  # the scope has ended, or is not there yet
                     continue
-                out.write(f"{time.monotonic_ns()},{current},{self.peak},{program}\n")
+                out.write(f"{time.monotonic_ns()},{current},{self.peak},{program},{maps}\n")
 
 
 def read_thread_times(pids: list[str],
@@ -704,7 +722,7 @@ def run_target(args: argparse.Namespace) -> int:
         "time_limit_s": seconds, "memory_limit": memory, "exit_status": status,
         "scenario_ok": failure is None, "failure": failure,
         "peak_memory_bytes": memory_sampler.peak, "peak_program_bytes": memory_sampler.peak_program,
-        "oom_kills": memory_sampler.oom_kills,
+        "oom_kills": memory_sampler.oom_kills, "peak_maps": memory_sampler.peak_maps,
         "frames": frame_summary,
         "segments": report.segment_stats(frames, events.marks),
         "builds": report.build_stalls(frames, builds),
