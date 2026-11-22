@@ -937,11 +937,17 @@ private:
             v.focus_first = true;
         }
         const ImGuiIO& io = ImGui::GetIO();
-        // The layout's size; in gamescope the window is larger, and the layout sits in its middle.
-        const ImVec2 area(window_width * scale_, window_height * scale_);
-        ImGui::SetNextWindowPos(ImVec2(std::floor(std::max(0.0f, io.DisplaySize.x - area.x) * 0.5f),
-                                       std::floor(std::max(0.0f, io.DisplaySize.y - area.y) * 0.5f)));
-        ImGui::SetNextWindowSize(gamescope_ ? area : io.DisplaySize);
+        if (gamescope_) {
+            // The window is the output's size, and the layout sits in its middle.
+            const ImVec2 area(window_width * scale_, window_height * scale_);
+            ImGui::SetNextWindowPos(
+                ImVec2(std::floor(std::max(0.0f, io.DisplaySize.x - area.x) * 0.5f),
+                       std::floor(std::max(0.0f, io.DisplaySize.y - area.y) * 0.5f)));
+            ImGui::SetNextWindowSize(area);
+        } else {
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(io.DisplaySize);
+        }
         if (focus_first_) {
             ImGui::SetNextWindowFocus();  // gamepad navigation needs a focused window
         }

@@ -51,4 +51,12 @@ TEST(QuitChord, ARepeatedPressDoesNotRestartTheHold) {
     EXPECT_TRUE(chord.held(t0 + 2s));
 }
 
+TEST(QuitChord, ARemovedControllerDropsWhatItHeld) {
+    QuitChord chord;
+    chord.back(true, t0);  // its release never comes
+    chord.reset();
+    chord.start(true, t0 + 1s);
+    EXPECT_FALSE(chord.held(t0 + 10s));
+}
+
 }  // namespace

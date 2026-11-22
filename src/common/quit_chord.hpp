@@ -19,6 +19,12 @@ public:
     void back(bool down, Clock::time_point now) { set(back_, down, now); }
     void start(bool down, Clock::time_point now) { set(start_, down, now); }
 
+    // A controller went away: a button it held never sends its release.
+    void reset() {
+        back_ = false;
+        start_ = false;
+    }
+
     // Both buttons have been down together for `hold`.
     bool held(Clock::time_point now) const {
         return back_ && start_ && now - since_ >= hold;

@@ -176,8 +176,10 @@ bool WindowSDL::PumpEvents(s32 timeout_ms) {
             }
             break;
         }
-        case SDL_EVENT_GAMEPAD_ADDED:
         case SDL_EVENT_GAMEPAD_REMOVED:
+            quit_chord.reset();
+            [[fallthrough]];
+        case SDL_EVENT_GAMEPAD_ADDED:
         case SDL_EVENT_GAMEPAD_AXIS_MOTION:
         case SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN:
         case SDL_EVENT_GAMEPAD_TOUCHPAD_UP:
