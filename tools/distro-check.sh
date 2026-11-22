@@ -9,7 +9,7 @@
 # own package manager (Bazzite's image has them already), unpacks the package, runs ldd on bb-run
 # and bb-launcher (no "not found") and `bb-run --check-system --headless` on lavapipe. With
 # --leave-out the named package of the list is not installed, and the script succeeds only when
-# the check fails: it shows that a missing library is noticed. Needs podman (or docker) and a
+# ldd reports a library "not found": it shows that a missing library is noticed. Needs podman (or docker) and a
 # network for the image and the packages.
 set -euo pipefail
 
@@ -42,7 +42,7 @@ case $distro in
              packages="vulkan-loader mesa-vulkan-drivers fontconfig" ;;
     ubuntu* | debian*) install="apt-get update && apt-get install -y --no-install-recommends"
                        packages="libvulkan1 mesa-vulkan-drivers libfontconfig1" ;;
-    arch) install="pacman -Sy --noconfirm --needed"
+    arch) install="pacman -Syu --noconfirm --needed"
           packages="vulkan-icd-loader vulkan-swrast fontconfig" ;;
     # An image of the installed system: it ships them, and its package database is read-only.
     bazzite) install=; packages="vulkan-loader mesa-vulkan-drivers fontconfig" ;;
@@ -71,7 +71,8 @@ else
 fi
 
 # The script that runs inside the container. Each step prints a "== " header, so the log shows
-# where it stopped. A failed install exits 3, a failed check 1.
+# where it stopped. A failed install exits 3, a library that ldd does not find 4, any other
+# failure 1 (bb-run --check-system's).
 inner=$(cat <<EOS
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -87,11 +88,11 @@ for bin in bb-run bb-launcher; do
     echo "== ldd \$bin"
     if ! deps=\$(ldd "\$bin" 2>&1); then
         echo "\$deps"; status=1
-    elif grep 'not found' <<<"\$deps"; then
-        status=1
+    elif grep 'not found' <<<"\$deps" && [ "\$status" -ne 1 ]; then
+        status=4  # only when no ldd failed: 4 has to mean a library is missing
     fi
 done
-[ "\$status" -eq 0 ] || exit 1
+[ "\$status" -eq 0 ] || exit "\$status"
 echo "== bb-run --check-system --headless"
 VK_LOADER_DRIVERS_SELECT='*lvp*' BB_USER_DIR=/tmp/bb-user ./bb-run --check-system --headless
 EOS
@@ -100,9 +101,10 @@ EOS
 status=0
 "$engine" run --rm -v "$package:/package.tar.gz:ro,Z" "$image" bash -c "$inner" || status=$?
 if [ -n "$leave_out" ]; then
-    # 1 is the check's failure; anything else (the install, the container) proves nothing.
-    if [ "$status" -ne 1 ]; then
-        echo "== distro-check $distro: status $status without $leave_out, expected the check's 1" >&2
+    # Only ldd's "not found" (4) shows that the missing library was noticed; another failure (the
+    # install, the unpacking, a part of --check-system) proves nothing.
+    if [ "$status" -ne 4 ]; then
+        echo "== distro-check $distro: status $status without $leave_out, expected 4 (ldd: not found)" >&2
         exit 1
     fi
     echo "== distro-check $distro: failed without $leave_out, as expected"

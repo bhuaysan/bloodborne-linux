@@ -594,8 +594,17 @@ int main(int argc, char** argv) {
             std::cout << bb::tools::run_usage;
             return 0;
         }
-        std::cerr << "bb-run: " << e.what() << '\n';
-        return 2;
+        // --check-system needs neither: it goes on with the command line alone.
+        if (std::ranges::find(args, "--check-system") == args.end()) {
+            std::cerr << "bb-run: " << e.what() << '\n';
+            return 2;
+        }
+        try {
+            options = bb::tools::parse_run_options(args);
+        } catch (const std::invalid_argument& bad) {
+            std::cerr << "bb-run: " << bad.what() << '\n' << bb::tools::run_usage;
+            return 2;
+        }
     } catch (const std::invalid_argument& e) {
         std::cerr << "bb-run: " << e.what() << '\n' << bb::tools::run_usage;
         return 2;

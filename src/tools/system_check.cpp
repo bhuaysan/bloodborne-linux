@@ -162,8 +162,11 @@ std::string probe_vulkan() {
     }
     const auto get =
         reinterpret_cast<PFN_vkGetInstanceProcAddr>(::dlsym(lib, "vkGetInstanceProcAddr"));
+    if (get == nullptr) {
+        return "libvulkan.so.1 has no vkGetInstanceProcAddr";
+    }
     const auto version = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
-        get != nullptr ? get(nullptr, "vkEnumerateInstanceVersion") : nullptr);
+        get(nullptr, "vkEnumerateInstanceVersion"));
     std::uint32_t api = VK_API_VERSION_1_0;
     if (version != nullptr && version(&api) != VK_SUCCESS) {
         return "vkEnumerateInstanceVersion failed";
@@ -193,6 +196,12 @@ std::string probe_vulkan() {
         get(instance, "vkEnumeratePhysicalDevices"));
     const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
         get(instance, "vkGetPhysicalDeviceProperties"));
+    const auto destroy =
+        reinterpret_cast<PFN_vkDestroyInstance>(get(instance, "vkDestroyInstance"));
+    if (enumerate == nullptr || properties == nullptr || destroy == nullptr) {
+        return "the Vulkan loader lacks vkEnumeratePhysicalDevices, "
+               "vkGetPhysicalDeviceProperties or vkDestroyInstance";
+    }
     std::uint32_t count = 0;
     std::vector<VkPhysicalDevice> devices;
     if (enumerate(instance, &count, nullptr) == VK_SUCCESS) {
@@ -220,8 +229,7 @@ std::string probe_vulkan() {
                           VK_API_VERSION_MAJOR(Vulkan::TargetVulkanApiVersion),
                           VK_API_VERSION_MINOR(Vulkan::TargetVulkanApiVersion), names);
     }
-    reinterpret_cast<PFN_vkDestroyInstance>(get(instance, "vkDestroyInstance"))(instance,
-                                                                                 nullptr);
+    destroy(instance, nullptr);
     return why;
 }
 

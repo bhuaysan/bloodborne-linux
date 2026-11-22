@@ -561,7 +561,6 @@ TEST(BbRun, PrintsTheUsage) {
         << bad.output;
 }
 
-// bb-run as the AppImage's runtime starts it: APPIMAGE and APPDIR set (APPDIR holds the program
 // The lavapipe ICD file, where the Vulkan driver package puts it, or empty.
 std::string lavapipe_icd() {
     for (const char* dir : {"/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d"}) {
@@ -684,6 +683,14 @@ TEST(BbRun, AnAppImageWithoutADataFolderStillPrintsHelp) {
     const Result r = run_in_appimage(dir, "--help", "");
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_NE(r.output.find("usage:"), std::string::npos) << r.output;
+}
+
+// --check-system needs no data folder either: the checks run, whatever their result.
+TEST(BbRun, AnAppImageWithoutADataFolderStillChecksTheSystem) {
+    const TempDir dir;
+    const Result r = run_in_appimage(dir, "--check-system --headless", "");
+    EXPECT_TRUE(r.status == 0 || r.status == 1) << r.output;
+    EXPECT_NE(r.output.find("guest memory: ok, "), std::string::npos) << r.output;
 }
 
 // A data-dir file whose folder is gone (an unmounted drive): bb-run names the folder, asks for the
