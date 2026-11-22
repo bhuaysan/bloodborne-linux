@@ -87,12 +87,39 @@ def segment_cpu(samples: dict[int, dict[int, tuple[str, int, int]]], presents: l
     return (last - first) / 1e9, frames, result
 
 
+def read_gpu(path: Path) -> list[tuple[int, int]]:
+    """gpu.csv as [(mono_ns, busy percent)], or [] for a run without it."""
+    if not path.exists():
+        return []
+    rows = []
+    with path.open(newline="") as f:
+        for row in csv.DictReader(f):
+            try:
+                rows.append((int(row["mono_ns"]), int(row["busy"])))
+            except (KeyError, TypeError, ValueError):
+                continue  # a truncated last line
+    return rows
+
+
+def segment_gpu(gpu: list[tuple[int, int]], presents: list[int],
+                start_ns: int, end_ns: int) -> tuple[float, float] | None:
+    """(mean busy percent, GPU ms per present) over a segment, or None without samples or
+    presents. The busy share of the span, divided by its presents."""
+    busy = [b for t, b in gpu if start_ns <= t < end_ns]
+    frames = sum(1 for p in presents if start_ns <= p < end_ns)
+    if not busy or not frames:
+        return None
+    mean = sum(busy) / len(busy)
+    return mean, mean / 100 * (end_ns - start_ns) / 1e6 / frames
+
+
 def run_report(run: Path, segment: str = "*", thread: str = "*", top: int = 6) -> str:
     samples = read_threads(run / "threads.csv")
     if not samples:
         return "no threads.csv: the run is older than the thread sampler\n"
     marks = frame_profile.read_marks(run / "events.csv")
     presents = [f.present_ns for f in report.read_frames(run / "frames.csv")]
+    gpu = read_gpu(run / "gpu.csv")
     # The last segment ends with the scenario: samples after it see the target shutting down.
     with (run / "events.csv").open(newline="") as f:
         end = max((int(r["mono_ns"]) for r in csv.DictReader(f)), default=max(samples))
@@ -106,6 +133,9 @@ def run_report(run: Path, segment: str = "*", thread: str = "*", top: int = 6) -
         for t in shown:
             count = f" x{t.threads}" if t.threads > 1 else ""
             lines.append(f"  {t.cpu_ms:7.2f} ({t.sys_ms:5.2f})  {t.name}{count}")
+        busy = segment_gpu(gpu, presents, start, stop)
+        if busy:
+            lines.append(f"  {busy[1]:7.2f}          GPU (busy {busy[0]:.0f} %, whole GPU)")
     return "\n".join(lines) + "\n"
 
 

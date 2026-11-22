@@ -8,7 +8,7 @@
   rig.py compare REF_RUN REF_RUN OUR_RUN     our menu captures and time against two reference runs
 
 Output of each run goes to analysis/rig/runs/<stamp>-<target>-<scenario>/: target.log, events.csv,
-frames.csv, memory.csv, threads.csv, shots/*.png, kernel.log, summary.json. Exit status 0 means
+frames.csv, memory.csv, threads.csv, gpu.csv, shots/*.png, kernel.log, summary.json. Exit status 0 means
 the scenario finished (or a run without one reached its time limit) with no kernel GPU fault and
 an unchanged game directory. The run fails on an out-of-memory kill, an unreadable kernel log, a
 target that exits before the scenario ends, a shot step without its picture, and no frame presented
@@ -451,6 +451,35 @@ class ThreadSampler(MemorySampler):
                     out.write(f"{now},{tid},{name},{utime},{stime}\n")
 
 
+def gpu_busy_files(drm: Path = Path("/sys/class/drm")) -> list[Path]:
+    """The amdgpu busy counters of the machine's GPUs (gpu_busy_percent), sorted by card."""
+    return sorted(drm.glob("card[0-9]*/device/gpu_busy_percent"))
+
+
+class GpuSampler(threading.Thread):
+    """Samples the GPU's busy percentage (amdgpu's gpu_busy_percent) ten times a second into
+    gpu.csv. It is the whole GPU, not only the target's work, so the desktop counts in it; times
+    the frame interval it gives the GPU time per present (tools/rig/thread_cpu.py)."""
+
+    def __init__(self, path: Path, files: list[Path] | None = None, period: float = 0.1):
+        super().__init__(daemon=True)
+        self.path, self.period = path, period
+        self.files = gpu_busy_files() if files is None else files
+        self.stopping = threading.Event()
+
+    def run(self) -> None:
+        if not self.files:
+            return  # no amdgpu GPU: no gpu.csv
+        with self.path.open("w", buffering=1) as out:
+            out.write("mono_ns,busy\n")
+            while not self.stopping.wait(self.period):
+                try:
+                    busy = max(int(f.read_text()) for f in self.files)
+                except (OSError, ValueError):
+                    continue  # the GPU is resetting or asleep
+                out.write(f"{time.monotonic_ns()},{busy}\n")
+
+
 def stop_target(unit: str, process: subprocess.Popen) -> None:
     subprocess.run(["systemctl", "--user", "stop", f"{unit}.scope"], capture_output=True)
     try:
@@ -600,6 +629,8 @@ def run_target(args: argparse.Namespace) -> int:
     memory_sampler.start()
     thread_sampler = ThreadSampler(unit, run / "threads.csv")
     thread_sampler.start()
+    gpu_sampler = GpuSampler(run / "gpu.csv")
+    gpu_sampler.start()
     target = RunningTarget(run, process, pad)
     failure = None
     interpreter = scn.Interpreter(target, events)
@@ -631,8 +662,10 @@ def run_target(args: argparse.Namespace) -> int:
             pad.close()
         memory_sampler.stopping.set()
         thread_sampler.stopping.set()
+        gpu_sampler.stopping.set()
         memory_sampler.join(timeout=3)
         thread_sampler.join(timeout=3)
+        gpu_sampler.join(timeout=3)
 
     shot_names = [step.args[0] for step in interpreter.executed if step.op == "shot"]
     status = process.returncode

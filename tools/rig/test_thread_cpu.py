@@ -83,6 +83,53 @@ class ThreadCpuTest(unittest.TestCase):
         self.assertIn("1.00 ( 0.33)  shadPS4:GpuComm", text)
         self.assertNotIn("GXWorker", text)
 
+    def test_gpu_time_per_present(self) -> None:
+        gpu = [(int(t * S / 10), 50 if t < 40 else 100) for t in range(100)]  # 10 a second
+        presents = [int(i * S / 30) for i in range(300)]
+        busy, ms = tc.segment_gpu(gpu, presents, 0, 4 * S)
+        self.assertAlmostEqual(busy, 50)
+        self.assertAlmostEqual(ms, 0.5 * 4000 / 120)
+        busy, ms = tc.segment_gpu(gpu, presents, 2 * S, 6 * S)
+        self.assertAlmostEqual(busy, 75)
+        self.assertIsNone(tc.segment_gpu(gpu, [], 0, 4 * S))
+        self.assertIsNone(tc.segment_gpu([], presents, 0, 4 * S))
+
+    def test_gpu_line_in_the_report(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d)
+            (run / "events.csv").write_text(
+                "mono_ns,utc,log_bytes,kind,text\n"
+                f"{2 * S},x,0,mark,play-stand\n{6 * S},x,0,end,scenario finished\n")
+            (run / "frames.csv").write_text(
+                "frame,present_ns,return_ns,result,width,height,captured\n"
+                + "".join(f"{i},{int(i * S / 30)},0,0,1,1,0\n" for i in range(300)))
+            (run / "threads.csv").write_text(
+                "mono_ns,tid,name,utime,stime\n"
+                + "".join(f"{t * S},1,shadPS4:GpuComm,{t},0\n" for t in range(8)))
+            (run / "gpu.csv").write_text(
+                "mono_ns,busy\n" + "".join(f"{int(t * S / 10)},60\n" for t in range(80))
+                + "x,y\n")
+            text = tc.run_report(run)
+        self.assertIn("20.00          GPU (busy 60 %, whole GPU)", text)  # 0.6 * 4000 ms / 120
+
+    def test_gpu_sampler_writes_the_busiest_card(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            drm = Path(d)
+            for card, busy in (("card0", "7"), ("card1", "42")):
+                (drm / card / "device").mkdir(parents=True)
+                (drm / card / "device" / "gpu_busy_percent").write_text(busy + "\n")
+            files = rig.gpu_busy_files(drm)
+            self.assertEqual([f.parent.parent.name for f in files], ["card0", "card1"])
+            sampler = rig.GpuSampler(drm / "gpu.csv", files, period=0.01)
+            sampler.start()
+            while not (drm / "gpu.csv").exists() or (drm / "gpu.csv").read_text().count("\n") < 3:
+                sampler.stopping.wait(0.01)
+            sampler.stopping.set()
+            sampler.join()
+            rows = tc.read_gpu(drm / "gpu.csv")
+        self.assertGreaterEqual(len(rows), 2)
+        self.assertEqual({b for _, b in rows}, {42})
+
     def test_runs_without_samples(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             self.assertIn("no threads.csv", tc.run_report(Path(d)))
