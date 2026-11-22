@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/ime/ime_dialog_ui.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
 // Changed for bloodborne-linux, 2026-11-12; 2026-11-22: typing on a physical keyboard activates
-// the text field, Enter is Done and Escape is Cancel (#795)
+// the text field, Enter is Done and Escape is Cancel (#795); the on-screen keyboard stays hidden
+// until the pad is used (#798)
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -429,7 +430,7 @@ ImeDialogUi::ImeDialogUi(ImeDialogUi&& other) noexcept
     : state(other.state), status(other.status), result(other.result),
       first_render(other.first_render), accept_armed(other.accept_armed),
       native_input_active(other.native_input_active), typed_ahead(std::move(other.typed_ahead)),
-      input_field_active(other.input_field_active),
+      input_field_active(other.input_field_active), osk_hidden(other.osk_hidden),
       keyboard_accept_pending(other.keyboard_accept_pending),
       pointer_navigation_active(other.pointer_navigation_active),
       edit_menu_popup(other.edit_menu_popup), menu_activate_armed(other.menu_activate_armed),
@@ -541,6 +542,7 @@ ImeDialogUi& ImeDialogUi::operator=(ImeDialogUi&& other) {
     native_input_active = other.native_input_active;
     typed_ahead = std::move(other.typed_ahead);
     input_field_active = other.input_field_active;
+    osk_hidden = other.osk_hidden;
     keyboard_accept_pending = other.keyboard_accept_pending;
     pointer_navigation_active = other.pointer_navigation_active;
     edit_menu_popup = other.edit_menu_popup;
@@ -790,6 +792,21 @@ void ImeDialogUi::Draw() {
     panel_layout_anchor = layout_anchor;
     panel_position.x = std::clamp(panel_position.x, min_x, max_x);
     panel_position.y = std::clamp(panel_position.y, min_y, max_y);
+    if (osk_hidden) {
+        // Without the on-screen keyboard the panel ends where the keyboard would start (#798).
+        const Libraries::Ime::ImePanelMetrics full = Libraries::Ime::ComputeImePanelMetrics({
+            .panel_w = panel_w,
+            .panel_h = panel_h,
+            .multiline = state->is_multi_line,
+            .show_title = !state->title.empty(),
+            .base_font_size = GetFontSize(),
+            .window_pos = panel_position,
+        });
+        const float top_h = full.kb_pos.y - panel_position.y;
+        if (top_h > 0.0f && top_h < window_size.y) {
+            window_size.y = top_h;
+        }
+    }
     SetNextWindowPos(panel_position);
     SetNextWindowSize(window_size);
     SetNextWindowDockID(0, ImGuiCond_Always);
@@ -872,6 +889,9 @@ void ImeDialogUi::Draw() {
         const bool osk_control_input = panel_input.osk_control_input;
 
         const bool raw_osk_control_input = panel_input.raw_osk_control_input;
+        if (raw_osk_control_input) {
+            osk_hidden = false;  // the pad is in use: show its keyboard from the next frame on
+        }
         if (native_input_active && raw_osk_control_input && !request_input_focus &&
             !pending_input_selection_apply) {
             native_input_active = false;
