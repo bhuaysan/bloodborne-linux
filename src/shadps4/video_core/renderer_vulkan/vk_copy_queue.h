@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copies of CPU-written guest memory into staging space, run on copy threads instead of the GPU
-// thread (#777). The GPU thread reserves the staging space, records the Vulkan copy that reads it
-// and pushes the memmove here; Push returns a ticket. The scheduler stamps every chunk and submit
-// it hands over with the last ticket pushed before it, and waits until every job up to that ticket
-// is done before it replays or submits them. So the GPU never reads staging space a job has not
-// filled, and the GPU thread itself never waits for a copy.
+// thread (#777, docs/design/command-recording.md). The GPU thread reserves the staging space,
+// records the Vulkan copy that reads it and pushes the memmove here; Push returns a ticket. The
+// scheduler stamps every submit with the last ticket pushed before it and submits only once every
+// job up to that ticket is done, so the GPU never reads staging space a job has not filled. The
+// GPU thread itself waits only where the guest could see progress past a draw (Liverpool's
+// labels, interrupts and memory writes) and where it waits for the GPU anyway (Finish, Wait).
 
 #pragma once
 
@@ -31,7 +32,7 @@ public:
     CopyQueue(const CopyQueue&) = delete;
     CopyQueue& operator=(const CopyQueue&) = delete;
 
-    /// Queues a job and returns its ticket. Tickets count up from 1. One pushing thread.
+    /// Queues a job and returns its ticket. Tickets count up from 1.
     u64 Push(Job&& job);
 
     /// The ticket of the last job pushed, or 0.

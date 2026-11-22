@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/amdgpu/liverpool.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-18
+// Changed for bloodborne-linux, 2026-11-22
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/assert.h"
@@ -61,6 +61,12 @@ Liverpool::~Liverpool() {
     }
 }
 
+void Liverpool::WaitCopies() {
+    if (rasterizer) {
+        rasterizer->WaitCopies();
+    }
+}
+
 void Liverpool::ProcessCeQueue() {
     auto& queue = mapped_queues[GfxQueueId];
     Task::Handle task{};
@@ -76,6 +82,7 @@ void Liverpool::ProcessCeQueue() {
         task.destroy();
         std::scoped_lock lock{queue.m_access};
         ce_submits.pop();
+        WaitCopies(); // ours (#777)
         --num_submits;
         std::scoped_lock lock2{submit_mutex};
         submit_cv.notify_all();
@@ -141,6 +148,7 @@ void Liverpool::Process(std::stop_token stoken) {
                 std::scoped_lock lock{queue.m_access};
                 queue.submits.pop();
 
+                WaitCopies(); // ours (#777)
                 --num_submits;
                 std::scoped_lock lock2{submit_mutex};
                 submit_cv.notify_all();
@@ -155,6 +163,7 @@ void Liverpool::Process(std::stop_token stoken) {
             submit_done = false;
         }
 
+        WaitCopies(); // ours (#777)
         Platform::IrqC::Instance()->Signal(Platform::InterruptId::GpuIdle);
     }
 }
@@ -191,6 +200,7 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
             break;
         }
         case PM4ItOpcode::DumpConstRam: {
+            WaitCopies(); // ours (#777)
             const auto* dump_const = reinterpret_cast<const PM4DumpConstRam*>(header);
             memcpy(dump_const->Address<void*>(),
                    cblock.constants_heap.data() + dump_const->Offset(), dump_const->Size());
@@ -273,6 +283,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
 
                 switch (nop->data_block[0]) {
                 case PM4CmdNop::PayloadType::PatchedFlip: {
+                    WaitCopies(); // ours (#777)
                     // There is no evidence that GPU CP drives flip events by parsing
                     // special NOP packets. For convenience lets assume that it does.
                     Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip);
@@ -577,6 +588,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                     regs.cp_strmout_cntl.offset_update_done = 1;
                 } else if (event->event_index.Value() == EventIndex::ZpassDone) {
                     if (event->event_type.Value() == EventType::PixelPipeStatDump) {
+                        WaitCopies(); // ours (#777)
                         static constexpr u64 OcclusionCounterValidMask = 0x8000000000000000ULL;
                         static constexpr u64 OcclusionCounterStep = 0x2FFFFFFULL;
                         u64* results = event->Address<u64*>();
@@ -589,6 +601,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                 break;
             }
             case PM4ItOpcode::EventWriteEos: {
+                WaitCopies(); // ours (#777)
                 const auto* event_eos = reinterpret_cast<const PM4CmdEventWriteEos*>(header);
                 event_eos->SignalFence([this](void* address, u64 data, u32 num_bytes) {
                     ASSERT(memory.TryWriteBacking(address, &data, num_bytes));
@@ -604,6 +617,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                 break;
             }
             case PM4ItOpcode::EventWriteEop: {
+                WaitCopies(); // ours (#777)
                 const auto* event_eop = reinterpret_cast<const PM4CmdEventWriteEop*>(header);
                 event_eop->SignalFence(
                     [this](void* address, u64 data, u32 num_bytes) {
@@ -650,6 +664,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                 break;
             }
             case PM4ItOpcode::WriteData: {
+                WaitCopies(); // ours (#777)
                 const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(header);
                 ASSERT(write_data->dst_sel.Value() == 2 || write_data->dst_sel.Value() == 5);
                 const u32 data_size = (header->type3.count.Value() - 2) * 4;
@@ -672,6 +687,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                 break;
             }
             case PM4ItOpcode::MemSemaphore: {
+                WaitCopies(); // ours (#777)
                 const auto* mem_semaphore = reinterpret_cast<const PM4CmdMemSemaphore*>(header);
                 if (mem_semaphore->IsSignaling()) {
                     mem_semaphore->Signal();
@@ -780,6 +796,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                     vgt_strmout_buffer_filled_size[buf_idx] = offset;
                 }
                 if (strmout->update_memory.Value()) {
+                    WaitCopies(); // ours (#777)
                     const VAddr dst_addr = strmout->DstAddress<VAddr>();
                     if (dst_addr && memory.IsValidMapping(dst_addr, sizeof(offset))) {
                         std::memcpy(reinterpret_cast<void*>(dst_addr),
@@ -1018,6 +1035,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             break;
         }
         case PM4ItOpcode::WriteData: {
+            WaitCopies(); // ours (#777)
             const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(header);
             ASSERT(write_data->dst_sel.Value() == 2 || write_data->dst_sel.Value() == 5);
             const u32 data_size = (header->type3.count.Value() - 2) * 4;
@@ -1029,6 +1047,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             break;
         }
         case PM4ItOpcode::MemSemaphore: {
+            WaitCopies(); // ours (#777)
             const auto* mem_semaphore = reinterpret_cast<const PM4CmdMemSemaphore*>(header);
             if (mem_semaphore->IsSignaling()) {
                 mem_semaphore->Signal();
@@ -1049,6 +1068,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             break;
         }
         case PM4ItOpcode::ReleaseMem: {
+            WaitCopies(); // ours (#777)
             const auto* release_mem = reinterpret_cast<const PM4CmdReleaseMem*>(header);
             release_mem->SignalFence(
                 [pipe_id = queue.pipe_id] {

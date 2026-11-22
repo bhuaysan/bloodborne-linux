@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/amdgpu/liverpool.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-16
+// Changed for bloodborne-linux, 2026-11-22
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -107,6 +107,12 @@ public:
     void BindRasterizer(Vulkan::Rasterizer* rasterizer_) {
         rasterizer = rasterizer_;
     }
+
+    // Ours (#777): the copy jobs of earlier buffer syncs are done. Each point where the command
+    // processor makes progress the guest can see (a label, an interrupt, a write into guest
+    // memory, a finished submit) waits for them first: a guest that sees it may write into a
+    // buffer an earlier draw read, and that draw's copy must have read the buffer before.
+    void WaitCopies();
 
     // The thread that processes the command buffers and runs SendCommand's functions. Upstream's
     // plain member is atomic here: fault handlers on guest threads read it.

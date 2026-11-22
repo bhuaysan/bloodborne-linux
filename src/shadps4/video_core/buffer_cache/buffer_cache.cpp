@@ -34,7 +34,7 @@ static constexpr size_t STREAM_BUFFER_SIZE = 128_MB;
 // Ours (#777): uploads from this size on are copied on the scheduler's copy threads. In
 // yharnam-route at 60 they carry almost all of the memmove time (about 1000 a second, 350 KiB
 // on average); smaller ones take about a microsecond, as long as the hand-over.
-static constexpr size_t AsyncSyncBytes = 64_KB;
+static constexpr size_t ASYNC_SYNC_BYTES = 64_KB;
 
 // The memmoves of one upload, run on a copy thread.
 struct CopyJob {
@@ -46,6 +46,7 @@ struct CopyJob {
     Vulkan::StagingBufferRef staging;
     boost::container::small_vector<Range, 4> ranges;
 };
+
 constexpr std::optional<u32> CmaskColorExpandedValue(u32 num_samples) {
     switch (num_samples) {
     case 1:
@@ -498,9 +499,9 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
     if (!copies.empty()) {
         const auto staging = staging_pool.Request(total_size_bytes, MemoryType::HostUncached);
         // Ours (#777): a large upload's memmove goes to the scheduler's copy threads, and the
-        // replay of the copy below waits for it. The pages were protected again above, so a CPU
+        // submit of the copy below waits for it. The pages were protected again above, so a CPU
         // write during the job marks them modified and the next draw syncs them again.
-        if (total_size_bytes >= AsyncSyncBytes) {
+        if (total_size_bytes >= ASYNC_SYNC_BYTES) {
             CopyJob job{.staging = staging};
             job.ranges.reserve(copies.size());
             for (const auto& copy : copies) {

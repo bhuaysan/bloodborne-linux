@@ -20,21 +20,12 @@ Scheduler::Scheduler(const Instance& instance, Recording recording_)
       work_semaphore{instance}, command_pool{instance, &work_semaphore} {
     BeginPrimary();
     dynamic_state.Invalidate();
-    if (recording != Recording::Direct) {
-        // Ours (#777): every hand-over carries the copy jobs its records read, also when the
-        // chunk is replayed at once (--sync-recording), so the replay waits for them.
+    if (recording == Recording::Threaded) {
         recorder.SetHandOver([this](RecordedChunk&& chunk) {
             Work work{};
             work.chunk = std::move(chunk);
-            work.copy_ticket = copies.Issued();
-            if (recording == Recording::Threaded) {
-                Enqueue(std::move(work));
-            } else {
-                Process(work);
-            }
+            Enqueue(std::move(work));
         });
-    }
-    if (recording == Recording::Threaded) {
         recording_thread = std::thread([this] { RecordingLoop(); });
     }
 }
@@ -253,8 +244,6 @@ void Scheduler::Enqueue(Work&& work) {
 // Replays a chunk into the primary command buffer, or ends and submits it and begins the next.
 // On the recording thread, or on the GPU thread without one.
 void Scheduler::Process(Work& work) {
-    // The staging space these records read is filled once its copy jobs are done (#777).
-    copies.Wait(work.copy_ticket);
     if (work.chunk.data) {
         CommandRecorder::ReplayChunk(primary, work.chunk);
         recorder.Recycle(std::move(work.chunk));
@@ -267,6 +256,10 @@ void Scheduler::Process(Work& work) {
     ASSERT_MSG(recording == Recording::Threaded || recorder.PendingBytes() == 0,
                "{} bytes of records left at a submit", recorder.PendingBytes());
     Check(primary.end());
+
+    // Ours (#777): the GPU reads the staging space the copy threads fill only once this command
+    // buffer is on the queue, so the submit waits for the jobs pushed before it was handed over.
+    copies.Wait(work.copy_ticket);
 
     SubmitInfo& info = work.info;
     std::array<vk::PipelineStageFlags, std::tuple_size_v<decltype(info.wait_semas)>>

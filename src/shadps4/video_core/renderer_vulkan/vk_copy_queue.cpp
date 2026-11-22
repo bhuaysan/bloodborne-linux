@@ -20,9 +20,10 @@ CopyQueue::~CopyQueue() {
 }
 
 u64 CopyQueue::Push(Job&& job) {
-    const u64 ticket = issued.load(std::memory_order_relaxed) + 1;
+    u64 ticket;
     {
         std::scoped_lock lk{mutex};
+        ticket = issued.load(std::memory_order_relaxed) + 1;
         if (threads.empty()) {
             for (unsigned i = 0; i < num_threads; ++i) {
                 threads.emplace_back([this] { Loop(); });

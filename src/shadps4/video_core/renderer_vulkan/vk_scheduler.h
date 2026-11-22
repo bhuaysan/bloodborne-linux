@@ -416,8 +416,8 @@ public:
     /// Returns once the recording thread has processed everything handed to it.
     void Drain();
 
-    /// The copy threads that fill staging space for commands recorded here (#777). Replay and
-    /// submit wait for the jobs pushed before a chunk or submit was handed over.
+    /// The copy threads that fill staging space for commands recorded here (#777). A submit
+    /// waits for the jobs pushed before it was handed over.
     CopyQueue& Copies() noexcept {
         return copies;
     }
@@ -459,7 +459,7 @@ private:
         bool submit = false;       // then ends the command buffer and submits it
         SubmitInfo info{};
         u64 signal_value = 0;
-        u64 copy_ticket = 0;       // the copy jobs to wait for before replay or submit
+        u64 copy_ticket = 0;       // the copy jobs a submit waits for
     };
 
     void SubmitExecution(SubmitInfo& info);

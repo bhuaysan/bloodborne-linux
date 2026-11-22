@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_rasterizer.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-19
+// Changed for bloodborne-linux, 2026-11-22
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -76,6 +76,11 @@ public:
     u64 Flush();
     void Finish();
     void OnSubmit();
+
+    /// Ours (#777): returns once the copy jobs of every buffer sync so far are done.
+    void WaitCopies() {
+        scheduler.Copies().WaitIdle();
+    }
 
     PipelineCache& GetPipelineCache() {
         return pipeline_cache;

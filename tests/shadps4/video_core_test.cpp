@@ -740,10 +740,10 @@ TEST(CopyQueue, RunsQueuedJobsAtShutdown) {
     EXPECT_EQ(ran.load(), 64);
 }
 
-// The replay of a chunk waits for the copy jobs pushed before its hand-over (#777): a copy from
-// staging space a job fills reads what the job wrote, in every recording mode. With a recording
-// thread the GPU thread's flush does not wait for the job; with --sync-recording (Deferred) the
-// hand-over on the GPU thread does.
+// A submit waits for the copy jobs pushed before it was handed over (#777): a copy from staging
+// space a job fills reads what the job wrote, in every recording mode. With a recording thread the
+// GPU thread's flush does not wait for the job; with --sync-recording (Deferred) and direct
+// recording the flush submits on the calling thread and waits there.
 TEST(VideoCore, ReplayWaitsForItsCopies) {
     if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
         GTEST_SKIP() << reason;
@@ -813,7 +813,7 @@ TEST(VideoCore, ReplayWaitsForItsCopies) {
             EXPECT_FALSE(scheduler.IsFree(scheduler.CurrentTick() - 1));
             release = true;
         } else {
-            // The flush replays or submits on this thread, so it waits for the job.
+            // The flush submits on this thread, so it waits for the job.
             releaser = std::thread([&] {
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 release = true;

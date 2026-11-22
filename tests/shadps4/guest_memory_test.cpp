@@ -1160,7 +1160,7 @@ TEST(GuestMemory, ACpuWriteDuringACopyIsSyncedAgain) {
         EXPECT_TRUE(gpu.tracker().IsRegionCpuModified(start, tp));
         release = true;
 
-        // The draw's copy from staging waits for the job, which ran after the write.
+        // The submit of the draw's copy from staging waits for the job, which ran after the write.
         auto& staging_pool = gpu.runtime.GetStagingPool();
         const auto readback = staging_pool.Request(size, VideoCore::MemoryType::HostCached);
         auto cmdbuf = gpu.scheduler.CommandBuffer();
@@ -1193,6 +1193,58 @@ TEST(GuestMemory, ACpuWriteDuringACopyIsSyncedAgain) {
         }
         EXPECT_FALSE(gpu.tracker().IsRegionCpuModified(start, size));
         gpu.rasterizer.Finish();
+        d.unmap();
+    }
+}
+
+// The command processor writes an EOP label only once the copy jobs of earlier buffer syncs are
+// done (#777): a game that sees the label may write into a buffer a draw before it read, and that
+// draw's copy must have read the buffer first. The test holds both copy threads, so a job pushed
+// before the submit stays pending, and the label stays unwritten until the test lets go.
+TEST(GuestMemory, ALabelWaitsForEarlierCopies) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    {
+        Gpu gpu;
+        Direct d(1);
+        auto* const dwords = static_cast<std::uint32_t*>(d.address);
+        auto& copies = gpu.scheduler.Copies();
+        std::atomic<bool> release{false};
+        std::atomic<int> waiting{0};
+        std::atomic<bool> copied{false};
+        for (int i = 0; i < 2; ++i) {
+            copies.Push([&] {
+                ++waiting;
+                while (!release.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+            });
+        }
+        copies.Push([&] { copied = true; });
+
+        // EVENT_WRITE_EOP: write 0x77 to the label, no interrupt.
+        const std::uint64_t label = addr(dwords) + 0x800;
+        const std::array<std::uint32_t, 6> eop{3u << 30 | 4u << 16 | 0x47u << 8,
+                                               0x504,
+                                               static_cast<std::uint32_t>(label),
+                                               1u << 29 | static_cast<std::uint32_t>(label >> 32),
+                                               0x77,
+                                               0};
+        gpu.liverpool->SubmitGfx(eop, {});
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        EXPECT_EQ(waiting.load(), 2);
+        EXPECT_EQ(std::atomic_ref(dwords[0x200]).load(), 0u);
+        EXPECT_FALSE(gpu.liverpool->IsGpuIdle());
+        release = true;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::atomic_ref(dwords[0x200]).load() != 0x77u &&
+               std::chrono::steady_clock::now() < until) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        EXPECT_EQ(std::atomic_ref(dwords[0x200]).load(), 0x77u);
+        EXPECT_TRUE(copied.load());
+        gpu.liverpool->WaitGpuIdle();
         d.unmap();
     }
 }
