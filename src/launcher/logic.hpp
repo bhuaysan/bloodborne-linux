@@ -56,9 +56,15 @@ bool shows_picture(MainState state);
 enum class Prompt { none, no_gpu, no_controller, run_failed, notice };
 Prompt before_play(bool gpu_ok, bool controller);
 
-// What Play runs: `bb_run --config <config>` and nothing else.
+// What Play runs: `bb_run --config <config>`, and `--fullscreen` in gamescope.
 std::vector<std::string> bb_run_arguments(const std::filesystem::path& bb_run,
-                                          const std::filesystem::path& config);
+                                          const std::filesystem::path& config, bool gamescope);
+
+// Whether the launcher runs inside gamescope (Steam's Game Mode, or `gamescope -- bb-launcher`),
+// from the value of GAMESCOPE_WAYLAND_DISPLAY, which gamescope sets for the programs it starts.
+// gamescope scales the one window it shows to fill its output, so the launcher and the game take
+// the output's size instead of being scaled up from a small window.
+bool in_gamescope(const char* gamescope_wayland_display);
 
 // ---- The AppImage's data folder (docs/design/launcher.md, "One portable folder") -------------------
 inline constexpr const char* data_folder_name = "Bloodborne-Linux-data";

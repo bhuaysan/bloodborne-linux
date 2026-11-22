@@ -4,7 +4,7 @@
 // Changed for bloodborne-linux, 2026-11-11: the window and surface part only, over the SDL3
 // window bb-run opens (docs/design/renderer.md, "The window is ours, the surface is upstream's").
 // No input of its own, settings or fullscreen; Open and PumpEvents are ours. 2026-11-21: Open
-// takes the display to open on.
+// takes the display to open on. 2026-11-22: PumpEvents ends the run on the controller's quit chord.
 // License texts: third_party/shadps4/LICENSES/
 #pragma once
 
@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 
+#include "common/quit_chord.hpp"
 #include "common/types.h"
 
 struct SDL_Window;
@@ -58,7 +59,8 @@ public:
     WindowSystemInfo GetWindowInfo() const { return window_info; }
 
     // Handles the pending events on the thread that opened the window, after waiting up to
-    // `timeout_ms` for the first. Returns false once the window is to close.
+    // `timeout_ms` for the first. Returns false once the window is to close, or once Back and Start
+    // have been held together long enough (common/quit_chord.hpp).
     bool PumpEvents(s32 timeout_ms);
 
     // Where PumpEvents hands the gamepad events (device added and removed, buttons, axes,
@@ -73,6 +75,7 @@ private:
     std::atomic<s32> width{0};
     std::atomic<s32> height{0};
     WindowSystemInfo window_info{};
+    bb::common::QuitChord quit_chord;
 };
 
 }  // namespace Frontend

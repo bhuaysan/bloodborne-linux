@@ -316,7 +316,7 @@ bb::hle::video::VideoCorePresenter* video_core() {
 // Handles the window's events for up to `timeout_ms`; ends the run once it is closed.
 void pump_display(std::int32_t timeout_ms) {
     if (!display->window->PumpEvents(timeout_ms)) {
-        bb::common::log(LogLevel::info, channel, "window closed");
+        bb::common::log(LogLevel::info, channel, "window closed, or Back and Start held");
         end_run(0);
     }
 }

@@ -4,7 +4,8 @@
 // Changed for bloodborne-linux, 2026-11-11: the window creation and the native handles of the
 // WindowSDL constructor and OnResize; X11 and Wayland only. Open and PumpEvents are ours: no
 // input (the gamepad events go to a handler, syslibs/pad_input.cpp), camera, audio, fullscreen
-// switching or hotkeys. 2026-11-21: Open takes the display to open on (FindDisplay).
+// switching or hotkeys. 2026-11-21: Open takes the display to open on (FindDisplay). 2026-11-22:
+// PumpEvents ends the run when Back and Start are held together (common/quit_chord.hpp, #757).
 // License texts: third_party/shadps4/LICENSES/
 
 #include "sdl_window.h"
@@ -161,10 +162,22 @@ bool WindowSDL::PumpEvents(s32 timeout_ms) {
         case SDL_EVENT_WINDOW_EXPOSED:
             OnResize();
             break;
+        case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+        case SDL_EVENT_GAMEPAD_BUTTON_UP: {
+            const bool down = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+            const auto now = bb::common::QuitChord::Clock::now();
+            if (event.gbutton.button == SDL_GAMEPAD_BUTTON_BACK) {
+                quit_chord.back(down, now);
+            } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_START) {
+                quit_chord.start(down, now);
+            }
+            if (gamepad_handler != nullptr) {
+                gamepad_handler(event);
+            }
+            break;
+        }
         case SDL_EVENT_GAMEPAD_ADDED:
         case SDL_EVENT_GAMEPAD_REMOVED:
-        case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-        case SDL_EVENT_GAMEPAD_BUTTON_UP:
         case SDL_EVENT_GAMEPAD_AXIS_MOTION:
         case SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN:
         case SDL_EVENT_GAMEPAD_TOUCHPAD_UP:
@@ -178,7 +191,7 @@ bool WindowSDL::PumpEvents(s32 timeout_ms) {
             break;
         }
     }
-    return true;
+    return !quit_chord.held(bb::common::QuitChord::Clock::now());
 }
 
 void WindowSDL::OnResize() {

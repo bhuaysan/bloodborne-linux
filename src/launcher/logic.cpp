@@ -96,8 +96,17 @@ Prompt before_play(bool gpu_ok, bool controller) {
 }
 
 std::vector<std::string> bb_run_arguments(const std::filesystem::path& bb_run,
-                                          const std::filesystem::path& config) {
-    return {bb_run.string(), "--config", config.string()};
+                                          const std::filesystem::path& config, bool gamescope) {
+    std::vector<std::string> args{bb_run.string(), "--config", config.string()};
+    if (gamescope) {
+        // A window would be scaled to the output anyway; fullscreen opens it at the output's size.
+        args.emplace_back("--fullscreen");
+    }
+    return args;
+}
+
+bool in_gamescope(const char* gamescope_wayland_display) {
+    return gamescope_wayland_display != nullptr && *gamescope_wayland_display != '\0';
 }
 
 bool inside_game_folder(const std::filesystem::path& folder) {

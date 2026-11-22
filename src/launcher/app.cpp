@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -160,6 +161,20 @@ private:
         SDL_SetWindowSize(window_, static_cast<int>(window_width * scale_),
                           static_cast<int>(window_height * scale_));
         SDL_SetWindowResizable(window_, false);
+        if (gamescope_) {
+            // gamescope would scale the small window up to its output, blurred. Fullscreen, the
+            // window is the output's size, and the layout is drawn at the largest scale that fits,
+            // centred on black (frame()).
+            SDL_SetWindowFullscreen(window_, true);
+            SDL_SyncWindow(window_);
+            int w = 0;
+            int h = 0;
+            SDL_GetWindowSize(window_, &w, &h);
+            if (w > 0 && h > 0) {
+                scale_ = std::min(static_cast<float>(w) / window_width,
+                                  static_cast<float>(h) / window_height);
+            }
+        }
         renderer_ = SDL_CreateRenderer(window_, nullptr);
         if (renderer_ == nullptr) {
             throw std::runtime_error(std::format("renderer: {}", SDL_GetError()));
@@ -559,8 +574,8 @@ private:
     void play() {
         notice_.clear();
         const fs::path dir = own_directory();
-        const auto args = bb_run_arguments(dir / "bb-run", play_config_.empty() ? config_path_
-                                                                                : play_config_);
+        const auto args = bb_run_arguments(
+            dir / "bb-run", play_config_.empty() ? config_path_ : play_config_, gamescope_);
         std::vector<char*> argv;
         for (const std::string& a : args) {
             argv.push_back(const_cast<char*>(a.c_str()));
@@ -922,8 +937,11 @@ private:
             v.focus_first = true;
         }
         const ImGuiIO& io = ImGui::GetIO();
-        ImGui::SetNextWindowPos(ImVec2(0, 0));
-        ImGui::SetNextWindowSize(io.DisplaySize);
+        // The layout's size; in gamescope the window is larger, and the layout sits in its middle.
+        const ImVec2 area(window_width * scale_, window_height * scale_);
+        ImGui::SetNextWindowPos(ImVec2(std::floor(std::max(0.0f, io.DisplaySize.x - area.x) * 0.5f),
+                                       std::floor(std::max(0.0f, io.DisplaySize.y - area.y) * 0.5f)));
+        ImGui::SetNextWindowSize(gamescope_ ? area : io.DisplaySize);
         if (focus_first_) {
             ImGui::SetNextWindowFocus();  // gamepad navigation needs a focused window
         }
@@ -985,6 +1003,7 @@ private:
     }
 
     Lang lang_ = Lang::en;
+    const bool gamescope_ = in_gamescope(std::getenv("GAMESCOPE_WAYLAND_DISPLAY"));
     float scale_ = 1.0f;
     SDL_Window* window_ = nullptr;
     SDL_Renderer* renderer_ = nullptr;

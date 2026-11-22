@@ -86,8 +86,20 @@ TEST(LauncherLogic, PlayAsksAboutTheGpuThenTheController) {
 }
 
 TEST(LauncherLogic, BbRunGetsTheConfigAndNothingElse) {
-    const auto args = bb_run_arguments("/opt/bb/bb-run", "/srv/cfg.toml");
+    const auto args = bb_run_arguments("/opt/bb/bb-run", "/srv/cfg.toml", false);
     EXPECT_EQ(args, (std::vector<std::string>{"/opt/bb/bb-run", "--config", "/srv/cfg.toml"}));
+}
+
+TEST(LauncherLogic, InGamescopeTheGameRunsFullscreen) {
+    const auto args = bb_run_arguments("/opt/bb/bb-run", "/srv/cfg.toml", true);
+    EXPECT_EQ(args, (std::vector<std::string>{"/opt/bb/bb-run", "--config", "/srv/cfg.toml",
+                                              "--fullscreen"}));
+}
+
+TEST(LauncherLogic, GamescopeIsKnownByItsWaylandDisplay) {
+    EXPECT_TRUE(in_gamescope("gamescope-0"));
+    EXPECT_FALSE(in_gamescope(""));
+    EXPECT_FALSE(in_gamescope(nullptr));
 }
 
 TEST(LauncherScript, ParsesEveryStep) {

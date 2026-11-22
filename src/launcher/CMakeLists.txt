@@ -46,6 +46,7 @@ target_link_libraries(bb-launcher PRIVATE bblauncherui bbversion bb_warnings)
 # first use. Nothing goes into the system: no menu entry, no icon theme. tools/package-portable.sh
 # installs this into Bloodborne-Linux/ and packs it.
 install(TARGETS bb-launcher bb-run RUNTIME DESTINATION .)
+install(FILES ${PROJECT_SOURCE_DIR}/packaging/README.txt DESTINATION .)
 install(FILES ${PROJECT_SOURCE_DIR}/packaging/game-README.txt DESTINATION game RENAME README.txt)
 install(FILES ${PROJECT_SOURCE_DIR}/packaging/bloodborne-linux.svg DESTINATION .)
 install(FILES ${PROJECT_SOURCE_DIR}/LICENSE DESTINATION licenses RENAME bloodborne-linux-GPL-2.0)

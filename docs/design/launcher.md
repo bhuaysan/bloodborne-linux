@@ -179,6 +179,10 @@ Under the row a line says what it does: the least time the loading page of a dea
 
 The launcher is meant for the mouse first. Each part of it can also be used with the controller alone: ImGui's gamepad navigation (`ImGuiConfigFlags_NavEnableGamepad`) through its SDL3 backend. Focus starts on the first entry. A (Cross) chooses, B (Circle) goes back, and the keyboard works the same way. This covers the couch and handheld PCs without a separate "big picture" mode.
 
+**gamescope and Steam's Game Mode (#757).** gamescope shows one window at a time and scales it to fill its output, so the 480 × 600 window came out blurred, and `bb-run`'s window was rendered at its configured size and scaled too. When `GAMESCOPE_WAYLAND_DISPLAY` is set (gamescope sets it for what it starts, Steam's Game Mode included), the launcher opens fullscreen and draws its layout at the largest scale that fits the output, centred on black, and Play adds `--fullscreen`, so the game opens at the output's size. The setting on the Picture page is not changed: on the desktop the game opens as before. Steam Input's virtual pad needs nothing of ours: Steam lets SDL see it (`SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD`) and hides the physical pad.
+
+In gamescope the game's window has no close button, and Steam's menu would end the launcher with it. `bb-run` therefore ends the run, as closing its window does, when Back and Start are held together for two seconds on any controller (`src/common/quit_chord.hpp`), and the launcher comes back. The PS4 keeps Share for the system, so the game sees Back only as a touch-pad press and Start as Options; holding both opens a menu for a moment, which the run's end then closes. The steps for Steam are in the package's `README.txt`.
+
 ## Technical choices
 
 - **Renderer:** ImGui's SDL_Renderer backend (`imgui_impl_sdlrenderer3`), not Vulkan. The launcher has to start, and show the problem, when Vulkan is missing or broken. It probes Vulkan separately by opening the loader at run time and listing the physical devices.
