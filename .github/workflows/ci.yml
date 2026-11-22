@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       code: ${{ steps.diff.outputs.code }}
+      package: ${{ steps.diff.outputs.package }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name == 'pull_request'
@@ -50,6 +51,12 @@ jobs:
               fi
           fi
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+          # The distro check of the portable package: on main, and on PRs that change the package.
+          package=true
+          if [ -n "$PR_BASE" ] && ! printf '%s\n' "$files" | grep -E '^(cmake/portable\.cmake|tools/package-portable\.sh|tools/distro-check\.sh|tools/release/|\.github/workflows/ci\.yml)' >/dev/null; then
+              package=false
+          fi
+          echo "package=$package" | tee -a "$GITHUB_OUTPUT"
 
   build:
     name: build (${{ matrix.preset }})
@@ -170,6 +177,70 @@ jobs:
 
       - name: Build and test
         run: tools/distro-build.sh --jobs 4 "${{ matrix.distro }}"
+
+  # The portable package started on each distribution R12 supports, in a fresh container with only
+  # the Vulkan loader, lavapipe and fontconfig (tools/distro-check.sh, docs/distributions.md).
+  # Built as the release builds it (release.yml, job package).
+  package:
+    needs: changes
+    if: needs.changes.outputs.package == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: registry.gitlab.steamos.cloud/steamrt/sniper/sdk@sha256:bb30053d3cd19d35c76ae69b2790dbaa1430448006f8240cb6d7e723f2d1940e
+    steps:
+      # The whole history: the version (cmake/version.cmake) needs the tags.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build the package
+        run: |
+          env=$(tools/release/sniper-setup.sh)
+          eval "$env"
+          tools/package-portable.sh dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: portable-package
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+          overwrite: true
+
+  distro-check:
+    name: distro-check (${{ matrix.distro }}${{ matrix.leave_out && format(' without {0}', matrix.leave_out) || '' }})
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [fedora44, ubuntu2204, ubuntu2404, debian12, debian13, arch, bazzite]
+        leave_out: ['']
+        include:
+          # The check notices a missing library. A new job: it replaces the empty leave_out.
+          - distro: debian13
+            leave_out: libfontconfig1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: portable-package
+          path: dist
+
+      - name: Check the package
+        env:
+          DISTRO: ${{ matrix.distro }}
+          LEAVE_OUT: ${{ matrix.leave_out }}
+        run: tools/distro-check.sh ${LEAVE_OUT:+--leave-out "$LEAVE_OUT"} "$DISTRO" dist/*.tar.gz
 
   privacy:
     runs-on: ubuntu-24.04

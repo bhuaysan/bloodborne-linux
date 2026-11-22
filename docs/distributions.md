@@ -73,3 +73,30 @@ Needs podman and a network. It installs the packages in a fresh official contain
 `release` preset with warnings as errors, builds, and runs the unit tests (tests that need the game
 skip). It prints the compiler and the build time. CI runs it for Ubuntu, Debian and Arch on every
 push to `main` (`.github/workflows/ci.yml`, job `distros`); Fedora is the main CI build.
+
+## Checking a system
+
+The portable package needs only glibc 2.31 or newer, the Vulkan loader and a Vulkan driver,
+fontconfig, and the display and sound libraries the desktop already has. `bb-run --check-system`
+checks what it can without the game and prints one line per part:
+
+```sh
+./bb-run --check-system              # on the desktop: opens the window briefly, plays nothing
+./bb-run --check-system --headless   # without a display or sound server
+```
+
+- `guest memory`: the address ranges the loader and the guest window reserve are free.
+- `ffmpeg`: the H.264, HEVC, AAC and MP3 decoders and the MP4 demuxer of the movies and sounds.
+- `video`: SDL opens a window (with `--headless`: SDL's offscreen driver).
+- `audio`: SDL opens the default playback device (with `--headless`: SDL's dummy driver).
+- `vulkan`: the Vulkan instance and the device the renderer creates, on `--device` if given.
+
+It exits with status 1 at the first part that fails. A device that lacks a feature the renderer
+needs ends it with video_core's message instead of a line.
+
+`tools/distro-check.sh <distro> <package.tar.gz>` unpacks a package in a fresh container of
+Fedora 44, Ubuntu 22.04 or 24.04, Debian 12 or 13, Arch or Bazzite, installs only the Vulkan loader,
+lavapipe and fontconfig, and runs `ldd` on both programs and `bb-run --check-system --headless` on
+lavapipe. With `--leave-out <package>` it succeeds only when the check fails without that package.
+CI runs it on every push to `main` and on PRs that change the package (`.github/workflows/ci.yml`,
+job `distro-check`).
