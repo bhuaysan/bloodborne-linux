@@ -687,6 +687,8 @@ private:
         desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
         desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
         desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+        // Every gamepad button valid: SDL maps joystick button N to SDL_GamepadButton N.
+        desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1;
         desc.name = "bb-launcher test pad";
         const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
         other_pad_ = id != 0 ? SDL_OpenJoystick(id) : nullptr;
