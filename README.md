@@ -51,9 +51,9 @@ A system without a desktop (a server or container image) also needs the librarie
 brings: on Ubuntu and Debian `libxkbcommon0 libwayland-cursor0 libwayland-egl1 libxext6
 libasound2t64 libpulse0 libpipewire-0.3-0t64 pipewire-bin libfontconfig1` (on Ubuntu 22.04 and
 Debian 12 `libasound2` and `libpipewire-0.3-0`), on Arch `libxkbcommon libxext alsa-lib libpulse
-pipewire fontconfig`. Without the display libraries the window does not open; without the sound ones the game plays silently. NVIDIA's driver and Intel GPUs
-are not checked yet. The game needs fewer than 2000 memory mappings, so the older `vm.max_map_count`
-default of 65530 is enough.
+pipewire fontconfig`. Without the display libraries the window does not open; without the sound
+ones the game plays silently. NVIDIA's driver and Intel GPUs are not checked yet. The game needs
+fewer than 2000 memory mappings, so the older `vm.max_map_count` default of 65530 is enough.
 
 To build the same folder from source, run `tools/package-portable.sh` (see Building; the script names what it needs). Versions and how releases are made are in [docs/releasing.md](docs/releasing.md).
 

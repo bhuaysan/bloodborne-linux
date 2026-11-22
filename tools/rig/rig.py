@@ -170,6 +170,8 @@ def container_prefix(image: str, game_dir: Path, package: Path, workdir: Path,
     what the package finds. The container stays in the caller's cgroup (--cgroups=disabled), so the
     scope's memory limit, the samplers and the stop reach the target. It replaces bwrap: rootless
     podman can't set up its user namespace inside bwrap's."""
+    if "XDG_RUNTIME_DIR" not in environ:
+        raise SystemExit("--container needs XDG_RUNTIME_DIR (the Wayland and sound sockets)")
     home, runtime = environ["HOME"], environ["XDG_RUNTIME_DIR"]
     return ["podman", "run", "--rm", "--cgroups=disabled", "--userns=keep-id",
             "--security-opt", "label=disable", "--network", "host", "--ipc", "host",

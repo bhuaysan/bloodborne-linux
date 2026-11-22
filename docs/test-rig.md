@@ -131,8 +131,8 @@ only the driver and the display libraries reached the title without sound, as th
 default on older distributions (Fedora, Arch and Ubuntu 24.04 ship 1048576). The rig records the
 most mappings one process of the target had (`peak_maps`, sampled once a second). The package's
 `bb-run` on the host had at most 1642 on the clinic route and 1606 on the Central Yharnam route
-(`yharnam-route`), and 1532 to 1939 in the containers (other libraries). That is 40 times below the old default, so
-`bb-run` doesn't check the limit at start. A route that comes near 30000 should add the check.
+(`yharnam-route`), and 1532 to 1876 in the containers (other libraries). That is more than 30 times
+below the old default, so `bb-run` doesn't check the limit at start. A route that comes near 30000 should add the check.
 
 ## Load times (#655)
 
