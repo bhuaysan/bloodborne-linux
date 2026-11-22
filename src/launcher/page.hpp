@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "common/runtime_dirs.hpp"
+#include "launcher/data_move.hpp"
 #include "launcher/logic.hpp"
 #include "launcher/text.hpp"
 
@@ -28,6 +29,13 @@ struct Context {
     std::string notice;                 // the last refused folder or other problem; may be empty
     bool controller = false;            // a controller is connected (or a script plays one)
     bool focus_first = false;           // the page was just opened or shown again
+    // The data folder (Advanced page): the one in use, whether it is the default place, whether
+    // BB_USER_DIR fixes it, and the text of the last move that failed (empty for none).
+    std::filesystem::path data_folder;
+    bool data_is_default = false;
+    bool data_locked = false;
+    bool data_changeable = true;  // the choice can be written (DataPlan::changeable)
+    std::string data_status;
 };
 
 class Page {
@@ -68,6 +76,11 @@ struct DataFolderText {
 const DataFolderText& data_folder_text(Lang lang);
 // The player-facing text of a refused folder.
 std::string data_folder_problem_text(Lang lang, DataFolderProblem problem);
+
+// The player-facing text of a move of the data folder that failed, and of one that left old files
+// behind (`leftovers`, the first one named).
+std::string move_problem_text(Lang lang, MoveProblem problem);
+std::string move_leftovers_text(Lang lang, const std::filesystem::path& first);
 
 // Shown when a chosen game folder and the data folder lie inside one another.
 std::string game_in_data_folder_text(Lang lang);

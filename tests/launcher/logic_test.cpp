@@ -167,6 +167,15 @@ TEST(LauncherLogic, ParsesTheDataFolderSteps) {
     EXPECT_THROW(parse_script("datafolder"), std::invalid_argument);
 }
 
+TEST(LauncherLogic, ParsesTheMoveSteps) {
+    const auto steps = parse_script("movedata /srv/a b\nmovedefault\n");
+    ASSERT_EQ(steps.size(), 2u);
+    EXPECT_EQ(steps[0].kind, StepKind::movedata);
+    EXPECT_EQ(steps[0].text, "/srv/a b");
+    EXPECT_EQ(steps[1].kind, StepKind::movedefault);
+    EXPECT_THROW(parse_script("movedata"), std::invalid_argument);
+}
+
 TEST(LauncherLogic, ProposesTheFolderNextToTheAppImageOrInHome) {
     EXPECT_EQ(propose_data_folder("/games/BB.AppImage", "/srv/p", true),
               std::filesystem::path("/games/Bloodborne-Linux-data"));
@@ -184,6 +193,12 @@ TEST(LauncherLogic, SearchesGameInTheDataFolderInAnAppImage) {
     EXPECT_EQ(game_search_dir(false, "/data", "/opt/bb"), std::filesystem::path("/opt/bb/game"));
 }
 
+namespace {
+DataFolderResult adopt_into_config(const std::filesystem::path& folder) {
+    return adopt_data_folder(folder, bb::common::data_dir_pointer_path());
+}
+}  // namespace
+
 TEST(LauncherLogic, AdoptingADataFolderCreatesItAndWritesThePointer) {
     namespace fs = std::filesystem;
     std::string templ = (fs::temp_directory_path() / "bb-datafolder-test-XXXXXX").string();
@@ -193,19 +208,25 @@ TEST(LauncherLogic, AdoptingADataFolderCreatesItAndWritesThePointer) {
     const std::string saved_value = saved != nullptr ? saved : "";
     ::setenv("XDG_CONFIG_HOME", (tmp / "config").c_str(), 1);
 
-    const DataFolderResult ok = adopt_data_folder(tmp / "a/data");
+    const DataFolderResult ok = adopt_into_config(tmp / "a/data");
     EXPECT_TRUE(ok.ok()) << ok.detail;
     struct stat st {};
     ASSERT_EQ(::stat((tmp / "a/data").c_str(), &st), 0);
     EXPECT_EQ(st.st_mode & 07777, 0700u);
     EXPECT_EQ(bb::common::read_data_dir_pointer(), tmp / "a/data");
 
-    EXPECT_EQ(adopt_data_folder("relative").problem, DataFolderProblem::not_absolute);
+    EXPECT_EQ(adopt_into_config("relative").problem, DataFolderProblem::not_absolute);
+    // Another pointer file is the one written, and none at all is no_place (nothing is created).
+    EXPECT_TRUE(adopt_data_folder(tmp / "b/data", tmp / "elsewhere/data-dir").ok());
+    EXPECT_EQ(bb::common::read_data_dir_pointer(tmp / "elsewhere/data-dir"), tmp / "b/data");
+    EXPECT_EQ(bb::common::read_data_dir_pointer(), tmp / "a/data");
+    EXPECT_EQ(adopt_data_folder(tmp / "c/data", {}).problem, DataFolderProblem::no_place);
+    EXPECT_FALSE(fs::exists(tmp / "c"));
     std::ofstream(tmp / "a/data/eboot.bin") << "x";
-    EXPECT_EQ(adopt_data_folder(tmp / "a/data").problem, DataFolderProblem::is_game);
+    EXPECT_EQ(adopt_into_config(tmp / "a/data").problem, DataFolderProblem::is_game);
     std::ofstream(tmp / "file") << "x";
-    EXPECT_EQ(adopt_data_folder(tmp / "file/sub").problem, DataFolderProblem::cannot_create);
-    EXPECT_EQ(adopt_data_folder(bb::common::source_dir()).problem, DataFolderProblem::overlaps);
+    EXPECT_EQ(adopt_into_config(tmp / "file/sub").problem, DataFolderProblem::cannot_create);
+    EXPECT_EQ(adopt_into_config(bb::common::source_dir()).problem, DataFolderProblem::overlaps);
     // A refused folder leaves the pointer as it was.
     EXPECT_EQ(bb::common::read_data_dir_pointer(), tmp / "a/data");
 
@@ -246,9 +267,9 @@ TEST(LauncherLogic, ADataFolderInsideAGameFolderIsNeitherProposedNorAdopted) {
     EXPECT_EQ(propose_data_folder(tmp / "BB.AppImage", (tmp / "home").string(), true),
               tmp / "Bloodborne-Linux-data");
 
-    EXPECT_EQ(adopt_data_folder(dump).problem, DataFolderProblem::is_game);
-    EXPECT_EQ(adopt_data_folder(dump / "sub").problem, DataFolderProblem::inside_game);
-    EXPECT_EQ(adopt_data_folder(dump / "Bloodborne-Linux-data").problem,
+    EXPECT_EQ(adopt_into_config(dump).problem, DataFolderProblem::is_game);
+    EXPECT_EQ(adopt_into_config(dump / "sub").problem, DataFolderProblem::inside_game);
+    EXPECT_EQ(adopt_into_config(dump / "Bloodborne-Linux-data").problem,
               DataFolderProblem::inside_game);
     // Nothing was created in the dump, and no pointer was written.
     EXPECT_FALSE(fs::exists(dump / "Bloodborne-Linux-data"));

@@ -345,7 +345,7 @@ TEST(LauncherText, DataFolderScreenHasEveryStringInBothLanguages) {
     for (auto p : {DataFolderProblem::not_absolute, DataFolderProblem::cannot_create,
                    DataFolderProblem::not_writable, DataFolderProblem::overlaps,
                    DataFolderProblem::is_game, DataFolderProblem::pointer_failed,
-                   DataFolderProblem::inside_game}) {
+                   DataFolderProblem::inside_game, DataFolderProblem::no_place}) {
         EXPECT_FALSE(data_folder_problem_text(Lang::en, p).empty());
         EXPECT_NE(data_folder_problem_text(Lang::de, p), data_folder_problem_text(Lang::en, p));
     }

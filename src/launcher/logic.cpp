@@ -144,11 +144,15 @@ std::filesystem::path game_search_dir(bool appimage, const std::filesystem::path
     return (appimage ? data_folder : executable_dir) / "game";
 }
 
-DataFolderResult adopt_data_folder(const std::filesystem::path& folder) {
+DataFolderResult adopt_data_folder(const std::filesystem::path& folder,
+                                   const std::filesystem::path& pointer_file) {
     namespace fs = std::filesystem;
     const auto fail = [](DataFolderProblem p, std::string detail) {
         return DataFolderResult{p, std::move(detail)};
     };
+    if (pointer_file.empty() || folder.empty()) {
+        return fail(DataFolderProblem::no_place, "no folder or no file to keep the choice in");
+    }
     if (!folder.is_absolute()) {
         return fail(DataFolderProblem::not_absolute, folder.string());
     }
@@ -178,7 +182,7 @@ DataFolderResult adopt_data_folder(const std::filesystem::path& folder) {
         return fail(DataFolderProblem::overlaps, e.what());
     }
     try {
-        common::write_data_dir_pointer(fs::canonical(folder));
+        common::write_data_dir_pointer(fs::canonical(folder), pointer_file);
     } catch (const std::exception& e) {
         return fail(DataFolderProblem::pointer_failed, e.what());
     }
@@ -224,13 +228,15 @@ std::vector<ScriptStep> parse_script(std::string_view text) {
         } else if (word == "waitgame") {
             step.kind = StepKind::waitgame;
             step.number = number();
-        } else if (word == "drop" || word == "shot" || word == "config" || word == "datafolder") {
+        } else if (word == "drop" || word == "shot" || word == "config" || word == "datafolder" ||
+                   word == "movedata") {
             if (arg.empty()) {
                 fail("a path is needed");
             }
             step.kind = word == "drop"   ? StepKind::drop
                         : word == "shot" ? StepKind::shot
                         : word == "config" ? StepKind::config
+                        : word == "movedata" ? StepKind::movedata
                                            : StepKind::datafolder;
             step.text = std::string(arg);
         } else if (word == "press") {
@@ -251,10 +257,11 @@ std::vector<ScriptStep> parse_script(std::string_view text) {
                 fail("press needs accept, back, up, down, left or right");
             }
         } else if (word == "nopad" || word == "search" || word == "quit" ||
-                   word == "datadefault") {
+                   word == "datadefault" || word == "movedefault") {
             step.kind = word == "nopad"      ? StepKind::nopad
                         : word == "search"   ? StepKind::search
                         : word == "datadefault" ? StepKind::datadefault
+                        : word == "movedefault" ? StepKind::movedefault
                                              : StepKind::quit;
         } else {
             fail(std::format("unknown step \"{}\"", word));

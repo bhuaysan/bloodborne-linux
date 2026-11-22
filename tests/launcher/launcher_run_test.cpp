@@ -3,6 +3,7 @@
 #ifdef BB_LAUNCHER_PATH
 
 #include <stdlib.h>
+#include <unistd.h>
 
 #include <filesystem>
 #include <format>
@@ -503,6 +504,216 @@ TEST(LauncherRun, TheAdvancedPageSavesTheLoadHold) {
     const auto r = run_script(dir, script);
     EXPECT_EQ(r.status, 0) << r.output;
     EXPECT_EQ(slurp(dir.path() / "user/config.toml"), "load_hold = 0\n");
+}
+
+// Runs a copy of the launcher as a tar.gz package starts it (no APPIMAGE, no BB_USER_DIR), with
+// HOME at dir/home.
+bb::test::Result run_tar_script(const Dir& dir, const fs::path& launcher, const std::string& script) {
+    fs::create_directories(dir.path() / "home");
+    fs::create_directories(dir.path() / "tmp");
+    std::ofstream(dir.path() / "script.txt") << script;
+    const std::string d = dir.path().string();
+    return bb::test::run(std::format(
+        "cd {} && env -u BB_GAME_DIR -u BB_CACHE_DIR -u BB_USER_DIR -u XDG_CONFIG_HOME -u APPIMAGE "
+        "-u APPDIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
+        "SDL_VIDEO_DRIVER=offscreen SDL_RENDER_DRIVER=software BB_LAUNCHER_SCRIPT={} HOME={} "
+        "TMPDIR={} timeout 60 {} 2>&1",
+        quote(d), quote(d + "/script.txt"), quote(d + "/home"), quote(d + "/tmp"),
+        quote(launcher.string())));
+}
+
+// A copy of bb-launcher in `folder`, as the tar.gz has it.
+fs::path install_launcher(const fs::path& folder) {
+    fs::create_directories(folder);
+    fs::copy_file(BB_LAUNCHER_PATH, folder / "bb-launcher");
+    return folder / "bb-launcher";
+}
+
+// A data folder with a config, a save, a log and a cache, as play leaves it.
+void fill_data_folder(const fs::path& folder) {
+    fs::create_directories(folder / "profiles/default/savedata/SPRJ0000");
+    fs::create_directories(folder / "cache/shaders");
+    fs::create_directories(folder / "logs");
+    std::ofstream(folder / "config.toml") << "fullscreen = true\n";
+    std::ofstream(folder / "profiles/default/savedata/SPRJ0000/sdimg_0") << "the save";
+    std::ofstream(folder / "logs/bb-run.log") << "log";
+    std::ofstream(folder / "cache/shaders/a.bin") << "cache";
+}
+
+// An AppImage moves its data folder (the script plays Change and Back to default): the files
+// arrive checked, the pointer follows, the old folder and the cache are gone, and the next start
+// finds the saves where the pointer says.
+TEST(LauncherRun, AnAppImageMovesItsDataFolderAndTheNextStartFindsIt) {
+    const Dir dir;
+    const fs::path apps = dir.path() / "apps";
+    fs::create_directories(apps);
+    fill_data_folder(dir.path() / "data-a");
+    fs::create_directories(dir.path() / "home/.config/bloodborne-linux");
+    const fs::path pointer = dir.path() / "home/.config/bloodborne-linux/data-dir";
+    std::ofstream(pointer) << (dir.path() / "data-a").string() << "\n";
+    const fs::path save = "profiles/default/savedata/SPRJ0000/sdimg_0";
+
+    auto r = run_appimage_script(
+        dir, std::format("wait 3\nmovedata {0}/data-b\nwait 4\nshot {0}/b.png\nquit\n",
+                         dir.path().string()),
+        apps / "BB.AppImage");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(r.output.find("data folder moved to " + (dir.path() / "data-b").string()),
+              std::string::npos) << r.output;
+    EXPECT_EQ(slurp_file(pointer), (dir.path() / "data-b").string() + "\n");
+    EXPECT_EQ(slurp_file(dir.path() / "data-b" / save), "the save");
+    EXPECT_EQ(slurp_file(dir.path() / "data-b/config.toml"), "fullscreen = true\n");
+    EXPECT_FALSE(fs::exists(dir.path() / "data-b/cache/shaders")) << "the old cache is left behind";
+    EXPECT_FALSE(fs::exists(dir.path() / "data-a"));
+    EXPECT_TRUE(is_png(dir.path() / "b.png"));
+
+    // Next start: no first-start question, the save is where the pointer says.
+    r = run_appimage_script(dir, "wait 3\nquit\n", apps / "BB.AppImage");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(r.output.find("no data folder"), std::string::npos) << r.output;
+    EXPECT_EQ(slurp_file(dir.path() / "data-b" / save), "the save");
+
+    // Back to default: the folder next to the AppImage, and the pointer names it.
+    r = run_appimage_script(dir, "wait 3\nmovedefault\nwait 4\nquit\n", apps / "BB.AppImage");
+    EXPECT_EQ(r.status, 0) << r.output;
+    const fs::path home_default = fs::canonical(apps) / "Bloodborne-Linux-data";
+    EXPECT_EQ(slurp_file(pointer), home_default.string() + "\n");
+    EXPECT_EQ(slurp_file(home_default / save), "the save");
+    EXPECT_FALSE(fs::exists(dir.path() / "data-b"));
+}
+
+// A move into a folder that holds something is refused with the reason, and nothing changes.
+TEST(LauncherRun, AMoveIntoAFullFolderIsRefusedAndNothingChanges) {
+    const Dir dir;
+    fill_data_folder(dir.path() / "data-a");
+    fs::create_directories(dir.path() / "full");
+    std::ofstream(dir.path() / "full/mine.txt") << "x";
+    fs::create_directories(dir.path() / "home/.config/bloodborne-linux");
+    const fs::path pointer = dir.path() / "home/.config/bloodborne-linux/data-dir";
+    std::ofstream(pointer) << (dir.path() / "data-a").string() << "\n";
+    const auto r = run_appimage_script(
+        dir, std::format("wait 3\nmovedata {}/full\nwait 4\nquit\n", dir.path().string()),
+        dir.path() / "apps/BB.AppImage");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_NE(r.output.find("bb-launcher: data folder " + (dir.path() / "full").string() + ": "),
+              std::string::npos) << r.output;
+    EXPECT_EQ(r.output.find("data folder moved"), std::string::npos) << r.output;
+    EXPECT_EQ(slurp_file(pointer), (dir.path() / "data-a").string() + "\n");
+    EXPECT_EQ(slurp_file(dir.path() / "data-a/profiles/default/savedata/SPRJ0000/sdimg_0"),
+              "the save");
+    EXPECT_EQ(files_below(dir.path() / "full"), std::vector<std::string>{"mine.txt"});
+}
+
+// The tar.gz keeps the choice in `data-dir` next to the program (the config folder stays
+// untouched), and Back to default removes that file and moves the data back to user/.
+TEST(LauncherRun, ATarGzMovesItsDataFolderThroughAFileNextToTheProgram) {
+    const Dir dir;
+    const fs::path pkg = dir.path() / "pkg";
+    const fs::path launcher = install_launcher(pkg);
+    fill_data_folder(pkg / "user");
+    const fs::path save = "profiles/default/savedata/SPRJ0000/sdimg_0";
+
+    auto r = run_tar_script(
+        dir, launcher,
+        std::format("wait 3\nmovedata {}/moved\nwait 4\nquit\n", dir.path().string()));
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(slurp_file(pkg / "data-dir"), (dir.path() / "moved").string() + "\n");
+    EXPECT_EQ(slurp_file(dir.path() / "moved" / save), "the save");
+    EXPECT_FALSE(fs::exists(pkg / "user"));
+    EXPECT_FALSE(fs::exists(dir.path() / "home/.config")) << "the config folder is not touched";
+
+    r = run_tar_script(dir, launcher, "wait 3\nquit\n");  // the next start uses the file
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_FALSE(fs::exists(pkg / "user"));
+
+    r = run_tar_script(dir, launcher, "wait 3\nmovedefault\nwait 4\nquit\n");
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_FALSE(fs::exists(pkg / "data-dir"));
+    EXPECT_EQ(slurp_file(pkg / "user" / save), "the save");
+    EXPECT_FALSE(fs::exists(dir.path() / "moved"));
+    EXPECT_FALSE(fs::exists(dir.path() / "home/.config"));
+}
+
+// A tar.gz in a folder that can't be written asks for a data folder like an AppImage, keeps the
+// choice in the config folder and runs from it on the next start.
+TEST(LauncherRun, ATarGzInAReadOnlyFolderAsksForADataFolderAndRunsFromIt) {
+    if (::geteuid() == 0) {
+        GTEST_SKIP() << "root writes anywhere";
+    }
+    const Dir dir;
+    const fs::path pkg = dir.path() / "ro";
+    const fs::path launcher = install_launcher(pkg);
+    fs::permissions(pkg, fs::perms::owner_read | fs::perms::owner_exec);
+    const fs::path pointer = dir.path() / "home/.config/bloodborne-linux/data-dir";
+    const fs::path chosen = fs::canonical(dir.path()) / "home/Bloodborne-Linux-data";
+
+    auto r = run_tar_script(
+        dir, launcher,
+        std::format("wait 3\nshot {}/ask.png\ndatadefault\nwait 5\nquit\n", dir.path().string()));
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_TRUE(is_png(dir.path() / "ask.png"));
+    EXPECT_EQ(slurp_file(pointer), chosen.string() + "\n");
+    EXPECT_TRUE(fs::is_directory(chosen));
+    EXPECT_FALSE(fs::exists(pkg / "user"));
+    EXPECT_FALSE(fs::exists(pkg / "data-dir"));
+
+    // The next start has its folder: no question. A move changes the config folder's file.
+    fill_data_folder(chosen);
+    r = run_tar_script(dir, launcher,
+                       std::format("wait 3\nmovedata {}/moved\nwait 4\nquit\n", dir.path().string()));
+    fs::permissions(pkg, fs::perms::owner_all);
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(r.output.find("no data folder"), std::string::npos) << r.output;
+    EXPECT_EQ(slurp_file(pointer), (dir.path() / "moved").string() + "\n");
+    EXPECT_EQ(slurp_file(dir.path() / "moved/profiles/default/savedata/SPRJ0000/sdimg_0"),
+              "the save");
+    EXPECT_FALSE(fs::exists(pkg / "data-dir"));
+}
+
+// The data folder of a tar.gz sat on a USB stick that is gone: `data-dir` next to the program names
+// it. The first-start screen's choice replaces that file (the runtime reads it first), so the next
+// start runs from the new folder, and the pointer of an AppImage on the same machine is untouched.
+TEST(LauncherRun, ATarGzWhoseDataFolderIsGoneChoosesAnotherAndRunsFromIt) {
+    const Dir dir;
+    const fs::path pkg = dir.path() / "pkg";
+    const fs::path launcher = install_launcher(pkg);
+    std::ofstream(pkg / "data-dir") << "/srv/unplugged/Bloodborne-Linux-data\n";
+    const fs::path appimage_pointer = dir.path() / "home/.config/bloodborne-linux/data-dir";
+    fs::create_directories(appimage_pointer.parent_path());
+    std::ofstream(appimage_pointer) << "/srv/appimage-data\n";
+    const fs::path chosen = fs::canonical(dir.path()) / "home/Bloodborne-Linux-data";
+
+    auto r = run_tar_script(
+        dir, launcher,
+        std::format("wait 3\nshot {}/ask.png\ndatadefault\nwait 5\nquit\n", dir.path().string()));
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_TRUE(is_png(dir.path() / "ask.png"));
+    EXPECT_EQ(slurp_file(pkg / "data-dir"), chosen.string() + "\n");
+    EXPECT_TRUE(fs::is_directory(chosen));
+    EXPECT_EQ(slurp_file(appimage_pointer), "/srv/appimage-data\n");
+
+    r = run_tar_script(dir, launcher, "wait 3\nquit\n");  // no question again
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(r.output.find("does not exist"), std::string::npos) << r.output;
+    EXPECT_EQ(slurp_file(pkg / "data-dir"), chosen.string() + "\n");
+}
+
+// A to B and back to A: at the end the sweep of the folders the data left must not touch A, which
+// is in use again (its cache and the folder itself stay).
+TEST(LauncherRun, MovingAwayAndBackKeepsTheCurrentFoldersCacheAtTheEnd) {
+    const Dir dir;
+    const fs::path pkg = dir.path() / "pkg";
+    const fs::path launcher = install_launcher(pkg);
+    fill_data_folder(pkg / "user");
+    const std::string d = dir.path().string();
+    const auto r = run_tar_script(
+        dir, launcher,
+        std::format("wait 3\nmovedata {0}/b\nwait 4\nmovedata {0}/pkg/user\nwait 4\nquit\n", d));
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(slurp_file(pkg / "data-dir"), (fs::canonical(pkg) / "user").string() + "\n");
+    EXPECT_EQ(slurp_file(pkg / "user/profiles/default/savedata/SPRJ0000/sdimg_0"), "the save");
+    EXPECT_TRUE(fs::is_directory(pkg / "user/cache")) << "the cache in use stays";
+    EXPECT_FALSE(fs::exists(dir.path() / "b"));
 }
 
 TEST(LauncherRun, ABadScriptEndsWithAMessage) {

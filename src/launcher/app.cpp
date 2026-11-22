@@ -32,6 +32,7 @@
 #include "common/game_folder.hpp"
 #include "launcher/find_game.hpp"
 #include "common/runtime_dirs.hpp"
+#include "launcher/data_move.hpp"
 #include "launcher/fonts.hpp"
 #include "launcher/gpu_probe.hpp"
 #include "launcher/header_image.hpp"
@@ -58,7 +59,9 @@ struct DialogMailbox {
     std::mutex mutex;
     std::optional<std::string> folder;
     bool open = false;
-    bool for_data = false;  // the dialog was opened to choose the data folder, not the game folder
+    // What the dialog was opened for: the game folder, the data folder on the first-start screen,
+    // or the new data folder of a move (Advanced page).
+    enum class Purpose { game, data, move } purpose = Purpose::game;
 };
 
 void on_folder_chosen(void* userdata, const char* const* list, int) {
@@ -123,6 +126,7 @@ public:
         }
         close_pages();  // a page left open at the end saves its choices too
         shutdown();
+        sweep_old_data_folders();
         return 0;
     }
 
@@ -235,7 +239,10 @@ private:
     // Takes the folder the player chose on the first-start screen: on success the normal startup
     // goes on, else the screen stays and says why.
     void choose_data_folder(const fs::path& folder) {
-        const DataFolderResult r = adopt_data_folder(folder);
+        // The file the runtime reads first, so a broken data-dir next to the program is replaced.
+        const DataPlan& plan = data_plan();
+        const DataFolderResult r =
+            adopt_data_folder(folder, plan.changeable ? plan.pointer_file : fs::path());
         if (!r.ok()) {
             data_error_ = data_folder_problem_text(lang_, r.problem);
             std::cerr << std::format("bb-launcher: data folder {}: {}\n", folder.string(), r.detail);
@@ -248,6 +255,120 @@ private:
         load_config();
         focus_first_ = true;
         start_search();
+    }
+
+    // ---- moving the data folder (Advanced page) -------------------------------------------------
+    // BB_USER_DIR decides the folder of this run, so the page can't change it.
+    static bool data_locked() {
+        const char* user = std::getenv("BB_USER_DIR");
+        return user != nullptr && *user;
+    }
+
+    // The plan looks at the file system (access, lstat), so it is made once per data folder.
+    const DataPlan& data_plan() const {
+        if (!plan_valid_ || plan_for_ != data_root_) {
+            PlanInput in;
+            in.appimage = common::running_from_appimage();
+            in.exe_dir = own_directory();
+            const char* appimage = std::getenv("APPIMAGE");
+            const char* home = std::getenv("HOME");
+            in.appimage_file = appimage != nullptr ? fs::path(appimage) : fs::path();
+            in.home = home != nullptr ? home : "";
+            plan_ = plan_data_folder(in);
+            plan_for_ = data_root_;
+            plan_valid_ = true;
+        }
+        return plan_;
+    }
+
+    bool data_is_default() const {
+        std::error_code ec;
+        const DataPlan& plan = data_plan();
+        return plan.default_folder.empty() ||
+               fs::weakly_canonical(plan.default_folder, ec) == fs::weakly_canonical(data_root_, ec);
+    }
+
+    // Moves the data folder to `to`, or to the default place, and loads the config from there.
+    // Open pages are closed first, so their changes reach the old config file; the Advanced page
+    // opens again and shows the new folder, or why the move failed.
+    void move_data(const fs::path& to, bool to_default) {
+        if (need_data_folder_ || data_root_.empty() || data_locked()) {
+            return;
+        }
+        close_pages();
+        plan_valid_ = false;
+        const DataPlan plan = data_plan();
+        if (!plan.changeable) {
+            return;  // the page disables the buttons
+        }
+        MoveRequest request;
+        request.from = data_root_;
+        request.to = to_default ? plan.default_folder : to;
+        request.pointer_file = plan.pointer_file;
+        request.remove_pointer = to_default && plan.default_removes_pointer;
+        if (game_ready_) {
+            request.forbidden.push_back(game_dir_);
+        }
+        const MoveResult r = move_data_folder(request);
+        if (!r.ok()) {
+            data_status_ = move_problem_text(lang_, r.problem);
+            std::cerr << std::format("bb-launcher: data folder {}: {}\n", request.to.string(),
+                                     r.detail);
+        } else {
+            data_status_ = r.leftovers.empty() ? std::string()
+                                               : move_leftovers_text(lang_, r.leftovers.front());
+            std::cerr << std::format("bb-launcher: data folder moved to {}\n",
+                                     request.to.string());
+            for (const fs::path& left : r.leftovers) {
+                std::cerr << "bb-launcher: could not remove " << left.string() << '\n';
+            }
+            for (const fs::path& kept : r.kept) {
+                std::cerr << "bb-launcher: left in the old folder: " << kept.string() << '\n';
+            }
+            // A folder the data came back to is in use again and is never swept.
+            std::error_code ec;
+            const fs::path back = fs::weakly_canonical(request.to, ec);
+            std::erase_if(old_data_folders_, [&](const fs::path& old) {
+                return fs::weakly_canonical(old, ec) == back;
+            });
+            old_data_folders_.push_back(request.from);
+            plan_valid_ = false;
+            reload_after_move();
+        }
+        open(make_advanced_page());
+    }
+
+    // Mesa and other libraries keep writing their caches where they started, so a moved-from
+    // folder gets a cache folder again behind the move. It is removed at the end, with the folder
+    // when that leaves it empty.
+    void sweep_old_data_folders() {
+        std::error_code ec;
+        const fs::path current = fs::weakly_canonical(data_root_, ec);
+        for (const fs::path& folder : old_data_folders_) {
+            if (data_root_.empty() || fs::weakly_canonical(folder, ec) == current) {
+                continue;  // in use again (A to B to A), or unknown: never touched
+            }
+            remove_old_cache(folder);
+            if (fs::is_directory(folder, ec) && fs::is_empty(folder, ec)) {
+                fs::remove(folder, ec);
+            }
+        }
+    }
+
+    // Starts over from the new folder: its config file, its game folder, its caches.
+    void reload_after_move() {
+        game_ready_ = false;
+        tried_folder_ = false;
+        notice_.clear();
+        data_root_.clear();
+        config_path_.clear();
+        load_config();
+        try {
+            common::redirect_library_caches(
+                common::RuntimeDirs::from_environment(common::default_profile, {}));
+        } catch (const std::exception&) {
+            // the old cache folder is gone; libraries create theirs again where they are
+        }
     }
 
     // ---- the game folder ----------------------------------------------------------------------
@@ -366,9 +487,9 @@ private:
         accept_check(r.folder, folder);
     }
 
-    // `for_data`: the dialog chooses the data folder, else the game folder. The result is used
-    // only for that purpose (the player may have moved on while the portal dialog was open).
-    void open_folder_dialog(const char* title, bool for_data) {
+    // The result is used only for `purpose` (the player may have moved on while the portal dialog
+    // was open).
+    void open_folder_dialog(const char* title, DialogMailbox::Purpose purpose) {
         {
             // SDL may call back from this thread, so the lock is released before the call.
             const std::lock_guard lock(dialog_->mutex);
@@ -376,7 +497,7 @@ private:
                 return;
             }
             dialog_->open = true;
-            dialog_->for_data = for_data;
+            dialog_->purpose = purpose;
         }
         // The callback gets its own reference; SDL calls back once.
         auto* ref = new std::shared_ptr<DialogMailbox>(dialog_);
@@ -509,6 +630,12 @@ private:
                 choose_data_folder(data_proposed_);
             }
             break;
+        case StepKind::movedata:
+        case StepKind::movedefault:
+            if (!need_data_folder_) {
+                move_data(step.text, step.kind == StepKind::movedefault);
+            }
+            break;
         case StepKind::press:
             release_key_ = gamepad_key(step.button);
             io.AddKeyEvent(release_key_, true);
@@ -562,6 +689,11 @@ private:
         ctx.notice = notice_;
         ctx.controller = controller();
         ctx.focus_first = focus_first_;
+        ctx.data_folder = data_root_;
+        ctx.data_is_default = data_is_default();
+        ctx.data_locked = data_locked();
+        ctx.data_changeable = data_plan().changeable;
+        ctx.data_status = data_status_;
         return ctx;
     }
 
@@ -591,7 +723,7 @@ private:
     void act(Action a) {
         switch (a) {
         case Action::set_up:
-        case Action::choose_another: open_folder_dialog(strings(lang_).dialog_title, false); break;
+        case Action::choose_another: open_folder_dialog(strings(lang_).dialog_title, DialogMailbox::Purpose::game); break;
         case Action::play:
             if (prompt_ != Prompt::none) {
                 break;  // a prompt came up in the frame of the press; it goes first
@@ -607,6 +739,10 @@ private:
         case Action::picture: open(make_picture_page()); break;
         case Action::advanced: open(make_advanced_page()); break;
         case Action::controller: open(make_controller_page()); break;
+        case Action::change_data:
+            open_folder_dialog(data_folder_text(lang_).dialog_title, DialogMailbox::Purpose::move);
+            break;
+        case Action::data_default: move_data({}, true); break;
         case Action::saves:
             if (game_ready_) {
                 open(make_saves_page());
@@ -684,10 +820,23 @@ private:
                 dialog_->folder.reset();
                 // A late result that no longer fits the screen is dropped: "Use this folder"
                 // may have ended the first-start screen while the dialog was still open.
-                if (dialog_->for_data && need_data_folder_) {
-                    choose_data_folder(folder);
-                } else if (!dialog_->for_data && !need_data_folder_) {
-                    set_up_folder(folder);
+                const bool asking = need_data_folder_;
+                switch (dialog_->purpose) {
+                case DialogMailbox::Purpose::data:
+                    if (asking) {
+                        choose_data_folder(folder);
+                    }
+                    break;
+                case DialogMailbox::Purpose::move:
+                    if (!asking) {
+                        move_data(folder, false);
+                    }
+                    break;
+                case DialogMailbox::Purpose::game:
+                    if (!asking) {
+                        set_up_folder(folder);
+                    }
+                    break;
                 }
             }
         }
@@ -738,7 +887,8 @@ private:
             switch (draw_data_folder_screen(ctx, data_proposed_, data_error_, focus_first_)) {
             case DataFolderChoice::use_proposed: choose_data_folder(data_proposed_); break;
             case DataFolderChoice::choose_other:
-                open_folder_dialog(data_folder_text(lang_).dialog_title, true);
+                open_folder_dialog(data_folder_text(lang_).dialog_title,
+                                   DialogMailbox::Purpose::data);
                 break;
             case DataFolderChoice::none: break;
             }
@@ -801,6 +951,11 @@ private:
     bool need_data_folder_ = false;  // an AppImage without a data folder: ask first
     fs::path data_proposed_;
     std::string data_error_;  // why the last choice was refused
+    mutable DataPlan plan_;  // data_plan()'s cache, for plan_for_
+    mutable fs::path plan_for_;
+    mutable bool plan_valid_ = false;
+    std::vector<fs::path> old_data_folders_;  // folders the data moved out of (see the sweep)
+    std::string data_status_;  // why the last move of the data folder failed, or what it left
     fs::path play_config_;  // set by a script's config step
     fs::path game_dir_;
     std::string title_;

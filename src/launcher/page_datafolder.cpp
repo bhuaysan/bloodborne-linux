@@ -63,8 +63,13 @@ std::string data_folder_problem_text(Lang lang, DataFolderProblem problem) {
         return de ? "Dieser Ordner liegt im Spielordner. W\xc3\xa4hle einen Ordner au\xc3\x9f" "erhalb."
                   : "This folder lies inside the game's own folder. Choose one outside it.";
     case DataFolderProblem::pointer_failed:
-        return de ? "Die Wahl konnte nicht gespeichert werden (~/.config/bloodborne-linux)."
-                  : "The choice could not be saved (~/.config/bloodborne-linux).";
+        return de ? "Die Wahl konnte nicht gespeichert werden."
+                  : "The choice could not be saved.";
+    case DataFolderProblem::no_place:
+        return de ? "Es gibt keinen Ort, an dem sich die Wahl speichern l\xc3\xa4sst (der "
+                    "Programmordner ist schreibgesch\xc3\xbctzt oder es gibt keinen Home-Ordner)."
+                  : "There is no place to keep the choice (the program's folder is read-only, or "
+                    "there is no home folder).";
     }
     return {};
 }

@@ -44,7 +44,7 @@ MainState select_state(const StateInput& in);
 // and saves open a page; play_anyway is Play after the no-controller prompt.
 enum class Action {
     none, set_up, play, play_anyway, settings, saves, quit, choose_another, game_folder, picture,
-    advanced, controller
+    advanced, controller, change_data, data_default
 };
 // The first button of a state.
 Action first_button(MainState state);
@@ -80,7 +80,7 @@ std::filesystem::path game_search_dir(bool appimage, const std::filesystem::path
                                       const std::filesystem::path& executable_dir);
 
 enum class DataFolderProblem { none, not_absolute, cannot_create, not_writable, overlaps, is_game,
-                               pointer_failed, inside_game };
+                               pointer_failed, inside_game, no_place };
 struct DataFolderResult {
     DataFolderProblem problem = DataFolderProblem::none;
     std::string detail;  // the system's or the check's own message, for the log
@@ -88,19 +88,22 @@ struct DataFolderResult {
 };
 // Refuses a folder that holds the game's files or lies inside a game folder (is_game, inside_game;
 // nothing is created then). Else creates `folder` (mode 0700), checks that it can be written and
-// doesn't overlap the source directory, then writes the pointer file (common::write_data_dir_pointer).
-DataFolderResult adopt_data_folder(const std::filesystem::path& folder);
+// doesn't overlap the source directory, then writes `pointer_file` (DataPlan::pointer_file: the one
+// file the runtime reads first, which replaces a broken one). no_place when it is empty.
+DataFolderResult adopt_data_folder(const std::filesystem::path& folder,
+                                   const std::filesystem::path& pointer_file);
 
 // ---- The scripted input of a test run (BB_LAUNCHER_SCRIPT, see app.cpp) ----------------------------
 // One step per line: `wait N` (frames), `drop PATH`, `press accept|back|up|down|left|right`,
-// `datafolder PATH` (chooses PATH on the first-start screen of an AppImage, as "Use this folder"
-// would), `datadefault` (takes the proposed folder), `shot PATH` (the rendered frame as a PNG), `config PATH` (Play uses this config file from now
+// `datafolder PATH` (chooses PATH on the first-start screen, as "Use this folder"
+// would), `datadefault` (takes the proposed folder), `movedata PATH` (moves the data folder to
+// PATH, as Change on the Advanced page would) and `movedefault` (Back to default), `shot PATH` (the rendered frame as a PNG), `config PATH` (Play uses this config file from now
 // on), `waitgame SECONDS` (waits for the game, then ends it), `nopad` (acts as if no controller
 // were connected from now on), `search` (a script with this step holds back the first-start
 // search's result until the step, which waits for the search to end and hands the result over)
 // and `quit`. Empty lines and lines that start with # are skipped.
 enum class StepKind { wait, drop, press, shot, config, waitgame, nopad, search, quit, datafolder,
-                      datadefault };
+                      datadefault, movedata, movedefault };
 enum class PadButton { accept, back, up, down, left, right };
 struct ScriptStep {
     StepKind kind = StepKind::quit;
