@@ -303,10 +303,21 @@ class LayerTests(unittest.TestCase):
             symbols = subprocess.run(["nm", "-D", "--defined-only", str(binary)],
                                      capture_output=True, text=True, check=True).stdout
             self.assertIn("vkNegotiateLoaderLayerInterfaceVersion", symbols)
-            # It brings its own C++ library, for containers of older distributions.
-            needed = subprocess.run(["readelf", "-d", str(binary)], capture_output=True, text=True,
-                                    check=True).stdout
-            self.assertNotIn("libstdc++", needed)
+
+
+    def test_portable_layer_is_built_in_the_sniper_sdk(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, \
+                unittest.mock.patch("subprocess.run") as run_mock:
+            rig.build_layer(Path(temp) / "layer", portable=True)
+            command = run_mock.call_args.args[0]
+            self.assertEqual(command[:2], ["podman", "run"])
+            self.assertIn(rig.SNIPER_SDK, command)
+            self.assertIn("-static-libstdc++", command)
+            self.assertEqual(command[command.index(rig.SNIPER_SDK) + 1], "g++-14")
+
+    def test_sniper_sdk_is_the_package_build_image(self) -> None:
+        script = (HERE.parent / "release" / "build-package.sh").read_text()
+        self.assertIn(rig.SNIPER_SDK, script)
 
 
 class PerfRunsTests(unittest.TestCase):

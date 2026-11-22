@@ -114,22 +114,33 @@ def setup_reference(root: Path | None = None) -> Path:
     return root
 
 
-def build_layer(destination: Path | None = None) -> Path:
-    """Compiles the Vulkan layer if its source is newer than the binary. Returns its directory."""
-    # Not "layer": that folder holds the builds without -static-libstdc++ of older checkouts, which
-    # rebuild it there.
-    destination = destination or rig_dir() / "layer-static"
+# The Steam Runtime 3 "sniper" SDK the package is built in (tools/release/build-package.sh): glibc
+# 2.31 and g++-14.
+SNIPER_SDK = ("registry.gitlab.steamos.cloud/steamrt/sniper/sdk@sha256:"
+              "bb30053d3cd19d35c76ae69b2790dbaa1430448006f8240cb6d7e723f2d1940e")
+LAYER_FLAGS = ["-std=c++20", "-O2", "-g", "-Wall", "-Wextra", "-Wno-missing-field-initializers",
+               "-Werror", "-fPIC", "-shared", "-fvisibility=hidden"]
+
+
+def build_layer(destination: Path | None = None, portable: bool = False) -> Path:
+    """Compiles the Vulkan layer if its source is newer than the binary. Returns its directory.
+    A portable layer (for --container) is built in the sniper SDK with its own C++ library, so it
+    loads in containers of older distributions too: one built here needs this machine's glibc and
+    libstdc++."""
+    destination = destination or rig_dir() / ("layer-portable" if portable else "layer")
     source = HERE / "layer" / "bb_rig_layer.cpp"
     binary = destination / "libVkLayer_bb_rig.so"
     if not binary.exists() or binary.stat().st_mtime < source.stat().st_mtime:
         destination.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["g++", "-std=c++20", "-O2", "-g", "-Wall", "-Wextra",
-                        "-Wno-missing-field-initializers", "-Werror", "-fPIC", "-shared",
-                        "-fvisibility=hidden",
-                        # Its own C++ library: the layer loads into bb-run in containers of older
-                        # distributions too (--container), whose libstdc++ is older than ours.
-                        "-static-libstdc++", "-static-libgcc",
-                        "-o", str(binary), str(source)], check=True)
+        if portable:
+            subprocess.run(["podman", "run", "--rm", "--userns=keep-id",
+                            "--security-opt", "label=disable",
+                            "-v", f"{source.parent}:/src:ro", "-v", f"{destination}:/out",
+                            SNIPER_SDK, "g++-14", *LAYER_FLAGS, "-static-libstdc++",
+                            "-static-libgcc", "-o", f"/out/{binary.name}", f"/src/{source.name}"],
+                           check=True)
+        else:
+            subprocess.run(["g++", *LAYER_FLAGS, "-o", str(binary), str(source)], check=True)
     shutil.copy(HERE / "layer" / "VkLayer_bb_rig.json", destination)
     return destination
 
@@ -641,7 +652,7 @@ def run_target(args: argparse.Namespace) -> int:
     if getattr(args, "container", None):
         container = container_prefix(args.container, game_dir, args.bb_run.resolve().parent, run,
                                      os.environ)
-    layer = build_layer()
+    layer = build_layer(portable=container is not None)
     work_root = None
     if args.target == "reference":
         program = reference_program(run, game_dir, args.user_from)
