@@ -1117,7 +1117,8 @@ TEST(GuestMemory, ACpuWriteDuringACopyIsSyncedAgain) {
         // As above: the buffer cache's sparse buffer needs a GPU that can create it.
         try {
             [[maybe_unused]] const NoLeakCheck no_leak_check;
-            arena = buffers.ObtainBuffer(start, size, VideoCore::ObtainBufferFlags::IgnoreStreamBuffer);
+            arena = buffers.ObtainBuffer(start, size,
+                                         VideoCore::ObtainBufferFlags::IgnoreStreamBuffer);
         } catch (const std::exception& e) {
             if (std::string(e.what()).find("ErrorOutOfDeviceMemory") == std::string::npos) {
                 throw;
@@ -1147,7 +1148,8 @@ TEST(GuestMemory, ACpuWriteDuringACopyIsSyncedAgain) {
         const u64 before = copies.Issued();
         {
             [[maybe_unused]] const NoLeakCheck no_leak_check;
-            arena = buffers.ObtainBuffer(start, size, VideoCore::ObtainBufferFlags::IgnoreStreamBuffer);
+            arena = buffers.ObtainBuffer(start, size,
+                                         VideoCore::ObtainBufferFlags::IgnoreStreamBuffer);
         }
         EXPECT_EQ(copies.Issued(), before + 1);
         EXPECT_LT(copies.Completed(), copies.Issued());
@@ -1189,7 +1191,8 @@ TEST(GuestMemory, ACpuWriteDuringACopyIsSyncedAgain) {
         EXPECT_TRUE(gpu.tracker().IsRegionCpuModified(start, tp));
         {
             [[maybe_unused]] const NoLeakCheck no_leak_check;
-            buffers.ObtainBuffer(start, size, VideoCore::ObtainBufferFlags::IgnoreStreamBuffer);
+            static_cast<void>(buffers.ObtainBuffer(
+                start, size, VideoCore::ObtainBufferFlags::IgnoreStreamBuffer));
         }
         EXPECT_FALSE(gpu.tracker().IsRegionCpuModified(start, size));
         gpu.rasterizer.Finish();
@@ -1226,7 +1229,12 @@ TEST(GuestMemory, ALabelWaitsForEarlierCopies) {
         while (waiting.load() < 2 && std::chrono::steady_clock::now() < until) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        ASSERT_EQ(waiting.load(), 2);
+        if (waiting.load() < 2) {
+            release = true; // the blockers capture locals that go before the rasterizer
+            copies.WaitIdle();
+            d.unmap();
+            FAIL() << "the copy threads did not start";
+        }
 
         // EVENT_WRITE_EOP: write 0x77 to the label, no interrupt.
         const std::uint64_t label = addr(dwords) + 0x800;
