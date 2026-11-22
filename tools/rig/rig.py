@@ -123,7 +123,11 @@ def build_layer(destination: Path | None = None) -> Path:
         destination.mkdir(parents=True, exist_ok=True)
         subprocess.run(["g++", "-std=c++20", "-O2", "-g", "-Wall", "-Wextra",
                         "-Wno-missing-field-initializers", "-Werror", "-fPIC", "-shared",
-                        "-fvisibility=hidden", "-o", str(binary), str(source)], check=True)
+                        "-fvisibility=hidden",
+                        # Its own C++ library: the layer loads into bb-run in containers of older
+                        # distributions too (--container), whose libstdc++ is older than ours.
+                        "-static-libstdc++", "-static-libgcc",
+                        "-o", str(binary), str(source)], check=True)
     shutil.copy(HERE / "layer" / "VkLayer_bb_rig.json", destination)
     return destination
 

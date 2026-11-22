@@ -303,6 +303,10 @@ class LayerTests(unittest.TestCase):
             symbols = subprocess.run(["nm", "-D", "--defined-only", str(binary)],
                                      capture_output=True, text=True, check=True).stdout
             self.assertIn("vkNegotiateLoaderLayerInterfaceVersion", symbols)
+            # It brings its own C++ library, for containers of older distributions.
+            needed = subprocess.run(["readelf", "-d", str(binary)], capture_output=True, text=True,
+                                    check=True).stdout
+            self.assertNotIn("libstdc++", needed)
 
 
 class PerfRunsTests(unittest.TestCase):
