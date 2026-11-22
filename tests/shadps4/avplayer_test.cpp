@@ -28,6 +28,7 @@ extern "C" {
 
 #include "common/logging/log.h"
 #include "core/libraries/avplayer/avplayer.h"
+#include "core/libraries/avplayer/avplayer_common.h"
 #include "core/libraries/libs.h"
 #include "core/memory.h"
 #include "hle/kernel/paths.hpp"
@@ -144,6 +145,60 @@ bool reference_frames(const std::string& path, std::vector<Nv12Frame>& out, int&
     avcodec_free_context(&ctx);
     avformat_close_input(&fmt);
     return ok;
+}
+
+// The player's queues are shared between its demuxer, decoder and caller threads, which test their
+// size while another thread pushes and pops (#539). The size, the check before a pop and the pop
+// itself have to see the queue under its lock: an unguarded std::deque::size() can read the two
+// ends mid-update, and libstdc++ treats the impossible size it then sees as unreachable.
+TEST(AvPlayerQueue, SizeAndPopAreSafeAgainstConcurrentPushAndClear) {
+    Libraries::AvPlayer::AvPlayerQueue<std::vector<int>> queue;
+    constexpr std::size_t max_items = 8;
+    std::atomic<bool> stop{false};
+    std::atomic<std::uint64_t> bad_sizes{0}, bad_pops{0};
+    // One producer keeps the queue between empty and max_items; the deque's ends move across its
+    // blocks all the time, and its block map grows and shrinks.
+    std::thread producer([&] {
+        while (!stop) {
+            if (queue.Size() < max_items) {
+                queue.Push(std::vector<int>(1, 7));
+            }
+        }
+    });
+    // A consumer pops by its own check, as the decoder threads do, and a third thread empties
+    // the queue, as Stop() does.
+    std::thread consumer([&] {
+        while (!stop) {
+            if (queue.Size() != 0) {
+                const auto item = queue.Pop();
+                if (item.has_value() && (item->size() != 1 || item->front() != 7)) {
+                    ++bad_pops;
+                }
+            }
+            const auto popped = queue.PopIf([](const std::vector<int>& v) { return v.size() == 1; });
+            if (popped.has_value() && popped->front() != 7) {
+                ++bad_pops;
+            }
+        }
+    });
+    std::thread clearer([&] {
+        while (!stop) {
+            queue.Clear();
+            std::this_thread::yield();
+        }
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (queue.Size() > max_items) {
+            ++bad_sizes;
+        }
+    }
+    stop = true;
+    producer.join();
+    consumer.join();
+    clearer.join();
+    EXPECT_EQ(bad_sizes.load(), 0u);
+    EXPECT_EQ(bad_pops.load(), 0u);
 }
 
 // The guest memory the library invalidates the GPU caches of the frames it writes in. It outlives

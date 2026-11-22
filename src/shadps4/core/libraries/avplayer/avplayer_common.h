@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/avplayer/avplayer_common.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-09
+// Changed for bloodborne-linux, 2026-11-22
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -59,7 +59,10 @@ struct AvPlayerEvent {
 template <class T>
 class AvPlayerQueue {
 public:
+    // Every access takes the lock: the demuxer, decoder and caller threads test the size while
+    // others push and pop, and an unguarded std::deque::size() can see its ends mid-update (#539).
     size_t Size() {
+        std::lock_guard guard(m_mutex);
         return m_queue.size();
     }
 
@@ -68,15 +71,23 @@ public:
         m_queue.emplace(std::forward<T>(value));
     }
 
-    T& Front() {
-        return m_queue.front();
-    }
-
     std::optional<T> Pop() {
-        if (Size() == 0) {
+        std::lock_guard guard(m_mutex);
+        if (m_queue.empty()) {
             return std::nullopt;
         }
+        auto result = std::move(m_queue.front());
+        m_queue.pop();
+        return result;
+    }
+
+    // Pops the front item only if `ready` accepts it, in one step under the lock.
+    template <class Pred>
+    std::optional<T> PopIf(Pred&& ready) {
         std::lock_guard guard(m_mutex);
+        if (m_queue.empty() || !ready(std::as_const(m_queue.front()))) {
+            return std::nullopt;
+        }
         auto result = std::move(m_queue.front());
         m_queue.pop();
         return result;

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/avplayer/avplayer_source.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-22
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/alignment.h"
@@ -392,16 +392,14 @@ bool AvPlayerSource::GetVideoData(AvPlayerFrameInfoEx& video_info) {
         return false;
     }
 
-    if (m_video_frames.Size() == 0) {
-        return false;
-    }
-
+    // The check of the front frame's time and its pop are one step under the queue's lock, so
+    // Stop() emptying the queue meanwhile can't leave a dangling front reference (#539).
     const auto current_time = CurrentTime();
-    const auto& new_frame = m_video_frames.Front();
-    if (m_state.GetSyncMode() == AvPlayerAvSyncMode::Default) {
-        if (new_frame.info.timestamp > current_time) {
-            return false;
-        }
+    const bool sync = m_state.GetSyncMode() == AvPlayerAvSyncMode::Default;
+    auto frame = m_video_frames.PopIf(
+        [&](const Frame& f) { return !sync || f.info.timestamp <= current_time; });
+    if (!frame.has_value()) {
+        return false;
     }
 
     if (m_current_video_frame.has_value()) {
@@ -410,7 +408,6 @@ bool AvPlayerSource::GetVideoData(AvPlayerFrameInfoEx& video_info) {
         m_video_buffers_cv.Notify();
     }
 
-    auto frame = m_video_frames.Pop();
     video_info = frame->info;
 
     m_current_video_frame = std::move(frame);
