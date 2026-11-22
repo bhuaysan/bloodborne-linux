@@ -86,7 +86,7 @@ checks what it can without the game and prints one line per part:
 ```
 
 - `guest memory`: the address ranges the loader and the guest window reserve are free.
-- `ffmpeg`: the H.264, HEVC, AAC and MP3 decoders and the MP4 demuxer of the movies and sounds.
+- `ffmpeg`: the H.264, AAC and MP3 decoders and the MP4 demuxer of the movies and sounds.
 - `video`: SDL opens a window (with `--headless`: SDL's offscreen driver).
 - `audio`: SDL opens the default playback device (with `--headless`: SDL's dummy driver).
 - `vulkan`: the Vulkan instance and the device the renderer creates, on `--device` if given.

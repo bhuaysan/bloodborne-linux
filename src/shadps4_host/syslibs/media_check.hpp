@@ -14,7 +14,7 @@ struct MediaSupport {
     std::vector<std::string> missing;  // and of those absent
 };
 
-// Looks up the H.264, HEVC, AAC and MP3 decoders and the MP4 demuxer.
+// Looks up the H.264, AAC and MP3 decoders and the MP4 demuxer.
 MediaSupport media_support();
 
 }  // namespace bb::shadps4
