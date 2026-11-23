@@ -2,7 +2,7 @@
 
 The hashes of eboot.bin and of the PRXs the runtime loads are in docs/source-policy.md,
 tools/self2elf/self2elf.py and src/loader/self.hpp. The hash of the eboot.elf that self2elf
-rebuilds is in tools/common/ps4elf.py and tests/loader/self_test.cpp. Needs no game files.
+rebuilds is in tools/common/ps4elf.py and tests/loader/game_test.cpp. Needs no game files.
 """
 
 import re
@@ -48,8 +48,8 @@ class PinnedHashesTest(unittest.TestCase):
         for name, digest in found:
             self.assertEqual(digest, known[f"sce_module/{name}"], name)
 
-    def test_eboot_elf_in_loader_test(self):
-        found = re.findall(rf'"({HEX})"', read("tests/loader/self_test.cpp"))
+    def test_eboot_elf_in_eboot_game_test(self):
+        found = re.findall(rf'"({HEX})"', read("tests/loader/game_test.cpp"))
         self.assertEqual(found, [by_name(ps4elf.PINNED_ELFS)["eboot.elf"]])
 
 
