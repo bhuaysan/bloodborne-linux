@@ -62,9 +62,9 @@ Bytes build_elf() {
     // One "zR" CIE, then an FDE per function: the FDE of 0x10 is at eh_frame_link + 20.
     std::vector<bb::test::UnwindFunction> unwind;
     for (const Function& f : functions) {
-        unwind.push_back({f.start, f.size});
+        unwind.push_back({f.start, f.size, false});
     }
-    bb::test::add_unwind_tables(elf, {0x1000, eh_frame_link, eh_hdr_link}, unwind);
+    bb::test::add_unwind_tables(elf, {0x1000, eh_frame_link, eh_hdr_link, false}, unwind);
     std::size_t dyn = bb::test::append_minimal_dynamic(elf, dynlib_offset, 0);
 
     const std::uint64_t hdr_size = bb::test::eh_hdr_size(std::size(functions));

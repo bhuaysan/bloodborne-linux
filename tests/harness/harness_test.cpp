@@ -23,9 +23,9 @@
 #include "common/memory.hpp"
 #include "game/image.hpp"
 #include "hle/hle.hpp"
+#include "loader/dynamic.hpp"
 #include "loader/elf.hpp"
 #include "loader/image.hpp"
-#include "loader/dynamic.hpp"
 #include "loader/relocate.hpp"
 #include "support/elf_builder.hpp"
 

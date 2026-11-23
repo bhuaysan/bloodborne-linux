@@ -27,7 +27,8 @@ inline constexpr std::uint32_t r_x86_64_jump_slot = 7;
 inline constexpr std::uint32_t r_x86_64_relative = 8;
 inline constexpr std::uint32_t r_x86_64_dtpmod64 = 16;
 
-// A dynamic tag with its name for error messages. It converts to its value.
+// A dynamic tag with its name for error messages. It converts to its value; pass `.value` where
+// a template would deduce the type (put, std::pair{...}).
 struct DynamicTag {
     std::uint64_t value;
     std::string_view name;

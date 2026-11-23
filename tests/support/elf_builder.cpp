@@ -21,11 +21,19 @@ Bytes raw(std::initializer_list<std::uint8_t> values) {
     return out;
 }
 
+// Copies `bytes` to `offset`, growing `out` like put.
+void put_bytes(Bytes& out, std::size_t offset, std::span<const std::byte> bytes) {
+    if (out.size() < offset + bytes.size()) {
+        out.resize(offset + bytes.size());
+    }
+    std::memcpy(out.data() + offset, bytes.data(), bytes.size());
+}
+
 }  // namespace
 
 void write_headers(Bytes& elf, std::span<const Phdr> phdrs, std::uint64_t entry,
                    std::uint16_t type) {
-    std::memcpy(elf.data(), "\x7f" "ELF\x02\x01", 6);  // 64-bit, little-endian
+    put_bytes(elf, 0, raw({0x7f, 'E', 'L', 'F', 2, 1}));  // 64-bit, little-endian
     put<std::uint16_t>(elf, 0x10, type);
     put<std::uint16_t>(elf, 0x12, em_x86_64);
     put<std::uint64_t>(elf, 0x18, entry);
@@ -49,8 +57,8 @@ void write_headers(Bytes& elf, std::span<const Phdr> phdrs, std::uint64_t entry,
 std::size_t append_minimal_dynamic(Bytes& elf, std::size_t dynlib_offset, std::uint64_t pltgot) {
     // DynamicInfo needs only the module info record and the (here empty) tables.
     std::size_t dyn = dynlib_offset + 8;
-    elf.resize(dyn);
-    std::memcpy(elf.data() + dynlib_offset, "\0self\0\0", 8);
+    elf.resize(dynlib_offset);
+    put_bytes(elf, dynlib_offset, raw({0, 's', 'e', 'l', 'f', 0, 0, 0}));
     const std::pair<std::uint64_t, std::uint64_t> entries[] = {
         {dt_sce_module_info, 0x0101ULL << 32 | 1},  // "self", version 1.1
         {dt_sce_strtab, 0}, {dt_sce_strsz, 6},
@@ -73,7 +81,7 @@ void add_unwind_tables(Bytes& elf, const UnwindLayout& layout,
         body.resize((body.size() + 3) / 4 * 4);  // DW_CFA_nop padding
         std::uint64_t at = pos;
         put(elf, base + at, static_cast<std::uint32_t>(body.size()));
-        std::memcpy(elf.data() + base + at + 4, body.data(), body.size());
+        put_bytes(elf, base + at + 4, body);
         pos += 4 + body.size();
         return at;
     };
@@ -107,8 +115,7 @@ void add_unwind_tables(Bytes& elf, const UnwindLayout& layout,
     put<std::uint32_t>(elf, base + pos, 0);
 
     const std::uint64_t hdr = base + layout.eh_hdr_link;
-    const Bytes encodings = raw({1, 0x1b, 0x03, 0x3b});
-    std::memcpy(elf.data() + hdr, encodings.data(), encodings.size());
+    put_bytes(elf, hdr, raw({1, 0x1b, 0x03, 0x3b}));
     put(elf, hdr + 4,
         static_cast<std::int32_t>(layout.eh_frame_link - layout.eh_hdr_link - 4));
     put(elf, hdr + 8, static_cast<std::uint32_t>(table.size()));
