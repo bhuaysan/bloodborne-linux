@@ -56,21 +56,17 @@ struct KnownFailure {
     std::string_view sha256;
     std::string_view cause;
 };
-constexpr std::string_view hull_cause =
-    "hull_shader_transform.cpp:# HullShaderTransform: Assertion Failed!unhandled pattern in tess "
-    "factor store";
 constexpr std::string_view copy_cause = "copy_shader.cpp:# operator(): Assertion Failed!";
 const KnownFailure known_failures[] = {
-    {"4a8d09572b70b42167b40b7fb73929772acbe1e16ea65524f2cef43f344ce87b", hull_cause},
-    {"55b2005381c36b49bae1a0fb6edf849637bc4e4138ae1770a21150296ca88623", hull_cause},
-    {"d9cb21f09c646f2462b109f3bc568c7a87dd052fabd42511adfdeded6055b723", hull_cause},
-    {"e221e748e05b1449b983c429f95d7f8f8616455515b692ff7d7eab85ae1a270a", hull_cause},
+    // The stream-out geometry programs and their copy shaders. The renderer skips a draw with
+    // stream-out before it translates anything, and no run so far has drawn one (#421).
     {"23030583679d1f3afab511489a789be1d356185abc93d1d8d4a51502a166fa44", copy_cause},
     {"36083e50dfc5a82ba166075dc9f5e8d1c7483ec1f9bd78700583fa2562582f85", copy_cause},
     {"43f205541fb1910e9b5c5f9d04138cb0f214b03c3c7289a22e7eeb6753b9a54b", copy_cause},
     {"fcb07ce8fd8c6981f1fabf6a6b709183edf965f6517191c81f657296f625c382", copy_cause},
     // EmitImageQueryLod indexes ctx.samplers out of bounds. It crashes with and without checked
-    // containers (-D_GLIBCXX_ASSERTIONS), so it needs no exception.
+    // containers (-D_GLIBCXX_ASSERTIONS), so it needs no exception. A debug pixel shader of the
+    // stream-out path (GXFlver_SOPos_FwdDbg); no run so far has reached it (#421).
     {"a98c9836981b0d3914b711f96fde634c8a5c54d51a382447a7390520f3806dd5", "crash (abort)"},
 };
 
@@ -92,10 +88,11 @@ struct Running {
     int output;
     const Job* job;
     TessConstantsForm form;
+    HullKind hull;
 };
 
 // Runs in the child. What it prints reaches the parent, which also sees what a crash leaves.
-[[noreturn]] void run_job(const Job& job, TessConstantsForm form) {
+[[noreturn]] void run_job(const Job& job, TessConstantsForm form, HullKind hull) {
     alarm(time_limit_seconds);
     install_walker_fault_handler();
     try {
@@ -103,8 +100,9 @@ struct Running {
             (void)Shader::ParseCopyShader(job.program.code);
             finish_job(copy_marker);
         }
-        const auto module = translate(job.program.code, runtime_info_of(job.program, job.copy_shader),
-                                      user_data_of(job.program, form));
+        const auto module =
+            translate(job.program.code, runtime_info_of(job.program, job.copy_shader, hull),
+                      user_data_of(job.program, form, hull));
         const std::string invalid = validate(module);
         if (invalid.empty()) {
             const auto digest = bb::common::sha256(std::as_bytes(std::span(module)));
@@ -118,7 +116,7 @@ struct Running {
     }
 }
 
-Running start_job(const Job& job, TessConstantsForm form) {
+Running start_job(const Job& job, TessConstantsForm form, HullKind hull) {
     int fds[2];
     if (pipe(fds) != 0) {
         throw std::runtime_error("pipe failed");
@@ -132,10 +130,10 @@ Running start_job(const Job& job, TessConstantsForm form) {
         dup2(fds[1], STDOUT_FILENO);
         dup2(fds[1], STDERR_FILENO);
         close(fds[1]);
-        run_job(job, form);
+        run_job(job, form, hull);
     }
     close(fds[1]);
-    return {pid, fds[0], &job, form};
+    return {pid, fds[0], &job, form, hull};
 }
 
 std::string read_all(int fd) {
@@ -316,6 +314,7 @@ TEST(ShaderCorpus, EveryProgramTranslatesOrHasAReason) {
             ++ok_by_stage[stage];
             report << "ok     " << running.job->file.string()
                    << (running.form == TessConstantsForm::through_pointer ? " (second V# form)" : "")
+                   << (running.hull == HullKind::passthrough ? " (passthrough hull)" : "")
                    << (spirv_hash.empty() ? "" : " spirv " + spirv_hash) << '\n';
             return;
         }
@@ -331,7 +330,8 @@ TEST(ShaderCorpus, EveryProgramTranslatesOrHasAReason) {
     std::size_t next = 0;
     while (next < jobs.size() || !running.empty()) {
         while (next < jobs.size() && running.size() < workers) {
-            running.push_back(start_job(jobs[next++], TessConstantsForm::inline_v_sharp));
+            running.push_back(
+                start_job(jobs[next++], TessConstantsForm::inline_v_sharp, HullKind::regular));
         }
         Running current = running.front();
         running.erase(running.begin());
@@ -342,7 +342,14 @@ TEST(ShaderCorpus, EveryProgramTranslatesOrHasAReason) {
         const auto type = static_cast<ProgramType>(current.job->program.type);
         if (outcome.starts_with("crash") && current.form == TessConstantsForm::inline_v_sharp &&
             (type == ProgramType::hs || type == ProgramType::ds)) {
-            running.push_back(start_job(*current.job, TessConstantsForm::through_pointer));
+            running.push_back(
+                start_job(*current.job, TessConstantsForm::through_pointer, current.hull));
+            continue;
+        }
+        // A failed hull program may be a passthrough (HullKind): try it as one, in the V# form
+        // that got it past the walker.
+        if (!outcome.empty() && type == ProgramType::hs && current.hull == HullKind::regular) {
+            running.push_back(start_job(*current.job, current.form, HullKind::passthrough));
             continue;
         }
         finish(current, outcome, spirv_hash_of(output));

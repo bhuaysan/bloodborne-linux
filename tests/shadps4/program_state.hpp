@@ -15,8 +15,16 @@ namespace bb::test::shadps4 {
 // The stage's runtime information: registers from the program's register block when it has one,
 // plausible fixed values for the state that only exists at draw time. `copy_shader` is the copy
 // shader of a geometry program.
+//
+// A hull stage is either regular, with one thread per output control point, or a passthrough
+// that copies its input control points: the game sets one thread and output base 0 for it, and
+// the translator then reads the invocation index as 0. The files don't say which a hull program
+// is, so a hull program that doesn't translate as a regular one is tried again as a passthrough
+// (#421).
+enum class HullKind { regular, passthrough };
 Shader::RuntimeInfo runtime_info_of(const gcn::Program& program,
-                                    std::span<const std::uint32_t> copy_shader);
+                                    std::span<const std::uint32_t> copy_shader,
+                                    HullKind hull = HullKind::regular);
 
 // How a tessellation program reaches its V# of tessellation constants. The files don't say, and
 // no one layout of the user data serves both: a program that reads the wrong one faults.
@@ -24,8 +32,10 @@ enum class TessConstantsForm { inline_v_sharp, through_pointer };
 
 // User data whose pointers lead to what the translator dereferences while translating: the empty
 // fetch shader for a vertex stage, the tessellation constants for a hull or domain shader, where
-// every register holds that address. In all other cases the registers are 0.
-UserData user_data_of(const gcn::Program& program, TessConstantsForm form);
+// every register holds that address (the constants of `hull`'s kind). In all other cases the
+// registers are 0.
+UserData user_data_of(const gcn::Program& program, TessConstantsForm form,
+                      HullKind hull = HullKind::regular);
 
 // Starts the line a corpus program prints when it fails with a reason.
 inline constexpr std::string_view failed_marker = "RESULT failed ";

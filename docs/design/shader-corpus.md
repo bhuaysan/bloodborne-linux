@@ -27,22 +27,25 @@ The cost is that image and buffer types follow a null sharp. A shader whose SPIR
 
 **Tessellation constants in two forms.** A program reaches its V# either inline in user data or through a pointer, and the files don't say which. No single layout of the user data serves both, so a tessellation program that faults on the first form is run again with the second.
 
+**Hull programs in two kinds.** A hull stage either runs one thread per output control point or passes its input control points through. For a passthrough the game sets one thread and an output base of 0, and the translator then reads the control point index as 0 (`IsPassthrough`). Some of the game's passthrough hulls store their tessellation factors at an address built from that index, which the translator only accepts as a passthrough. The files don't say which kind a program is, so a hull program that fails as a regular hull is run again as a passthrough, with tessellation constants of its own (output base 0) and a quad domain, whose six factors are the most a hull stores (#421).
+
 **One process per program.** Assertions become `bb::shader::TranslationFailure`, but libstdc++ bounds checks, Sirit's `abort` and bad pointers can't be caught. A forked child per program keeps any of them to that program.
 
 ## Result
 
-Of the 3,832 programs, 3,793 translate to a module that passes `spirv-val --target-env vulkan1.3` and 30 are copy shaders that `ParseCopyShader` accepts (debug and optimized builds, the device profile of the reference GPU). Nine don't translate, and the test lists exactly these programs by the SHA-256 of their code, each with its cause. Another program that fails, a listed one that fails for another cause and a listed one that stops failing all fail the test:
+Of the 3,832 programs, 3,797 translate to a module that passes `spirv-val --target-env vulkan1.3` and 30 are copy shaders that `ParseCopyShader` accepts (debug and optimized builds, the device profile of the reference GPU). Five don't translate, and the test lists exactly these programs by the SHA-256 of their code, each with its cause. Another program that fails, a listed one that fails for another cause and a listed one that stops failing all fail the test:
 
 | Programs | Stage | Cause |
 |---|---|---|
-| 4 | hull | `HullShaderTransform` asserts on a tessellation factor store whose address isn't in the form it expects |
 | 2 | geometry | `ParseCopyShader` asserts on an `s_lshl_b32` whose operands are not inline constants, in the copy shader of a stream-out program |
 | 2 | copy shader | the same copy shaders on their own |
 | 1 | pixel | a bug in the translator: `resource_patching_pass.cpp` adds a sampler only for `ImageSampleRaw`, but `EmitImageQueryLod` indexes `ctx.samplers` anyway. Out of bounds, and a crash with or without checked containers |
 
 A program is identified by its code. 21 of them come with more than one register block, and only one block is translated.
 
-A per-program comparison with the reference isn't possible: shadPS4 only translates what a run reaches. The reference run didn't crash, but it isn't known whether it reached any of these nine. R7 will show whether the game needs them.
+Until #421 four hull programs were listed too, for an assertion on their tessellation factor stores. The game reaches three of them once a save loads (two while it loads, the third in Central Yharnam), and both the reference and our program translate them there: they are passthrough hulls, which the corpus didn't try then.
+
+None of the five left was reached in any run so far (#421): the reference runs and the maintainer's playthrough log every program they compile, and a probe in our program logged every program it met on the way to Central Yharnam. All five belong to the stream-out path (`GXFlver_*_SO`, `GXFlver_SOPos_FwdDbg`), and the renderer skips a draw with stream-out before it translates a stage, with a warning that no run has printed. Later areas may still reach them.
 
 The per-program report goes to `analysis/shadps4-corpus-report.txt` and is never committed.
 

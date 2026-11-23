@@ -76,39 +76,58 @@ struct TessConstants {
 
 // Where the two blocks lie. The constants' address is the one the kernel picked with address
 // randomization off, so programs reaching their V# inline translate as they did in those runs.
+// A passthrough hull (HullKind) has blocks of its own, whose constants have output base 0: the
+// translator takes the hull's output layout from them.
 constexpr std::uintptr_t tess_constants_address = 0x40000000;
 constexpr std::uintptr_t tess_v_sharp_table_address = 0x40050000;
+constexpr std::uintptr_t passthrough_offset = 0x100000;
 static_assert(tess_constants_address + sizeof(TessConstants) <= tess_v_sharp_table_address);
+static_assert(tess_v_sharp_table_address + 0x40000 <= tess_constants_address + passthrough_offset);
 
-TessConstants* tess_constants() {
-    static TessConstants* const data = [] {
-        auto* block = new (low_block(tess_constants_address, sizeof(TessConstants))) TessConstants;
-        block->constants = {
-            .ls_stride = stride_bytes,
-            .hs_cp_stride = stride_bytes,
-            .num_patches = 1,
-            .hs_output_base = control_points * stride_bytes,
-            .patch_const_size = 16,
-            .patch_const_base = 2 * control_points * stride_bytes,
-            .patch_output_size = control_points * stride_bytes,
-            .off_chip_tessellation_factor_threshold = 0.0f,
-            .first_edge_tess_factor_index = 0,
-        };
-        block->self_pointers.fill(low_address(block));
-        return block;
-    }();
+TessConstants* make_tess_constants(HullKind hull) {
+    const std::uintptr_t offset = hull == HullKind::passthrough ? passthrough_offset : 0;
+    auto* block = new (low_block(tess_constants_address + offset, sizeof(TessConstants)))
+        TessConstants;
+    block->constants = {
+        .ls_stride = stride_bytes,
+        .hs_cp_stride = stride_bytes,
+        .num_patches = 1,
+        .hs_output_base = hull == HullKind::passthrough ? 0 : control_points * stride_bytes,
+        .patch_const_size = 16,
+        .patch_const_base = 2 * control_points * stride_bytes,
+        .patch_output_size = control_points * stride_bytes,
+        .off_chip_tessellation_factor_threshold = 0.0f,
+        .first_edge_tess_factor_index = 0,
+    };
+    block->self_pointers.fill(low_address(block));
+    return block;
+}
+
+TessConstants* tess_constants(HullKind hull) {
+    if (hull == HullKind::passthrough) {
+        static TessConstants* const data = make_tess_constants(HullKind::passthrough);
+        return data;
+    }
+    static TessConstants* const data = make_tess_constants(HullKind::regular);
     return data;
 }
 
 // A table of V#s of those constants, for a program that reaches its V# through a pointer.
-std::uint32_t* tess_v_sharp_table() {
+std::uint32_t* make_tess_v_sharp_table(HullKind hull) {
     constexpr std::size_t size_dwords = 0x10000;
-    static std::uint32_t* const table = [] {
-        auto* dwords = static_cast<std::uint32_t*>(
-            low_block(tess_v_sharp_table_address, size_dwords * sizeof(std::uint32_t)));
-        std::fill_n(dwords, size_dwords, low_address(tess_constants()));
-        return dwords;
-    }();
+    const std::uintptr_t offset = hull == HullKind::passthrough ? passthrough_offset : 0;
+    auto* dwords = static_cast<std::uint32_t*>(
+        low_block(tess_v_sharp_table_address + offset, size_dwords * sizeof(std::uint32_t)));
+    std::fill_n(dwords, size_dwords, low_address(tess_constants(hull)));
+    return dwords;
+}
+
+std::uint32_t* tess_v_sharp_table(HullKind hull) {
+    if (hull == HullKind::passthrough) {
+        static std::uint32_t* const table = make_tess_v_sharp_table(HullKind::passthrough);
+        return table;
+    }
+    static std::uint32_t* const table = make_tess_v_sharp_table(HullKind::regular);
     return table;
 }
 
@@ -183,7 +202,7 @@ void fill_geometry(Shader::RuntimeInfo& info, std::span<const std::uint32_t> cop
     gs.vs_copy_hash = 1;
 }
 
-void fill_tess_control(Shader::RuntimeInfo& info, const Settings& settings) {
+void fill_tess_control(Shader::RuntimeInfo& info, const Settings& settings, HullKind hull) {
     auto& tcs = info.sw.tcs;
     tcs.offchip_lds_enable = (settings.tgid_enable & 1) != 0;  // RSRC2 bit 7 is OC_LDS_EN for a HS
     tcs.hs_output_cp_stride = stride_bytes;
@@ -192,6 +211,14 @@ void fill_tess_control(Shader::RuntimeInfo& info, const Settings& settings) {
     tcs.tess_type = AmdGpu::TessellationType::Triangle;
     tcs.ls_stride = stride_bytes;
     tcs.hs_output_base = control_points * stride_bytes;
+    if (hull == HullKind::passthrough) {
+        // What the game's registers and constants give a passthrough hull (IsPassthrough). A quad
+        // domain has the most tessellation factors (four edges, two inside), so any factor the
+        // program stores has a place: the bound, as for the other draw-time values.
+        tcs.num_threads = 1;
+        tcs.hs_output_base = 0;
+        tcs.tess_type = AmdGpu::TessellationType::Quad;
+    }
 }
 
 void fill_tess_eval(Shader::RuntimeInfo& info) {
@@ -205,7 +232,7 @@ void fill_tess_eval(Shader::RuntimeInfo& info) {
 }  // namespace
 
 Shader::RuntimeInfo runtime_info_of(const Program& program,
-                                    std::span<const std::uint32_t> copy_shader) {
+                                    std::span<const std::uint32_t> copy_shader, HullKind hull) {
     using Shader::HwStage;
     using Shader::SwStage;
     Shader::RuntimeInfo info{};
@@ -235,7 +262,7 @@ Shader::RuntimeInfo runtime_info_of(const Program& program,
         break;
     case ProgramType::hs:
         info.Initialize(HwStage::Hull, SwStage::TessellationControl);
-        fill_tess_control(info, settings);
+        fill_tess_control(info, settings, hull);
         break;
     case ProgramType::ds:
         info.Initialize(HwStage::Vertex, SwStage::TessellationEval);
@@ -249,7 +276,7 @@ Shader::RuntimeInfo runtime_info_of(const Program& program,
     return info;
 }
 
-UserData user_data_of(const Program& program, TessConstantsForm form) {
+UserData user_data_of(const Program& program, TessConstantsForm form, HullKind hull) {
     const auto type = static_cast<ProgramType>(program.type);
     UserData user_data{};
     const auto set_pair = [&](std::size_t reg, const void* target) {
@@ -268,8 +295,8 @@ UserData user_data_of(const Program& program, TessConstantsForm form) {
         }
     } else if (type == ProgramType::hs || type == ProgramType::ds) {
         const void* block = form == TessConstantsForm::inline_v_sharp
-                                ? static_cast<const void*>(tess_constants())
-                                : tess_v_sharp_table();
+                                ? static_cast<const void*>(tess_constants(hull))
+                                : tess_v_sharp_table(hull);
         user_data.fill(low_address(block));
     }
     return user_data;
