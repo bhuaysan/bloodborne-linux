@@ -52,6 +52,17 @@ function(bb_add_test name)
     gtest_discover_tests(${name} PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\] ")
 endfunction()
 
+# bb_add_one_entry_test(<target>) registers a test binary with the harness main
+# (tests/harness/main.cpp) as one ctest entry, for the binaries that load the eboot once per
+# process. The main exits with 77 when nothing failed but some tests were skipped, which shows the
+# entry as Skipped. No SKIP_REGULAR_EXPRESSION: it would win over a failure and hide a failing
+# eboot-free test whenever the EbootTest cases skip (no game, as in CI; #724).
+function(bb_add_one_entry_test name)
+    target_compile_definitions(${name} PRIVATE BB_TEST_SKIP_EXIT_CODE=77)
+    add_test(NAME ${name} COMMAND ${name})
+    set_tests_properties(${name} PROPERTIES SKIP_RETURN_CODE 77)
+endfunction()
+
 add_subdirectory(common)
 add_subdirectory(shadps4)
 add_subdirectory(hle)

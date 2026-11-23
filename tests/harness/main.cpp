@@ -4,6 +4,12 @@
 // BB_TEST_GUEST_WINDOW, set only for the binaries whose tests map guest memory, it also lets the
 // guest window into ASan's shadow gap (tests/support/guest_window_asan.cpp); the others keep the
 // gap protected.
+//
+// With BB_TEST_SKIP_EXIT_CODE, set for the binaries that run as one ctest entry (the eboot
+// tests), a run in which nothing failed but some tests were skipped exits with that code, and
+// ctest's SKIP_RETURN_CODE shows the entry as Skipped. A SKIP_REGULAR_EXPRESSION on the output
+// would win over a failure: without the game every EbootTest case prints "[  SKIPPED ]", and a
+// failing eboot-free test in the same binary would be reported as Skipped (#724).
 #include <gtest/gtest.h>
 
 extern "C" const char* __asan_default_options() {
@@ -16,5 +22,11 @@ extern "C" const char* __asan_default_options() {
 
 int main(int argc, char** argv) {
     testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+    const int result = RUN_ALL_TESTS();
+#ifdef BB_TEST_SKIP_EXIT_CODE
+    if (result == 0 && testing::UnitTest::GetInstance()->skipped_test_count() > 0) {
+        return BB_TEST_SKIP_EXIT_CODE;
+    }
+#endif
+    return result;
 }

@@ -18,10 +18,7 @@ target_link_libraries(bbeboottest PUBLIC bbharness bbtestsupport GTest::gtest
 
 add_executable(harness_eboot_test eboot_test.cpp main.cpp)
 target_link_libraries(harness_eboot_test PRIVATE bbeboottest bbgame bbhle bbeboottls bb_warnings)
-add_test(NAME harness_eboot_test COMMAND harness_eboot_test)
-# gtest_discover_tests sets this on its entries; without it a run without the game (all cases
-# skipped, gtest exits 0) would show as Passed instead of Skipped.
-set_tests_properties(harness_eboot_test PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
+bb_add_one_entry_test(harness_eboot_test)
 
 # The tests with the load set loaded and initialised (LoadSetTest), in a binary of their own: the
 # HLE registry takes one load set per process, and EbootTest's harness would be a second one.
@@ -30,5 +27,4 @@ target_link_libraries(harness_load_set_test PRIVATE bbeboottest bbgame bbhle bbe
                                                     bb_warnings)
 # Its tests map guest memory in the guest window (main.cpp).
 target_compile_definitions(harness_load_set_test PRIVATE BB_TEST_GUEST_WINDOW)
-add_test(NAME harness_load_set_test COMMAND harness_load_set_test)
-set_tests_properties(harness_load_set_test PROPERTIES SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
+bb_add_one_entry_test(harness_load_set_test)
