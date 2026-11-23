@@ -350,9 +350,11 @@ private:
             return false;
         }
 
-        LOG_INFO(Lib_AudioOut, "Opened audio device: {} ({} Hz, {} ch, gain: {:.3f})",
-                 device_name.empty() ? "default" : device_name, sample_rate, num_channels,
-                 initial_gain);
+        // The device SDL opened: the match, or the default's current device.
+        const char* opened = SDL_GetAudioDeviceName(SDL_GetAudioStreamDevice(stream));
+        LOG_INFO(Lib_AudioOut, "Opened audio device: {}{} ({} Hz, {} ch, gain: {:.3f})",
+                 opened ? opened : "?", device_name.empty() ? " (default)" : "", sample_rate,
+                 num_channels, initial_gain);
         return true;
     }
 
