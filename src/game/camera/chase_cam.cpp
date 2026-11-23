@@ -133,16 +133,21 @@ void chase_cam_update_scaled(ChaseCamUpdate* original, double calls, bool eases,
     }
 }
 
+void chase_cam_update_with(ChaseCamUpdate* original, bool eases, void* cam, void* chr,
+                           void* world, float dt) {
+    ChaseFovWidener& fov = chase_fov_widener();
+    fov.restore();
+    chase_cam_update_scaled(original, static_cast<double>(frame_rate()) / default_frame_rate,
+                            eases, cam, chr, world, dt);
+    fov.widen(cam, field_of_view());
+}
+
 // 0x0143ac60
 void chase_cam_update(void* cam, void* chr, void* world, float dt) {
     auto* const original =
         reinterpret_cast<ChaseCamUpdate*>(hook::original(image(), 0x0143ac60));
     const bool eases = global<std::uint8_t>(0x05127a94) != 0;  // camera collision on
-    ChaseFovWidener& fov = chase_fov_widener();
-    fov.restore(cam);
-    chase_cam_update_scaled(original, static_cast<double>(frame_rate()) / default_frame_rate,
-                            eases, cam, chr, world, dt);
-    fov.widen(cam, field_of_view());
+    chase_cam_update_with(original, eases, cam, chr, world, dt);
 }
 
 }  // namespace bb::game

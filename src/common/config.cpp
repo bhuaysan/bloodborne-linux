@@ -89,12 +89,33 @@ private:
 };
 
 bool whole_number(std::string_view text, unsigned& out) {
-    const char* end = text.data() + text.size();
-    const auto [ptr, ec] = std::from_chars(text.data(), end, out);
-    return ec == std::errc{} && ptr == end;
+    const std::optional<unsigned> n = parse_whole_number(text);
+    out = n.value_or(0);
+    return n.has_value();
 }
 
 }  // namespace
+
+std::optional<unsigned> parse_whole_number(std::string_view text) {
+    unsigned n = 0;
+    const char* end = text.data() + text.size();
+    const auto [ptr, ec] = std::from_chars(text.data(), end, n);
+    if (ec != std::errc{} || ptr != end) {
+        return std::nullopt;
+    }
+    return n;
+}
+
+std::optional<float> parse_number(std::string_view text, float min, float max) {
+    float n = 0;
+    const char* end = text.data() + text.size();
+    const auto [ptr, ec] = std::from_chars(text.data(), end, n);
+    // The negated test also refuses NaN.
+    if (ec != std::errc{} || ptr != end || !(n >= min && n <= max)) {
+        return std::nullopt;
+    }
+    return n;
+}
 
 ParsedConfig parse_config(std::string_view text, std::string_view source) {
     ParsedConfig result;
@@ -143,15 +164,12 @@ ParsedConfig parse_config(std::string_view text, std::string_view source) {
         };
         // A decimal number from `min` to `max`.
         const auto want_number = [&](float max, float min = 0.0f) {
-            float number = 0;
-            const char* end = v.text.data() + v.text.size();
-            const auto [ptr, ec] = std::from_chars(v.text.data(), end, number);
-            // The negated test also refuses NaN.
-            if (v.quoted || ec != std::errc{} || ptr != end || !(number >= min && number <= max)) {
+            const std::optional<float> number = parse_number(v.text, min, max);
+            if (v.quoted || !number) {
                 p.fail(std::format("{}: \"{}\" is not a number from {} to {}", key, v.text, min,
                                    max));
             }
-            return number;
+            return number.value_or(0.0f);
         };
         if (key == "game_dir") {
             std::string dir = want_string();

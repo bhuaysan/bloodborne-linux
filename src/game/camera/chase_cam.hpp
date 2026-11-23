@@ -55,8 +55,15 @@ inline constexpr float rate_ease = 1.0f / 30.0f;
 void chase_cam_update_scaled(ChaseCamUpdate* original, double calls, bool eases, void* cam,
                              void* chr, void* world, float dt);
 
-// 0x0143ac60, wrapped: runs the original with its per-call factors scaled from 30 calls a second
-// to frame_rate() (chase_cam_update_scaled with frame_rate() / 30). At 30 FPS it is the original.
+// The wrap's work around `original`: puts the game's field of view back (chase_fov_widener),
+// runs it scaled from 30 calls a second to frame_rate() (chase_cam_update_scaled with
+// frame_rate() / 30), and widens the field of view to field_of_view() afterwards. With the
+// game's rate and angle it is the original.
+void chase_cam_update_with(ChaseCamUpdate* original, bool eases, void* cam, void* chr, void* world,
+                           float dt);
+
+// 0x0143ac60, wrapped: chase_cam_update_with on the game's update, with `eases` from the camera
+// collision byte.
 void chase_cam_update(void* cam, void* chr, void* world, float dt);
 
 }  // namespace bb::game

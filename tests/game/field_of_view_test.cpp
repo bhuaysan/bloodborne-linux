@@ -1,5 +1,6 @@
 // Tests of the field-of-view option in src/game/camera/field_of_view.cpp (#666): the widener
-// around a stand-in for the chase camera update that eases +0x50 as the game does, and, against
+// around a stand-in for the chase camera update that eases +0x50 as the game does, the chase
+// camera wrap (chase_cam_update_with) around that stand-in at a set field of view, and, against
 // the eboot, that the game's chase camera keeps the angle the option names at +0x50.
 #include "game/camera/field_of_view.hpp"
 
@@ -14,6 +15,8 @@
 
 #include <gtest/gtest.h>
 
+#include "game/camera/chase_cam.hpp"
+#include "game/frame/frame.hpp"
 #include "game/image.hpp"
 #include "harness/eboot.hpp"
 
@@ -46,7 +49,7 @@ void stand_in(Camera& cam, float target) {
 
 // One update as the wrap runs it.
 void update(ChaseFovWidener& w, Camera& cam, float target, float degrees) {
-    w.restore(&cam);
+    w.restore();
     stand_in(cam, target);
     w.widen(&cam, degrees);
 }
@@ -135,6 +138,58 @@ TEST(FieldOfView, SwitchingTheOptionOffGivesTheGamesAngleBack) {
     update(w, cam, 43.0f * deg, 63.0f);
     update(w, cam, 43.0f * deg, game_fov);
     EXPECT_FLOAT_EQ(cam.fov(), 43.0f * deg);
+}
+
+TEST(FieldOfView, AnOldCameraGetsItsAngleBackWhenAnotherIsUpdated) {
+    ChaseFovWidener w;
+    Camera a, b;
+    a.set_fov(43.0f * deg);
+    b.set_fov(43.0f * deg);
+    update(w, a, 43.0f * deg, 63.0f);
+    update(w, b, 43.0f * deg, 63.0f);
+    EXPECT_FLOAT_EQ(a.fov(), 43.0f * deg);
+    // a's next update eases from the game's angle and widens it once.
+    update(w, a, 43.0f * deg, 63.0f);
+    EXPECT_FLOAT_EQ(seen_fov, 43.0f * deg);
+    EXPECT_FLOAT_EQ(a.fov(), 63.0f * deg);
+    EXPECT_FLOAT_EQ(b.fov(), 43.0f * deg);
+}
+
+TEST(FieldOfView, HorizontalAngle) {
+    EXPECT_NEAR(bb::game::horizontal_fov(43.0f, 1920, 1080), 70.0f, 0.5f);
+    EXPECT_NEAR(bb::game::horizontal_fov(65.0f, 5120, 1440), 132.0f, 0.5f);
+    EXPECT_LT(bb::game::horizontal_fov(65.0f, 1920, 1080), bb::game::wide_fov_warning);
+    EXPECT_LT(bb::game::horizontal_fov(65.0f, 3440, 1440), bb::game::wide_fov_warning);
+    EXPECT_GT(bb::game::horizontal_fov(60.0f, 5120, 1440), bb::game::wide_fov_warning);
+}
+
+// The chase camera wrap's work around a stand-in for the game's update: the update eases +0x50 a
+// quarter of the way to 43 degrees.
+float wrap_seen = 0.0f;
+void wrap_stand_in(void* cam, void*, void*, float) {
+    auto& c = *static_cast<Camera*>(cam);
+    wrap_seen = c.fov();
+    c.set_fov(c.fov() + (43.0f * deg - c.fov()) * 0.25f);
+}
+
+TEST(FieldOfView, TheChaseCameraWrapWidensAroundTheUpdate) {
+    ASSERT_EQ(bb::game::frame_rate(), 30U);
+    FovGuard guard;
+    Camera cam;
+    cam.set_fov(40.0f * deg);
+    bb::game::set_field_of_view(60.0f);
+    bb::game::chase_cam_update_with(&wrap_stand_in, true, &cam, nullptr, nullptr, 1.0f / 30.0f);
+    EXPECT_FLOAT_EQ(wrap_seen, 40.0f * deg);
+    EXPECT_FLOAT_EQ(cam.fov(), 40.75f * deg + 17.0f * deg);
+    // The next update sees the game's angle again, not the widened one.
+    bb::game::chase_cam_update_with(&wrap_stand_in, true, &cam, nullptr, nullptr, 1.0f / 30.0f);
+    EXPECT_FLOAT_EQ(wrap_seen, 40.75f * deg);
+    EXPECT_FLOAT_EQ(cam.fov(), 41.3125f * deg + 17.0f * deg);
+    // At the game's angle the field holds the game's value; the widener lets go of `cam`.
+    bb::game::set_field_of_view(game_fov);
+    bb::game::chase_cam_update_with(&wrap_stand_in, true, &cam, nullptr, nullptr, 1.0f / 30.0f);
+    EXPECT_FLOAT_EQ(wrap_seen, 41.3125f * deg);
+    EXPECT_FLOAT_EQ(cam.fov(), 41.734375f * deg);
 }
 
 using FieldOfViewGame = EbootTest;

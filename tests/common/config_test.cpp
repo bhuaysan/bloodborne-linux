@@ -10,6 +10,7 @@
 #include <optional>
 #include <functional>
 #include <string>
+#include <string_view>
 
 #include <gtest/gtest.h>
 
@@ -452,6 +453,36 @@ TEST_F(ConfigFileTest, NewFoldersGetMode0700) {
 TEST_F(ConfigFileTest, DefaultPathIsInTheUserDir) {
     ASSERT_EQ(::setenv("BB_USER_DIR", dir_.c_str(), 1), 0);
     EXPECT_EQ(bb::common::default_config_path(), dir_ / "config.toml");
+}
+
+}  // namespace
+
+namespace {
+
+// The number parsers that the config file and bb-run's command line share (#725).
+TEST(ConfigNumbers, WholeNumbersAreAllOfTheText) {
+    EXPECT_EQ(bb::common::parse_whole_number("16"), 16U);
+    EXPECT_EQ(bb::common::parse_whole_number("0"), 0U);
+    for (std::string_view bad : {"", " 16", "16 ", "16.0", "x16", "-1", "+1", "99999999999"}) {
+        EXPECT_EQ(bb::common::parse_whole_number(bad), std::nullopt) << bad;
+    }
+}
+
+TEST(ConfigNumbers, NumbersAreInRange) {
+    EXPECT_EQ(bb::common::parse_number("0.25", 0.0f, 2.0f), 0.25f);
+    EXPECT_EQ(bb::common::parse_number("2", 0.0f, 2.0f), 2.0f);
+    EXPECT_EQ(bb::common::parse_number("30", 30.0f, 65.0f), 30.0f);
+    for (std::string_view bad : {"", "2.01", "-0.1", "nan", "inf", "1x", " 1", "1e9"}) {
+        EXPECT_EQ(bb::common::parse_number(bad, 0.0f, 2.0f), std::nullopt) << bad;
+    }
+}
+
+TEST(ConfigNumbers, SixteenNine) {
+    EXPECT_TRUE(bb::common::is_sixteen_nine(1920, 1080));
+    EXPECT_TRUE(bb::common::is_sixteen_nine(3840, 2160));
+    EXPECT_FALSE(bb::common::is_sixteen_nine(2560, 1080));
+    EXPECT_FALSE(bb::common::is_sixteen_nine(1920, 1081));
+    EXPECT_TRUE(bb::common::is_sixteen_nine(0xffffffffULL * 16, 0xffffffffULL * 9));
 }
 
 }  // namespace

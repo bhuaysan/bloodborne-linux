@@ -4,6 +4,7 @@
 // cascades and YEBIS, which read the same render camera, follow.
 #include "game/camera/aspect.hpp"
 
+#include "common/config.hpp"
 #include "game/image.hpp"
 #include "hook/hook.hpp"
 
@@ -15,8 +16,7 @@ float aspect_now = game_aspect;
 }  // namespace
 
 void set_screen_aspect(std::uint32_t width, std::uint32_t height) {
-    const bool sixteen_nine = std::uint64_t{width} * 9 == std::uint64_t{height} * 16;
-    aspect_now = sixteen_nine || height == 0 ? game_aspect
+    aspect_now = common::is_sixteen_nine(width, height) || height == 0 ? game_aspect
                                              : static_cast<float>(width) / static_cast<float>(height);
 }
 

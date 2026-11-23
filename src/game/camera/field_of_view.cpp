@@ -6,6 +6,7 @@
 // as it does with cutscene cameras, so there the two can't be told apart.
 #include "game/camera/field_of_view.hpp"
 
+#include <cmath>
 #include <format>
 #include <numbers>
 #include <stdexcept>
@@ -32,13 +33,21 @@ float field_of_view() {
     return fov_degrees;
 }
 
+float horizontal_fov(float degrees, std::uint32_t width, std::uint32_t height) {
+    const double half = static_cast<double>(degrees) * std::numbers::pi / 360.0;
+    const double aspect = static_cast<double>(width) / static_cast<double>(height);
+    return static_cast<float>(std::atan(std::tan(half) * aspect) * 360.0 / std::numbers::pi);
+}
+
 float widened_fov(float fov, float degrees) {
     return fov + (degrees - game_fov) * (std::numbers::pi_v<float> / 180.0f);
 }
 
-void ChaseFovWidener::restore(void* cam) {
-    if (cam == cam_ && load<float>(cam, chase_cam_fov) == widened_) {
-        store<float>(cam, chase_cam_fov, game_);
+void ChaseFovWidener::restore() {
+    // Also before another camera's update: the one widened last gets its value back, so that its
+    // next update eases from the game's angle and doesn't widen the widened one again.
+    if (cam_ != nullptr && load<float>(cam_, chase_cam_fov) == widened_) {
+        store<float>(cam_, chase_cam_fov, game_);
     }
     cam_ = nullptr;
 }

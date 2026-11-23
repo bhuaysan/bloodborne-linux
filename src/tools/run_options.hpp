@@ -102,7 +102,9 @@ inline constexpr std::string_view run_usage =
     "                       scale the chromatic aberration by S, 0 to 1 (default 1, the game's)\n"
     "  --fov DEGREES        the vertical field of view of the player's camera, 30 to 65, in place\n"
     "                       of the game's 43 (about 70 horizontal at 16:9); the game's other\n"
-    "                       angles for it move by the same amount, cutscenes keep their own\n";
+    "                       angles for it move by the same amount, cutscenes keep their own;\n"
+    "                       at a wide --resolution the angle across grows (65 at 5120x1440 is\n"
+    "                       about 132), and bb-run warns above 120 across\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;

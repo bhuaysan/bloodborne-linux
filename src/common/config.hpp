@@ -74,11 +74,15 @@ inline constexpr bool is_wide_resolution(unsigned width, unsigned height) {
     return false;
 }
 
+// width x height is exactly 16:9: the game's own aspect, which the wide-aspect paths leave alone.
+inline constexpr bool is_sixteen_nine(unsigned long long width, unsigned long long height) {
+    return width * 9 == height * 16;
+}
+
 inline constexpr bool valid_resolution(unsigned width, unsigned height) {
-    const bool sixteen_nine =
-        width >= default_resolution_width && width <= max_resolution_width &&
-        width % resolution_width_step == 0 &&
-        static_cast<unsigned long long>(width) * 9 == static_cast<unsigned long long>(height) * 16;
+    const bool sixteen_nine = width >= default_resolution_width &&
+                              width <= max_resolution_width &&
+                              width % resolution_width_step == 0 && is_sixteen_nine(width, height);
     return sixteen_nine || is_wide_resolution(width, height);
 }
 
@@ -141,6 +145,12 @@ class ConfigError : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };
+
+// The number parsers of the config file and of bb-run's command line, so both take the same
+// values. All of `text` must be the number: no sign for the whole number, no spaces. nullopt for
+// anything else, and for a number outside `min` to `max` or NaN.
+std::optional<unsigned> parse_whole_number(std::string_view text);
+std::optional<float> parse_number(std::string_view text, float min, float max);
 
 struct ParsedConfig {
     Config config;

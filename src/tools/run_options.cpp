@@ -1,11 +1,9 @@
 #include "tools/run_options.hpp"
 
 #include <algorithm>
-#include <charconv>
 #include <format>
 #include <stdexcept>
 #include <string>
-#include <system_error>
 
 #include "common/config.hpp"
 #include "common/log.hpp"
@@ -17,10 +15,8 @@ namespace {
 constexpr unsigned max_timeout_seconds = 86400;
 
 unsigned parse_timeout(std::string_view value) {
-    unsigned seconds = 0;
-    const char* end = value.data() + value.size();
-    const auto [ptr, ec] = std::from_chars(value.data(), end, seconds);
-    if (ec != std::errc{} || ptr != end || seconds == 0 || seconds > max_timeout_seconds) {
+    const unsigned seconds = common::parse_whole_number(value).value_or(0);
+    if (seconds == 0 || seconds > max_timeout_seconds) {
         throw std::invalid_argument(
             std::format("--timeout: \"{}\" is not a number of seconds from 1 to {}", value,
                         max_timeout_seconds));
@@ -35,9 +31,8 @@ using common::min_window_width;
 
 // One side of --window-size.
 bool parse_side(std::string_view text, unsigned min, unsigned& side) {
-    const char* end = text.data() + text.size();
-    const auto [ptr, ec] = std::from_chars(text.data(), end, side);
-    return ec == std::errc{} && ptr == end && side >= min && side <= max_window_side;
+    side = common::parse_whole_number(text).value_or(0);
+    return side >= min && side <= max_window_side;
 }
 
 void parse_window_size(std::string_view value, RunOptions& options) {
@@ -56,9 +51,8 @@ void parse_resolution(std::string_view value, RunOptions& options) {
     unsigned width = 0;
     unsigned height = 0;
     const auto side = [](std::string_view text, unsigned& out) {
-        const char* end = text.data() + text.size();
-        const auto [ptr, ec] = std::from_chars(text.data(), end, out);
-        return ec == std::errc{} && ptr == end;
+        out = common::parse_whole_number(text).value_or(0);
+        return out != 0;
     };
     const bool parsed = x != std::string_view::npos && side(value.substr(0, x), width) &&
                         side(value.substr(x + 1), height);
@@ -79,56 +73,15 @@ void parse_resolution(std::string_view value, RunOptions& options) {
     options.resolution_height = height;
 }
 
-float parse_rcas_attenuation(std::string_view value) {
-    float stops = 0;
-    const char* end = value.data() + value.size();
-    const auto [ptr, ec] = std::from_chars(value.data(), end, stops);
-    // The negated test also refuses NaN.
-    if (ec != std::errc{} || ptr != end || !(stops >= 0.0f && stops <= max_rcas_attenuation)) {
-        throw std::invalid_argument(std::format(
-            "--rcas-attenuation: \"{}\" is not a number from 0 to {}", value,
-            max_rcas_attenuation));
-    }
-    return stops;
-}
-
-float parse_strength(std::string_view option, std::string_view value) {
-    float strength = 0;
-    const char* end = value.data() + value.size();
-    const auto [ptr, ec] = std::from_chars(value.data(), end, strength);
-    // The negated test also refuses NaN.
-    if (ec != std::errc{} || ptr != end ||
-        !(strength >= 0.0f && strength <= common::max_post_effect_strength)) {
-        throw std::invalid_argument(std::format("{}: \"{}\" is not a number from 0 to {}", option,
-                                                value, common::max_post_effect_strength));
-    }
-    return strength;
-}
-
-float parse_fov(std::string_view value) {
-    float degrees = 0;
-    const char* end = value.data() + value.size();
-    const auto [ptr, ec] = std::from_chars(value.data(), end, degrees);
-    // The negated test also refuses NaN.
-    if (ec != std::errc{} || ptr != end ||
-        !(degrees >= common::min_fov && degrees <= common::max_fov)) {
+// A decimal number of option `option` from `min` to `max`; `what` names it in the error.
+float parse_float(std::string_view option, std::string_view value, float min, float max,
+                  std::string_view what = "a number") {
+    const std::optional<float> number = common::parse_number(value, min, max);
+    if (!number) {
         throw std::invalid_argument(
-            std::format("--fov: \"{}\" is not a number of degrees from {} to {}", value,
-                        common::min_fov, common::max_fov));
+            std::format("{}: \"{}\" is not {} from {} to {}", option, value, what, min, max));
     }
-    return degrees;
-}
-
-float parse_load_hold(std::string_view value) {
-    float seconds = 0;
-    const char* end = value.data() + value.size();
-    const auto [ptr, ec] = std::from_chars(value.data(), end, seconds);
-    // The negated test also refuses NaN.
-    if (ec != std::errc{} || ptr != end || !(seconds >= 0.0f && seconds <= max_load_hold)) {
-        throw std::invalid_argument(std::format(
-            "--load-hold: \"{}\" is not a number of seconds from 0 to {}", value, max_load_hold));
-    }
-    return seconds;
+    return *number;
 }
 
 }  // namespace
@@ -268,28 +221,24 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             options.pad_input = std::filesystem::path(value());
         } else if (arg == "--frame-rate") {
             const std::string_view fps = value();
-            unsigned rate = 0;
-            for (const unsigned r : common::frame_rates) {
-                rate = fps == std::to_string(r) ? r : rate;
-            }
-            if (rate == 0) {
+            const unsigned rate = common::parse_whole_number(fps).value_or(0);
+            if (!common::valid_frame_rate(rate)) {
                 throw std::invalid_argument(
                     std::format("--frame-rate: \"{}\" is not 30, 60, 120 or 144", fps));
             }
             options.frame_rate = rate;
         } else if (arg == "--anisotropy") {
             const std::string_view level = value();
-            unsigned parsed = 0;
-            for (const unsigned l : common::anisotropy_levels) {
-                parsed = level == std::to_string(l) ? l : parsed;
-            }
-            if (parsed == 0 && level != "game") {
+            const unsigned parsed =
+                level == "game" ? 0 : common::parse_whole_number(level).value_or(0);
+            if (level != "game" && !common::valid_anisotropy(parsed)) {
                 throw std::invalid_argument(
                     std::format("--anisotropy: \"{}\" is not game, 1, 2, 4, 8 or 16", level));
             }
             options.anisotropy = parsed;
         } else if (arg == "--load-hold") {
-            options.load_hold = parse_load_hold(value());
+            options.load_hold =
+                parse_float(arg, value(), 0.0f, max_load_hold, "a number of seconds");
         } else if (arg == "--window-size") {
             parse_window_size(value(), options);
         } else if (arg == "--resolution") {
@@ -297,13 +246,16 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
         } else if (arg == "--no-motion-blur") {
             options.motion_blur = false;
         } else if (arg == "--motion-blur-strength") {
-            options.motion_blur_strength = parse_strength(arg, value());
+            options.motion_blur_strength =
+                parse_float(arg, value(), 0.0f, common::max_post_effect_strength);
         } else if (arg == "--no-chromatic-aberration") {
             options.chromatic_aberration = false;
         } else if (arg == "--chromatic-aberration-strength") {
-            options.chromatic_aberration_strength = parse_strength(arg, value());
+            options.chromatic_aberration_strength =
+                parse_float(arg, value(), 0.0f, common::max_post_effect_strength);
         } else if (arg == "--fov") {
-            options.fov = parse_fov(value());
+            options.fov = parse_float(arg, value(), common::min_fov, common::max_fov,
+                                      "a number of degrees");
         } else if (arg == "--fullscreen") {
             options.fullscreen = true;
         } else if (arg == "--fsr") {
@@ -312,7 +264,7 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             options.rcas = false;
             rcas_given = true;
         } else if (arg == "--rcas-attenuation") {
-            options.rcas_attenuation = parse_rcas_attenuation(value());
+            options.rcas_attenuation = parse_float(arg, value(), 0.0f, max_rcas_attenuation);
             rcas_given = true;
         } else if (arg == "--present-mode") {
             const std::optional<PresentMode> mode = common::parse_present_mode(value());

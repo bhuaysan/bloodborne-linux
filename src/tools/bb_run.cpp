@@ -64,6 +64,7 @@
 #include "hle/video/video_out.hpp"
 #include "hook/hook.hpp"
 #include "loader/load_set.hpp"
+#include "tools/game_options.hpp"
 #include "tools/main_loop_probe.hpp"
 #include "tools/run_options.hpp"
 #if defined(BB_HAVE_WINDOW) && defined(BB_HAVE_VIDEO_CORE)
@@ -81,6 +82,7 @@
 #endif
 #ifdef BB_HAVE_WINDOW
 #include "hle/video/video_core_presenter.hpp"
+#include "tools/renderer_options.hpp"
 #include "sdl_window.h"
 #endif
 
@@ -257,11 +259,10 @@ void open_display(const bb::tools::RunOptions& options) {
     Frontend::WindowSDL::SetGamepadEventHandler(&Libraries::Pad::HandleGamepadEvent);
     Libraries::Pad::StartPolling();
     // After the window: the device order depends on its window system type.
-    const Vulkan::ValidationOptions validation{options.validation, options.validation_sync,
-                                               options.validation_gpu};
+    const Vulkan::RendererOptions wanted = bb::tools::renderer_options(options, -1);
     std::optional<std::int32_t> gpu_id =
         bb::hle::video::resolve_gpu_id(options.device, d->window->GetWindowInfo().type, why,
-                                       validation);
+                                       wanted.validation);
     if (!gpu_id && options.device_fallback) {
         // A card named in the config file that is gone: the game still starts.
         bb::common::log(LogLevel::warn, channel, "device in the config file: {}; using the default",
@@ -275,17 +276,8 @@ void open_display(const bb::tools::RunOptions& options) {
     Storage::pipeline_cache_enabled = options.pipeline_cache;
     Vulkan::async_pipeline_builds = options.async_pipelines;
     Vulkan::threaded_recording = options.threaded_recording;
-    Vulkan::RendererOptions renderer{*gpu_id, validation, Vulkan::PresentMode::Mailbox,
-                                     options.fsr, options.rcas, options.rcas_attenuation,
-                                     options.anisotropy};
+    const Vulkan::RendererOptions renderer = bb::tools::renderer_options(options, *gpu_id);
     const char* const present_mode_name = bb::common::present_mode_name(options.present_mode);
-    switch (options.present_mode) {
-    case bb::tools::PresentMode::fifo: renderer.present_mode = Vulkan::PresentMode::Fifo; break;
-    case bb::tools::PresentMode::mailbox: break;
-    case bb::tools::PresentMode::immediate:
-        renderer.present_mode = Vulkan::PresentMode::Immediate;
-        break;
-    }
     bb::common::log(LogLevel::info, channel, "renderer: device {}, present mode {}, validation {}",
                     *gpu_id, present_mode_name, options.validation ? "on" : "off");
     bb::common::log(LogLevel::info, channel,
@@ -455,24 +447,14 @@ int start(const bb::tools::RunOptions& options) {
         bb::hook::apply(eboot, bb::hook::replacements());
         bb::common::log(LogLevel::info, channel, "{} hooks applied",
                         bb::hook::replacements().size());
-        // Before the entry point: the engine sets its heaps up at start, and the larger targets
-        // of a larger frame buffer come out of GFX_GraphicsPrivate (docs/design/resolution.md).
-        bb::game::set_graphics_heap_size(eboot, options.resolution_width,
-                                         options.resolution_height);
+        // Before the entry point.
+        bb::tools::prepare_eboot(eboot, options);
         bb::common::log(LogLevel::info, channel, "GFX_GraphicsPrivate heap {} MiB",
                         bb::game::graphics_private_heap_size(options.resolution_width,
                                                              options.resolution_height) >> 20);
-        // The HUD places its world markers in 1920x1080 stage coordinates (#713).
-        bb::game::set_hud_stage_loads(eboot, options.resolution_width, options.resolution_height);
-        // Black, not the game's grey, beside the 16:9 menus at a wider frame buffer (#711).
-        bb::game::set_device_clear_color(eboot, options.resolution_width,
-                                         options.resolution_height);
     });
     bb::game::set_image(game->eboot);
-    // Before the entry point: system_properties_init and the graphics device read the size from
-    // the globals (docs/design/resolution.md).
-    bb::game::set_frame_buffer_size(options.resolution_width, options.resolution_height);
-    bb::game::set_screen_aspect(options.resolution_width, options.resolution_height);
+    bb::tools::apply_game_options(options);
     bb::common::log(LogLevel::info, channel, "rendering at {}x{}", options.resolution_width,
                     options.resolution_height);
     bb::hle::kernel::check_eboot_tls();
@@ -482,18 +464,10 @@ int start(const bb::tools::RunOptions& options) {
     bb::hle::system::set_user_name(options.profile);
     main_loop = new MainLoop{bb::tools::MainLoopProbe(), options.stop_at_main_loop, start_time};
     bb::game::set_frame_observer(&observe_frame);
-    bb::game::set_frame_rate(options.frame_rate);
-    static_assert(bb::tools::max_load_hold == bb::game::game_load_hold,
-                  "--load-hold's range must end at the game's hold");
-    bb::game::set_load_hold(options.load_hold);
     if (options.load_hold != bb::game::game_load_hold) {
         bb::common::log(LogLevel::info, channel, "loading page hold {} s (the game's: {} s)",
                         options.load_hold, bb::game::game_load_hold);
     }
-    static_assert(bb::common::max_post_effect_strength == bb::game::max_post_effect_strength);
-    bb::game::set_post_effects({options.motion_blur, options.motion_blur_strength,
-                                options.chromatic_aberration,
-                                options.chromatic_aberration_strength});
     if (bb::game::post_effects() != bb::game::PostEffects{}) {
         bb::common::log(LogLevel::info, channel,
                         "motion blur {} (strength {}), chromatic aberration {} (strength {})",
@@ -501,14 +475,18 @@ int start(const bb::tools::RunOptions& options) {
                         options.chromatic_aberration ? "on" : "off",
                         options.chromatic_aberration_strength);
     }
-    static_assert(bb::common::min_fov == bb::game::min_fov &&
-                  bb::common::max_fov == bb::game::max_fov);
-    static_assert(bb::common::game_fov == bb::game::game_fov,
-                  "--fov's default must be the game's angle");
-    bb::game::set_field_of_view(options.fov);
     if (options.fov != bb::game::game_fov) {
         bb::common::log(LogLevel::info, channel, "field of view {} degrees (the game's: {})",
                         options.fov, bb::game::game_fov);
+    }
+    const float across = bb::game::horizontal_fov(options.fov, options.resolution_width,
+                                                  options.resolution_height);
+    if (across > bb::game::wide_fov_warning) {
+        bb::common::log(LogLevel::warn, channel,
+                        "field of view {} degrees is about {:.0f} across at {}x{}: the picture is "
+                        "strongly stretched towards its sides",
+                        options.fov, across, options.resolution_width,
+                        options.resolution_height);
     }
     bb::hle::video::set_vblank_rate(options.frame_rate);
     bb::common::log(LogLevel::info, channel, "target frame rate {} FPS, vblank period {} ns",

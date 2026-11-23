@@ -27,6 +27,12 @@ inline constexpr float max_fov = 65.0f;
 void set_field_of_view(float degrees);
 float field_of_view();
 
+// The horizontal angle in degrees of a vertical one of `degrees` at a picture of width x height.
+float horizontal_fov(float degrees, std::uint32_t width, std::uint32_t height);
+// Above this horizontal angle bb-run warns that the picture is strongly stretched towards its
+// sides: 65 degrees at 5120x1440 is about 132 (docs/design/image-quality.md).
+inline constexpr float wide_fov_warning = 120.0f;
+
 // `fov` (radians) moved by `degrees` - game_fov.
 float widened_fov(float fov, float degrees);
 
@@ -35,15 +41,16 @@ float widened_fov(float fov, float degrees);
 // updates the field holds the widened value.
 class ChaseFovWidener {
 public:
-    // Before the update: puts the game's value back, unless something else wrote the field since
-    // widen (then that value is the game's).
-    void restore(void* cam);
+    // Before an update: puts the game's value back into the camera widened last, unless something
+    // else wrote its field since widen (then that value is the game's). Also before the update of
+    // another camera, so that the last one starts from its own angle when it is updated again.
+    void restore();
     // After the update: keeps the game's value and writes it widened to `degrees`; at game_fov
     // it leaves the field alone.
     void widen(void* cam, float degrees);
 
 private:
-    const void* cam_ = nullptr;
+    void* cam_ = nullptr;
     float game_ = 0.0f;
     float widened_ = 0.0f;
 };

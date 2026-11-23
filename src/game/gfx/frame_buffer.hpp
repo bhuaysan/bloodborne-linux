@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "common/config.hpp"
 #include "loader/image.hpp"
 
 namespace bb::game {
@@ -92,8 +93,7 @@ inline constexpr std::array<float, 4> device_clear_black = {0.0f, 0.0f, 0.0f, 1.
 // The device clear colour for a frame buffer of `width` x `height`: the game's grey at 16:9,
 // black at any other aspect, so the sides of the 16:9 menus are black.
 constexpr std::array<float, 4> device_clear_color_for(std::uint32_t width, std::uint32_t height) {
-    return std::uint64_t{width} * 9 == std::uint64_t{height} * 16 ? device_clear_grey
-                                                                  : device_clear_black;
+    return common::is_sixteen_nine(width, height) ? device_clear_grey : device_clear_black;
 }
 
 // Writes device_clear_color_for(width, height) into the device clear colour of `eboot`. Called
