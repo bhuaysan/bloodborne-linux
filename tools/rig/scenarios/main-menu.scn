@@ -9,6 +9,7 @@ log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
 mark logos
 # The logos fade and hold for a few seconds each; only the title stays still this long. The stable
 # event gives the time to the menu: when the picture stopped changing.
+nonblack level=12 timeout=120   # the title (mean level 23); the logos stay below 8
 stable seconds=6 delta=1 timeout=120
 mark menu
 shot menu-1

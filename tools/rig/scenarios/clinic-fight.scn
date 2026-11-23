@@ -9,6 +9,7 @@ log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
 sleep 1
 tap A                   # the notice about an unclean end of the last session, when there is one
 mark logos
+nonblack level=12 timeout=120   # the title (mean level 23); the logos stay below 8
 stable seconds=6 delta=1 timeout=120
 dpad D                  # Play Offline
 tap A

@@ -5,6 +5,7 @@ limit time=300
 
 log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
 mark logos
+nonblack level=12 timeout=120   # the title (mean level 23); the logos stay below 8
 stable seconds=6 delta=1 timeout=120
 shot title
 

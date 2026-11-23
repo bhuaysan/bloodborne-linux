@@ -9,6 +9,7 @@ limit time=900
 
 log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
 mark logos
+nonblack level=12 timeout=120   # the title (mean level 23); the logos stay below 8
 stable seconds=6 delta=1 timeout=120
 shot 01-title
 mark menu
@@ -98,6 +99,7 @@ lognow
 tap A
 mark exit
 log 'mount SPRJ0005 at /savedata0 \(mode 0xa' timeout=20
+nonblack level=12 timeout=120   # the logos again, then the title
 stable seconds=6 delta=1 timeout=120
 shot 13-title-again
 mark title-again

@@ -12,6 +12,7 @@ log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
 sleep 1
 tap A                   # the notice about an unclean end of the last session, when there is one
 mark logos
+nonblack level=12 timeout=120   # the title (mean level 23); the logos stay below 8
 stable seconds=6 delta=1 timeout=120
 dpad D                  # Play Offline
 tap A
@@ -23,6 +24,8 @@ stable seconds=3 delta=1 timeout=60
 sleep 10                # the loading page, if it is still up, goes
 stable seconds=3 delta=1 timeout=60
 shot 00-start
+# The street is at level 45; the title (23) or a notice (9) means Continue was missed (#791).
+expect_level min=30 max=60
 mark play-stand
 sleep 15
 
