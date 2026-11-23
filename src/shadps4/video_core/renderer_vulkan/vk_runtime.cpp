@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_runtime.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-20
+// Changed for bloodborne-linux, 2026-11-23
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/alignment.h"
@@ -227,6 +227,20 @@ void Runtime::DownloadImage(VideoCore::Image* src, const VideoCore::Buffer* dst,
     }
 }
 
+vk::Extent2D CopyMipExtent(vk::Extent2D src, vk::Extent2D dst, bool block_coded, u32 mip) {
+    constexpr u32 block = 4;  // every block-coded GCN format (BC1 to BC7) has 4x4 texel blocks
+    const auto side = [&](u32 src_side, u32 dst_side) {
+        const u32 src_mip = std::max(src_side >> mip, 1u);
+        const u32 dst_mip = std::max(dst_side >> mip, 1u);
+        const u32 side = std::min(src_mip, dst_mip);
+        if (block_coded && side % block != 0 && (side != src_mip || side != dst_mip)) {
+            return side / block * block;
+        }
+        return side;
+    };
+    return {side(src.width, dst.width), side(src.height, dst.height)};
+}
+
 void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
     // Ours (#689): upstream clears the dirty bits at the end. They are cleared before the copy is
     // recorded and only while the image is still tracked, so a write fault after that keeps its
@@ -246,13 +260,13 @@ void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
     // of bounds of a smaller destination (a depth image recreated narrower than the color image it
     // replaces), and the destination's depth from a shallower 3D source. Between a block-coded and
     // a plain image the extent counts source texels, which the destination's size does not, so
-    // that pair keeps the source's extent.
-    u32 base_width = src->info.size.width;
-    u32 base_height = src->info.size.height;
-    if (src->info.props.is_block == dst->info.props.is_block) {
-        base_width = std::min(base_width, dst->info.size.width);
-        base_height = std::min(base_height, dst->info.size.height);
-    }
+    // that pair keeps the source's extent. Between two block-coded images each mip's extent stays
+    // on block boundaries (#703, CopyMipExtent).
+    const vk::Extent2D src_extent{src->info.size.width, src->info.size.height};
+    const bool same_coding = src->info.props.is_block == dst->info.props.is_block;
+    const vk::Extent2D dst_extent =
+        same_coding ? vk::Extent2D{dst->info.size.width, dst->info.size.height} : src_extent;
+    const bool block_coded = same_coding && src->info.props.is_block;
     u32 base_depth = src->info.size.depth;
     if (dst->info.type == AmdGpu::ImageType::Color3D) {
         base_depth = src->info.type == AmdGpu::ImageType::Color3D
@@ -280,8 +294,12 @@ void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
     const bool is_same_type = !is_2d_to_3d && !is_3d_to_2d;
 
     for (u32 mip = 0; mip < num_mips; ++mip) {
-        const u32 mip_w = std::max(base_width >> mip, 1u);
-        const u32 mip_h = std::max(base_height >> mip, 1u);
+        const vk::Extent2D mip_extent = CopyMipExtent(src_extent, dst_extent, block_coded, mip);
+        if (mip_extent.width == 0 || mip_extent.height == 0) {
+            continue;  // no valid region: a mip under a block wide that is not both mips' edge
+        }
+        const u32 mip_w = mip_extent.width;
+        const u32 mip_h = mip_extent.height;
         const u32 mip_d = std::max(base_depth >> mip, 1u);
 
         const auto [src_layers, dst_layers] = SanitizeCopyLayers(src->info, dst->info, mip_d);
@@ -335,8 +353,10 @@ void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
     }
 
     auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.copyImage(src->GetImage(), vk::ImageLayout::eTransferSrcOptimal, dst->GetImage(),
-                     vk::ImageLayout::eTransferDstOptimal, regions);
+    if (!regions.empty()) {
+        cmdbuf.copyImage(src->GetImage(), vk::ImageLayout::eTransferSrcOptimal, dst->GetImage(),
+                         vk::ImageLayout::eTransferDstOptimal, regions);
+    }
 
     dst->flags |= (src->flags & VideoCore::ImageFlagBits::GpuModified);
 }

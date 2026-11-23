@@ -2394,6 +2394,89 @@ TEST(GuestMemory, ADepthImageRecreatedNarrowerFromDepthCopiesWithinItsBounds) {
     }
 }
 
+// The extent CopyImage copies at each mip between two block-coded images of different sizes
+// stays a multiple of the 4x4 block or the edge of both mips (#703). Before, it was the smaller
+// base extent shifted down: from 20 to 12 texels wide, mip 1 copied 6 (the destination's edge, not
+// the source's), and from 128 to 256 wide, mip 6 copied 2 into a mip 4 wide.
+TEST(CopyMipExtent, BlockCodedMipsStayOnBlockBoundaries) {
+    using Vulkan::CopyMipExtent;
+    const auto extent = [](u32 w, u32 h) { return vk::Extent2D{w, h}; };
+    // 20x20 into 12x12: 12, 6 -> 4, 3 -> 0 (no valid region), 1 is the edge of both.
+    EXPECT_EQ(CopyMipExtent(extent(20, 20), extent(12, 12), true, 0), extent(12, 12));
+    EXPECT_EQ(CopyMipExtent(extent(20, 20), extent(12, 12), true, 1), extent(4, 4));
+    EXPECT_EQ(CopyMipExtent(extent(20, 20), extent(12, 12), true, 2), extent(0, 0));
+    EXPECT_EQ(CopyMipExtent(extent(20, 20), extent(12, 12), true, 4), extent(1, 1));
+    // 128x128 into 256x256 (ExpandImage): the mips under a block are not both edges.
+    EXPECT_EQ(CopyMipExtent(extent(128, 128), extent(256, 256), true, 5), extent(4, 4));
+    EXPECT_EQ(CopyMipExtent(extent(128, 128), extent(256, 256), true, 6), extent(0, 0));
+    EXPECT_EQ(CopyMipExtent(extent(128, 128), extent(256, 256), true, 7), extent(0, 0));
+    // Same size: every mip is the edge of both, also under a block.
+    EXPECT_EQ(CopyMipExtent(extent(20, 12), extent(20, 12), true, 1), extent(10, 6));
+    EXPECT_EQ(CopyMipExtent(extent(20, 12), extent(20, 12), true, 3), extent(2, 1));
+    // Each side on its own: the width is the edge of both, the height is not.
+    EXPECT_EQ(CopyMipExtent(extent(12, 20), extent(12, 12), true, 1), extent(6, 4));
+    // Plain images clamp to the smaller mip only.
+    EXPECT_EQ(CopyMipExtent(extent(20, 20), extent(12, 12), false, 1), extent(6, 6));
+    EXPECT_EQ(CopyMipExtent(extent(20, 20), extent(12, 12), false, 5), extent(1, 1));
+}
+
+// A BC1 image of `width` x `width` with `levels` mips, linear, not bound to guest memory.
+VideoCore::ImageInfo bc1_info(u32 width, u32 levels) {
+    AmdGpu::Image texture{};
+    texture.base_address = 0x100000000 >> 8;
+    texture.data_format = u64(AmdGpu::DataFormat::FormatBc1);
+    texture.num_format = u64(AmdGpu::NumberFormat::Unorm);
+    texture.width = width - 1;
+    texture.height = width - 1;
+    texture.pitch = width - 1;
+    texture.last_level = levels - 1;
+    texture.tiling_index = u64(AmdGpu::TileMode::DisplayLinearAligned);
+    texture.type = u64(AmdGpu::ImageType::Color2D);
+    texture.dst_sel_x = u64(AmdGpu::CompSwizzle::Red);
+    texture.dst_sel_y = u64(AmdGpu::CompSwizzle::Green);
+    texture.dst_sel_z = u64(AmdGpu::CompSwizzle::Blue);
+    texture.dst_sel_w = u64(AmdGpu::CompSwizzle::Alpha);
+    return VideoCore::ImageInfo{texture, Shader::ImageResource{}};
+}
+
+// CopyImage between BC1 images of different sizes with several mips, both ways, records only
+// regions the validation layer accepts (#703; the layer is local only, VK_ADD_LAYER_PATH). Without
+// the fix it reports the mips whose extent is under a block and not the edge of both images.
+TEST(GuestMemory, BlockCodedCopiesBetweenSizesStayOnBlockBoundaries) {
+    if (const std::string reason = no_vulkan_reason(); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    const bool validate = validation_layer_present();
+    if (!validate) {
+        std::fprintf(stderr, "no validation layer: the copies are only recorded\n");
+    }
+    {
+        Gpu gpu{Vulkan::ValidationOptions{.enable = validate}};
+        std::unique_ptr<ValidationErrors> errors;
+        if (validate) {
+            errors = std::make_unique<ValidationErrors>(gpu.instance.GetInstance());
+        }
+        Common::SlotVector<VideoCore::ImageView> views;
+        const std::array<std::pair<VideoCore::ImageInfo, VideoCore::ImageInfo>, 2> pairs{{
+            {bc1_info(20, 5), bc1_info(12, 4)},
+            {bc1_info(128, 8), bc1_info(256, 9)},
+        }};
+        gpu.liverpool->SendCommand<true>([&] {
+            for (const auto& [a, b] : pairs) {
+                ASSERT_TRUE(a.props.is_block);
+                VideoCore::Image first{gpu.instance, gpu.runtime, views, a};
+                VideoCore::Image second{gpu.instance, gpu.runtime, views, b};
+                gpu.runtime.CopyImage(&first, &second);
+                gpu.runtime.CopyImage(&second, &first);
+                gpu.rasterizer.Finish();
+            }
+        });
+        if (errors != nullptr) {
+            EXPECT_EQ(errors->count.load(), 0u);
+        }
+    }
+}
+
 // An image found as one layer of a larger image requested later is copied into it
 // (TextureCache::ResolveOverlap, left overlap) after the larger image's upload. The layer is
 // brought up to date first (#696); upstream copies it stale over the fresh upload.

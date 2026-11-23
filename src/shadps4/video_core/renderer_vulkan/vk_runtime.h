@@ -113,4 +113,10 @@ private:
     vk::MemoryBarrier2 memory_barrier{};
 };
 
+// Ours (#703): the extent CopyImage copies at `mip` between images of base extents `src` and
+// `dst`, clamped to both mips. Between two block-coded images (4x4 texel blocks) each side is a
+// multiple of the block, or the edge of both mips, as vkCmdCopyImage requires; a side of 0 means
+// the mip is not copied.
+vk::Extent2D CopyMipExtent(vk::Extent2D src, vk::Extent2D dst, bool block_coded, u32 mip);
+
 } // namespace Vulkan
