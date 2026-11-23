@@ -94,6 +94,13 @@ TEST(RunOptions, SyncRecordingRecordsOnTheGpuThread) {
     EXPECT_FALSE(parse({"--sync-recording"}).threaded_recording);
 }
 
+TEST(RunOptions, PipelineReuseCanBeOffOrChecked) {
+    using Reuse = RunOptions::PipelineReuse;
+    EXPECT_EQ(parse({}).pipeline_reuse, Reuse::on);
+    EXPECT_EQ(parse({"--no-pipeline-reuse"}).pipeline_reuse, Reuse::off);
+    EXPECT_EQ(parse({"--check-pipeline-reuse"}).pipeline_reuse, Reuse::check);
+}
+
 TEST(RunOptions, ParsesEveryOption) {
     const RunOptions o = parse({"--game-dir", "/games/bb", "--profile", "test_1-a", "--timeout",
                                 "10", "--stop-at-main-loop", "--log", "hle=trace,warn",

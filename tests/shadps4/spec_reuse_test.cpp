@@ -2,8 +2,9 @@
 // lookup it replaces: build the stage's StageSpecialization and take the first permutation equal
 // to it. Random draws of one program change the sharps, the fetch shader, the vertex buffer
 // table, the runtime info and the first binding, often only in parts the specialization does
-// not read (addresses, sizes), so that both the reused answer and the full lookup run. Needs no
-// Vulkan device: the modules are placeholder handles.
+// not read (addresses, sizes), so that both the reused answer and the full lookup run. The
+// pipeline reuse of #780 checks a draw with MatchesSharps, the part of Matches that reads guest
+// memory. Needs no Vulkan device: the modules are placeholder handles.
 
 #include <array>
 #include <cstdint>
@@ -176,12 +177,23 @@ public:
                 }
             }
         }
-        if (change()) {
+        if (change() && !fixed_registers) {
             runtime_variant = pick(3);
         }
-        if (change()) {
+        if (change() && !fixed_registers) {
             start = pick(2) == 0 ? Bindings{} : Bindings{.unified = 3, .buffer = 1};
         }
+    }
+
+    // What the user data points to, for changing it in place (#780).
+    u32* FlatBuffer(size_t buffer) {
+        return &program.info.flattened_ud_buf[buffer_locs[buffer]];
+    }
+    u32* VertexSharp(size_t attrib) {
+        return &vertex_table[4 * attrib];
+    }
+    u32* FetchCode() {
+        return fetch_code.data();
     }
 
     Shader::RuntimeInfo RuntimeInfo() const {
@@ -204,6 +216,9 @@ public:
     std::array<u32, 16> user_data{};
     Vulkan::Program program;
     Bindings start{};
+    // Randomize leaves the runtime info and the first binding alone (#780: the registers they
+    // come from did not change).
+    bool fixed_registers = false;
 
 private:
     void SetPointer(u32 sgpr, const void* p) {
@@ -411,4 +426,94 @@ TEST(SpecReuse, InsertedPermutationDropsTheLastAnswer) {
     made.reset();
     EXPECT_EQ(program.FindPermutation(runtime_info, profile, draws.start, made), 1u);
     EXPECT_TRUE(made.has_value());
+}
+
+// MatchesSharps (#780), for draws whose registers did not change: yes only for user data that
+// points to what gives a SameAs specialization, and yes for all of it while the fetch shader's
+// words stay the same.
+TEST(SpecReuse, MatchesSharpsSeesWhatTheUserDataPointsTo) {
+    for (const auto stage : {Kind::Vertex, Kind::Fragment}) {
+        Draws draws{stage, 13};
+        draws.fixed_registers = true;
+        const Shader::Profile profile{};
+        auto& info = draws.program.info;
+        const auto runtime_info = draws.RuntimeInfo();
+        std::optional<Shader::StageSpecialization> last;
+        std::vector<u32> last_code;
+        u32 same = 0;
+        u32 differ = 0;
+        for (u32 draw = 0; draw < Draws::NumDraws; ++draw) {
+            draws.Randomize();
+            ASSERT_TRUE(draws.RuntimeInfo() == runtime_info);
+            Shader::StageSpecialization spec{info, runtime_info, profile, draws.start};
+            std::vector<u32> code;
+            if (!spec.fetch_shader_data.Empty()) {
+                const u32* p = Shader::Gcn::GetFetchShaderCode(info, info.fetch_shader_sgpr_base);
+                code.assign(p, p + spec.fetch_shader_data.size / sizeof(u32));
+            }
+            if (last) {
+                const bool matches = last->MatchesSharps(info, last_code);
+                const bool is_same = spec.SameAs(*last);
+                ASSERT_EQ(matches, last->Matches(info, runtime_info, draws.start, last_code));
+                if (matches) {
+                    ASSERT_TRUE(is_same) << "draw " << draw;
+                }
+                if (is_same && code == last_code) {
+                    ASSERT_TRUE(matches) << "draw " << draw;
+                }
+                ++(is_same ? same : differ);
+            }
+            last = std::move(spec);
+            last_code = std::move(code);
+        }
+        EXPECT_GT(same, Draws::NumDraws / 10);
+        EXPECT_GT(differ, Draws::NumDraws / 10);
+    }
+}
+
+// The cases of #780's check one by one: a sharp the shader table points to, a vertex buffer
+// sharp and a fetch shader word change in guest memory, with every register the same.
+TEST(SpecReuse, MatchesSharpsFailsWhenGuestMemoryChanged) {
+    const Shader::Profile profile{};
+    {
+        Draws draws{Kind::Fragment, 17};
+        auto& info = draws.program.info;
+        // Buffer 1 is formatted: its data format is part of the specialization once it is bound.
+        AmdGpu::Buffer sharp;
+        std::memcpy(&sharp, draws.FlatBuffer(1), sizeof(sharp));
+        sharp.num_records = 100;
+        std::memcpy(draws.FlatBuffer(1), &sharp, sizeof(sharp));
+        const Shader::StageSpecialization spec{info, draws.RuntimeInfo(), profile, draws.start};
+        ASSERT_TRUE(spec.MatchesSharps(info, {}));
+        sharp.data_format = sharp.data_format == 4 ? 5 : 4;
+        std::memcpy(draws.FlatBuffer(1), &sharp, sizeof(sharp));
+        EXPECT_FALSE(spec.MatchesSharps(info, {}));
+    }
+    {
+        Draws draws{Kind::Vertex, 19};
+        auto& info = draws.program.info;
+        AmdGpu::Buffer attrib;
+        std::memcpy(&attrib, draws.VertexSharp(0), sizeof(attrib));
+        attrib.num_records = 100;
+        std::memcpy(draws.VertexSharp(0), &attrib, sizeof(attrib));
+        const Shader::StageSpecialization spec{info, draws.RuntimeInfo(), profile, draws.start};
+        ASSERT_FALSE(spec.fetch_shader_data.Empty());
+        const u32* p = Shader::Gcn::GetFetchShaderCode(info, info.fetch_shader_sgpr_base);
+        const std::vector<u32> code(p, p + spec.fetch_shader_data.size / sizeof(u32));
+        ASSERT_TRUE(spec.MatchesSharps(info, code));
+
+        const AmdGpu::Buffer saved = attrib;
+        // Another number class: the vertex input's type follows it.
+        attrib.num_format = AmdGpu::GetNumberClass(attrib.GetNumberFmt()) ==
+                                    AmdGpu::NumberClass::Float
+                                ? u32(AmdGpu::NumberFormat::Uint)
+                                : u32(AmdGpu::NumberFormat::Float);
+        std::memcpy(draws.VertexSharp(0), &attrib, sizeof(attrib));
+        EXPECT_FALSE(spec.MatchesSharps(info, code));
+        std::memcpy(draws.VertexSharp(0), &saved, sizeof(saved));
+        ASSERT_TRUE(spec.MatchesSharps(info, code));
+
+        draws.FetchCode()[0] ^= 1u; // the first load's offset
+        EXPECT_FALSE(spec.MatchesSharps(info, code));
+    }
 }

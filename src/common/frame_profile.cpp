@@ -18,7 +18,7 @@ constexpr std::array<std::string_view, parts> names = {
     "commands", "draw",   "pipeline", "bind",         "buffer",        "sync", "resident", "texture", "render",
     "vertex",   "state",  "upload",   "detile",   "upload_new",    "fault",         "inval_buffer",
     "inval_texture", "protect", "copy", "irq", "queue", "submit", "wait", "replay",
-    "present", "flip_wait"};
+    "present", "flip_wait", "reuse", "lookup"};
 
 // Counters every thread may add to: add() with a time in ns, and the ticks of threads that
 // found no free ThreadCounters.

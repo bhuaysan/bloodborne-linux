@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_pipeline_cache.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-18
+// Changed for bloodborne-linux, 2026-11-23
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -11,12 +11,14 @@
 #include <future>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string_view>
 
 #include <tsl/robin_map.h>
 #include "shader_recompiler/profile.h"
 #include "shader_recompiler/recompiler.h"
 #include "shader_recompiler/specialization.h"
+#include "video_core/amdgpu/pipeline_regs.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_pipeline_workers.h"
@@ -44,6 +46,12 @@ class ShaderCache;
 // Whether new graphics pipelines are created on worker threads, with a draw skipped while its
 // pipeline is not ready yet (#521). bb-run --sync-pipelines turns it off.
 extern bool async_pipeline_builds;
+
+// Whether a graphics pipeline lookup takes the result of an earlier one whose registers and
+// sharps were the same (#780). bb-run --no-pipeline-reuse turns it off; --check-pipeline-reuse
+// looks up every reused draw again and stops the run if the result differs.
+enum class PipelineReuse { off, on, check };
+extern PipelineReuse pipeline_reuse;
 
 struct Program {
     struct Module {
@@ -82,6 +90,15 @@ struct Program {
     size_t FindPermutation(const Shader::RuntimeInfo& runtime_info,
                            const Shader::Profile& profile, Shader::Backend::Bindings start,
                            std::optional<Shader::StageSpecialization>& built);
+
+    // Ours (#780): the specialization of the last lookup and the fetch shader words it was
+    // parsed from, if FindPermutation made one since the last InsertPermut.
+    [[nodiscard]] const Shader::StageSpecialization* LastSpec() const {
+        return last ? &last->spec : nullptr;
+    }
+    [[nodiscard]] std::span<const u32> LastFetchCode() const {
+        return last ? std::span<const u32>{last->fetch_code} : std::span<const u32>{};
+    }
 
 private:
     struct LastLookup {
@@ -174,6 +191,40 @@ private:
     void RegisterActive();
     void UnregisterActive();
 
+    // Ours (#780, docs/design/command-recording.md, "Reusing pipeline lookups"): a graphics
+    // lookup of a vertex and pixel shader draw is kept by the state of the registers it read and
+    // the program registers, and the next draw with the same takes its result after checking
+    // what the shaders read from guest memory: the programs' hashes, the fetch shader and the
+    // sharps. Everything else the lookup reads is a register.
+    struct ReuseKey {
+        u32 state;
+        AmdGpu::PipelineDrawRegs draw;
+        u32 vertex_sgpr_offset;
+        u32 instance_sgpr_offset;
+        u32 is_indirect;
+        bool operator==(const ReuseKey&) const = default;
+    };
+    struct ReuseKeyHash {
+        size_t operator()(const ReuseKey& key) const noexcept;
+    };
+    struct ReuseStage {
+        Program* program;
+        u64 hash; // the program's hash, as its binary info has it
+        Shader::StageSpecialization spec;
+        std::vector<u32> fetch_code;
+    };
+    struct ReuseEntry {
+        GraphicsPipelineKey key;
+        const GraphicsPipeline* pipeline;
+        std::array<std::optional<ReuseStage>, 2> stages; // pixel, vertex; empty when not bound
+    };
+    // The reuse table's key of the draw, or none when it cannot reuse a lookup.
+    std::optional<ReuseKey> MakeReuseKey();
+    // The entry of `key` if what the shaders read from guest memory is still the same.
+    const ReuseEntry* FindReusable(const ReuseKey& key);
+    // Keeps the lookup that just ran for `key`.
+    void RememberLookup(const ReuseKey& key, const GraphicsPipeline* pipeline);
+
 private:
     const Instance& instance;
     Scheduler& scheduler;
@@ -190,6 +241,7 @@ private:
     std::array<Shader::RuntimeInfo, MaxShaderStages> runtime_infos{};
     std::array<const Shader::Info*, MaxShaderStages> infos{};
     std::array<vk::ShaderModule, MaxShaderStages> modules{};
+    std::array<Program*, MaxShaderStages> programs{}; // ours (#780): of infos
     Shader::Gcn::FetchShaderData* fetch_shader{};
     GraphicsPipelineKey graphics_key{};
     ComputePipelineKey compute_key{};
@@ -206,6 +258,13 @@ private:
     std::atomic<u32> num_skipped_draws{}; // draws skipped while their pipeline was being created
     tsl::robin_map<GraphicsPipelineKey, std::unique_ptr<PendingGraphics>> pending_graphics;
     PipelineWaitBudget wait_budget;
+    // The reuse table (#780). Its entries name states by the snapshot table's ids, so it starts
+    // over with it.
+    AmdGpu::PipelineRegSnapshots reuse_states;
+    tsl::robin_map<ReuseKey, std::unique_ptr<ReuseEntry>, ReuseKeyHash> reuse_entries;
+    u64 reuse_generation{};
+    u64 reuse_epoch{};
+    u32 reuse_state{};
     std::mutex save_mutex;
     u32 saved_pipelines{}; // num_new_pipelines at the last save of the driver's cache
     std::chrono::steady_clock::time_point last_save{};

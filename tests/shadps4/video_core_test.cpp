@@ -149,6 +149,48 @@ TEST(VideoCore, CreatesAndDestroysRendererOnLavapipe) {
     liverpool.reset();
 }
 
+// Liverpool tells the pipeline lookup's register tracker (#780, pipeline_regs.h) about a changed
+// register the lookup reads, through each kind of SET packet and CLEAR_STATE, and not about user
+// data, a rewritten value or a register the lookup does not read. Needs no Vulkan device.
+TEST(VideoCore, LiverpoolTracksTheRegistersOfThePipelineLookup) {
+    Core::MemoryManager memory;
+    auto liverpool = std::make_unique<AmdGpu::Liverpool>(memory);
+    const auto type3 = [](u32 opcode, u32 dwords) { return 3u << 30 | (dwords - 2) << 16 | opcode << 8; };
+    // Runs one packet and returns whether the generation moved.
+    const auto moves = [&](std::vector<u32> packet) {
+        const u64 before = liverpool->pipeline_regs.Generation();
+        liverpool->SubmitGfx(packet, {});
+        liverpool->WaitGpuIdle();
+        return liverpool->pipeline_regs.Generation() != before;
+    };
+    constexpr u32 SetContextReg = 0x69;
+    constexpr u32 SetShReg = 0x76;
+    constexpr u32 SetUconfigReg = 0x79;
+    constexpr u32 ClearState = 0x12;
+    const auto word = [](size_t byte_offset) { return static_cast<u32>(byte_offset / 4); };
+    const u32 shader_control = word(offsetof(AmdGpu::Regs, depth_shader_control)) -
+                               AmdGpu::Regs::ContextRegWordOffset;
+    const u32 depth_bounds = word(offsetof(AmdGpu::Regs, depth_bounds_min)) -
+                             AmdGpu::Regs::ContextRegWordOffset;
+    const u32 gs_program = word(offsetof(AmdGpu::Regs, gs_program)) - AmdGpu::Regs::ShRegWordOffset;
+    const u32 vs_user_data = word(offsetof(AmdGpu::Regs, vs_program.user_data)) -
+                             AmdGpu::Regs::ShRegWordOffset;
+    const u32 primitive_type = word(offsetof(AmdGpu::Regs, primitive_type)) -
+                               AmdGpu::Regs::UconfigRegWordOffset;
+    const u32 esgs_ring = word(offsetof(AmdGpu::Regs, vgt_esgs_ring_size)) -
+                          AmdGpu::Regs::UconfigRegWordOffset;
+
+    EXPECT_TRUE(moves({type3(SetContextReg, 3), shader_control, 0x10}));
+    EXPECT_FALSE(moves({type3(SetContextReg, 3), shader_control, 0x10}));  // the same value
+    EXPECT_FALSE(moves({type3(SetContextReg, 3), depth_bounds, 0x3f000000}));  // not read
+    EXPECT_TRUE(moves({type3(SetShReg, 4), gs_program, 0x1234, 0x1}));
+    EXPECT_FALSE(moves({type3(SetShReg, 6), vs_user_data, 1, 2, 3, 4}));
+    EXPECT_FALSE(moves({type3(SetUconfigReg, 3), primitive_type, 4}));  // read at every draw
+    EXPECT_FALSE(moves({type3(SetUconfigReg, 3), esgs_ring, 0x100}));  // not read
+    EXPECT_TRUE(moves({type3(ClearState, 2), 0}));
+    liverpool.reset();
+}
+
 // The staging ring keeps its first 12 blocks of 16 MiB however long they are idle (#531): a
 // fresh block costs a page fault per page on its first write. The blocks after those go once
 // they have been idle for 300 frames.

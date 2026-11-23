@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/shader_recompiler/specialization.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-18
+// Changed for bloodborne-linux, 2026-11-23
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -216,11 +216,18 @@ struct StageSpecialization {
     // constructor reads the constant buffer from guest memory.
     bool Matches(const Info& info_, const RuntimeInfo& runtime_info_, Backend::Bindings start_,
                  std::span<const u32> fetch_code) const {
-        if (info != &info_ || info_.sw_stage == SwStage::TessellationControl ||
-            info_.sw_stage == SwStage::TessellationEval) {
+        if (!(runtime_info == runtime_info_) || start != start_) {
             return false;
         }
-        if (!(runtime_info == runtime_info_) || start != start_) {
+        return MatchesSharps(info_, fetch_code);
+    }
+
+    // Matches for a draw whose runtime info and first binding are known to equal this one's
+    // (#780: the registers they are built from did not change): only what the stage reads from
+    // guest memory through its user data, the fetch shader and the sharps.
+    bool MatchesSharps(const Info& info_, std::span<const u32> fetch_code) const {
+        if (info != &info_ || info_.sw_stage == SwStage::TessellationControl ||
+            info_.sw_stage == SwStage::TessellationEval) {
             return false;
         }
         // ParseFetchShader reads the words of the fetch shader up to its end, s_setpc, and
@@ -248,7 +255,7 @@ struct StageSpecialization {
             for (size_t i = 0; i < fetch_shader_data.attributes.size(); ++i) {
                 const auto& desc = fetch_shader_data.attributes[i];
                 const AmdGpu::Buffer sharp = desc.GetSharp(info_);
-                if (vs_attribs[i] != (sharp ? MakeVsAttrib(desc, sharp, runtime_info_)
+                if (vs_attribs[i] != (sharp ? MakeVsAttrib(desc, sharp, runtime_info)
                                             : VsAttribSpecialization{})) {
                     return false;
                 }

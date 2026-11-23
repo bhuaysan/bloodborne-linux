@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/amdgpu/liverpool.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-22
+// Changed for bloodborne-linux, 2026-11-23
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/assert.h"
@@ -299,12 +299,14 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
             }
             case PM4ItOpcode::ClearState: {
                 regs.SetDefaults();
+                pipeline_regs.OnReset(); // ours (#780)
                 break;
             }
             case PM4ItOpcode::SetConfigReg: {
                 const auto* set_data = reinterpret_cast<const PM4CmdSetData*>(header);
                 const auto reg_addr = Regs::ConfigRegWordOffset + set_data->reg_offset;
                 const auto* payload = reinterpret_cast<const u32*>(header + 2);
+                pipeline_regs.OnWrite(regs, reg_addr, payload, count - 1); // ours (#780)
                 std::memcpy(&regs.reg_array[reg_addr], payload, (count - 1) * sizeof(u32));
                 break;
             }
@@ -313,6 +315,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                 const auto reg_addr = Regs::ContextRegWordOffset + set_data->reg_offset;
                 const auto* payload = reinterpret_cast<const u32*>(header + 2);
 
+                pipeline_regs.OnWrite(regs, reg_addr, payload, count - 1); // ours (#780)
                 std::memcpy(&regs.reg_array[reg_addr], payload, (count - 1) * sizeof(u32));
 
                 // In the case of HW, render target memory has alignment as color block operates on
@@ -392,6 +395,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                                  (set_data->reg_offset - 0x200);
                     std::memcpy(addr, header + 2, set_size);
                 } else {
+                    pipeline_regs.OnWrite(regs, Regs::ShRegWordOffset + set_data->reg_offset,
+                                          reinterpret_cast<const u32*>(header + 2),
+                                          count - 1); // ours (#780)
                     std::memcpy(&regs.reg_array[Regs::ShRegWordOffset + set_data->reg_offset],
                                 header + 2, set_size);
                 }
@@ -399,6 +405,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
             }
             case PM4ItOpcode::SetUconfigReg: {
                 const auto* set_data = reinterpret_cast<const PM4CmdSetData*>(header);
+                pipeline_regs.OnWrite(regs, Regs::UconfigRegWordOffset + set_data->reg_offset,
+                                      reinterpret_cast<const u32*>(header + 2),
+                                      count - 1); // ours (#780)
                 std::memcpy(&regs.reg_array[Regs::UconfigRegWordOffset + set_data->reg_offset],
                             header + 2, (count - 1) * sizeof(u32));
                 break;
@@ -992,6 +1001,9 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
                              (set_data->reg_offset - 0x200);
                 std::memcpy(addr, header + 2, set_size);
             } else {
+                pipeline_regs.OnWrite(regs, Regs::ShRegWordOffset + set_data->reg_offset,
+                                      reinterpret_cast<const u32*>(header + 2),
+                                      header->type3.NumWords() - 1); // ours (#780)
                 std::memcpy(&regs.reg_array[Regs::ShRegWordOffset + set_data->reg_offset],
                             header + 2, set_size);
             }

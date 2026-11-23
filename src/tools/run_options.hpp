@@ -23,7 +23,9 @@ inline constexpr std::string_view run_usage =
     "              [--log SPEC] [--no-log-file] [--headless] [--device NAME] [--display NAME]\n"
     "              [--validation] [--validation-sync] [--validation-gpu]\n"
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
-    "              [--sync-pipelines] [--sync-recording] [--pad-input PATH]\n"
+    "              [--sync-pipelines] [--sync-recording]\n"
+    "              [--no-pipeline-reuse | --check-pipeline-reuse]\n"
+    "              [--pad-input PATH]\n"
     "              [--frame-rate 30|60|120|144] [--load-hold SECONDS]\n"
     "              [--window-size WIDTHxHEIGHT] [--fullscreen]\n"
     "              [--fsr] [--no-rcas]\n"
@@ -67,6 +69,11 @@ inline constexpr std::string_view run_usage =
     "                       while its pipeline is created on a worker thread (the default)\n"
     "  --sync-recording     record and submit Vulkan commands on the GPU thread instead of a\n"
     "                       recording thread of their own (the default)\n"
+    "  --no-pipeline-reuse  look up every draw's pipeline from its registers instead of taking\n"
+    "                       an earlier lookup's result when its registers and sharps are the\n"
+    "                       same (the default), for comparison runs\n"
+    "  --check-pipeline-reuse  look up every reused pipeline again and stop the run if the\n"
+    "                       lookup finds another one\n"
     "  --pad-input PATH     read pad states from the file or FIFO PATH and give them to the game\n"
     "                       through a gamepad that exists only in this process (docs/test-rig.md);\n"
     "                       needs a window; other controllers are then ignored\n"
@@ -145,6 +152,8 @@ struct RunOptions {
     bool pipeline_cache = true;  // false with --no-pipeline-cache
     bool async_pipelines = true;  // false with --sync-pipelines
     bool threaded_recording = true;  // false with --sync-recording
+    // --no-pipeline-reuse, --check-pipeline-reuse
+    enum class PipelineReuse { off, on, check } pipeline_reuse = PipelineReuse::on;
     std::optional<std::filesystem::path> pad_input;  // --pad-input
     unsigned frame_rate = 30;  // --frame-rate: 30, 60, 120 or 144
     float load_hold = max_load_hold;  // --load-hold: 0 to 12 seconds

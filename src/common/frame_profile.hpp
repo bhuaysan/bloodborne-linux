@@ -47,6 +47,8 @@ enum class Part : unsigned {
     replay,    // replaying recorded Vulkan commands into a command buffer (#676)
     present,   // the presenter thread's present call
     flip_wait, // a flip request waiting from its queueing to the vblank that took it
+    reuse,     // graphics pipeline lookups taken from the reuse table (inside pipeline, #780)
+    lookup,    // graphics pipeline lookups that built the key (inside pipeline, #780)
     count,
 };
 
@@ -117,6 +119,11 @@ public:
     }
     Scope(const Scope&) = delete;
     Scope& operator=(const Scope&) = delete;
+
+    // Records nothing after all (a path that turned out not to be the one this part counts).
+    void cancel() noexcept {
+        start_ = 0;
+    }
 
 private:
     Part part_;

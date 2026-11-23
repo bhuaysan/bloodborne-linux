@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_pipeline_cache.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-18
+// Changed for bloodborne-linux, 2026-11-23
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
 #include <ranges>
 #include <thread>
+
+#include <xxhash.h>
 
 #include "common/hash.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -31,6 +33,12 @@ using Shader::SwStage;
 constexpr static auto SpirvVersion1_6 = 0x00010600U;
 
 bool async_pipeline_builds = true;
+PipelineReuse pipeline_reuse = PipelineReuse::on;
+
+// The reuse table's size limits (#780): a few hundred states and a few thousand draws a frame
+// come back every frame; past these the tables start over.
+constexpr static size_t MaxReuseStates = 1024;
+constexpr static size_t MaxReuseEntries = 16384;
 
 // How long the GPU thread waits for pipelines the workers create: at most 8 ms in a frame, a
 // quarter of a frame at the game's 30 FPS. A pipeline takes 4 ms on average, so one or two new
@@ -282,7 +290,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                              AmdGpu::Liverpool* liverpool_)
     : instance{instance_}, scheduler{scheduler_}, liverpool{liverpool_},
       desc_heap{instance, scheduler.GetWorkSemaphore(), DescriptorHeapSizes},
-      wait_budget{PipelineWaitPerFrame} {
+      wait_budget{PipelineWaitPerFrame}, reuse_states{MaxReuseStates} {
     const auto& vk12_props = instance.GetVk12Properties();
     profile = Shader::Profile{
         .max_viewport_width = instance.GetMaxViewportWidth(),
@@ -377,7 +385,27 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     draw_indirect_params = params;
     bb::common::frame_profile::Scope profile_pipeline(bb::common::frame_profile::Part::pipeline);
     pending_start.reset();
+    // Ours (#780): take an earlier lookup's result when nothing it read changed.
+    const std::optional<ReuseKey> reuse_key = MakeReuseKey();
+    const GraphicsPipeline* reused = nullptr;
+    if (reuse_key) {
+        bb::common::frame_profile::Scope profile_reuse(bb::common::frame_profile::Part::reuse);
+        if (const ReuseEntry* entry = FindReusable(*reuse_key)) {
+            reused = entry->pipeline;
+            if (pipeline_reuse != PipelineReuse::check) {
+                if (!pending_graphics.empty() && !WaitForPending(entry->key)) {
+                    ++num_skipped_draws;
+                    return nullptr;
+                }
+                return reused;
+            }
+        } else {
+            profile_reuse.cancel();
+        }
+    }
+    bb::common::frame_profile::Scope profile_lookup(bb::common::frame_profile::Part::lookup);
     if (!RefreshGraphicsKey()) {
+        ASSERT_MSG(!reused, "Pipeline reuse took a pipeline for a draw the lookup skips");
         return nullptr;
     }
     const auto [it, is_new] = graphics_pipelines.try_emplace(graphics_key);
@@ -408,11 +436,106 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         }
         SaveDriverCacheIfDue();
     }
+    // With --check-pipeline-reuse a reused draw is looked up again here and has to find the same.
+    ASSERT_MSG(!reused || reused == it->second.get(),
+               "Pipeline reuse took pipeline {:#x}, the lookup finds {:#x}",
+               std::hash<GraphicsPipelineKey>{}(reused->GetGraphicsKey()),
+               std::hash<GraphicsPipelineKey>{}(graphics_key));
+    if (reuse_key) {
+        RememberLookup(*reuse_key, it->second.get());
+    }
     if (!pending_graphics.empty() && !WaitForPending(graphics_key)) {
         ++num_skipped_draws;
         return nullptr;
     }
     return it->second.get();
+}
+
+size_t PipelineCache::ReuseKeyHash::operator()(const ReuseKey& key) const noexcept {
+    static_assert(std::has_unique_object_representations_v<ReuseKey>);
+    return XXH3_64bits(&key, sizeof(key));
+}
+
+std::optional<PipelineCache::ReuseKey> PipelineCache::MakeReuseKey() {
+    // Only draws of a vertex and a pixel shader: the other stages read guest memory beyond the
+    // sharps (the tessellation constants, the copy shader of the geometry stage). Without
+    // dynamic vertex input the key also holds the vertex formats, which Matches does not check.
+    const auto& regs = liverpool->regs;
+    if (pipeline_reuse == PipelineReuse::off || !instance.IsVertexInputDynamicState() ||
+        regs.stage_enable.raw != AmdGpu::ShaderStageEnable::VgtStages::Vs) {
+        return std::nullopt;
+    }
+    const u64 generation = liverpool->pipeline_regs.Generation();
+    if (generation != reuse_generation) {
+        reuse_state = reuse_states.Resolve(regs);
+        reuse_generation = generation;
+        if (reuse_states.Epoch() != reuse_epoch) {
+            reuse_entries.clear();
+            reuse_epoch = reuse_states.Epoch();
+        }
+    }
+    return ReuseKey{
+        .state = reuse_state,
+        .draw = AmdGpu::PipelineDrawRegs::Read(regs),
+        .vertex_sgpr_offset = draw_indirect_params.vertex_sgpr_offset,
+        .instance_sgpr_offset = draw_indirect_params.instance_sgpr_offset,
+        .is_indirect = draw_indirect_params.is_indirect,
+    };
+}
+
+const PipelineCache::ReuseEntry* PipelineCache::FindReusable(const ReuseKey& key) {
+    const auto it = reuse_entries.find(key);
+    if (it == reuse_entries.end()) {
+        return nullptr;
+    }
+    const ReuseEntry& entry = *it->second;
+    const auto& regs = liverpool->regs;
+    // In the order RefreshGraphicsStages binds them, doing what GetProgram does for a program it
+    // knows, then checking the specialization as FindPermutation does. The runtime info and the
+    // first binding come from registers, which are the same.
+    constexpr std::array<HwStage, 2> hw_stages{HwStage::Fragment, HwStage::Vertex};
+    for (size_t i = 0; i < hw_stages.size(); ++i) {
+        if (!entry.stages[i]) {
+            continue;
+        }
+        const ReuseStage& stage = *entry.stages[i];
+        const auto params = AmdGpu::GetParams(*regs.ProgramForStage(static_cast<u32>(hw_stages[i])));
+        if (params.hash != stage.hash) {
+            return nullptr;
+        }
+        auto& info = stage.program->info;
+        info.pgm_base = params.Base();
+        info.user_data = params.user_data;
+        info.RefreshFlatBuf();
+        if (!stage.spec.MatchesSharps(info, stage.fetch_code)) {
+            return nullptr;
+        }
+    }
+    return &entry;
+}
+
+void PipelineCache::RememberLookup(const ReuseKey& key, const GraphicsPipeline* pipeline) {
+    auto entry = std::make_unique<ReuseEntry>(graphics_key, pipeline);
+    constexpr std::array<SwStage, 2> sw_stages{SwStage::Fragment, SwStage::Vertex};
+    for (size_t i = 0; i < sw_stages.size(); ++i) {
+        const auto index = static_cast<u32>(sw_stages[i]);
+        if (!infos[index]) {
+            continue;
+        }
+        const Program* program = programs[index];
+        const Shader::StageSpecialization* spec = program->LastSpec();
+        // A program's first lookup makes no specialization to check against; the next one does.
+        if (!spec) {
+            return;
+        }
+        const auto fetch = program->LastFetchCode();
+        entry->stages[i].emplace(programs[index], program->info.pgm_hash, *spec,
+                                std::vector<u32>{fetch.begin(), fetch.end()});
+    }
+    if (reuse_entries.size() >= MaxReuseEntries) {
+        reuse_entries.clear();
+    }
+    reuse_entries.insert_or_assign(key, std::move(entry));
 }
 
 void PipelineCache::CreateOnWorker(GraphicsPipeline& pipeline,
@@ -810,6 +933,7 @@ PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_sta
         if (auto& fetch = program->modules[0].spec.fetch_shader_data; !fetch.Empty()) {
             fetch_shader = &fetch;
         }
+        programs[static_cast<u32>(sw_stage)] = program.get();
         return std::make_tuple(&program->info, module, perm_hash);
     }
 
@@ -838,6 +962,7 @@ PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_sta
     if (auto& fetch = program->modules[perm_idx].spec.fetch_shader_data; !fetch.Empty()) {
         fetch_shader = &fetch;
     }
+    programs[static_cast<u32>(sw_stage)] = program.get();
     return std::make_tuple(&program->info, module, perm_hash);
 }
 

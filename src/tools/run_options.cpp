@@ -217,6 +217,10 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             options.async_pipelines = false;
         } else if (arg == "--sync-recording") {
             options.threaded_recording = false;
+        } else if (arg == "--no-pipeline-reuse") {
+            options.pipeline_reuse = RunOptions::PipelineReuse::off;
+        } else if (arg == "--check-pipeline-reuse") {
+            options.pipeline_reuse = RunOptions::PipelineReuse::check;
         } else if (arg == "--pad-input") {
             options.pad_input = std::filesystem::path(value());
         } else if (arg == "--frame-rate") {

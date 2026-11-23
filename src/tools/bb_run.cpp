@@ -276,6 +276,17 @@ void open_display(const bb::tools::RunOptions& options) {
     Storage::pipeline_cache_enabled = options.pipeline_cache;
     Vulkan::async_pipeline_builds = options.async_pipelines;
     Vulkan::threaded_recording = options.threaded_recording;
+    switch (options.pipeline_reuse) {
+    case bb::tools::RunOptions::PipelineReuse::off:
+        Vulkan::pipeline_reuse = Vulkan::PipelineReuse::off;
+        break;
+    case bb::tools::RunOptions::PipelineReuse::on:
+        Vulkan::pipeline_reuse = Vulkan::PipelineReuse::on;
+        break;
+    case bb::tools::RunOptions::PipelineReuse::check:
+        Vulkan::pipeline_reuse = Vulkan::PipelineReuse::check;
+        break;
+    }
     const Vulkan::RendererOptions renderer = bb::tools::renderer_options(options, *gpu_id);
     const char* const present_mode_name = bb::common::present_mode_name(options.present_mode);
     bb::common::log(LogLevel::info, channel, "renderer: device {}, present mode {}, validation {}",
