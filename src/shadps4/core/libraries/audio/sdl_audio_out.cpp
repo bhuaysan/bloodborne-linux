@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/audio/sdl_audio_out.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-12. 2026-11-23: the device comes from SetPlaybackDevice
+// and matches a part of its name (FindPlaybackDevice, #750) in place of shadPS4's config.
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstring>
 #include <memory>
 #include <thread>
@@ -26,6 +28,38 @@
 #define SDL_INVALID_AUDIODEVICEID 0
 
 namespace Libraries::AudioOut {
+
+namespace {
+// SetPlaybackDevice's name, set before the game opens its first port.
+std::string playback_device;
+
+bool ContainsIgnoringCase(std::string_view text, std::string_view part) {
+    const auto lower = [](char c) { return std::tolower(static_cast<unsigned char>(c)); };
+    return std::search(text.begin(), text.end(), part.begin(), part.end(),
+                       [&](char a, char b) { return lower(a) == lower(b); }) != text.end();
+}
+} // namespace
+
+void SetPlaybackDevice(std::string name) {
+    playback_device = std::move(name);
+}
+
+std::optional<std::size_t> FindPlaybackDevice(const std::vector<std::string>& names,
+                                              std::string_view part) {
+    if (part.empty()) {
+        return std::nullopt;
+    }
+    std::optional<std::size_t> found;
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        if (names[i] == part) {
+            return i;
+        }
+        if (!found && ContainsIgnoringCase(names[i], part)) {
+            found = i;
+        }
+    }
+    return found;
+}
 
 // Volume constants
 constexpr float VOLUME_0DB = 32768.0f; // 1 << 15
@@ -316,23 +350,18 @@ private:
             return false;
         }
 
-        LOG_INFO(Lib_AudioOut, "Opened audio device: {} ({} Hz, {} ch, gain: {:.3f})", device_name,
-                 sample_rate, num_channels, initial_gain);
+        LOG_INFO(Lib_AudioOut, "Opened audio device: {} ({} Hz, {} ch, gain: {:.3f})",
+                 device_name.empty() ? "default" : device_name, sample_rate, num_channels,
+                 initial_gain);
         return true;
     }
 
     SDL_AudioDeviceID SelectAudioDevice(const std::string& device_name, OrbisAudioOutPort type) {
-        if (device_name == "None") {
-            LOG_INFO(Lib_AudioOut, "Audio device disabled for port type {}",
-                     static_cast<int>(type));
-            return SDL_INVALID_AUDIODEVICEID;
-        }
-
-        if (device_name.empty() || device_name == "Default Device") {
+        if (device_name.empty()) {
             return SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
         }
 
-        // Search for specific device
+        // Search for the device whose name matches
         int num_devices = 0;
         SDL_AudioDeviceID* dev_array = SDL_GetAudioPlaybackDevices(&num_devices);
 
@@ -341,23 +370,30 @@ private:
             return SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
         }
 
-        SDL_AudioDeviceID selected_device = SDL_INVALID_AUDIODEVICEID;
-
+        std::vector<std::string> names;
         for (int i = 0; i < num_devices; i++) {
             const char* dev_name = SDL_GetAudioDeviceName(dev_array[i]);
-            if (dev_name && device_name == dev_name) {
-                selected_device = dev_array[i];
-                break;
-            }
+            names.emplace_back(dev_name ? dev_name : "");
         }
-
+        const std::optional<std::size_t> index = FindPlaybackDevice(names, device_name);
+        const SDL_AudioDeviceID selected_device =
+            index ? dev_array[*index] : SDL_INVALID_AUDIODEVICEID;
         SDL_free(dev_array);
 
         if (selected_device == SDL_INVALID_AUDIODEVICEID) {
-            LOG_WARNING(Lib_AudioOut, "Audio device '{}' not found, using default", device_name);
+            std::string list;
+            for (const std::string& name : names) {
+                list += list.empty() ? "" : ", ";
+                list += name;
+            }
+            LOG_WARNING(Lib_AudioOut,
+                        "No audio device name contains '{}' (devices: {}), using default",
+                        device_name, list);
             return SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
         }
 
+        LOG_INFO(Lib_AudioOut, "Audio device '{}' for port type {}: {}", device_name,
+                 static_cast<int>(type), names[*index]);
         return selected_device;
     }
 
@@ -383,14 +419,8 @@ private:
         return true;
     }
 
-    std::string GetDeviceName(OrbisAudioOutPort type) const {
-        switch (type) {
-        case OrbisAudioOutPort::Main:
-        case OrbisAudioOutPort::Bgm:
-        case OrbisAudioOutPort::PadSpk:
-        default:
-            return "Default Device";
-        }
+    std::string GetDeviceName(OrbisAudioOutPort) const {
+        return playback_device;  // every port type plays on the same device
     }
 
     static constexpr float DOWNMIX_FRONT = 1.0f;

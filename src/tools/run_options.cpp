@@ -121,6 +121,7 @@ RunOptions options_from_config(const common::Config& config) {
         options.device_fallback = true;
     }
     options.display = config.display.value_or(options.display);
+    options.audio_device = config.audio_device.value_or(options.audio_device);
     return options;
 }
 
@@ -205,6 +206,8 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             options.device_fallback = false;
         } else if (arg == "--display") {
             options.display = value();
+        } else if (arg == "--audio-device") {
+            options.audio_device = value();
         } else if (arg == "--validation") {
             options.validation = true;
         } else if (arg == "--validation-sync") {

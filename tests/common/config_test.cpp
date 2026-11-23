@@ -56,7 +56,8 @@ TEST(Config, ParsesEverySetting) {
         "load_hold = 2.5\n"
         "present_mode = \"immediate\"\n"
         "device = \"AMD Radeon RX 7900 XTX (RADV NAVI31)\"\n"
-        "display = \"DELL U2723QE\"",
+        "display = \"DELL U2723QE\"\n"
+        "audio_device = \"USB Headset Analog Stereo\"",
         "c");
     const Config& c = parsed.config;
     EXPECT_EQ(c.game_dir, fs::path("/games/bb"));
@@ -79,6 +80,7 @@ TEST(Config, ParsesEverySetting) {
     EXPECT_EQ(c.present_mode, bb::common::PresentMode::immediate);
     EXPECT_EQ(c.device, "AMD Radeon RX 7900 XTX (RADV NAVI31)");
     EXPECT_EQ(c.display, "DELL U2723QE");
+    EXPECT_EQ(c.audio_device, "USB Headset Analog Stereo");
     EXPECT_TRUE(parsed.unknown_keys.empty());
 }
 
@@ -145,6 +147,7 @@ TEST(Config, RefusesALoadHoldOutOfRange) {
 TEST(Config, RefusesAnEmptyDeviceOrDisplay) {
     EXPECT_EQ(error_of("device = \"\""), "c.toml:1: device: the name is empty");
     EXPECT_EQ(error_of("display = \"\""), "c.toml:1: display: the name is empty");
+    EXPECT_EQ(error_of("audio_device = \"\""), "c.toml:1: audio_device: the name is empty");
     EXPECT_EQ(error_of("display = 1"), "c.toml:1: display: the value must be in double quotes");
 }
 
@@ -277,6 +280,7 @@ TEST_F(ConfigFileTest, WriteThenReadGivesTheSameConfig) {
     c.present_mode = bb::common::PresentMode::fifo;
     c.device = "GPU \"one\"";
     c.display = "Monitor\twith tab";
+    c.audio_device = "Headset \"two\"";
     const fs::path file = dir_ / "sub" / "config.toml";  // the directory is created
     bb::common::write_config(file, c);
     EXPECT_EQ(bb::common::read_config(file).config, c);

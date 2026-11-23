@@ -62,6 +62,7 @@ TEST(RunOptions, Defaults) {
     EXPECT_EQ(o.device, "");
     EXPECT_FALSE(o.device_fallback);
     EXPECT_EQ(o.display, "");
+    EXPECT_EQ(o.audio_device, "");
     EXPECT_FALSE(o.validation);
     EXPECT_FALSE(o.validation_sync);
     EXPECT_FALSE(o.validation_gpu);
@@ -133,6 +134,8 @@ TEST(RunOptions, ParsesTheRendererOptions) {
     EXPECT_EQ(parse_error({"--present-mode"}), "--present-mode needs a value");
     EXPECT_EQ(parse({"--display", "DELL"}).display, "DELL");
     EXPECT_EQ(parse_error({"--display"}), "--display needs a value");
+    EXPECT_EQ(parse({"--audio-device", "Headset"}).audio_device, "Headset");
+    EXPECT_EQ(parse_error({"--audio-device"}), "--audio-device needs a value");
     EXPECT_EQ(parse_error({"--validation-sync"}),
               "--validation-sync and --validation-gpu need --validation");
     EXPECT_EQ(parse_error({"--validation-gpu"}),
@@ -406,6 +409,7 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     c.present_mode = bb::common::PresentMode::immediate;
     c.device = "Radeon";
     c.display = "Lenovo";
+    c.audio_device = "Headset";
     const RunOptions o = with_config(c, {});
     EXPECT_EQ(o.game_dir, std::filesystem::path("/g"));
     EXPECT_EQ(o.profile, "cfg");
@@ -429,6 +433,7 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     EXPECT_EQ(o.device, "Radeon");
     EXPECT_TRUE(o.device_fallback);  // a card in the file that is gone doesn't stop the game
     EXPECT_EQ(o.display, "Lenovo");
+    EXPECT_EQ(o.audio_device, "Headset");
 }
 
 TEST(RunOptionsConfig, EmptyConfigKeepsTheDefaults) {
@@ -447,6 +452,7 @@ TEST(RunOptionsConfig, EmptyConfigKeepsTheDefaults) {
     EXPECT_EQ(o.device, "");
     EXPECT_FALSE(o.device_fallback);
     EXPECT_EQ(o.display, "");
+    EXPECT_EQ(o.audio_device, "");
 }
 
 TEST(RunOptionsConfig, CommandLineWinsOverTheFile) {
@@ -469,13 +475,16 @@ TEST(RunOptionsConfig, CommandLineWinsOverTheFile) {
     c.device = "Radeon";
     c.display = "Lenovo";
     c.load_hold = 0.0f;
+    c.audio_device = "Headset";
     const RunOptions r = with_config(c, {"--present-mode", "fifo", "--device", "llvmpipe",
-                                         "--display", "DELL", "--load-hold", "6"});
+                                         "--display", "DELL", "--load-hold", "6",
+                                         "--audio-device", "Speakers"});
     EXPECT_EQ(r.load_hold, 6.0f);
     EXPECT_EQ(r.present_mode, PresentMode::fifo);
     EXPECT_EQ(r.device, "llvmpipe");
     EXPECT_FALSE(r.device_fallback);  // --device that names no card still ends the run
     EXPECT_EQ(r.display, "DELL");
+    EXPECT_EQ(r.audio_device, "Speakers");
 }
 
 TEST(RunOptionsConfig, ParsesSetup) {

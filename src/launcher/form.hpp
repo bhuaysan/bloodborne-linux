@@ -12,8 +12,8 @@ namespace bb::launcher {
 
 class Form {
 public:
-    // The rows' geometry, logical pixels: eleven rows fill a page's 448.
-    static constexpr float row_h = 40;
+    // The rows' geometry, logical pixels: twelve rows fit a page's 448.
+    static constexpr float row_h = 37;
     static constexpr float control_x = 230;  // from the window's left edge
     static constexpr float control_w = 226;
 

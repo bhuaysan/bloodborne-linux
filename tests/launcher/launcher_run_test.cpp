@@ -45,8 +45,8 @@ bb::test::Result run_script(const Dir& dir, const std::string& script,
     const std::string d = dir.path().string();
     return bb::test::run(std::format(
         "cd {} && env -u BB_GAME_DIR -u BB_CACHE_DIR -u WAYLAND_DISPLAY -u DISPLAY LC_ALL=C ASAN_OPTIONS=detect_leaks=0 "
-        "SDL_VIDEO_DRIVER=offscreen SDL_RENDER_DRIVER=software {}BB_LAUNCHER_SCRIPT={} "
-        "HOME={} BB_USER_DIR={} timeout 60 {} 2>&1",
+        "SDL_VIDEO_DRIVER=offscreen SDL_RENDER_DRIVER=software SDL_AUDIO_DRIVER=dummy "
+        "{}BB_LAUNCHER_SCRIPT={} HOME={} BB_USER_DIR={} timeout 60 {} 2>&1",
         quote(d), more_env, quote(d + "/script.txt"), quote(d + "/home"),
         quote(d + "/user"), quote(BB_LAUNCHER_PATH)));
 }
@@ -503,6 +503,27 @@ TEST(LauncherRun, ThePicturePageSavesTheImageQualityChoices) {
     EXPECT_EQ(slurp(dir.path() / "user/config.toml"),
               "anisotropy = 16\nmotion_blur = true\nmotion_blur_strength = 0.35\n"
               "chromatic_aberration = false\nfov = 52\n");
+}
+
+// The sound output, the last row (#750): its dropdown lists System default, then the devices SDL
+// lists, here the one of SDL's dummy driver. The first device goes into audio_device.
+TEST(LauncherRun, ThePicturePageSavesTheSoundOutput) {
+    const Dir dir;
+    std::string script = to_picture;
+    std::vector<const char*> steps(11, "down");  // mode -> sound output
+    for (const char* step : {"accept", "down", "accept"}) {
+        steps.push_back(step);
+    }
+    for (const char* step : steps) {
+        script += std::format("press {}\nwait 2\n", step);
+    }
+    const char* keep = std::getenv("BB_LAUNCHER_TEST_SHOT");  // a shot to look at, if asked for
+    script += std::format("shot {}\npress back\nwait 3\nquit\n",
+                          keep ? keep : (dir.path() / "shot.png").string());
+    const auto r = run_script(dir, script);
+    EXPECT_EQ(r.status, 0) << r.output;
+    EXPECT_EQ(slurp(dir.path() / "user/config.toml"),
+              "audio_device = \"System audio playback device\"\n");
 }
 
 // The Advanced page: Settings, its third entry, the load hold slider from the game's 12 s down to

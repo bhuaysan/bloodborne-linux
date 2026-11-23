@@ -23,6 +23,7 @@ TEST(PictureSettings, AnEmptyConfigShowsBbRunsDefaults) {
     EXPECT_EQ(c.present_mode, bb::common::PresentMode::mailbox);
     EXPECT_EQ(c.device, "");
     EXPECT_EQ(c.display, "");
+    EXPECT_EQ(c.audio_device, "");
 }
 
 // The defaults write nothing: the page leaves the file as it was.
@@ -133,6 +134,27 @@ TEST(PictureSettings, MapsSyncDeviceAndDisplay) {
     other.frame_rate = 60;
     apply_choices(config, gone, other);
     EXPECT_EQ(config.device, "Gone");
+}
+
+// The sound output (#750): a device writes audio_device, System default removes it, and a device
+// in the file that is gone (headphones unplugged) stays until the player picks another.
+TEST(PictureSettings, MapsTheSoundOutput) {
+    Config config;
+    const PictureChoices base;
+    PictureChoices c = base;
+    c.audio_device = "USB Headset Analog Stereo";
+    apply_choices(config, base, c);
+    EXPECT_EQ(config.audio_device, "USB Headset Analog Stereo");
+    EXPECT_EQ(choices_from_config(config), c);
+    apply_choices(config, c, base);
+    EXPECT_EQ(config, Config{});
+    config.audio_device = "Gone";
+    const PictureChoices gone = choices_from_config(config);
+    EXPECT_EQ(gone.audio_device, "Gone");
+    PictureChoices other = gone;
+    other.frame_rate = 60;
+    apply_choices(config, gone, other);
+    EXPECT_EQ(config.audio_device, "Gone");
 }
 
 TEST(PictureSettings, OddR11ValuesAndStrengthsSurvive) {

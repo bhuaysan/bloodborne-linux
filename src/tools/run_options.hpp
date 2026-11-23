@@ -21,7 +21,7 @@ inline constexpr std::string_view run_usage =
     "       bb-run --check-system [--headless] [--device NAME] [--display NAME] [--validation]\n"
     "       bb-run [--config FILE] [--setup DIR] [--game-dir DIR] [--profile NAME] [--timeout SECONDS] [--stop-at-main-loop]\n"
     "              [--log SPEC] [--no-log-file] [--headless] [--device NAME] [--display NAME]\n"
-    "              [--validation] [--validation-sync] [--validation-gpu]\n"
+    "              [--audio-device NAME] [--validation] [--validation-sync] [--validation-gpu]\n"
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
     "              [--sync-pipelines] [--sync-recording]\n"
     "              [--no-pipeline-reuse | --check-pipeline-reuse]\n"
@@ -57,6 +57,9 @@ inline constexpr std::string_view run_usage =
     "  --display NAME       open the window centred on the display whose name contains NAME,\n"
     "                       ignoring case, and cover it with --fullscreen (default: the primary\n"
     "                       display); a warning and the primary display when none matches\n"
+    "  --audio-device NAME  play the sound on the SDL playback device whose name contains NAME,\n"
+    "                       ignoring case (default: the desktop's default output, followed when\n"
+    "                       it changes); a warning and the default when none matches\n"
     "  --validation         load the Vulkan validation layer (core checks)\n"
     "  --validation-sync    with --validation: synchronization validation\n"
     "  --validation-gpu     with --validation: GPU-assisted validation\n"
@@ -145,6 +148,8 @@ struct RunOptions {
     // warns and takes the default instead of ending the run. --device sets it to false.
     bool device_fallback = false;
     std::string display;  // --display: a display name part, empty for the primary display
+    // --audio-device: an SDL playback device name part, empty for the desktop's default output
+    std::string audio_device;
     bool validation = false;       // --validation
     bool validation_sync = false;  // --validation-sync, only with --validation
     bool validation_gpu = false;   // --validation-gpu, only with --validation

@@ -125,8 +125,9 @@ A settings form like the ones in other games: one row per setting, its name on t
 | Texture filtering | dropdown: Default (the game's own filtering), 2×, 4×, 8×, 16× |
 | Motion blur | slider from Off to 100 % |
 | Colour fringes | slider from Off to 100 % |
+| Sound output | dropdown: System default, then the playback devices SDL lists, by name |
 
-Every slider is a thin line with a diamond and a small tick at the default, with its value in a column of its own to the right, as wide as the widest value, so all lines have the same length. Eleven rows of 40 logical pixels fill the page; at a small scale the form scrolls, and gamepad navigation scrolls it to the focused row.
+Every slider is a thin line with a diamond and a small tick at the default, with its value in a column of its own to the right, as wide as the widest value, so all lines have the same length. Twelve rows of 37 logical pixels fill the page (40 until the sound row came, #750); at a small scale the form scrolls, and gamepad navigation scrolls it to the focused row.
 
 With the pad, up and down move between the rows, A opens a dropdown, and left and right move a slider directly, as in a game's settings: a degree, a step of sharpness or 5 %. The mouse drags a slider to any whole value. The defaults are the game's own picture and bb-run's defaults, and a setting the player left alone writes nothing, so they leave the config file as it was. A value in the file that lies between the slider's steps shows as the nearest step and stays until the slider moves. The mapping onto the config file from #577 (and so onto `bb-run`'s options):
 
@@ -144,11 +145,12 @@ With the pad, up and down move between the rows, A opens a dropdown, and left an
 | sharpness 2 to 10 | `--fsr` with RCAS at 2 stops of attenuation down to 0 (the sharpest) in quarter stops; 9 is RCAS's default of 0.25 stops and writes no `rcas_attenuation` |
 | field of view | `--fov`: no key at 43°, else the degrees (#666) |
 | Default / 2× … 16× | `--anisotropy`: no key (the game's filtering), else the level (#658). A level set by hand (1×) is added to the list |
+| sound output | `audio_device`, `--audio-device NAME` (#750): no key for System default, where the game plays on the desktop's default output and moves with it when the default changes. The page opens SDL's audio only while it reads the list, so the launcher holds no connection to the sound server. A device named in the file that is gone (headphones unplugged) stays at the end of the list, and bb-run plays on the default with a warning |
 | motion blur, colour fringes | Off writes `motion_blur = false` (`--no-motion-blur`, #665) and no strength; above 0 `motion_blur = true` and `motion_blur_strength` = the percent / 100; 100 % no strength key, the game's. The same for `chromatic_aberration` and `chromatic_aberration_strength` |
 
-The sharpness slider counts steps instead of showing stops of attenuation, which mean nothing to a player, and puts FSR without RCAS below the RCAS steps because it is the softer of the two. The device and display names are stored whole. bb-run takes the device or display of exactly that name first, else the first whose name contains it, ignoring case, so "RTX 3060" doesn't pick an "RTX 3060 Ti" listed before it; of two identical cards or monitors it picks the first. Options that the shadow and draw-distance issues of R11 add get a row of their own in their own issue.
+The sharpness slider counts steps instead of showing stops of attenuation, which mean nothing to a player, and puts FSR without RCAS below the RCAS steps because it is the softer of the two. The device, display and sound output names are stored whole. bb-run takes the device, display or sound output of exactly that name first, else the first whose name contains it, ignoring case, so "RTX 3060" doesn't pick an "RTX 3060 Ti" listed before it; of two identical cards, monitors or sound outputs it picks the first. Options that the shadow and draw-distance issues of R11 add get a row of their own in their own issue.
 
-Sound gets a row once `bb-run` has a choice for it: the output device (#750), no volume, which the desktop's mixer has. Until then the page is called "Picture and sound" anyway, so the menu doesn't change later.
+Sound has one row, the output device (#750); no volume, which the desktop's mixer has. It is the last row, so the picture rows keep their places, and the rows shrank from 40 to 37 pixels to fit it rather than moving it to Advanced: choosing headphones is not a setting a player can leave alone.
 
 Changes are saved when the page closes. There is no Apply button.
 

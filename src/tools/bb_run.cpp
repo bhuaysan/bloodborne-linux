@@ -71,6 +71,7 @@
 #include "tools/system_check.hpp"
 #endif
 #ifdef BB_HAVE_VIDEO_CORE
+#include "core/libraries/audio/audioout_backend.h"
 #include "core/libraries/libs.h"
 #include "core/libraries/pad_input.h"
 #include "core/memory.h"
@@ -457,6 +458,11 @@ int start(const bb::tools::RunOptions& options) {
         }
     }
     Libraries::InitHLELibs(&symbols, *guest_memory);
+    // Before the game opens its first audio port.
+    Libraries::AudioOut::SetPlaybackDevice(options.audio_device);
+    if (!options.audio_device.empty()) {
+        bb::common::log(LogLevel::info, channel, "audio device \"{}\"", options.audio_device);
+    }
 #endif
     // Never destroyed: the game runs in it until the process ends.
     auto* game = new Game{bb::loader::map_load_set(*game_dir)};

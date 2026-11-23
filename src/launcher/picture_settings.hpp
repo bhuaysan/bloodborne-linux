@@ -46,6 +46,7 @@ struct PictureChoices {
     common::PresentMode present_mode = common::PresentMode::mailbox;  // bb-run's default
     std::string device;   // a Vulkan device's name; empty for bb-run's choice
     std::string display;  // an SDL display's name; empty for the primary display
+    std::string audio_device;  // an SDL playback device's name; empty for the desktop's default
     bool operator==(const PictureChoices&) const = default;
 };
 
@@ -101,6 +102,7 @@ inline PictureChoices choices_from_config(const common::Config& config) {
     c.present_mode = config.present_mode.value_or(common::PresentMode::mailbox);
     c.device = config.device.value_or("");
     c.display = config.display.value_or("");
+    c.audio_device = config.audio_device.value_or("");
     return c;
 }
 
@@ -159,6 +161,9 @@ inline void apply_choices(common::Config& config, const PictureChoices& before,
     }
     if (after.display != before.display) {
         config.display = name(after.display);
+    }
+    if (after.audio_device != before.audio_device) {
+        config.audio_device = name(after.audio_device);
     }
 }
 

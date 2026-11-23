@@ -17,10 +17,12 @@
 #include <filesystem>
 #include <format>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <SDL3/SDL.h>
 #include <gtest/gtest.h>
@@ -30,6 +32,7 @@
 #include "core/libraries/ajm/ajm_aac.h"
 #include "core/libraries/ajm/ajm_result.h"
 #include "core/libraries/audio/audioout.h"
+#include "core/libraries/audio/audioout_backend.h"
 #include "core/libraries/avplayer/avplayer.h"
 #include "core/libraries/ime/ime_dialog.h"
 #include "core/libraries/kernel/kernel.h"
@@ -199,6 +202,20 @@ TEST(SysLibsHost, GuestPathsResolveThroughTheKernel) {
     EXPECT_EQ(mounts.Open("/app0/movie/a.mp4"), nullptr);
     EXPECT_EQ(mounts.GetHostPath("/app0/movie/a.mp4"), game / "movie" / "a.mp4");
     EXPECT_EQ(mounts.GetHostPath("/nomount/a.mp4"), std::filesystem::path{});
+}
+
+// bb-run --audio-device (#750): the whole name first, else the first name that contains the part,
+// ignoring case; nothing for an empty part or one no name contains.
+TEST(SysLibsHost, PlaybackDeviceMatchesTheWholeNameFirst) {
+    using Libraries::AudioOut::FindPlaybackDevice;
+    const std::vector<std::string> names{"Speakers Analog Stereo", "USB Headset Digital Stereo",
+                                         "USB Headset"};
+    EXPECT_EQ(FindPlaybackDevice(names, "USB Headset"), 2u);  // not the longer one before it
+    EXPECT_EQ(FindPlaybackDevice(names, "usb headset"), 1u);  // no whole name: the first part
+    EXPECT_EQ(FindPlaybackDevice(names, "speakers"), 0u);
+    EXPECT_EQ(FindPlaybackDevice(names, "HDMI"), std::nullopt);
+    EXPECT_EQ(FindPlaybackDevice(names, ""), std::nullopt);
+    EXPECT_EQ(FindPlaybackDevice({}, "USB"), std::nullopt);
 }
 
 TEST(SysLibsHost, VersionsAndUser) {

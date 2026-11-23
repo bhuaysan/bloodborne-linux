@@ -45,6 +45,8 @@ struct Text {
     const char* game_textures;  // anisotropy 0: the game's own filtering
     const char* motion_blur;
     const char* fringes;
+    const char* sound;
+    const char* system_default;  // no audio_device key: the desktop's default output
 };
 constexpr Text english{
     .title = "Picture and sound",
@@ -67,6 +69,8 @@ constexpr Text english{
     .game_textures = "Default",
     .motion_blur = "Motion blur",
     .fringes = "Colour fringes",
+    .sound = "Sound output",
+    .system_default = "System default",
 };
 constexpr Text german{
     .title = "Bild und Ton",
@@ -89,6 +93,8 @@ constexpr Text german{
     .game_textures = "Standard",
     .motion_blur = "Bewegungsunsch\xc3\xa4rfe",
     .fringes = "Farbs\xc3\xa4ume",
+    .sound = "Tonausgabe",
+    .system_default = "Systemstandard",
 };
 
 const Text& text(Lang lang) {
@@ -118,6 +124,27 @@ std::vector<std::string> display_names() {
         }
         SDL_free(ids);
     }
+    return names;
+}
+
+// The names of the playback devices SDL lists, in its order. SDL's audio is open only while they
+// are read, so the launcher holds no connection to the sound server. Empty when SDL has no sound.
+std::vector<std::string> audio_device_names() {
+    std::vector<std::string> names;
+    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+        return names;
+    }
+    int count = 0;
+    if (SDL_AudioDeviceID* ids = SDL_GetAudioPlaybackDevices(&count)) {
+        for (int i = 0; i < count; ++i) {
+            const char* name = SDL_GetAudioDeviceName(ids[i]);
+            if (name != nullptr && *name != '\0') {
+                names.emplace_back(name);
+            }
+        }
+        SDL_free(ids);
+    }
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
     return names;
 }
 
@@ -283,7 +310,9 @@ private:
             return line_slider("##fringes", now_.chromatic_aberration, 0, full_effect,
                                full_effect, 5, value_w, percent, s);
         });
-
+        form.row(t.sound, [&] {
+            return name_dropdown("##sound", t.system_default, audio_devices_, now_.audio_device);
+        });
     }
 
     void load(const Context& ctx) {
@@ -302,6 +331,7 @@ private:
         before_ = now_ = choices_from_config(config);
         displays_ = display_names();
         gpus_ = vulkan_gpu_names();
+        audio_devices_ = audio_device_names();
         display_ = display_size(now_.display);
         sizes_ = resolution_choices(display_, now_.size);
     }
@@ -313,6 +343,7 @@ private:
     std::vector<Size> sizes_;
     std::vector<std::string> displays_;
     std::vector<std::string> gpus_;
+    std::vector<std::string> audio_devices_;
 };
 
 }  // namespace
@@ -327,7 +358,7 @@ std::vector<const char*> picture_strings(Lang lang) {
             t.main_display, t.resolution, t.screen_size, t.frame_rate,    t.sync,
             t.syncs[0],    t.syncs[1],   t.syncs[2],    t.gpu,            t.automatic,
             t.sharpness,   t.off,        t.fov,         t.fov_default,    t.textures,
-            t.game_textures, t.motion_blur, t.fringes};
+            t.game_textures, t.motion_blur, t.fringes,     t.sound,          t.system_default};
 }
 
 }  // namespace bb::launcher

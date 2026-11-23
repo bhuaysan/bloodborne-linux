@@ -136,6 +136,9 @@ struct Config {
     // case (bb-run --device, --display). Not empty.
     std::optional<std::string> device;
     std::optional<std::string> display;
+    // audio_device: a part of the SDL playback device's name, ignoring case (bb-run
+    // --audio-device). Not empty; no key plays on the desktop's default output.
+    std::optional<std::string> audio_device;
 
     bool operator==(const Config&) const = default;
 };

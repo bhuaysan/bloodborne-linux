@@ -252,11 +252,11 @@ ParsedConfig parse_config(std::string_view text, std::string_view source) {
                 p.fail(std::format("present_mode: \"{}\" is not fifo, mailbox or immediate",
                                    v.text));
             }
-        } else if (key == "device" || key == "display") {
+        } else if (key == "device" || key == "display" || key == "audio_device") {
             if (want_string().empty()) {
                 p.fail(std::format("{}: the name is empty", key));
             }
-            (key == "device" ? c.device : c.display) = v.text;
+            (key == "device" ? c.device : key == "display" ? c.display : c.audio_device) = v.text;
         } else {
             result.unknown_keys.push_back(key);
         }
@@ -358,6 +358,9 @@ std::string format_config(const Config& c) {
     }
     if (c.display) {
         out += std::format("display = {}\n", quote_string(*c.display));
+    }
+    if (c.audio_device) {
+        out += std::format("audio_device = {}\n", quote_string(*c.audio_device));
     }
     return out;
 }
