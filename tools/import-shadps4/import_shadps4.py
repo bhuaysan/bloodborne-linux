@@ -26,7 +26,8 @@ reproduces the tree of the import commits, not the current one. --check takes an
 import commit (git archive r5 src/shadps4 third_party). --write takes an empty directory or such
 an export, and a later import is reviewed as the diff between that tree and the files it replaces.
 Without --tree the target is this checkout, which both modes refuse once src/shadps4/ holds edits
-made after the import (--write also once the owned third_party/ roots do); a git checkout or worktree given as --tree is refused the same way.
+made after the import (--write also once the owned third_party/ roots do). A git checkout or
+worktree given as --tree is refused the same way.
 """
 
 from __future__ import annotations
