@@ -374,6 +374,15 @@ TEST(AvPlayerGame, StopIsSafeAgainstAThreadPullingFrames) {
             }
         }
     });
+    // A failed ASSERT returns early: stop and join the puller, or ~thread would abort the binary.
+    struct JoinPuller {
+        std::atomic<bool>& done;
+        std::thread& thread;
+        ~JoinPuller() {
+            done = true;
+            thread.join();
+        }
+    } join_puller{done, puller};
 
     constexpr int rounds = 500;
     int rounds_with_frames = 0;
@@ -392,8 +401,6 @@ TEST(AvPlayerGame, StopIsSafeAgainstAThreadPullingFrames) {
         ASSERT_TRUE(source.Stop()) << "round " << round;
         ASSERT_EQ(live_buffers.load(), 0) << "round " << round;
     }
-    done = true;
-    puller.join();
     EXPECT_EQ(bad_frames.load(), 0);
     // Playback restarts after each Stop(): every round that waited for frames got them.
     EXPECT_EQ(rounds_with_frames, rounds / 2);

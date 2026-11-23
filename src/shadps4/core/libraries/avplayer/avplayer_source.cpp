@@ -321,6 +321,7 @@ bool AvPlayerSource::Start() {
     m_demuxer_thread.Run([this](std::stop_token stop) { this->DemuxerThread(stop); });
     m_video_decoder_thread.Run([this](std::stop_token stop) { this->VideoDecoderThread(stop); });
     m_audio_decoder_thread.Run([this](std::stop_token stop) { this->AudioDecoderThread(stop); });
+    std::scoped_lock frames_lock(m_current_frames_mutex);  // the getters read it (#785)
     m_start_time = std::chrono::high_resolution_clock::now();
     return true;
 }
