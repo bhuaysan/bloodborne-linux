@@ -96,7 +96,7 @@ Releases start on glibc 2.31 and newer. The package brings its own SDL, FFmpeg a
 |---|---|---|---|
 | Fedora | 44 | nothing on a desktop | the reference machine |
 | Ubuntu | 22.04 | `mesa-vulkan-drivers` (AMD and Intel) | none known |
-| Debian | 12 | `mesa-vulkan-drivers` (AMD and Intel); on Debian 13 from `trixie-backports` | Debian 13's own Mesa 25.0.7 hangs the GPU in the intro after the character editor; the backports driver doesn't (#793) |
+| Debian | 12 | `mesa-vulkan-drivers` (AMD and Intel) | none known |
 | Arch Linux | rolling | `vulkan-radeon` (AMD) or `vulkan-intel` | none known |
 | Bazzite | stable image | nothing | none known |
 

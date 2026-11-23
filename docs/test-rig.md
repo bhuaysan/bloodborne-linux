@@ -106,6 +106,12 @@ image is the distribution's official one with only what the README names install
 the libraries a desktop brings, `--no-install-recommends`). Bazzite's image links `/home` to `var/home` but has no `/var/home`, so
 its image adds that folder and nothing else.
 
+`run reference --container IMAGE` runs the reference the same way, with the unpacked AppImage in
+place of the package folder (#793). It also gets `/dev/input` and `/run/udev` read-only, because
+the reference reads the rig's uinput pad through SDL. It starts in the run's `work/`, as on the
+host: started anywhere else, the reference doesn't find `work/user` and takes the shadPS4 folder in
+the shared home, with whatever saves are there.
+
 Each image ran `main-menu` with `SDL_AUDIO_DRIVER=pulseaudio` (the logos and the title with sound)
 and `new-game-to-clinic` with `SDL_AUDIO_DRIVER=pipewire` (a new game to first control in the
 clinic), on the package of #737 (`v0.1.0-17-gd8170ae9`). Sound counted when `pw-dump` showed a running
@@ -117,11 +123,13 @@ PulseAudio, none for PipeWire's own).
 | Fedora 44 (host) | 26.2.6 | – | yes | 0 | – / 1642 |
 | Ubuntu 24.04 | 25.2.8 | yes | yes | 0.30 | 881 / 1876 |
 | Ubuntu 22.04 | 23.2.1 | yes | yes | 0.46 | 874 / 1862 |
-| Debian 13 | 25.0.7 | yes | no: GPU ring timeout in the intro after the character editor, 3 of 3 runs (#793) | – | 832 / – |
+| Debian 13 | 25.0.7 | yes | no: GPU ring timeout in the intro after the character editor, 3 of 3 runs; fixed by #793, see below | – | 832 / – |
 | Debian 13, Mesa from `trixie-backports` | 26.1.6 | yes | yes | 0.63 | 813 / 1866 |
 | Debian 12 | 22.3.6 | yes | yes | 0.42 | 843 / 1844 |
 | Arch Linux | 26.3.1 | yes | yes | 0.28 | 570 / 1532 |
 | Bazzite (stable) | 26.2.7 | yes | yes | 0.41 | 537 / 1579 |
+
+Debian 13's Mesa 25.0.7 hung because RADV before 25.1 gives sparse binding a queue family of its own and drops sparse binds sent to the graphics queue, where the buffer cache binds its arenas (Mesa commit `f58630f07c3`, found by bisecting 25.0 to 25.1 on this route). The reference hangs the same way in the same container. `bb-run` now sets RADV's driconf option `radv_legacy_sparse_binding=true` unless the environment sets it, which keeps sparse binding on the graphics queue; with it the route reached the clinic on 25.0.7 (#793).
 
 "Yes" means the scenario finished, its shots show the scenario (the title menu, the hunter in the
 clinic) and the sound check above held. The shot difference is `compare.difference` of the clinic

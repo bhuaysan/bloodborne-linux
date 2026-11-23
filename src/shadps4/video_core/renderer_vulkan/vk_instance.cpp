@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/renderer_vulkan/vk_instance.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-23
 // License texts: third_party/shadps4/LICENSES/
 
 #include <boost/container/static_vector.hpp>
@@ -373,6 +373,13 @@ bool Instance::CreateDevice() {
     if (!graphics_queue_found) {
         LOG_CRITICAL(Render_Vulkan, "Unable to find graphics and/or present queues.");
         return false;
+    }
+    // Ours (#793): the buffer cache binds its sparse arenas on this queue. A driver that drops
+    // such binds leaves the arenas unbacked, and the GPU hangs on the first draw that reads them.
+    if (!(family_properties[queue_family_index].queueFlags & vk::QueueFlagBits::eSparseBinding)) {
+        LOG_ERROR(Render_Vulkan,
+                  "The graphics queue does not support sparse binding; expect a GPU hang. "
+                  "Update the Vulkan driver (RADV: Mesa 25.1 or later).");
     }
 
     static constexpr std::array queue_priorities = {1.0f};

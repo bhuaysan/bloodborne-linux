@@ -404,6 +404,12 @@ int start(const bb::tools::RunOptions& options) {
     // Before SDL and the Vulkan loader. The signal thread is running, but it only waits in sigwait
     // and never reads the environment.
     bb::common::redirect_library_caches(dirs);
+    // The buffer cache binds its sparse arenas on the graphics queue. RADV before Mesa 25.1 moves
+    // sparse binding to a queue family of its own and drops binds sent to the graphics queue, so
+    // the arenas stay unbacked and the GPU hangs in the intro (#793). This driconf option puts
+    // sparse binding back on the graphics queue there; later versions don't know it. A value the
+    // player set wins.
+    ::setenv("radv_legacy_sparse_binding", "true", 0);
     if (options.log_file) {
         const fs::path log = bb::common::open_log_file(dirs);
         bb::common::log(LogLevel::info, channel, "log file {}", log.string());
