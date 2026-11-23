@@ -114,3 +114,66 @@ A first version took every context register into the snapshot. Context registers
 | `yharnam-fight` `play-walk` | 8.49 (8.28–8.77) | 8.22 (7.92–9.14) |
 
 In the segments the route repeats, the GPU thread gets 0.25–0.36 ms cheaper per present, beyond the spread in `play-walk` (108 to 111 FPS) and `play-camera`. That is about half the estimate: the reuse itself still costs 0.4 µs a draw, and the tracker and the resolves add some. The later segments of both routes go where the hunter's dodges, attacks and the enemies take it, and runs of the same build differ there by 1–5 ms per present, so they decide nothing either way. The GPU thread is still the bound at 120 in `play-walk`; the next cut is #779.
+
+## A two-stage GPU thread (#779)
+
+The idea: split the GPU thread into a strict chain of two threads. Stage A parses PM4, keeps the registers and looks up the pipeline. Stage B alone owns the buffer cache, the texture cache and the page manager: lookups, uploads, bindings, barriers, then the recording that the recording thread already replays. The caches keep one owner and need no locks.
+
+**Decision: not a milestone now.** After #780 the GPU itself bounds the heaviest segments at 120, not the GPU thread. Splitting the thread would take its CPU time per present from about 8 ms to about 6 ms, but the frames would still wait for the GPU, which is busy 95–99 % of the time there at nearly its top clock. In `yharnam-route` `play-walk` that caps the gain at about 3 % (111 to at most 114 FPS), for a change of about 2500 lines of Core code with a new class of ordering bugs. R13's next step is the GPU's own work per frame (#827). The split is worth reassessing once the GPU needs clearly less time per frame than the GPU thread and the GPU thread is still above 8.33 ms.
+
+### Measured split
+
+`relwithdebinfo` build of `main` at `f8861cb2` (after #780) with a local probe that counts packet types per frame, `--window`, warm cache, 120 FPS. Two `--log profile=debug` runs of `yharnam-route` and one of `yharnam-fight` for the counters; one run each without counters for the thread times; the GPU's busy share and clock (`hwmon` `freq1_input`) sampled every 0.1 s beside them. Load from other programs averaged 1.4–2.9 cores during these runs (another session was building), so their thread times read slightly high; the #780 runs on a quiet machine are given beside them.
+
+Stage A is `commands` minus `draw` (PM4 processing outside the draws) plus `pipeline`; stage B is the rest of `draw` (`bind`, `render`, `vertex`, `state` and the unscoped rest: render state, barriers, the draw record). Counters, a normal frame, ms:
+
+| route | segment | `commands` | A | B | A share |
+|---|---|---|---|---|---|
+| yharnam-route | play-walk | 7.89, 8.86 | 2.13, 2.27 | 5.76, 6.58 | 26–27 % |
+| yharnam-route | play-sprint | 9.23, 9.60 | 2.45, 2.47 | 6.78, 7.13 | 26 % |
+| yharnam-route | play-dodge | 10.98, 10.32 | 2.87, 2.67 | 8.11, 7.65 | 26 % |
+| yharnam-route | play-attack | 10.52, 10.39 | 2.80, 2.76 | 7.72, 7.63 | 27 % |
+| yharnam-fight | play-walk | 9.53 | 2.41 | 7.12 | 25 % |
+| yharnam-fight | play-heal | 9.87 | 2.68 | 7.19 | 27 % |
+
+#780 took `pipeline` from 1.48 to about 1.0–1.2 ms, so stage A fell from 27–29 % of `commands` (#654) to 25–27 %. The counters read about 10 % above the thread's CPU time (their own scopes, `docs/test-rig.md`). Applied to the GPU thread's CPU per present (7.97–8.01 ms in `play-walk` in the quiet #780 runs), stage B would take about 5.9 ms, plus the cost of handing over about 1500 draw records and about 2000 forwarded packets a frame (register writes not counted) (estimated 0.2–0.4 ms, as for the deferred command buffer). Stage B would fit the 8.33 ms slot in every segment.
+
+The GPU does not. Per present (`thread_cpu.py`, runs without counters):
+
+| route | segment | FPS | GPU thread CPU | GPU | GPU busy | GPU clock (MHz) |
+|---|---|---|---|---|---|---|
+| yharnam-route | play-walk | 107, 101 (#780: 111) | 8.28, 8.85 (#780: 7.97–8.01) | 8.88, 9.71 (#780: 8.74–8.77) | 95, 99 % | 2502, 2577 |
+| yharnam-route | play-sprint | 106, 109 | 8.49, 8.27 | 9.15, 9.01 | 97, 98 % | 2574, 2570 |
+| yharnam-route | play-dodge | 102, 86 | 8.89, 10.39 | 9.54, 10.26 | 97, 88 % | 2584, 2314 |
+| yharnam-fight | play-walk | 108 (#780: 2 runs) | 8.53 (#780: 8.13, 8.31) | 9.26 (#780: 8.71, 8.86) | 99 % | 2548 |
+| yharnam-fight | play-heal | 108 | 8.61 | 8.94 | 97 % | 2558 |
+
+The highest clock seen in these runs was 2631 MHz, and the heavy segments run at 2500–2585 MHz: the GPU is not waiting for work at a low clock, as it does in the clinic (`docs/test-rig.md`, "Heavy areas at 30, 60 and 120"). In each heavy segment the GPU needs about as long per present as the frame interval, and longer than the GPU thread's CPU time. A GPU thread that cost nothing would raise `play-walk` to 1000 / 8.75 = 114 FPS at most.
+
+### Where stage A would wait for stage B
+
+Per frame in `yharnam-route` `play-walk` (probe counts, both runs): 1330–1500 draws, 3 indirect draws, 110–130 dispatches on the graphics ring and none on the compute rings, 220–265 `WAIT_REG_MEM`, 420–475 end-of-pipe events, 2 end-of-shader events, 1150–1270 `DMA_DATA`, 44 `WRITE_DATA`, 44 `WAIT_ON_CE_COUNTER`, 4–6 occlusion counter dumps, no `COND_EXEC`, no `MEM_SEMAPHORE` wait, no GDS read with `Finish`, no `Finish` from other paths and no callback from a guest thread. The other segments and `yharnam-fight` have the same mix.
+
+- **Guest-visible writes** (end-of-pipe and end-of-shader fences and their interrupts, `RELEASE_MEM`, `WRITE_DATA`, the occlusion counter dump, `STRMOUT_BUFFER_UPDATE`, `DUMP_CONST_RAM`): the guest reads them as "the GPU is done with the work before". They have to run on stage B in command order, after B has read what the draws before them use, as they now run after `WaitCopies`. Stage A forwards them and does not wait. The guest sees them later by stage B's lag, at most the queued part of a frame.
+- **`WAIT_REG_MEM`** is the real cost. Today all 220–265 a frame pass at the first test (no spin at all in the probe), and with twice as many end-of-pipe events most of them presumably wait for a label that an earlier event of the same stream wrote. Once stage B writes the labels, each such wait would stop stage A until B has caught up, about every six draws, and the two stages would run nearly in series. Stage A would need a table of the label writes it has forwarded and B has not done yet, and test a wait on such an address against the forwarded value: B runs in order, so everything after the wait comes after the write. Only a wait on memory the guest or another queue writes polls as today. The first step would have to confirm by a probe which labels the waits read.
+- **The constant engine.** 44 `WAIT_ON_CE_COUNTER` a frame: the draw engine waits for the constant engine's dumps, which hold the descriptors the draws read. Stage B reads them when it binds, so the draw engine's counter (`INCREMENT_DE_COUNTER`) has to count on B, and the constant engine's `WAIT_ON_DE_COUNTER_DIFF` then waits for B. That is a bounded lag (the ring's depth), not a drain.
+- **Packets that read guest memory.** Indirect draws and dispatches read their arguments on the GPU through the buffer cache: stage B, nothing for A. `DMA_DATA` fills and copies go through the buffer cache too, and the GPU's copies do not write guest memory (the range is marked GPU-modified), so stage A reads the same guest memory as the GPU thread does today. `COND_EXEC` reads memory a GPU write may have set and would drain; the game does not use it here. `SET_PREDICATION` and `LOAD_*_REG` are not implemented; a `LOAD_*_REG` from GPU-written memory would drain.
+- **The pipeline lookup reads guest memory** (the sharps, the fetch shader, the SRT tables of the flattened user data), and stage B reads the same memory again when it binds. The two reads must agree, so the record carries what A read, and B binds from it. That makes the records larger than a register delta.
+- **Synchronous paths** (`Finish` at a GDS read, `FlushGpuModified`, downloads, the texture cache's collection) belong to stage B. None ran in these segments.
+
+### Write faults
+
+A guest thread's write fault on a page only the CPU wrote is handled on that thread (`MarkCpuModifiedFromFault`) and touches neither stage. A fault on a page the GPU wrote, an invalidation and an unmap with images in it go through `OnGpuThread`: a callback the GPU thread runs between two packets while the guest thread waits. They would go to stage B's queue, which B runs between two records, so the guest thread still waits for at most one draw's work. Stage A's queued records hold guest addresses, not cache objects, and B resolves them after the callback, in the same order as today. In these segments no callback ran; the 4–5 ms of `fault` per frame are the fast path on the guest threads, which #809 targets.
+
+### Size and steps, if it is reassessed
+
+1. **Records on one thread** (Core). Stage B gets its own register file, fed by the register writes stage A forwards with each draw, and the draw record carries A's pipeline, its sharps and user data. Still one thread; measured as the record cost on the GPU thread (`thread_cpu.py`), with a check mode that compares B's draws against today's.
+2. **Fences, labels and the constant engine on B, the label table on A** (Core). Measured as the `WAIT_REG_MEM` waits that the table does not answer.
+3. **The second thread** (Core), the callback queue on B and a switch that runs both stages on one thread for comparison runs. Measured at 120 against `main`: FPS, both threads' CPU per present and the GPU's time per present in `yharnam-route` and `yharnam-fight`; p99 at 60 in `yharnam-route`.
+
+Each step is one PR near the 800-line limit, about 2500 lines in all.
+
+### Rejected ideas
+
+- **Moving guest memory back to VRAM.** It does not apply: the buffer cache always copies guest buffers into its device-local arena (`arena_memory_type_index`), and the texture cache allocates its images with a device-local preference, so the GPU never reads guest memory over the bus.
+- **Skipping draws while a pipeline builds**, beyond the 8 ms budget a frame already waits (#521). It costs picture quality for a case the warm disk cache (R8.1) makes rare; the measured segments run with a warm cache.
