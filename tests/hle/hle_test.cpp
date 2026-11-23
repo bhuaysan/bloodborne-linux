@@ -16,9 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "common/log.hpp"
-#include "loader/image.hpp"
 #include "loader/relocate.hpp"
-#include "support/game.hpp"
 
 namespace {
 
@@ -394,38 +392,6 @@ TEST(HleTrace, OnlyWhenTheFilterShowsTraceAtResolve) {
     testing::internal::CaptureStderr();
     EXPECT_EQ(reinterpret_cast<decltype(&untraced)>(later)(41), 42U);
     EXPECT_EQ(testing::internal::GetCapturedStderr(), "");
-}
-
-// Every import of the eboot gets a stub or a data block, and a call through a GOT slot reaches
-// the stub of the slot's import. 686 of the 701 imports are referenced, 20 of them data.
-TEST(HleGame, RelocatesTheEbootWithStubs) {
-    BB_REQUIRE_GAME(game);
-    const Counts before = counts();
-    bb::loader::Image image = bb::loader::map_eboot(game);
-    bb::loader::relocate(image, resolve, bb::loader::eboot_module_id);
-    image.finalize_protection();
-    // At most 639 of the 666 referenced function imports get a stub: the HLE modules implement
-    // the others. A bound rather than the exact number, so that each new HLE function doesn't
-    // edit this line.
-    EXPECT_LE(counts().stubs - before.stubs, 639U);
-    EXPECT_EQ(counts().data_blocks - before.data_blocks, 20U);
-
-    const bb::loader::Rela& rela = image.dyn.plt_relocs.at(0);
-    ASSERT_EQ(rela.offset, 0x53e4690U);
-    const bb::loader::Import& imp = image.dyn.symbols.at(rela.sym).decoded;
-    ASSERT_EQ(imp.nid, "bzQExy189ZI");
-    const auto slot = *reinterpret_cast<const std::uintptr_t*>(image.runtime(rela.offset));
-    EXPECT_EQ(slot, import_address(imp.library, imp.nid));
-
-    Recorder recorder;
-    const auto stub = reinterpret_cast<std::uint64_t (*)(std::uint64_t, std::uint64_t,
-                                                         std::uint64_t, std::uint64_t,
-                                                         std::uint64_t, std::uint64_t)>(slot);
-    EXPECT_EQ(stub(6, 5, 4, 3, 2, 1), 0U);
-    ASSERT_EQ(recorder.calls.size(), 1U);
-    EXPECT_EQ(recorder.calls[0].stub->nid, "bzQExy189ZI");
-    EXPECT_EQ(recorder.calls[0].stub->library, imp.library);
-    EXPECT_EQ(recorder.calls[0].args, (std::vector<std::uint64_t>{6, 5, 4, 3, 2, 1}));
 }
 
 }  // namespace

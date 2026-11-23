@@ -3,8 +3,10 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -52,5 +54,10 @@ struct LoadSet {
 // after the previous image that is aligned to the PRX's largest PT_LOAD p_align. Relocates
 // nothing. Throws as map_eboot and map_prx do.
 LoadSet map_load_set(const std::filesystem::path& game_dir, std::uintptr_t base = default_base);
+
+// As map_load_set, with the eboot's ELF given (as read_pinned_self returns it) rather than read
+// from `game_dir`: for the tests, which read it once per process.
+LoadSet map_load_set(const std::filesystem::path& game_dir, std::span<const std::byte> eboot_elf,
+                     std::uintptr_t base = default_base);
 
 }  // namespace bb::loader

@@ -15,7 +15,6 @@
 
 #include "loader/elf.hpp"
 #include "support/elf_builder.hpp"
-#include "support/game.hpp"
 
 namespace {
 
@@ -461,28 +460,6 @@ TEST(Hook, FillsAPatchsJumpTargets) {
     expect_refusal([&] { bb::hook::apply(image, std::array{patch}); },
                    "the jump target 0x106 lies inside the patched bytes");
     EXPECT_EQ(image.fn<int()>(0x100)(), 6);
-}
-
-TEST(HookGame, PatchesAnEbootFunction) {
-    BB_REQUIRE_GAME(game);
-    Image image = map_eboot(game);
-    image.finalize_protection();
-    // 0xF0 is 0x77 bytes long and starts with c7 47 08 01 (mov dword [rdi+8], 1).
-    Patch original = bytes_at(image, 0xF0);
-    const std::uint8_t start[] = {0xc7, 0x47, 0x08, 0x01};
-    ASSERT_EQ(std::memcmp(original.data(), start, sizeof start), 0);
-
-    // The entry jumps straight to the replacement, so no game code runs.
-    const Replacement hook[] = {{0xF0, reinterpret_cast<void*>(&replacement_a), "a"}};
-    bb::hook::apply(image, hook);
-    EXPECT_EQ(image.fn<int()>(0xF0)(), 1001);
-    bb::hook::remove(image, hook);
-    EXPECT_EQ(std::memcmp(bytes_at(image, 0xF0).data(), original.data(), original.size()), 0);
-    EXPECT_EQ(protection(default_base + 0xF0), "r-xp");
-
-    const Replacement too_short[] = {{0x34F0, reinterpret_cast<void*>(&replacement_a), "s"}};
-    expect_refusal([&] { bb::hook::apply(image, too_short); },
-                   "hook s at 0x34f0: the function is 3 bytes, a hook needs 14");
 }
 
 }  // namespace

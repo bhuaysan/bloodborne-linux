@@ -81,8 +81,14 @@ LoadedModule& LoadSet::eboot() {
 }
 
 LoadSet map_load_set(const std::filesystem::path& game_dir, std::uintptr_t base) {
+    return map_load_set(game_dir, read_pinned_self(game_dir / "eboot.bin", eboot_bin_sha256),
+                        base);
+}
+
+LoadSet map_load_set(const std::filesystem::path& game_dir, std::span<const std::byte> eboot_elf,
+                     std::uintptr_t base) {
     LoadSet set;
-    set.modules.push_back({"eboot.bin", eboot_module_id, map_eboot(game_dir, base)});
+    set.modules.push_back({"eboot.bin", eboot_module_id, map_elf(eboot_elf, base)});
     for (std::string_view name : load_set_prxs) {
         std::vector<std::byte> elf = read_prx(game_dir, name);
         const std::uint64_t align = base_alignment(elf);

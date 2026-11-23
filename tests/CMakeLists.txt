@@ -77,5 +77,18 @@ add_subdirectory(harness)
 add_subdirectory(game)
 add_subdirectory(tools)
 add_subdirectory(launcher)
+# The tests of the loader, the HLE and the hook against the eboot, in one binary run as one ctest
+# entry, so that eboot.bin is read and its ELF rebuilt once (support/eboot_file.hpp; #71).
+# LinkGame stays in loader_test: it registers the load set's exports with the HLE, which would
+# change what HleGame resolves.
+add_library(bbebootfile STATIC support/eboot_file.cpp)
+target_include_directories(bbebootfile PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(bbebootfile PRIVATE bbloader bbcommon bb_warnings)
+add_executable(eboot_game_test loader/game_test.cpp hle/game_test.cpp hook/game_test.cpp
+                               harness/main.cpp)
+target_link_libraries(eboot_game_test PRIVATE bbebootfile bbloader bbhle bbhook bbelfbuilder
+                                              bbtestsupport GTest::gtest bb_warnings)
+bb_add_one_entry_test(eboot_game_test)
+
 bb_add_test(support_test SOURCES support/game_test.cpp)
 target_compile_definitions(support_test PRIVATE BB_IN_GIT_CHECKOUT=${BB_IN_GIT_CHECKOUT})

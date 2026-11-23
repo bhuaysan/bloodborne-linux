@@ -12,6 +12,8 @@
 
 #include <gtest/gtest.h>
 
+#include "loader/image.hpp"
+#include "support/eboot_facts.hpp"
 #include "support/game.hpp"
 #include "support/process.hpp"
 
@@ -21,50 +23,18 @@ using bb::test::quote;
 using bb::test::Result;
 using bb::test::run;
 
+namespace facts = bb::test::eboot_facts;
+
 using LibraryCounts = std::tuple<std::string, int, int>;  // library, func, object
 
-// The imports of eboot.elf by library, in the order of the summary of tools/elfimports.
-const std::vector<LibraryCounts> eboot_imports = {
-    {"libc", 197, 19},
-    {"libkernel", 79, 1},
-    {"libSceGnmDriver", 50, 0},
-    {"libSceNet", 35, 0},
-    {"libScePosix", 32, 0},
-    {"libSceNpMatching2", 27, 0},
-    {"libSceHttp", 24, 0},
-    {"libSceNpManager", 20, 0},
-    {"libSceFios2", 17, 0},
-    {"libSceNpWebApi", 17, 0},
-    {"libSceAvPlayer", 16, 0},
-    {"libSceNpScore", 14, 0},
-    {"libSceAjm", 12, 0},
-    {"libSceSaveData", 11, 0},
-    {"libSceVoice", 11, 0},
-    {"libSceRtc", 10, 0},
-    {"libScePad", 9, 0},
-    {"libSceVideoOut", 8, 0},
-    {"libSceNpSignaling", 7, 0},
-    {"libSceNpUtility", 7, 0},
-    {"libSceAudioOut", 6, 0},
-    {"libSceNetCtl", 6, 0},
-    {"libSceNpTrophy", 6, 0},
-    {"libSceUserService", 6, 0},
-    {"libSceImeDialog", 5, 0},
-    {"libSceNpProfileDialog", 5, 0},
-    {"libScePlayGo", 5, 0},
-    {"libSceSystemService", 5, 0},
-    {"libSceMouse", 4, 0},
-    {"libSceMsgDialog", 4, 0},
-    {"libSceNpAuth", 4, 0},
-    {"libSceNpCommerce", 4, 0},
-    {"libSceSaveDataDialog", 4, 0},
-    {"libSceAppContent", 3, 0},
-    {"libSceAudioIn", 3, 0},
-    {"libSceSysmodule", 3, 0},
-    {"libSceNpCommon", 2, 0},
-    {"libSceSsl", 2, 0},
-    {"libSceCommonDialog", 1, 0},
-};
+// The imports of the eboot by library, as bb-load prints them.
+std::vector<LibraryCounts> eboot_imports() {
+    std::vector<LibraryCounts> out;
+    for (const facts::LibraryImports& entry : facts::library_imports) {
+        out.emplace_back(entry.library, entry.functions, entry.objects);
+    }
+    return out;
+}
 
 const std::string bb_load = quote(BB_LOAD_PATH);
 
@@ -139,41 +109,56 @@ TEST(BbLoadGame, PrintsTheLoadSet) {
     std::string last;
     std::vector<ModuleOutput> modules = parse(r.output, last);
     ASSERT_EQ(modules.size(), 3U) << r.output;
-    // The relocation counts are those of the tables that tools/common/ps4elf.py reads; 686 of
-    // the 701 imports are referenced, 20 of them data.
-    EXPECT_EQ(modules[0].header, (std::vector<std::string>{
-                                     "module     eboot.bin id 1",
-                                     "base       0x10000000",
-                                     "entry      0xa0",
-                                     "segment    0x0 size 0x50d96dc file 0x50d96dc r-x",
-                                     "segment    0x50dc000 size 0x5f70f4 file 0x309b38 rw-",
-                                     "tls        0x50dc040 file 0x0 mem 0x750 align 0x10",
-                                     "procparam  0x50dc000",
-                                     "reloc      R_X86_64_64 2838",
-                                     "reloc      R_X86_64_GLOB_DAT 23",
-                                     "reloc      R_X86_64_JUMP_SLOT 661",
-                                     "reloc      R_X86_64_RELATIVE 231478",
-                                 }));
-    EXPECT_EQ(modules[0].imports, "imports    701 in 39 libraries");
-    EXPECT_EQ(modules[0].libraries, eboot_imports);
-    // 14 of the libc imports are never referenced.
-    EXPECT_EQ(modules[0].bindings["libc"], "202 0 0 14");
-    EXPECT_EQ(modules[0].bindings["libSceFios2"], "17 0 0 0");
-    // All 80 libkernel imports go to HLE, at least 16 of them to implementations in
-    // src/hle/kernel. Bounds rather than exact numbers, so that each new kernel function
-    // doesn't edit this line.
-    EXPECT_TRUE(hle_at_least(modules[0].bindings["libkernel"], 80, 16));
+    EXPECT_EQ(modules[0].header,
+              (std::vector<std::string>{
+                  "module     eboot.bin id 1",
+                  std::format("base       {:#x}", bb::loader::default_base),
+                  std::format("entry      {:#x}", facts::entry),
+                  std::format("segment    {:#x} size {:#x} file {:#x} r-x", facts::code.link_addr,
+                              facts::code.mem_size, facts::code.file_size),
+                  std::format("segment    {:#x} size {:#x} file {:#x} rw-", facts::data.link_addr,
+                              facts::data.mem_size, facts::data.file_size),
+                  std::format("tls        {:#x} file {:#x} mem {:#x} align {:#x}",
+                              facts::tls.link_addr, facts::tls.file_size, facts::tls.mem_size,
+                              facts::tls.align),
+                  std::format("procparam  {:#x}", facts::proc_param),
+                  std::format("reloc      R_X86_64_64 {}", facts::relocs_64),
+                  std::format("reloc      R_X86_64_GLOB_DAT {}", facts::relocs_glob_dat),
+                  std::format("reloc      R_X86_64_JUMP_SLOT {}", facts::relocs_jump_slot),
+                  std::format("reloc      R_X86_64_RELATIVE {}", facts::relocs_relative),
+              }));
+    EXPECT_EQ(modules[0].imports, std::format("imports    {} in {} libraries", facts::imports,
+                                              facts::library_imports.size()));
+    EXPECT_EQ(modules[0].libraries, eboot_imports());
+    // All libc imports are exported by libc.prx, but some are never referenced.
+    const facts::LibraryImports libc = facts::imports_of("libc");
+    EXPECT_EQ(modules[0].bindings["libc"],
+              std::format("{} 0 0 {}",
+                          libc.functions + libc.objects - facts::unreferenced_libc_imports,
+                          facts::unreferenced_libc_imports));
+    EXPECT_EQ(modules[0].bindings["libSceFios2"],
+              std::format("{} 0 0 0", facts::imports_of("libSceFios2").functions));
+    // All libkernel imports go to HLE, at least 16 of them to implementations in src/hle/kernel.
+    // Bounds rather than exact numbers, so that each new kernel function doesn't edit this line.
+    const facts::LibraryImports libkernel = facts::imports_of("libkernel");
+    EXPECT_TRUE(hle_at_least(modules[0].bindings["libkernel"],
+                             libkernel.functions + libkernel.objects, 16));
     // src/hle/net implements sceNetInit, sceNetPoolCreate and sceNetEpollWait.
-    EXPECT_EQ(modules[0].bindings["libSceNet"], "0 3 32 0");
+    EXPECT_EQ(modules[0].bindings["libSceNet"],
+              std::format("0 3 {} 0", facts::imports_of("libSceNet").functions - 3));
 
     EXPECT_EQ(modules[1].header.at(0), "module     libSceFios2.prx id 2");
-    EXPECT_EQ(modules[1].header.at(1), "base       0x156d4000");
-    EXPECT_EQ(modules[1].header.back(), "reloc      R_X86_64_DTPMOD64 3");
+    EXPECT_EQ(modules[1].header.at(1), 
+              std::format("base       {:#x}", bb::loader::default_base + facts::fios2_offset));
+    EXPECT_EQ(modules[1].header.back(),
+              std::format("reloc      R_X86_64_DTPMOD64 {}", facts::fios2_dtpmod_relocs));
     EXPECT_EQ(modules[1].imports, "imports    81 in 4 libraries");
     EXPECT_EQ(modules[1].bindings["libSceLibcInternal"], "15 0 1 0");
     EXPECT_EQ(modules[2].header.at(0), "module     libc.prx id 3");
-    EXPECT_EQ(modules[2].header.at(1), "base       0x1584c000");
-    EXPECT_EQ(modules[2].header.back(), "reloc      R_X86_64_DTPMOD64 14");
+    EXPECT_EQ(modules[2].header.at(1), 
+              std::format("base       {:#x}", bb::loader::default_base + facts::libc_offset));
+    EXPECT_EQ(modules[2].header.back(),
+              std::format("reloc      R_X86_64_DTPMOD64 {}", facts::libc_dtpmod_relocs));
     EXPECT_EQ(modules[2].imports, "imports    79 in 2 libraries");
     EXPECT_EQ(modules[2].bindings["libSceFios2"], "8 0 0 0");
     // At most 468 stubs across the load set; each new HLE function lowers the number.

@@ -6,12 +6,10 @@
 
 #include <gtest/gtest.h>
 
-#include "common/file.hpp"
 #include "common/sha256.hpp"
 #include "loader/bytes.hpp"
 #include "loader/elf.hpp"
 #include "support/elf_builder.hpp"
-#include "support/game.hpp"
 
 namespace {
 
@@ -168,15 +166,6 @@ TEST(SelfToElf, SurvivesCorruptHeaders) {
             }
         }
     }
-}
-
-TEST(SelfToElfGame, RebuildsThePinnedEboot) {
-    BB_REQUIRE_GAME(game);
-    auto self = bb::common::read_file(game / "eboot.bin");
-    ASSERT_EQ(bb::common::to_hex(bb::common::sha256(self)), bb::loader::eboot_bin_sha256);
-    // eboot.elf in PINNED_ELFS of tools/common/ps4elf.py: the output of tools/self2elf.
-    EXPECT_EQ(bb::common::to_hex(bb::common::sha256(self_to_elf(self))),
-              "941f887a562aae054fac35af8cc8f27cf075f3d4cc2e029fb5ae2a663aaa5ae7");
 }
 
 }  // namespace

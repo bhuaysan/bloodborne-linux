@@ -15,7 +15,6 @@
 
 #include <gtest/gtest.h>
 
-#include "common/file.hpp"
 #include "hle/hle.hpp"
 #include "hle/link.hpp"
 #include "loader/bytes.hpp"
@@ -23,7 +22,7 @@
 #include "loader/image.hpp"
 #include "loader/load_set.hpp"
 #include "loader/relocate.hpp"
-#include "loader/self.hpp"
+#include "support/eboot_facts.hpp"
 #include "support/elf_builder.hpp"
 #include "support/game.hpp"
 
@@ -647,159 +646,13 @@ TEST(Link, BindsImportsToExportsFirst) {
     EXPECT_THROW(bb::hle::register_export("libc", "FFFFFFFFFFF", libc), std::logic_error);
 }
 
-TEST(ParseDynamicGame, ReadsTheEboot) {
-    BB_REQUIRE_GAME(game);
-    auto elf = self_to_elf(bb::common::read_file(game / "eboot.bin"));
-    auto phdrs = read_phdrs(elf, read_elf_header(elf));
-    DynamicInfo info = parse_dynamic(elf, phdrs);
-
-    // Counts as tools/elfimports and tools/common/ps4elf.py report them for eboot.elf.
-    EXPECT_EQ(info.symbols.size(), 703U);
-    auto undefined = [&](std::uint8_t type) {
-        return std::count_if(info.symbols.begin(), info.symbols.end(), [&](const Symbol& s) {
-            return s.shndx == 0 && s.type == type && s.name.find('#') != std::string::npos;
-        });
-    };
-    EXPECT_EQ(undefined(2), 681);  // STT_FUNC imports
-    EXPECT_EQ(undefined(1), 20);   // STT_OBJECT imports
-    auto count = [](const std::vector<Rela>& relas, std::uint32_t type) {
-        return std::count_if(relas.begin(), relas.end(),
-                             [&](const Rela& r) { return r.type == type; });
-    };
-    EXPECT_EQ(info.plt_relocs.size(), 661U);
-    EXPECT_EQ(count(info.plt_relocs, r_x86_64_jump_slot), 661);
-    EXPECT_EQ(info.relocs.size(), 234339U);
-    EXPECT_EQ(count(info.relocs, r_x86_64_relative), 231478);
-    EXPECT_EQ(count(info.relocs, r_x86_64_64), 2838);
-    EXPECT_EQ(count(info.relocs, r_x86_64_glob_dat), 23);
-
-    EXPECT_EQ(info.self.id, 0);
-    EXPECT_FALSE(info.soname);
-    EXPECT_TRUE(info.textrel);
-    EXPECT_EQ(info.init, 0x20U);
-    EXPECT_EQ(info.fini, 0x2ba8220U);
-    for (const auto& array : {info.preinit_array, info.init_array, info.fini_array}) {
-        ASSERT_TRUE(array);
-        EXPECT_EQ(array->addr, 0x53e5b38U);  // all three empty, at the same address
-        EXPECT_EQ(array->size, 0U);
-    }
-    EXPECT_EQ(info.needed.size(), 42U);
-    auto exported = [](const Library& lib) { return lib.exported; };
-    EXPECT_EQ(std::count_if(info.libraries.begin(), info.libraries.end(), exported), 0);
-    EXPECT_EQ(info.libraries.size(), 43U);
-    auto unused = [](const Library& lib) { return !lib.module; };
-    EXPECT_EQ(std::count_if(info.libraries.begin(), info.libraries.end(), unused), 4);
-    auto imports = [&](std::string_view library, std::uint8_t type) {
-        return std::count_if(info.symbols.begin(), info.symbols.end(), [&](const Symbol& s) {
-            return s.kind == Symbol::Kind::import && s.decoded.library == library &&
-                   s.decoded.type == type;
-        });
-    };
-    auto kind = [&](Symbol::Kind k) {
-        return std::count_if(info.symbols.begin(), info.symbols.end(),
-                             [&](const Symbol& s) { return s.kind == k; });
-    };
-    EXPECT_EQ(kind(Symbol::Kind::import), 701);
-    EXPECT_EQ(kind(Symbol::Kind::none), 2);
-    EXPECT_EQ(imports("libc", stt_func), 197);
-    EXPECT_EQ(imports("libc", stt_object), 19);
-    EXPECT_EQ(imports("libkernel", stt_func), 79);
-    EXPECT_EQ(imports("libkernel", stt_object), 1);
-    EXPECT_EQ(imports("libScePosix", stt_func), 32);
-    EXPECT_EQ(imports("libSceAppContent", stt_func), 3);
-    // Library names and the module and file names they come from.
-    auto module_of = [&](std::string_view library) -> const Module* {
-        auto lib = std::find_if(info.libraries.begin(), info.libraries.end(),
-                                [&](const Library& l) { return l.name == library; });
-        if (lib == info.libraries.end() || !lib->module || *lib->module == 0 ||
-            *lib->module > info.needed.size()) {
-            return nullptr;
-        }
-        return &info.needed[*lib->module - 1];
-    };
-    const Module* posix = module_of("libScePosix");
-    const Module* app_content = module_of("libSceAppContent");
-    ASSERT_TRUE(posix);
-    ASSERT_TRUE(app_content);
-    EXPECT_EQ(posix->name, "libkernel");
-    EXPECT_EQ(app_content->name, "libSceAppContentUtil");
-    EXPECT_EQ(app_content->file, "libSceAppContent.prx");
-}
-
-TEST(RelocateGame, RelocatesTheEboot) {
-    BB_REQUIRE_GAME(game);
-    Image image = map_eboot(game);
-    std::map<std::string, std::uintptr_t> fakes;  // a distinct address per NID#library
-    relocate(image, [&](const Import& imp) {
-        std::uintptr_t next = 0x7e00'0000'0000 + 0x20 * (fakes.size() + 1);
-        return fakes.try_emplace(imp.nid + '#' + imp.library, next).first->second;
-    }, eboot_module_id);
-    EXPECT_EQ(fakes.size(), 686U);  // of the 701 imports, as tools/common/ps4elf.py counts them
-
-    for (const Rela& r : image.dyn.plt_relocs) {
-        const Import& imp = image.dyn.symbols[r.sym].decoded;
-        ASSERT_EQ(slot(image, r.offset), fakes.at(imp.nid + '#' + imp.library)) << r.offset;
-    }
-    EXPECT_EQ(slot(image, 0x513b330), default_base + 0x5540528);  // the first R_X86_64_RELATIVE
-    // No target in the code segment despite DT_TEXTREL, and imported data is used at offsets
-    // 0 and 0x10 only (docs/design/runtime.md, "Data imports").
-    for (const Rela& r : image.dyn.relocs) {
-        ASSERT_GE(r.offset, image.segments[1].link_addr);
-        if (r.type == r_x86_64_64 && image.dyn.symbols[r.sym].type == stt_object) {
-            ASSERT_TRUE(r.addend == 0 || r.addend == 0x10) << r.offset;
-        }
-    }
-    image.finalize_protection();
-}
-
 TEST(LoadSet, EbootThrowsWithoutAnEboot) {
     LoadSet set;
     EXPECT_THROW(set.eboot(), std::logic_error);
     EXPECT_THROW(std::as_const(set).eboot(), std::logic_error);
 }
 
-// Maps eboot, libSceFios2 and libc one after the other, with module ids 1 to 3, and relocates
-// them with fake imports. libc.prx also exports 4 STT_TLS symbols, which exports() skips.
-TEST(LoadSetGame, MapsAndRelocatesTheLoadSet) {
-    BB_REQUIRE_GAME(game);
-    LoadSet set = map_load_set(game);
-    ASSERT_EQ(set.modules.size(), 3U);
-    const LoadedModule& eboot = set.modules[0];
-    const LoadedModule& fios2 = set.modules[1];
-    const LoadedModule& libc = set.modules[2];
-    EXPECT_EQ(&set.eboot(), &eboot);
-    EXPECT_EQ(eboot.file, "eboot.bin");
-    EXPECT_EQ(eboot.id, eboot_module_id);
-    EXPECT_EQ(eboot.image.base, default_base);
-    EXPECT_EQ(fios2.file, "libSceFios2.prx");
-    EXPECT_EQ(fios2.id, 2U);
-    EXPECT_EQ(fios2.image.base, default_base + 0x56d4000);  // right after the eboot's .bss
-    EXPECT_EQ(fios2.image.dyn.self.name, "libSceFios2");
-    EXPECT_EQ(libc.file, "libc.prx");
-    EXPECT_EQ(libc.id, 3U);
-    EXPECT_EQ(libc.image.base, fios2.image.base + 0x178000);
-    EXPECT_EQ(libc.image.dyn.self.name, "libc");
-    EXPECT_TRUE(exports(eboot.image).empty());
-    EXPECT_EQ(exports(fios2.image).size(), 165U);  // as tools/elfimports counts them
-    EXPECT_EQ(exports(libc.image).size(), 1597U + 539U);
-
-    for (LoadedModule& m : set.modules) {
-        relocate(m.image, [](const Import&) { return std::uintptr_t{0x7e00'0000'0000}; }, m.id);
-        m.image.finalize_protection();
-    }
-    std::size_t dtpmod = 0;  // 3 in libSceFios2, 14 in libc, each holding the module id
-    for (const LoadedModule* m : {&fios2, &libc}) {
-        for (const Rela& r : m->image.dyn.relocs) {
-            if (r.type == r_x86_64_dtpmod64) {
-                ++dtpmod;
-                EXPECT_EQ(slot(m->image, r.offset), m->id) << m->file;
-            }
-        }
-    }
-    EXPECT_EQ(dtpmod, 17U);
-}
-
-// The bound counts are those of tools/elfimports: the eboot uses 216 libc NIDs, the eboot and
+// The bound counts are those of tools/elfimports: the eboot uses all its libc NIDs, the eboot and
 // libc.prx 21 libSceFios2 NIDs, and libSceFios2.prx 15 libSceLibcInternal NIDs that libc.prx
 // exports, all 16 of them imported, one of them data.
 TEST(LinkGame, BindsTheLoadSet) {
@@ -824,7 +677,9 @@ TEST(LinkGame, BindsTheLoadSet) {
         }
     }
     EXPECT_EQ(exported.size(), 3U);
-    EXPECT_EQ(exported["libc"].size(), 216U);
+    constexpr auto eboot_libc = bb::test::eboot_facts::imports_of("libc");
+    EXPECT_EQ(exported["libc"].size(),
+              static_cast<std::size_t>(eboot_libc.functions + eboot_libc.objects));
     EXPECT_EQ(exported["libSceFios2"].size(), 21U);
     EXPECT_EQ(exported["libSceLibcInternal"].size(), 15U);
     EXPECT_FALSE(other.contains("libc"));

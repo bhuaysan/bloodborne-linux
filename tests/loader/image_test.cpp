@@ -21,7 +21,6 @@
 #include "loader/elf.hpp"
 #include "loader/load_set.hpp"
 #include "support/elf_builder.hpp"
-#include "support/game.hpp"
 
 namespace {
 
@@ -30,7 +29,7 @@ using bb::test::Bytes;
 using bb::test::protection;
 using bb::test::put;
 
-constexpr std::uintptr_t test_base = 0x30000000;  // clear of default_base, used by game tests
+constexpr std::uintptr_t test_base = 0x30000000;  // clear of default_base
 constexpr std::uint64_t code_size = 0x1800, data_link = 0x4000, data_file = 0x100,
                         data_mem = 0x3000, dynlib_offset = 0x4000;
 constexpr std::uint32_t pf_rx = 5, pf_rw = 6;
@@ -409,25 +408,6 @@ TEST(Image, RefusesBadFdes) {
                         "FDE at 0x1030 starts at 0x100000010, the search table says 0x10", 0x10);
 }
 
-TEST(MapEbootGame, FindsFunctionSizes) {
-    BB_REQUIRE_GAME(game);
-    Image image = map_eboot(game);
-    ASSERT_TRUE(image.unwind);
-    EXPECT_EQ(image.unwind->link_addr, 0x4F41510U);
-    EXPECT_EQ(image.unwind->fde_count, 162959U);
-    // Sizes from tools/noreturn's fde_ranges over eboot.elf: the first and last table entries,
-    // two in between and two functions shorter than a hook patch (mov al, 1; ret and ret).
-    const std::pair<std::uint64_t, std::uint64_t> sizes[] = {
-        {0xA0, 0x4F},        {0xF0, 0x77}, {0x190A950, 0xC3},
-        {0x2BBE370, 0x135}, {0x34F0, 3},  {0x6600, 1}};
-    for (auto [link, size] : sizes) {
-        EXPECT_EQ(image.function_size(link), size) << link;
-    }
-    for (std::uint64_t miss : {0xA1UL, 0x2BBE371UL, 0x4F41510UL, 0x50DC000UL}) {
-        EXPECT_FALSE(image.function_size(miss)) << miss;
-    }
-}
-
 TEST(MapEboot, RefusesAnotherBuild) {
     auto dir = std::filesystem::path(testing::TempDir()) / "bb-map-eboot-test";
     std::filesystem::create_directories(dir);
@@ -447,38 +427,6 @@ TEST(MapPrx, RefusesAnotherBuildAndUnpinnedNames) {
                             "libSceFace.prx is not a pinned PRX");
     std::filesystem::remove_all(dir);
     EXPECT_EQ(protection(test_base), "unmapped");
-}
-
-TEST(MapEbootGame, MapsTheEbootAtTheDefaultBase) {
-    BB_REQUIRE_GAME(game);
-    Image image = map_eboot(game);
-    EXPECT_EQ(image.base, default_base);
-    EXPECT_EQ(image.entry, 0xA0U);
-    ASSERT_EQ(image.segments.size(), 2U);
-    const Segment& code = image.segments[0];
-    EXPECT_EQ(code.link_addr, 0U);
-    EXPECT_EQ(code.mem_size, 0x50D96DCU);
-    EXPECT_EQ(code.file_size, 0x50D96DCU);
-    EXPECT_EQ(code.prot, PROT_READ | PROT_EXEC);
-    const Segment& data = image.segments[1];
-    EXPECT_EQ(data.link_addr, 0x50DC000U);
-    EXPECT_EQ(data.mem_size, 0x5F70F4U);
-    EXPECT_EQ(data.file_size, 0x309B38U);
-    EXPECT_EQ(data.prot, PROT_READ | PROT_WRITE);
-    ASSERT_TRUE(image.tls);
-    EXPECT_EQ(image.tls->link_addr, 0x50DC040U);
-    EXPECT_EQ(image.tls->file_size, 0U);
-    EXPECT_EQ(image.tls->mem_size, 0x750U);
-    EXPECT_EQ(image.tls->align, 0x10U);
-    EXPECT_EQ(image.proc_param, 0x50DC000U);
-
-    image.finalize_protection();
-    EXPECT_EQ(protection(default_base), "r-xp");
-    EXPECT_EQ(protection(default_base + 0x50D96DB), "r-xp");
-    EXPECT_EQ(protection(default_base + 0x50DB000), "---p");  // gap before the data segment
-    EXPECT_EQ(protection(default_base + 0x50DC000), "rw-p");
-    EXPECT_EQ(protection(default_base + 0x56D30F3), "rw-p");
-    EXPECT_EQ(protection(default_base + 0x56D4000), "unmapped");
 }
 
 }  // namespace
