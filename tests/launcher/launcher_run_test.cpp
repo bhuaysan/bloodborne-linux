@@ -506,7 +506,8 @@ TEST(LauncherRun, ThePicturePageSavesTheImageQualityChoices) {
 }
 
 // The sound output, the last row (#750): its dropdown lists System default, then the devices SDL
-// lists, here the one of SDL's dummy driver. The first device goes into audio_device.
+// lists, here the one of SDL's dummy driver (named in SDL's SDL_audio.c, DEFAULT_PLAYBACK_DEVNAME).
+// The first device goes into audio_device. A row added above it changes the count of downs.
 TEST(LauncherRun, ThePicturePageSavesTheSoundOutput) {
     const Dir dir;
     std::string script = to_picture;
