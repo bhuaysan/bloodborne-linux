@@ -102,6 +102,8 @@ Releases start on glibc 2.31 and newer. The package brings its own SDL, FFmpeg a
 
 A system without a desktop (a server or container image) also needs the libraries a desktop brings: on Ubuntu and Debian `libxkbcommon0 libwayland-cursor0 libwayland-egl1 libxext6 libasound2t64 libpulse0 libpipewire-0.3-0t64 pipewire-bin libfontconfig1` (on Ubuntu 22.04 and Debian 12 `libasound2` and `libpipewire-0.3-0`), on Arch `libxkbcommon libxext alsa-lib libpulse pipewire fontconfig`. Without the display libraries the window does not open; without the sound ones the game plays silently. NVIDIA's driver and Intel GPUs are not checked yet. The game needs fewer than 2000 memory mappings, so the older `vm.max_map_count` default of 65530 is enough.
 
+If the game hitches for one frame (50 to 100 ms) about once a minute, look for a program that reads the memory use of every process, such as a system monitor that shows PSS or shared memory, or a desktop app that polls `/proc/*/smaps_rollup`. While the kernel collects that figure for the game's 4 GiB of mapped memory, the game's write tracking has to wait. Closing that program removes the hitch (#792).
+
 ## Known limits
 
 - At 60 FPS and above, a few small differences from 30 remain. They are listed in [docs/design/frame-rate.md](docs/design/frame-rate.md).
