@@ -16,8 +16,9 @@ using namespace std::chrono;
 
 constexpr std::int32_t invalid = kernel::sce_error(22);  // guest EINVAL
 
-// The tick epoch, 1600-01-01 00:00:00 UTC, and the end of what a date can hold.
-constexpr sys_days epoch = sys_days{year{1600} / January / 1};
+// The tick epoch, 0001-01-01 00:00:00 UTC (proleptic Gregorian), and the end of what a date can
+// hold.
+constexpr sys_days epoch = sys_days{year{1} / January / 1};
 constexpr sys_days end = sys_days{year{10000} / January / 1};
 
 constexpr std::uint64_t to_ticks(microseconds since_epoch) {

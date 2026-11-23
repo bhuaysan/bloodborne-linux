@@ -20,10 +20,11 @@ struct GuestDate {
 };
 static_assert(sizeof(GuestDate) == 16);
 
-// A tick counts microseconds (eboot 0x20ee420-0x20ee483). The code doesn't show its epoch, so
-// it is our choice: 1600-01-01 00:00:00 UTC, the start of the 400-year calendar cycle that holds
-// the lowest year the game accepts (1601, eboot 0x20ee240). Every date the game handles then
-// has a positive tick, and 0 stays free for "no date" (eboot 0x145b77e).
+// A tick counts microseconds (eboot 0x20ee420-0x20ee483) since 0001-01-01 00:00:00 UTC in the
+// proleptic Gregorian calendar. The eboot doesn't show the epoch; this is the one shadPS4's RTC
+// functions use (UNIX_EPOCH_TICKS), so ticks match other systems' if they leave the process. The
+// lowest year the game accepts is 1601 (eboot 0x20ee240), so every date it handles has a
+// positive tick and 0 stays free for "no date" (eboot 0x145b77e).
 inline constexpr std::uint64_t ticks_per_second_value = 1'000'000;
 
 // The current date and time in UTC (sceRtcGetCurrentClockLocalTime, ZPD1YOKI+Kw).
