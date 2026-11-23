@@ -54,8 +54,9 @@ elif a[0] == "api":
     expr = a[a.index("--jq") + 1]
     if "/check-runs" in path:
         jq({"total_count": 0, "check_runs": load("check_runs.json")}, expr)
-    elif "/check-suites" in path:
-        jq({"total_count": 0, "check_suites": load("check_suites.json")}, expr)
+    elif "/actions/runs" in path:
+        runs = load("runs.json")
+        jq({"total_count": runs["total"], "workflow_runs": runs["runs"]}, expr)
     elif path.split("?")[0].endswith("/status"):
         if os.path.exists(os.path.join(d, "status_error")):
             sys.exit(1)
@@ -77,8 +78,9 @@ def check_run(name, conclusion, status="completed"):
     return {"name": name, "status": status, "conclusion": conclusion}
 
 
-def suite(sid, status, app):
-    return {"id": sid, "status": status, "app": {"slug": app}}
+def wf_run(rid, status, created, event="pull_request", workflow=7):
+    return {"id": rid, "name": "CI", "workflow_id": workflow, "event": event,
+            "status": status, "created_at": created}
 
 
 @unittest.skipUnless(shutil.which("jq") and shutil.which("git"),
@@ -134,10 +136,12 @@ class MergePrCiGate(unittest.TestCase):
                         FAKE_HEAD_OID=self.head)
         self.set_ci([check_run("build (release)", "success")], [])
 
-    def set_ci(self, check_runs, statuses, suites=()):
+    def set_ci(self, check_runs, statuses, runs=(), total=None):
         (self.data / "check_runs.json").write_text(json.dumps(check_runs))
         (self.data / "statuses.json").write_text(json.dumps(statuses))
-        (self.data / "check_suites.json").write_text(json.dumps(list(suites)))
+        runs = list(runs)
+        (self.data / "runs.json").write_text(json.dumps(
+            {"total": len(runs) if total is None else total, "runs": runs}))
 
     def merge(self, *flags):
         return run("sh", "tools/merge-pr.sh", *flags, "1", cwd=self.clone,
@@ -196,23 +200,29 @@ class MergePrCiGate(unittest.TestCase):
                     [{"context": "ext", "state": "error"}])
         self.assert_refused(self.merge("--sha", self.head), "fail\text")
 
-    def test_running_suite_refused(self):
+    def test_running_workflow_refused(self):
         # the build jobs of a running workflow don't exist yet
         self.set_ci([check_run("privacy", "success"),
                      check_run("package", "skipped")], [],
-                    [suite(1, "completed", "github-actions"),
-                     suite(2, "in_progress", "github-actions"),
-                     suite(3, "queued", "other-app")])
+                    [wf_run(1, "completed", "2026-01-01T10:00:00Z", "push"),
+                     wf_run(2, "in_progress", "2026-01-01T10:00:01Z")])
         self.assert_refused(self.merge("--sha", self.head),
-                            "pending\tcheck suite 2 (in_progress)")
+                            "pending\tActions run 2 CI (pull_request, in_progress)")
 
-    def test_queued_foreign_suite_ignored(self):
+    def test_stuck_older_run_ignored(self):
+        # a run stuck queued for good, superseded by reopening the PR
         self.set_ci([check_run("build (release)", "success")], [],
-                    [suite(1, "completed", "github-actions"),
-                     suite(3, "queued", "other-app")])
+                    [wf_run(1, "queued", "2026-01-01T10:00:00Z"),
+                     wf_run(2, "completed", "2026-01-01T12:00:00Z"),
+                     wf_run(3, "completed", "2026-01-01T09:00:00Z", "push")])
         r = self.merge("--sha", self.head)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.origin_main(), self.head)
+
+    def test_runs_beyond_one_page_refused(self):
+        self.set_ci([check_run("build (release)", "success")], [],
+                    [wf_run(1, "completed", "2026-01-01T10:00:00Z")], total=101)
+        self.assert_refused(self.merge("--sha", self.head), "one page")
 
     def test_status_api_error_refused(self):
         (self.data / "status_error").write_text("")
