@@ -3,11 +3,19 @@
 # identity. GitHub's merge button writes the account's display name into
 # the history, so it must not be used.
 #
-# Usage: tools/merge-pr.sh [--maintainer] [--sha <commit>] <pr-number>
+# Usage: tools/merge-pr.sh [--maintainer [--allow-red-ci <reason>]]
+#                          [--sha <commit>] <pr-number>
 #
 # --sha is the PR head commit the independent review saw. The merge is
 # refused if the PR branch points anywhere else, e.g. after a late push.
 # It is required unless --maintainer is given.
+#
+# The merge is also refused unless CI on that head commit is green: at
+# least one check, none failed, cancelled or still running. The local
+# tests build only the debug preset, so a release -Werror failure shows
+# up only there. --allow-red-ci (maintainer only) merges anyway and posts
+# the reason with the failing checks as a comment on the PR, so the
+# decision is recorded.
 #
 # Rebases the PR branch onto origin/main in a temporary worktree, runs
 # tools/run-tests.sh (without the C++ build when only docs change, as in CI)
@@ -38,18 +46,23 @@ set -f
 # These would make git ignore the :(glob) and :! magic in the pathspecs.
 unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS
 
-usage() { echo "usage: $0 [--maintainer] [--sha <commit>] <pr-number>" >&2; exit 2; }
+usage() { echo "usage: $0 [--maintainer [--allow-red-ci <reason>]] [--sha <commit>] <pr-number>" >&2; exit 2; }
 maintainer=0
 want_sha=
+red_ci_reason=
 while [ $# -gt 1 ]; do
     case "$1" in
         --maintainer) maintainer=1; shift ;;
+        --allow-red-ci) [ $# -gt 2 ] || usage; red_ci_reason="$2"; shift 2
+            [ -n "$red_ci_reason" ] || { echo "--allow-red-ci needs a reason" >&2; exit 2; } ;;
         --sha) [ $# -gt 2 ] || usage; want_sha="$2"; shift 2 ;;
         *) usage ;;
     esac
 done
 [ $# -eq 1 ] || usage
 pr="$1"
+[ -z "$red_ci_reason" ] || [ "$maintainer" -eq 1 ] ||
+    { echo "--allow-red-ci is for the maintainer and needs --maintainer" >&2; exit 2; }
 [ -n "$want_sha" ] || [ "$maintainer" -eq 1 ] ||
     { echo "--sha <commit> is required: the PR head the review saw" >&2; exit 2; }
 # a commit id, not a ref name: "--sha origin/<branch>" would always match
@@ -98,6 +111,34 @@ case "$fetched" in
     *) echo "PR #$pr head is $fetched, not the reviewed $want_sha; review the new commits first" >&2
        exit 1 ;;
 esac
+
+# CI on the pinned head. Check runs (GitHub Actions) and commit statuses,
+# the latest run of each check only. Every line is "<bucket> <name>":
+# skipped and neutral count as passed, a run without a conclusion as
+# pending. The conclusion decides, not the status: GitHub can leave a
+# finished run "in_progress" with conclusion "success".
+ci="$(gh api --paginate "repos/{owner}/{repo}/commits/$fetched/check-runs?per_page=100" \
+        --jq '.check_runs[] | [(if .conclusion == null then "pending"
+            elif (.conclusion | IN("success", "skipped", "neutral")) then "pass"
+            else "fail" end), .name] | @tsv' &&
+      gh api --paginate "repos/{owner}/{repo}/commits/$fetched/status?per_page=100" \
+        --jq '.statuses[] | [(if .state == "success" then "pass"
+            elif .state == "pending" then "pending" else "fail" end), .context] | @tsv')" ||
+    { echo "could not read the CI checks of $fetched" >&2; exit 1; }
+ci_bad="$(printf '%s\n' "$ci" | grep -v '^pass' || true)"
+if [ -z "$ci" ]; then
+    ci_bad="no CI checks on $fetched yet"
+fi
+if [ -n "$ci_bad" ]; then
+    if [ -z "$red_ci_reason" ]; then
+        echo "CI on PR #$pr head $fetched is not green:" >&2
+        printf '%s\n' "$ci_bad" >&2
+        echo "wait for pending checks; a failure the PR didn't cause goes to the maintainer" >&2
+        exit 1
+    fi
+    echo "warning: CI on $fetched is not green, merging by maintainer decision:" >&2
+    printf '%s\n' "$ci_bad" >&2
+fi
 
 wt="$(mktemp -d)"
 gh_err="$(mktemp)"
@@ -161,6 +202,12 @@ fi
 tools/run-tests.sh $test_args || { echo "tests fail on the rebased branch" >&2; exit 1; }
 tools/privacy-check.sh "$main_base" ||
     { echo "privacy check fails on the rebased branch" >&2; exit 1; }
+if [ -n "$ci_bad" ]; then
+    # the record of the decision, before main moves
+    printf 'Merged with CI not green on %s, by maintainer decision: %s\n\n```\n%s\n```\n' \
+        "$fetched" "$red_ci_reason" "$ci_bad" | gh pr comment "$pr" --body-file - >/dev/null ||
+        { echo "could not record the CI decision on PR #$pr; main was not updated" >&2; exit 1; }
+fi
 echo "merging PR #$pr ($count commits from $head)"
 git log --oneline "$main_base..HEAD"
 
