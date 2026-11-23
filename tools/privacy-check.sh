@@ -29,14 +29,25 @@ problems="$( { git ls-tree -r -z --name-only HEAD
                git log -z --format= --name-only --diff-filter=AR "$range"; } |
     tr '\0' '\n' | sort -u | while IFS= read -r f; do path_problem "$f"; done)"
 [ -z "$problems" ] || fail "$problems"
-big="$(git rev-list --objects "$range" |
-    git cat-file --batch-check='%(objecttype) %(objectsize) %(rest)' |
-    # split by hand: read would strip trailing spaces from the path, and
-    # "symbols/a.csv " would get the larger symbols/*.csv limit
+# Every blob a commit of the range adds or changes, at every path, against
+# every parent of a merge (#31). Not rev-list --objects: it names a blob
+# only once, drops leading whitespace from the name and cuts it at a
+# newline. --raw without -z separates the path by a tab and C-quotes a
+# name with a tab, newline, quote or backslash, so a line holds one whole
+# path. A quoted name starts with '"' and never gets the symbols/*.csv limit.
+big="$(git -c core.quotePath=false log --raw --no-abbrev --no-renames \
+        --diff-merges=separate --root --format= "$range" |
+    awk -F '\t' '{ split($1, m, " "); if (m[2] != "160000" && m[4] !~ /^0+$/) print m[4] " /" $2 }' |
+    LC_ALL=C sort -u |
+    # %(rest) drops the whitespace after the id, so each path carries a
+    # leading "/" that is cut off again here
+    git cat-file --batch-check='%(objectsize) %(rest)' |
     while IFS= read -r line; do
-        type="${line%% *}"; line="${line#* }"
-        size="${line%% *}"; path="${line#* }"
-        [ "$type" = blob ] || continue
+        # split by hand: read would strip whitespace around the path, and
+        # "symbols/a.csv " would get the larger symbols/*.csv limit
+        size="${line%% *}"; path="${line#* /}"
+        # cat-file prints "<id> missing" for an object it cannot find
+        case "$size" in ""|*[!0-9]*) echo "cannot read the size of a blob: $line"; continue ;; esac
         [ "$size" -le "$(size_limit "$path")" ] || echo "file too large ($size bytes): $path"
     done)"
 [ -z "$big" ] || fail "$big"

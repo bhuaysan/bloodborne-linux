@@ -131,6 +131,72 @@ class PrivacyCheckTest(RepoTest):
                 self.assertIn("squashed before merging", result.stderr)
 
 
+class SizeLimitTest(RepoTest):
+    """The size check sees each new blob's exact path (#31)."""
+
+    BIG = b"0" * 3_000_000  # over the 2 MiB default, under the symbols/*.csv limit
+
+    def add(self, *names, content=BIG):
+        for name in names:
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        self.git("add", "--", *names)
+        self.git("commit", "-q", "-m", "Add files")
+
+    def assert_too_large(self, name):
+        result = self.check()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("file too large (3000000 bytes)", result.stderr)
+        return result
+
+    def test_symbols_csv_gets_the_larger_limit(self):
+        self.add("symbols/ok.csv")
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_default_limit(self):
+        self.add("big.dat")
+        self.assertIn("big.dat", self.assert_too_large("big.dat").stderr)
+
+    def test_leading_whitespace_keeps_the_default_limit(self):
+        self.add(" symbols/l.csv")
+        self.assertIn(" symbols/l.csv", self.assert_too_large(" symbols/l.csv").stderr)
+
+    def test_trailing_whitespace_keeps_the_default_limit(self):
+        self.add("symbols/t.csv ")
+        self.assert_too_large("symbols/t.csv ")
+
+    def test_newline_in_name_keeps_the_default_limit(self):
+        self.add("symbols/n.csv\nx")
+        self.assert_too_large("symbols/n.csv\nx")
+
+    def test_every_path_of_a_new_blob_is_checked(self):
+        # rev-list --objects names a blob once, by the first path it walks
+        self.add("symbols/a.csv", "zz/a.dat")
+        self.assertIn("zz/a.dat", self.assert_too_large("zz/a.dat").stderr)
+
+    def test_old_blob_at_a_new_path_is_checked(self):
+        self.add("symbols/a.csv")
+        self.git("tag", "-f", "base")
+        self.add("zz/a.dat")
+        self.assertIn("zz/a.dat", self.assert_too_large("zz/a.dat").stderr)
+
+    def test_blob_added_by_a_merge_is_checked(self):
+        self.commit("Side base")
+        self.git("checkout", "-q", "-b", "side")
+        self.add("symbols/s.csv", content=b"1\n")
+        self.git("checkout", "-q", "main")
+        self.add("symbols/s.csv", content=b"2\n")
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.git("merge", "-q", "side")
+        (self.repo / "symbols" / "s.csv").unlink()
+        (self.repo / "big.dat").write_bytes(self.BIG)
+        self.git("add", "-A")
+        self.git("commit", "-q", "--no-edit")
+        self.assert_too_large("big.dat")
+
+
 class NulByteTest(RepoTest):
     """A file with a NUL byte in the same diff must not hide a hit in another file (#39)."""
 
