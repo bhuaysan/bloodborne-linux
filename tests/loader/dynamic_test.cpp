@@ -24,38 +24,21 @@
 #include "loader/load_set.hpp"
 #include "loader/relocate.hpp"
 #include "loader/self.hpp"
+#include "support/elf_builder.hpp"
 #include "support/game.hpp"
 
 namespace {
 
 using namespace bb::loader;
-using Bytes = std::vector<std::byte>;
+using bb::test::Bytes;
+using bb::test::put;
 using Dyn = std::pair<std::uint64_t, std::uint64_t>;
 
-constexpr std::uint64_t dt_sce_pltrel = 0x6100002B, dt_sce_pltrelsz = 0x6100002D,
-                        dt_sce_relaent = 0x61000033, dt_sce_strtab = 0x61000035,
-                        dt_sce_strsz = 0x61000037, dt_sce_symtab = 0x61000039,
-                        dt_sce_syment = 0x6100003B, dt_sce_symtabsz = 0x6100003F;
-constexpr std::uint64_t dt_init = 0x0C, dt_fini = 0x0D, dt_init_array = 0x19,
-                        dt_init_arraysz = 0x1B, dt_preinit_array = 0x20,
-                        dt_preinit_arraysz = 0x21;
-constexpr std::uint64_t dt_needed = 1, dt_soname = 0x0E, dt_sce_module_info = 0x6100000D,
-                        dt_sce_needed_module = 0x6100000F, dt_sce_export_lib = 0x61000013,
-                        dt_sce_import_lib = 0x61000015, dt_sce_export_lib_attr = 0x61000017,
-                        dt_sce_import_lib_attr = 0x61000019;
 constexpr std::size_t dynlib_offset = 0x3000;  // file offset of PT_SCE_DYNLIBDATA
 
 // A module or library record.
 constexpr std::uint64_t record(std::uint64_t id, std::uint64_t version, std::uint32_t low) {
     return id << 48 | version << 32 | low;
-}
-
-template <class T>
-void put(Bytes& out, std::size_t offset, T value) {
-    if (out.size() < offset + sizeof value) {
-        out.resize(offset + sizeof value);
-    }
-    std::memcpy(out.data() + offset, &value, sizeof value);
 }
 
 struct Elf {
@@ -95,7 +78,7 @@ struct Synthetic {
                    {dt_sce_import_lib_attr, record(1, 0, 9)},
                    {dt_sce_export_lib_attr, record(0, 0, 1)},
                    {dt_soname, str("self.prx")},
-                   {0x16, 0},  // DT_TEXTREL
+                   {dt_textrel, 0},
                    {dt_init, 0x200},
                    {dt_init_array, 0x4300},
                    {dt_init_arraysz, 0x10},
@@ -146,13 +129,13 @@ struct Synthetic {
                              {dt_sce_symtab, append(symtab)},
                              {dt_sce_symtabsz, symtab.size()},
                              {dt_sce_syment, 24},
-                             {0x61000029, append(jmprel)},  // DT_SCE_JMPREL
+                             {dt_sce_jmprel, append(jmprel)},
                              {dt_sce_pltrelsz, jmprel.size()},
-                             {dt_sce_pltrel, 7},
-                             {0x6100002F, append(rela)},  // DT_SCE_RELA
-                             {0x61000031, rela.size()},   // DT_SCE_RELASZ
+                             {dt_sce_pltrel, dt_rela},
+                             {dt_sce_rela, append(rela)},
+                             {dt_sce_relasz, rela.size()},
                              {dt_sce_relaent, 24},
-                             {0x61000027, 0x4000}};  // DT_SCE_PLTGOT
+                             {dt_sce_pltgot, 0x4000}};
         dyn.insert(dyn.begin(), records.begin(), records.end());
         if (edit) {
             edit(dyn);
@@ -438,23 +421,7 @@ constexpr std::uintptr_t fake_func = 0x7e00'0000'1000, fake_object = 0x7e00'0000
 // `elf` with its ELF header and program headers written into the start of the code segment.
 Bytes to_file(const Elf& elf) {
     Bytes bytes = elf.bytes;
-    std::memcpy(bytes.data(), "\x7f" "ELF\x02\x01", 6);
-    put<std::uint16_t>(bytes, 0x10, et_sce_dynamic);
-    put<std::uint16_t>(bytes, 0x12, em_x86_64);
-    put<std::uint64_t>(bytes, 0x20, elf_header_size);  // e_phoff
-    put<std::uint16_t>(bytes, 0x36, phdr_size);
-    put<std::uint16_t>(bytes, 0x38, static_cast<std::uint16_t>(elf.phdrs.size()));
-    for (std::size_t i = 0; i < elf.phdrs.size(); ++i) {
-        const Phdr& ph = elf.phdrs[i];
-        std::size_t at = elf_header_size + i * phdr_size;
-        put(bytes, at, ph.type);
-        put(bytes, at + 0x04, ph.flags);
-        put(bytes, at + 0x08, ph.offset);
-        put(bytes, at + 0x10, ph.vaddr);
-        put(bytes, at + 0x20, ph.filesz);
-        put(bytes, at + 0x28, ph.memsz);
-        put(bytes, at + 0x30, ph.align);
-    }
+    bb::test::write_headers(bytes, elf.phdrs, 0, et_sce_dynamic);
     return bytes;
 }
 

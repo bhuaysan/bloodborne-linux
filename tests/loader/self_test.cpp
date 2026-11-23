@@ -10,6 +10,7 @@
 #include "common/sha256.hpp"
 #include "loader/bytes.hpp"
 #include "loader/elf.hpp"
+#include "support/elf_builder.hpp"
 #include "support/game.hpp"
 
 namespace {
@@ -18,15 +19,8 @@ using bb::loader::LoadError;
 using bb::loader::read_elf_header;
 using bb::loader::read_phdrs;
 using bb::loader::self_to_elf;
-using Bytes = std::vector<std::byte>;
-
-template <class T>
-void put(Bytes& out, std::size_t offset, T value) {
-    if (out.size() < offset + sizeof value) {
-        out.resize(offset + sizeof value);
-    }
-    std::memcpy(out.data() + offset, &value, sizeof value);
-}
+using bb::test::Bytes;
+using bb::test::put;
 
 constexpr std::size_t code_size = 0x400;
 constexpr std::uint64_t data_entry = 0x2804;  // signed, blocked, 16 KiB blocks
@@ -42,20 +36,10 @@ struct Synthetic {
 Synthetic build_self(void (*edit_elf)(Bytes&) = nullptr) {
     std::string_view libversion = "libversion";
     Bytes elf(0x1000 + code_size + libversion.size());
-    std::memcpy(elf.data(), "\x7f" "ELF\x02\x01", 6);  // 64-bit, little-endian
-    put<std::uint16_t>(elf, 0x10, bb::loader::et_sce_dynexec);
-    put<std::uint16_t>(elf, 0x12, bb::loader::em_x86_64);
-    put<std::uint64_t>(elf, 0x20, 0x40);  // e_phoff
-    put<std::uint16_t>(elf, 0x34, 0x40);  // e_ehsize
-    put<std::uint16_t>(elf, 0x36, 0x38);  // e_phentsize
-    put<std::uint16_t>(elf, 0x38, 2);     // e_phnum
-    auto phdr = [&](int i, std::uint32_t type, std::uint64_t offset, std::uint64_t size) {
-        put<std::uint32_t>(elf, 0x40 + i * 0x38, type);
-        put<std::uint64_t>(elf, 0x40 + i * 0x38 + 0x08, offset);
-        put<std::uint64_t>(elf, 0x40 + i * 0x38 + 0x20, size);
-    };
-    phdr(0, bb::loader::pt_load, 0x1000, code_size);
-    phdr(1, bb::loader::pt_sce_libversion, 0x1000 + code_size, libversion.size());
+    const bb::loader::Phdr phdrs[] = {
+        {bb::loader::pt_load, 0, 0x1000, 0, code_size, 0, 0},
+        {bb::loader::pt_sce_libversion, 0, 0x1000 + code_size, 0, libversion.size(), 0, 0}};
+    bb::test::write_headers(elf, phdrs);
     for (std::size_t i = 0; i < code_size; ++i) {
         elf[0x1000 + i] = static_cast<std::byte>(i * 7);
     }

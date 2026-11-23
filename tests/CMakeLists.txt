@@ -23,6 +23,11 @@ target_include_directories(bbtestsupport PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(bbtestsupport PRIVATE BB_MAIN_CHECKOUT="${BB_MAIN_CHECKOUT}")
 target_link_libraries(bbtestsupport PUBLIC bbcommon GTest::gtest PRIVATE bb_warnings)
 
+# The writers for the synthetic PS4 ELFs of the loader, hook and harness tests.
+add_library(bbelfbuilder STATIC support/elf_builder.cpp)
+target_include_directories(bbelfbuilder PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(bbelfbuilder PUBLIC bbloader PRIVATE bb_warnings)
+
 # The shader corpus reader and the spirv-val wrapper, used by tests/shadps4. The
 # tests that need spirv-val skip without it.
 find_program(BB_SPIRV_VAL spirv-val)

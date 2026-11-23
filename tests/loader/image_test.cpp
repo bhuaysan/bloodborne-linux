@@ -6,10 +6,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <initializer_list>
 #include <iterator>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -22,92 +20,36 @@
 #include "loader/bytes.hpp"
 #include "loader/elf.hpp"
 #include "loader/load_set.hpp"
+#include "support/elf_builder.hpp"
 #include "support/game.hpp"
 
 namespace {
 
 using namespace bb::loader;
-using Bytes = std::vector<std::byte>;
+using bb::test::Bytes;
+using bb::test::protection;
+using bb::test::put;
 
 constexpr std::uintptr_t test_base = 0x30000000;  // clear of default_base, used by game tests
 constexpr std::uint64_t code_size = 0x1800, data_link = 0x4000, data_file = 0x100,
                         data_mem = 0x3000, dynlib_offset = 0x4000;
 constexpr std::uint32_t pf_rx = 5, pf_rw = 6;
 
-template <class T>
-void put(Bytes& out, std::size_t offset, T value) {
-    if (out.size() < offset + sizeof value) {
-        out.resize(offset + sizeof value);
-    }
-    std::memcpy(out.data() + offset, &value, sizeof value);
-}
-
 std::byte pattern(std::size_t i) {
     return static_cast<std::byte>(i * 13 + 1);
 }
 
-// Unwind tables in the code segment (docs/formats/eh-frame.md): .eh_frame at eh_frame_link with
-// a "zR" and a "zPLR" CIE, an FDE (pcrel|sdata4) per function, a dead FDE (pc_begin 0) and the
-// terminator, then .eh_frame_hdr at eh_hdr_link, whose search table lists the live FDEs.
-struct Function {
-    std::uint64_t start, size;
-    bool lsda;  // uses the "zPLR" CIE
-};
-constexpr Function functions[] = {{0x10, 0x20, false}, {0x40, 0xd, true}, {0x60, 0x30, false}};
+// Unwind tables in the code segment: .eh_frame at eh_frame_link with a "zR" and a "zPLR" CIE, an
+// FDE per function, a dead FDE (pc_begin 0) and the terminator, then .eh_frame_hdr at
+// eh_hdr_link, whose search table lists the live FDEs.
+constexpr bb::test::UnwindFunction functions[] = {
+    {0x10, 0x20, false}, {0x40, 0xd, true}, {0x60, 0x30, false}};
 constexpr std::uint64_t eh_frame_link = 0x1000, eh_hdr_link = 0x1200,
                         eh_hdr_size = 12 + 8 * (std::size(functions) + 1);
-
-Bytes raw(std::initializer_list<std::uint8_t> values) {
-    Bytes out;
-    for (std::uint8_t v : values) {
-        out.push_back(std::byte{v});
-    }
-    return out;
-}
 
 // The byte at link address `link` of the code segment, which starts at file offset 0x1000.
 std::byte& code_at(Bytes& elf, std::uint64_t link) {
     return elf.at(0x1000 + link);
-}
-
-void add_unwind_tables(Bytes& elf) {
-    std::uint64_t pos = eh_frame_link;
-    auto record = [&](Bytes body) {
-        body.resize((body.size() + 3) / 4 * 4);  // DW_CFA_nop padding
-        std::uint64_t at = pos;
-        put(elf, 0x1000 + at, static_cast<std::uint32_t>(body.size()));
-        std::memcpy(&code_at(elf, at + 4), body.data(), body.size());
-        pos += 4 + body.size();
-        return at;
-    };
-    // id 0, version 1, augmentation, code align 1, data align -8, return address r16, then the
-    // augmentation data: length, personality (indirect pcrel sdata4), LSDA and FDE encodings.
-    std::uint64_t cie_r = record(raw({0, 0, 0, 0, 1, 'z', 'R', 0, 1, 0x78, 0x10, 1, 0x1b}));
-    std::uint64_t cie_plr = record(raw({0, 0, 0, 0, 1, 'z', 'P', 'L', 'R', 0, 1, 0x78, 0x10, 7,
-                                        0x9b, 0, 0, 0, 0, 0x1b, 0x1b}));
-    auto fde = [&](std::uint64_t cie, std::uint64_t start, std::uint64_t size, bool lsda) {
-        Bytes body(lsda ? 17 : 13);
-        put(body, 0, static_cast<std::uint32_t>(pos + 4 - cie));
-        put(body, 4, static_cast<std::uint32_t>(start - (pos + 8)));
-        put(body, 8, static_cast<std::uint32_t>(size));
-        body[12] = std::byte{lsda ? std::uint8_t{4} : std::uint8_t{0}};  // augmentation length
-        return record(body);
-    };
-    std::vector<std::pair<std::uint64_t, std::uint64_t>> table;  // (function, FDE)
-    for (const Function& f : functions) {
-        table.emplace_back(f.start, fde(f.lsda ? cie_plr : cie_r, f.start, f.size, f.lsda));
-    }
-    fde(cie_r, pos + 8, 0x40, false);  // dead: raw pc_begin 0
-    put<std::uint32_t>(elf, 0x1000 + pos, 0);
-
-    std::memcpy(&code_at(elf, eh_hdr_link), raw({1, 0x1b, 0x03, 0x3b}).data(), 4);
-    put(elf, 0x1000 + eh_hdr_link + 4, static_cast<std::int32_t>(eh_frame_link - eh_hdr_link - 4));
-    put(elf, 0x1000 + eh_hdr_link + 8, static_cast<std::uint32_t>(table.size()));
-    for (std::size_t i = 0; i < table.size(); ++i) {
-        std::uint64_t at = 0x1000 + eh_hdr_link + 12 + 8 * i;
-        put(elf, at, static_cast<std::int32_t>(table[i].first - eh_hdr_link));
-        put(elf, at + 4, static_cast<std::int32_t>(table[i].second - eh_hdr_link));
-    }
 }
 
 // The link address of the FDE that search table entry `i` points to.
@@ -135,35 +77,14 @@ void use_eight_byte_fde(Bytes& elf, std::uint8_t enc) {
 // `edit` changes the program headers before they are written.
 Bytes build_elf(void (*edit)(std::vector<Phdr>&) = nullptr) {
     Bytes elf(dynlib_offset);
-    std::memcpy(elf.data(), "\x7f" "ELF\x02\x01", 6);
-    put<std::uint16_t>(elf, 0x10, et_sce_dynexec);
-    put<std::uint16_t>(elf, 0x12, em_x86_64);
-    put<std::uint64_t>(elf, 0x18, 0x10);  // e_entry
-    put<std::uint64_t>(elf, 0x20, 0x40);  // e_phoff
-    put<std::uint16_t>(elf, 0x36, 0x38);  // e_phentsize
     for (std::size_t i = 0; i < code_size; ++i) {
         elf[0x1000 + i] = pattern(i);
     }
     for (std::size_t i = 0; i < data_file; ++i) {
         elf[0x3000 + i] = pattern(i + 7);
     }
-    add_unwind_tables(elf);
-
-    // DynamicInfo needs only the module info record and the (here empty) tables.
-    std::size_t dyn = dynlib_offset + 8;
-    elf.resize(dyn);
-    std::memcpy(elf.data() + dynlib_offset, "\0self\0\0", 8);
-    const std::pair<std::uint64_t, std::uint64_t> entries[] = {
-        {0x6100000D, 0x0101ULL << 32 | 1},  // DT_SCE_MODULE_INFO "self"
-        {0x61000035, 0}, {0x61000037, 6},   // string table
-        {0x61000039, 0}, {0x6100003F, 0}, {0x6100003B, 24},  // symbols
-        {0x61000029, 0}, {0x6100002D, 0}, {0x6100002B, 7},   // PLT relocations
-        {0x6100002F, 0}, {0x61000031, 0}, {0x61000033, 24},  // relocations
-        {0x61000027, data_link}, {0, 0}};                     // DT_SCE_PLTGOT, DT_NULL
-    for (auto [tag, value] : entries) {
-        put(elf, elf.size(), tag);
-        put(elf, elf.size(), value);
-    }
+    bb::test::add_unwind_tables(elf, {0x1000, eh_frame_link, eh_hdr_link, true}, functions);
+    std::size_t dyn = bb::test::append_minimal_dynamic(elf, dynlib_offset, data_link);
 
     std::vector<Phdr> phdrs = {
         {pt_load, pf_rx, 0x1000, 0, code_size, code_size, 0x4000},
@@ -177,36 +98,8 @@ Bytes build_elf(void (*edit)(std::vector<Phdr>&) = nullptr) {
     if (edit) {
         edit(phdrs);
     }
-    put<std::uint16_t>(elf, 0x38, static_cast<std::uint16_t>(phdrs.size()));
-    for (std::size_t i = 0; i < phdrs.size(); ++i) {
-        const Phdr& ph = phdrs[i];
-        std::size_t at = 0x40 + i * phdr_size;
-        put(elf, at, ph.type);
-        put(elf, at + 0x04, ph.flags);
-        put(elf, at + 0x08, ph.offset);
-        put(elf, at + 0x10, ph.vaddr);
-        put(elf, at + 0x20, ph.filesz);
-        put(elf, at + 0x28, ph.memsz);
-        put(elf, at + 0x30, ph.align);
-    }
+    bb::test::write_headers(elf, phdrs, 0x10);
     return elf;
-}
-
-// The permissions ("r-xp", ...) of the mapping that holds `addr`, from /proc/self/maps.
-std::string protection(std::uintptr_t addr) {
-    std::ifstream maps("/proc/self/maps");
-    std::string line;
-    while (std::getline(maps, line)) {
-        std::istringstream in(line);
-        std::uintptr_t start, end;
-        char dash;
-        std::string perms;
-        in >> std::hex >> start >> dash >> end >> perms;
-        if (start <= addr && addr < end) {
-            return perms;
-        }
-    }
-    return "unmapped";
 }
 
 // Expects `f` to throw an `E` whose message contains `message`.
@@ -422,7 +315,7 @@ TEST(Image, FindsFunctionSizes) {
     ASSERT_TRUE(image.unwind);
     EXPECT_EQ(image.unwind->link_addr, eh_hdr_link);
     EXPECT_EQ(image.unwind->fde_count, std::size(functions));
-    for (const Function& f : functions) {
+    for (const bb::test::UnwindFunction& f : functions) {
         EXPECT_EQ(image.function_size(f.start), f.size) << f.start;
     }
     std::uint64_t dead = eh_frame_link + 0x78;  // where the dead FDE "starts"

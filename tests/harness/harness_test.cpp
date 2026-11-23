@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
-#include <cstring>
 #include <format>
 #include <initializer_list>
 #include <iterator>
@@ -26,7 +25,9 @@
 #include "hle/hle.hpp"
 #include "loader/elf.hpp"
 #include "loader/image.hpp"
+#include "loader/dynamic.hpp"
 #include "loader/relocate.hpp"
+#include "support/elf_builder.hpp"
 
 namespace {
 
@@ -34,21 +35,14 @@ using namespace bb::loader;
 using bb::harness::Arena;
 using bb::harness::Harness;
 using bb::harness::Result;
-using Bytes = std::vector<std::byte>;
+using bb::test::Bytes;
+using bb::test::put;
 
 constexpr std::uintptr_t test_base = 0x32000000;  // clear of the other tests' bases
 // Link addresses: the code segment at 0 (file offset 0x1000), the data segment at 0x4000 (file
 // offset 0x2000) with the GOT slots of the two imports and a global.
 constexpr std::uint64_t got_a = 0x4000, got_b = 0x4008, global = 0x4100;
 constexpr std::uint64_t read_write_at = 0x10, calls_at = 0x40, float_bits_at = 0x60;
-
-template <class T>
-void put(Bytes& out, std::size_t offset, T value) {
-    if (out.size() < offset + sizeof value) {
-        out.resize(offset + sizeof value);
-    }
-    std::memcpy(out.data() + offset, &value, sizeof value);
-}
 
 void code(Bytes& elf, std::uint64_t link, std::initializer_list<std::uint8_t> bytes) {
     std::ranges::transform(bytes, elf.begin() + 0x1000 + static_cast<std::ptrdiff_t>(link),
@@ -104,44 +98,28 @@ Bytes build_elf() {
     }
     const std::uint64_t dynamic = blob.size();
     const std::pair<std::uint64_t, std::uint64_t> entries[] = {
-        {1, file},                                            // DT_NEEDED
-        {0x6100000F, 1ULL << 48 | 0x0101ULL << 32 | module},  // DT_SCE_NEEDED_MODULE
-        {0x61000015, 1ULL << 32 | library},                   // DT_SCE_IMPORT_LIB
-        {0x6100000D, 0x0101ULL << 32 | self},                 // DT_SCE_MODULE_INFO
-        {0x61000035, 0}, {0x61000037, strsz},                 // string table
-        {0x61000039, symtab}, {0x6100003F, 72}, {0x6100003B, 24},  // symbols
-        {0x61000029, jmprel}, {0x6100002D, 48}, {0x6100002B, 7},   // PLT relocations
-        {0x6100002F, 0}, {0x61000031, 0}, {0x61000033, 24},        // relocations
-        {0x61000027, got_a}, {0, 0}};                              // DT_SCE_PLTGOT, DT_NULL
+        {dt_needed, file},
+        {dt_sce_needed_module, 1ULL << 48 | 0x0101ULL << 32 | module},
+        {dt_sce_import_lib, 1ULL << 32 | library},
+        {dt_sce_module_info, 0x0101ULL << 32 | self},
+        {dt_sce_strtab, 0}, {dt_sce_strsz, strsz},
+        {dt_sce_symtab, symtab}, {dt_sce_symtabsz, 72}, {dt_sce_syment, 24},
+        {dt_sce_jmprel, jmprel}, {dt_sce_pltrelsz, 48}, {dt_sce_pltrel, dt_rela},
+        {dt_sce_rela, 0}, {dt_sce_relasz, 0}, {dt_sce_relaent, 24},
+        {dt_sce_pltgot, got_a}, {0, 0}};  // DT_NULL
     for (auto [tag, value] : entries) {
         put(blob, blob.size(), tag);
         put(blob, blob.size(), value);
     }
     elf.insert(elf.end(), blob.begin(), blob.end());
 
-    std::memcpy(elf.data(), "\x7f" "ELF\x02\x01", 6);
-    put<std::uint16_t>(elf, 0x10, et_sce_dynexec);
-    put<std::uint16_t>(elf, 0x12, em_x86_64);
-    put<std::uint64_t>(elf, 0x20, elf_header_size);  // e_phoff
-    put<std::uint16_t>(elf, 0x36, phdr_size);
     const Phdr phdrs[] = {
         {pt_load, pf_r | pf_x, 0x1000, 0, 0x1000, 0x1000, 0x4000},
         {pt_load, pf_r | 2, 0x2000, 0x4000, 0x1000, 0x2000, 0x4000},  // PF_W: data and .bss
         {pt_sce_dynlibdata, pf_r, 0x3000, 0, blob.size(), 0, 0x10},
         {pt_dynamic, pf_r, 0x3000 + dynamic, 0, blob.size() - dynamic, blob.size() - dynamic, 8},
     };
-    put<std::uint16_t>(elf, 0x38, static_cast<std::uint16_t>(std::size(phdrs)));
-    for (std::size_t i = 0; i < std::size(phdrs); ++i) {
-        const Phdr& ph = phdrs[i];
-        const std::size_t at = elf_header_size + i * phdr_size;
-        put(elf, at, ph.type);
-        put(elf, at + 0x04, ph.flags);
-        put(elf, at + 0x08, ph.offset);
-        put(elf, at + 0x10, ph.vaddr);
-        put(elf, at + 0x20, ph.filesz);
-        put(elf, at + 0x28, ph.memsz);
-        put(elf, at + 0x30, ph.align);
-    }
+    bb::test::write_headers(elf, phdrs);
     return elf;
 }
 
