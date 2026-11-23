@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/avplayer/avplayer_source.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-12
+// Changed for bloodborne-linux, 2026-11-23
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
@@ -230,6 +230,9 @@ private:
     AvPlayerQueue<Frame> m_audio_frames;
     AvPlayerQueue<Frame> m_video_frames;
 
+    // Guards the current frames and the audio clock they set (m_last_audio_ts, m_last_data_time,
+    // m_pause_duration) between the frame getters and Stop(). Taken before a queue's lock.
+    std::mutex m_current_frames_mutex{};
     std::optional<Frame> m_current_video_frame;
     std::optional<Frame> m_current_audio_frame;
 

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/core/libraries/avplayer/avplayer_source.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-22
+// Changed for bloodborne-linux, 2026-11-23
 // License texts: third_party/shadps4/LICENSES/
 
 #include "common/alignment.h"
@@ -341,6 +341,9 @@ bool AvPlayerSource::Stop() {
     m_audio_decoder_thread.Stop();
     m_demuxer_thread.Stop();
 
+    // The game's thread may be inside a frame getter, moving the current frames' buffers back
+    // into the buffer queues (#785). The decoder threads are gone and never take this lock.
+    std::scoped_lock frames_lock(m_current_frames_mutex);
     m_current_audio_frame.reset();
     m_current_video_frame.reset();
 
@@ -388,6 +391,8 @@ bool AvPlayerSource::GetVideoData(AvPlayerFrameInfo& video_info) {
 }
 
 bool AvPlayerSource::GetVideoData(AvPlayerFrameInfoEx& video_info) {
+    // Stop() resets the current frame and empties the queues under the same lock (#785).
+    std::scoped_lock frames_lock(m_current_frames_mutex);
     if (!IsActive() || m_is_paused) {
         return false;
     }
@@ -415,6 +420,8 @@ bool AvPlayerSource::GetVideoData(AvPlayerFrameInfoEx& video_info) {
 }
 
 bool AvPlayerSource::GetAudioData(AvPlayerFrameInfo& audio_info) {
+    // Stop() resets the current frame and the audio clock under the same lock (#785).
+    std::scoped_lock frames_lock(m_current_frames_mutex);
     if (!IsActive() || m_is_paused) {
         return false;
     }

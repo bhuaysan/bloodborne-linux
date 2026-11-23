@@ -29,6 +29,7 @@ extern "C" {
 #include "common/logging/log.h"
 #include "core/libraries/avplayer/avplayer.h"
 #include "core/libraries/avplayer/avplayer_common.h"
+#include "core/libraries/avplayer/avplayer_source.h"
 #include "core/libraries/libs.h"
 #include "core/memory.h"
 #include "hle/kernel/paths.hpp"
@@ -296,6 +297,106 @@ TEST(AvPlayerGame, OpeningMovieFramesMatchFfmpeg) {
 
     EXPECT_EQ(sceAvPlayerStop(player), 0);
     EXPECT_EQ(sceAvPlayerClose(player), 0);
+}
+
+// The game's thread pulls frames while another thread stops the player (#785): Stop() resets the
+// current frames and empties the buffer queues while a frame getter may be moving a current
+// frame's buffer back into them. Each round starts the movie, lets the puller take a few frames
+// (or none, to stop during start-up) and stops it under the puller's feet.
+class NoSyncCallback final : public AvPlayerStateCallback {
+public:
+    AvPlayerAvSyncMode GetSyncMode() override {
+        return AvPlayerAvSyncMode::None;  // frames as fast as they decode
+    }
+    void OnWarning(u32) override {}
+    void OnError() override {}
+    void OnEOF() override {}
+};
+
+// The player's buffers that are allocated and not yet freed: after Stop() there are none, since it
+// frees the current frames and empties every queue. A getter that raced Stop() would keep one.
+std::atomic<int> live_buffers{0};
+void* PS4_SYSV_ABI allocate_counted(void* object, u32 align, u32 size) {
+    void* p = allocate(object, align, size);
+    if (p != nullptr) {
+        ++live_buffers;
+    }
+    return p;
+}
+void PS4_SYSV_ABI deallocate_counted(void* object, void* mem) {
+    if (mem != nullptr) {
+        --live_buffers;
+    }
+    deallocate(object, mem);
+}
+
+TEST(AvPlayerGame, StopIsSafeAgainstAThreadPullingFrames) {
+    BB_REQUIRE_GAME(game);
+    const std::filesystem::path movie = game / "dvdroot_ps4/movie/sprj_opening.mp4";
+    BB_REQUIRE_GAME_DATA(movie, "nothing: the game dump lacks its opening movie");
+    if (avcodec_find_decoder(AV_CODEC_ID_H264) == nullptr ||
+        avcodec_find_decoder(AV_CODEC_ID_AAC) == nullptr) {
+        GTEST_SKIP() << "no H.264 or AAC decoder in this FFmpeg build";
+    }
+    Common::Log::g_class_levels[static_cast<std::size_t>(Common::Log::Class::Lib_AvPlayer)] =
+        Common::Log::Level::Error;  // each round logs its start and stop
+    bb::hle::kernel::path_map().mount_game(game);
+
+    NoSyncCallback callback;
+    AvPlayerInitData init{};
+    init.memory_replacement = {nullptr, allocate_counted, deallocate_counted, allocate_counted,
+                               deallocate_counted};
+    init.num_output_video_framebuffers = 2;
+    AvPlayerSource source(callback, guest_memory());
+    ASSERT_TRUE(source.Init(init, "/app0/dvdroot_ps4/movie/sprj_opening.mp4"));
+    ASSERT_TRUE(source.FindStreams());
+    const s32 streams = source.GetStreamCount();
+    ASSERT_GE(streams, 2);
+    for (s32 i = 0; i < streams; ++i) {
+        ASSERT_TRUE(source.EnableStream(i));
+    }
+
+    // The puller runs through every round, so it is inside a getter whenever Stop() comes.
+    std::atomic<bool> done{false};
+    std::atomic<int> video_frames{0}, bad_frames{0};
+    std::thread puller([&] {
+        while (!done) {
+            AvPlayerFrameInfoEx video{};
+            if (source.GetVideoData(video)) {
+                if (video.p_data == nullptr) {
+                    ++bad_frames;
+                }
+                ++video_frames;
+            }
+            AvPlayerFrameInfo audio{};
+            if (source.GetAudioData(audio) && audio.p_data == nullptr) {
+                ++bad_frames;
+            }
+        }
+    });
+
+    constexpr int rounds = 500;
+    int rounds_with_frames = 0;
+    for (int round = 0; round < rounds; ++round) {
+        ASSERT_TRUE(source.Start()) << "round " << round;
+        // Every other round stops at once, the others after 1 to 3 frames.
+        const int want = round % 2 == 0 ? 0 : 1 + round % 3;
+        const int before = video_frames.load();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (video_frames.load() - before < want && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        if (video_frames.load() - before >= want && want > 0) {
+            ++rounds_with_frames;
+        }
+        ASSERT_TRUE(source.Stop()) << "round " << round;
+        ASSERT_EQ(live_buffers.load(), 0) << "round " << round;
+    }
+    done = true;
+    puller.join();
+    EXPECT_EQ(bad_frames.load(), 0);
+    // Playback restarts after each Stop(): every round that waited for frames got them.
+    EXPECT_EQ(rounds_with_frames, rounds / 2);
 }
 
 }  // namespace
