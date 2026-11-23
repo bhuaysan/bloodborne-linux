@@ -2406,7 +2406,7 @@ TEST(CopyMipExtent, BlockCodedMipsStayOnBlockBoundaries) {
     EXPECT_EQ(CopyMipExtent(extent(20, 20), extent(12, 12), true, 1), extent(4, 4));
     EXPECT_EQ(CopyMipExtent(extent(20, 20), extent(12, 12), true, 2), extent(0, 0));
     EXPECT_EQ(CopyMipExtent(extent(20, 20), extent(12, 12), true, 4), extent(1, 1));
-    // 128x128 into 256x256 (ExpandImage): the mips under a block are not both edges.
+    // 128x128 into 256x256 (more mips, the issue's example): mips under a block are not both edges.
     EXPECT_EQ(CopyMipExtent(extent(128, 128), extent(256, 256), true, 5), extent(4, 4));
     EXPECT_EQ(CopyMipExtent(extent(128, 128), extent(256, 256), true, 6), extent(0, 0));
     EXPECT_EQ(CopyMipExtent(extent(128, 128), extent(256, 256), true, 7), extent(0, 0));
