@@ -5,11 +5,15 @@
 # each part in a segment of its own named play-*. Use
 # `rig.py perf yharnam-fight --runs 5 --bb-user DIR --reference-user DIR`.
 # After Continue the hunter stands under an arch with the street and its fire ahead. A group of
-# enemies stands in the street, and in the open they kill the hunter within a minute (both targets
-# in the first runs). So the route walks out until they notice, locks on and backs into the arch,
-# where only one or two can reach the hunter at a time, and fights there in short exchanges (a
-# swing, a roll, a swing, a roll to the side) with a blood vial between them. The pictures of a
-# run (shots 01 to 08) show whether the hunter died: the echoes in the top right drop to 0 then.
+# enemies stands in the street with their backs to the hunter, and in the open they kill the hunter
+# within a minute (both targets in the first runs). So the route runs up to them (4.3 s; at 3 s they
+# never noticed the hunter, at 5.5 s it ran into the middle of the group), swings once to draw them,
+# locks on and backs up the steps into the arch, where only one or two can reach the hunter at a
+# time. It fights there in short exchanges (a swing, a roll, a swing, a roll to the side), two per
+# segment, with a blood vial between them. The hunter is weak, and it died in about half of the
+# runs (#654). The pictures of a run (shots 01 to 08) show whether it died: YOU DIED or a loading
+# page in a shot, and the echoes in the top right drop to 0 after it; such a run measures a death
+# and a load, so leave it out.
 limit time=700
 
 log 'sceSystemServiceHideSplashScreen|Vo5V8KAwCmk' timeout=150
@@ -34,20 +38,22 @@ shot 00-start           # the picture is the world by now; enemies near the hunt
 
 mark play-walk
 stick LY -32767
-sleep 3
+sleep 4.3
 neutral
 shot 01-enemies
+tap RB
+sleep 0.9
 
 mark play-lockon
 tap R3
 sleep 0.5
 stick LY 32767
-sleep 3.5
+sleep 5.5
 neutral
 shot 02-arch
 
 mark play-fight-first
-repeat 4
+repeat 2
 tap RB
 sleep 0.9
 stick LY 32767
@@ -73,7 +79,7 @@ sleep 2.5
 shot 04-heal
 
 mark play-fight-strong
-repeat 4
+repeat 2
 trigger R
 sleep 1.8
 stick LY 32767
@@ -99,7 +105,7 @@ sleep 2.5
 shot 06-heal
 
 mark play-fight-last
-repeat 4
+repeat 2
 tap RB
 sleep 0.9
 tap RB

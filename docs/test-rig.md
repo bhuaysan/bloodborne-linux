@@ -88,13 +88,13 @@ Per segment and column the report gives the median over the runs of the p50, p95
 
 `yharnam-route.scn` continues from a save at the great bonfire in Central Yharnam, made by playing the reference by hand (not committed, under `analysis/rig/manual/`). Both targets load it: `--user-from` (and `--bb-user`) takes the reference's `user/` directory (`home/ID/savedata/TITLE/SPRJ0005`) for `bb-run` too, and `rig.py` copies the save files into the layout `bb-run` uses (`savedata/SPRJ0005`). The segments are `play-stand` (15 s), `play-walk` (out of the alcove into the street with the fire, under the arch), `play-camera`, `play-sprint` (`B` held 2.5 s, back and forth), `play-dodge`, `play-attack`, `play-lockon` and `play-walk-again`, about 235 s of play. No enemy is near on the way, so it covers the open street with fire and fog but not fighting. The camera swings as the hunter moves, so the walk ends in one of two places from run to run.
 
-`yharnam-fight.scn` continues from a second hand-made save just before a group of living enemies (`analysis/rig/manual/yharnam-enemies/work/user`). The hunter walks out until they notice (`play-walk`), locks on and backs toward the arch (`play-lockon`), and fights in short exchanges of a swing and a roll (`play-fight-first`, `play-fight-strong` with `R2`, `play-fight-last`), with a blood vial between them (`play-heal`, `play-heal-again`) and a sprint at the end (`play-sprint`). About 100 s of play. The route is blind, so how long the enemies stay in contact differs between runs. It ends its load wait with `expect_level min=33 max=45`, a step that fails the run when the picture's mean luma is outside the band: in about 1 of 5 runs an enemy killed the hunter during the wait, and the run measured a loading page and the lantern route instead (#538). The band fits this save's lighting only; another save needs its own.
+`yharnam-fight.scn` continues from a second hand-made save just before a group of living enemies (`analysis/rig/manual/yharnam-enemies/work/user`). The hunter runs up to them and swings once to draw them (`play-walk`), locks on and backs up the steps into the arch (`play-lockon`), and fights two short exchanges of a swing and a roll per segment (`play-fight-first`, `play-fight-strong` with `R2`, `play-fight-last`), with a blood vial between them (`play-heal`, `play-heal-again`) and a sprint at the end (`play-sprint`). About 80 s of play. Until #654 the route turned back after 3 s, before the enemies noticed the hunter, so it measured the street with enemies but no fight. The route is blind, so how long the enemies stay in contact differs between runs, and the weak hunter dies in about half of them: leave out a run whose shots show YOU DIED or a loading page. It ends its load wait with `expect_level min=33 max=45`, a step that fails the run when the picture's mean luma is outside the band: in about 1 of 5 runs an enemy killed the hunter during the wait, and the run measured a loading page and the lantern route instead (#538). The band fits this save's lighting only; another save needs its own.
 
 `yharnam-death.scn` continues from the same save, walks 4 s toward the enemies and stands until they kill the hunter. YOU DIED, the load and the respawn at the lantern follow, and the shots after it show the hunter from behind. The scenario has no check step of its own: its shots are compared by eye against a reference run, the hunter and his weapon whole and no large flat polygon of one colour anywhere (#537).
 
 ### Heavy areas at 30, 60 and 120 (#654)
 
-Measured on 2026-11-23 to decide which thread bounds a frame at 120 FPS. No save later than Central Yharnam exists, so the maintainer limited the measurement to the existing routes: `clinic-fight`, `yharnam-route` and `yharnam-fight`. `bb-run` was a `relwithdebinfo` build of `main` at `35b4567`, run with `--window` (1280x720), a warm `--cache-home` (one warm-up run per route first) and `--perf`. It made three runs per route at 30, 60 and 120, and one more run at 120 with `--log profile=debug` for the counters, kept apart from the perf runs. The reference made three runs per route at 30. `yharnam-fight` ran at 120 only. Its route never draws the group's attention (the hunter turns back before they notice, and its fight segments face the arch's wall), so it measures the street with enemies, not a fight. Longer approaches drew the group, and the hunter died within about 20 s in all four trial runs.
+Measured on 2026-11-23 to decide which thread bounds a frame at 120 FPS. No save later than Central Yharnam exists, so the maintainer limited the measurement to the existing routes: `clinic-fight`, `yharnam-route` and `yharnam-fight`. `bb-run` was a `relwithdebinfo` build of `main` at `35b4567`, run with `--window` (1280x720), a warm `--cache-home` (one warm-up run per route first) and `--perf`. It made three runs per route at 30, 60 and 120, and one more run at 120 with `--log profile=debug` for the counters, kept apart from the perf runs. The reference made three runs per route at 30. `yharnam-fight` ran at 120 only, with the route as changed by #654, which now draws the group into a fight. Of five runs, two ended with the hunter's death and are left out. The counter run died after `play-heal`, so its counters stop there.
 
 Before each run the machine had no compiler and no difftest running, and the load from other programs stayed under 1.5 cores. Bursts from another program still came every 30 to 40 minutes, up to 14.7 cores for a few minutes. A sampler of the CPU time outside the rig's scope (every 5 s) marked them, and a segment of a run is left out where that load went over 4 cores. A fourth run at 30 and at 120 kept at least three runs per segment, except where the table cell says otherwise below. The numbers are medians over the runs. Times are in ms.
 
@@ -117,14 +117,14 @@ Before each run the machine had no compiler and no difftest running, and the loa
 | yharnam-route | play-attack | 33.3 / 33.4 / 41.8 | 33.3 / 33.4 / 34.4 | 16.7 / 16.7 / 16.8 | 8.3 / 10.7 / 17.7 | 112 |
 | yharnam-route | play-lockon | 33.3 / 33.4 / 50.0 | 33.3 / 33.4 / 33.5 | 16.7 / 16.7 / 16.8 | 8.3 / 10.1 / 16.6 | 114 |
 | yharnam-route | play-walk-again | 33.3 / 33.4 / 33.6 | 33.3 / 33.4 / 34.4 | 16.7 / 16.7 / 16.7 | 8.3 / 9.7 / 10.8 | 116 |
-| yharnam-fight | play-walk | – | – | – | 8.6 / 9.9 / 16.7 | 112 |
-| yharnam-fight | play-lockon | – | – | – | 9.3 / 10.5 / 16.7 | 108 |
-| yharnam-fight | play-fight-first | – | – | – | 8.3 / 9.4 / 9.7 | 118 |
-| yharnam-fight | play-heal | – | – | – | 8.3 / 8.4 / 9.4 | 119 |
-| yharnam-fight | play-fight-strong | – | – | – | 8.3 / 8.4 / 8.5 | 120 |
-| yharnam-fight | play-heal-again | – | – | – | 8.3 / 8.4 / 8.8 | 120 |
-| yharnam-fight | play-fight-last | – | – | – | 8.3 / 8.6 / 9.4 | 119 |
-| yharnam-fight | play-sprint | – | – | – | 8.3 / 8.4 / 9.4 | 119 |
+| yharnam-fight | play-walk | – | – | – | 9.4 / 16.6 / 17.7 | 103 |
+| yharnam-fight | play-lockon | – | – | – | 8.4 / 10.5 / 17.5 | 110 |
+| yharnam-fight | play-fight-first | – | – | – | 8.3 / 9.1 / 10.8 | 117 |
+| yharnam-fight | play-heal | – | – | – | 8.3 / 10.0 / 11.0 | 115 |
+| yharnam-fight | play-fight-strong | – | – | – | 8.5 / 16.7 / 17.7 | 104 |
+| yharnam-fight | play-heal-again | – | – | – | 9.4 / 16.7 / 17.7 | 93 |
+| yharnam-fight | play-fight-last | – | – | – | 9.0 / 13.5 / 17.2 | 105 |
+| yharnam-fight | play-sprint | – | – | – | 8.3 / 10.2 / 16.7 | 115 |
 
 Left out by the load rule: `yharnam-route` at 120 has two runs in `play-attack`, and the reference in Yharnam has two runs in `play-dodge` and `play-attack`.
 
@@ -147,18 +147,18 @@ Left out by the load rule: `yharnam-route` at 120 has two runs in `play-attack`,
 | yharnam-route | play-attack | 5.2 | 0.6 | 8.3 | 7.5 | 3.0 | 7.7 |
 | yharnam-route | play-lockon | 5.3 | 0.6 | 7.8 | 7.1 | 2.8 | 7.6 |
 | yharnam-route | play-walk-again | 5.3 | 0.6 | 8.2 | 7.4 | 2.9 | 7.6 |
-| yharnam-fight | play-walk | 4.4 | 0.7 | 8.6 | 8.2 | 3.1 | 8.6 |
-| yharnam-fight | play-lockon | 4.6 | 0.7 | 8.7 | 8.4 | 3.1 | 8.6 |
-| yharnam-fight | play-fight-first | 5.1 | 0.6 | 6.8 | 6.3 | 2.4 | 6.9 |
-| yharnam-fight | play-heal | 5.1 | 0.6 | 6.0 | 5.9 | 2.3 | 6.5 |
-| yharnam-fight | play-fight-strong | 5.1 | 0.6 | 5.9 | 5.5 | 2.2 | 6.5 |
-| yharnam-fight | play-heal-again | 5.1 | 0.6 | 5.7 | 5.4 | 2.2 | 6.5 |
-| yharnam-fight | play-fight-last | 5.1 | 0.6 | 6.8 | 6.6 | 2.6 | 7.0 |
-| yharnam-fight | play-sprint | 5.2 | 0.6 | 6.4 | 6.3 | 2.4 | 6.8 |
+| yharnam-fight | play-walk | 4.6 | 0.7 | 9.1 | 9.0 | 3.3 | 8.9 |
+| yharnam-fight | play-lockon | 5.2 | 0.7 | 9.1 | 8.3 | 3.2 | 8.4 |
+| yharnam-fight | play-fight-first | 5.4 | 0.7 | 7.2 | 6.7 | 2.6 | 7.3 |
+| yharnam-fight | play-heal | 5.1 | 0.7 | 7.8 | 7.6 | 3.0 | 7.9 |
+| yharnam-fight | play-fight-strong | 4.4 | 0.7 | 8.0 | 8.6 | 3.2 | 8.2 |
+| yharnam-fight | play-heal-again | 4.2 | 0.7 | 8.7 | 9.0 | 3.2 | 9.1 |
+| yharnam-fight | play-fight-last | 4.4 | 0.6 | 7.2 | 7.5 | 2.8 | 7.6 |
+| yharnam-fight | play-sprint | – | – | – | – | – | 7.0 |
 
-**The heaviest segment is `play-walk` of `yharnam-route` at 120** (p50 9.3 ms, 103 FPS), followed by `play-sprint`, `play-dodge` and `play-attack` there (109 to 112 FPS) and the walk and lock-on of `yharnam-fight` (108 to 112 FPS). The clinic holds 120 in every segment except a few late frames in `play-stand` to `play-camera`. Every segment holds 60: the highest p99 at 60 is 18.65 ms (`yharnam-route` `play-walk`, one run), under the 18.8 ms limit, so no segment needs a follow-up issue for its 60 FPS slot. At 30, `bb-run` stays within 33.4 to 34.4 ms p99 where the reference often shows 50 ms.
+**The heaviest segments are in Central Yharnam at 120:** the fight's `play-heal-again` (p50 9.4 ms, 93 FPS, with a wide spread between runs), `play-walk` of both routes (103 FPS), the fight's `play-fight-strong` and `play-fight-last` (104 and 105 FPS), and `play-sprint`, `play-dodge` and `play-attack` of `yharnam-route` (109 to 112 FPS). The clinic holds 120 in every segment except a few late frames in `play-stand` to `play-camera`. Every segment holds 60: the highest p99 at 60 is 18.65 ms (`yharnam-route` `play-walk`, one run), under the 18.8 ms limit, so no segment needs a follow-up issue for its 60 FPS slot. At 30, `bb-run` stays within 33.4 to 34.4 ms p99 where the reference often shows 50 ms.
 
-**What bounds a frame there is the GPU thread.** In the slow Yharnam segments the GPU thread's `commands` take 9.5 to 10.6 ms of a normal frame (table below), more than the 8.33 ms slot. Its `wait` (the scheduler waiting for the GPU) is 0.00, so it never waits for the GPU. The frame rate matches 1/`commands` (9.7 ms a frame at 103 FPS). The game's main loop uses 4.4 to 5.6 ms of CPU per present and its render thread 0.7 ms, so neither bounds a frame. The GPU is busy 7.7 to 8.9 ms per present in the same segments, up to 92 % of the time. That share is not a bound by itself: the clinic's `play-stand` holds 117 to 120 FPS at 8.3 ms per present (about 97 % busy), because the GPU's clock follows its load. Once the GPU thread is cheaper, the GPU is the next thing to check, with its clock read alongside the busy share.
+**What bounds a frame there is the GPU thread.** In the slow Yharnam segments with counters, the GPU thread's `commands` take 9.2 to 10.2 ms of a normal frame (table below), more than the 8.33 ms slot. Its `wait` (the scheduler waiting for the GPU) is 0.00, so it never waits for the GPU. The frame rate matches 1/`commands` (9.7 ms a frame at 103 FPS). The game's main loop uses 4.4 to 5.6 ms of CPU per present and its render thread 0.7 ms, so neither bounds a frame. The GPU is busy 7.6 to 9.1 ms per present in the same segments, up to 92 % of the time. That share is not a bound by itself: the clinic's `play-stand` holds 117 to 120 FPS at 8.3 ms per present (about 97 % busy), because the GPU's clock follows its load. Once the GPU thread is cheaper, the GPU is the next thing to check, with its clock read alongside the busy share.
 
 **GPU thread counters at 120** (one `--log profile=debug` run per route, a normal frame, inclusive parts; `fault` and `protect` count all threads):
 
@@ -179,16 +179,12 @@ Left out by the load rule: `yharnam-route` at 120 has two runs in `play-attack`,
 | yharnam-route | play-attack | 10.19 | 1.62 | 3.10 | 1.97 | 0.90 | 1.71 | 0.01 | 0.01 | 0.95 | 1.00 | 0.67 | 0.00 | 6.13 | 3.24 | 32 % |
 | yharnam-route | play-lockon | 9.04 | 1.43 | 2.67 | 1.78 | 0.83 | 1.47 | 0.01 | 0.01 | 0.83 | 0.91 | 0.59 | 0.00 | 5.20 | 2.71 | 32 % |
 | yharnam-route | play-walk-again | 7.04 | 1.06 | 2.01 | 1.44 | 0.71 | 1.10 | 0.00 | 0.00 | 0.64 | 0.69 | 0.44 | 0.00 | 4.29 | 2.15 | 31 % |
-| yharnam-fight | play-walk | 10.64 | 1.76 | 3.26 | 2.07 | 0.90 | 1.77 | 0.01 | 0.01 | 1.00 | 1.10 | 0.67 | 0.00 | 5.41 | 2.76 | 33 % |
-| yharnam-fight | play-lockon | 10.22 | 1.69 | 3.13 | 1.98 | 0.86 | 1.70 | 0.01 | 0.01 | 0.96 | 1.09 | 0.65 | 0.00 | 4.89 | 2.65 | 34 % |
-| yharnam-fight | play-fight-first | 6.94 | 1.08 | 2.04 | 1.38 | 0.70 | 1.14 | 0.01 | 0.01 | 0.64 | 0.68 | 0.44 | 0.00 | 3.79 | 2.05 | 32 % |
-| yharnam-fight | play-heal | 6.05 | 0.93 | 1.74 | 1.19 | 0.63 | 0.99 | 0.01 | 0.00 | 0.57 | 0.58 | 0.38 | 0.00 | 3.31 | 1.67 | 31 % |
-| yharnam-fight | play-fight-strong | 6.12 | 0.93 | 1.67 | 1.27 | 0.69 | 0.94 | 0.01 | 0.01 | 0.53 | 0.60 | 0.39 | 0.00 | 3.41 | 1.76 | 31 % |
-| yharnam-fight | play-heal-again | 6.84 | 1.06 | 1.90 | 1.41 | 0.74 | 1.07 | 0.01 | 0.01 | 0.60 | 0.64 | 0.44 | 0.00 | 3.58 | 1.90 | 31 % |
-| yharnam-fight | play-fight-last | 8.18 | 1.30 | 2.48 | 1.59 | 0.77 | 1.38 | 0.01 | 0.01 | 0.77 | 0.78 | 0.52 | 0.00 | 4.23 | 2.16 | 32 % |
-| yharnam-fight | play-sprint | 6.36 | 0.96 | 1.87 | 1.27 | 0.64 | 1.06 | 0.01 | 0.00 | 0.61 | 0.61 | 0.41 | 0.00 | 3.27 | 1.70 | 31 % |
+| yharnam-fight | play-walk | 9.24 | 1.44 | 2.88 | 1.78 | 0.76 | 1.58 | 0.01 | 0.01 | 0.89 | 0.94 | 0.61 | 0.00 | 4.75 | 2.50 | 32 % |
+| yharnam-fight | play-lockon | 7.47 | 1.14 | 2.14 | 1.56 | 0.72 | 1.15 | 0.00 | 0.00 | 0.66 | 0.81 | 0.48 | 0.00 | 4.31 | 2.29 | 32 % |
+| yharnam-fight | play-fight-first | 5.82 | 0.85 | 1.56 | 1.29 | 0.66 | 0.85 | 0.02 | 0.00 | 0.47 | 0.67 | 0.35 | 0.00 | 3.36 | 1.80 | 32 % |
+| yharnam-fight | play-heal | 6.81 | 1.03 | 1.91 | 1.42 | 0.74 | 1.08 | 0.01 | 0.01 | 0.60 | 0.72 | 0.44 | 0.00 | 3.58 | 1.83 | 32 % |
 
-`pipeline`, `vertex` and `state` together are 31 to 34 % of `commands` in every segment. The write-tracking faults of the guest threads cost 4 to 6 ms a frame in Yharnam, plus 2.5 to 3.2 ms of `mprotect`. They run on the game's threads, not on the GPU thread, and that is what #809 targets.
+`pipeline`, `vertex` and `state` together are 31 to 33 % of `commands` in every segment. The write-tracking faults of the guest threads cost 4 to 6 ms a frame in Yharnam, plus 2.5 to 3.2 ms of `mprotect`. They run on the game's threads, not on the GPU thread, and that is what #809 targets.
 
 **The GPU thread's `memmove` by caller at 120** (perf samples of one run per route, ms per present):
 
@@ -209,18 +205,18 @@ Left out by the load rule: `yharnam-route` at 120 has two runs in `play-attack`,
 | clinic-fight | play-attack | 3.21 | 0.28 | 0.09 | 0.05 | 0.04 | 0.10 | 0.01 | 0.00 |
 | clinic-fight | play-lockon | 2.94 | 0.28 | 0.09 | 0.06 | 0.03 | 0.10 | 0.01 | 0.00 |
 | clinic-fight | play-walk-again | 3.68 | 0.36 | 0.12 | 0.07 | 0.04 | 0.11 | 0.01 | 0.00 |
-| yharnam-fight | play-walk | 7.71 | 0.91 | 0.34 | 0.31 | 0.12 | 0.13 | 0.01 | 0.00 |
-| yharnam-fight | play-lockon | 7.80 | 0.72 | 0.26 | 0.25 | 0.09 | 0.12 | 0.00 | 0.00 |
-| yharnam-fight | play-fight-first | 5.84 | 0.60 | 0.21 | 0.17 | 0.07 | 0.12 | 0.02 | 0.00 |
-| yharnam-fight | play-heal | 5.38 | 0.47 | 0.19 | 0.11 | 0.05 | 0.10 | 0.02 | 0.00 |
-| yharnam-fight | play-fight-strong | 5.00 | 0.46 | 0.16 | 0.12 | 0.06 | 0.11 | 0.02 | 0.00 |
-| yharnam-fight | play-heal-again | 5.07 | 0.46 | 0.15 | 0.13 | 0.07 | 0.11 | 0.01 | 0.00 |
-| yharnam-fight | play-fight-last | 6.14 | 0.60 | 0.22 | 0.16 | 0.07 | 0.14 | 0.02 | 0.00 |
-| yharnam-fight | play-sprint | 5.66 | 0.61 | 0.22 | 0.15 | 0.08 | 0.15 | 0.01 | 0.00 |
+| yharnam-fight | play-walk | 8.41 | 0.90 | 0.38 | 0.23 | 0.11 | 0.18 | 0.01 | 0.00 |
+| yharnam-fight | play-lockon | 7.81 | 0.86 | 0.29 | 0.30 | 0.11 | 0.16 | 0.01 | 0.00 |
+| yharnam-fight | play-fight-first | 5.96 | 0.63 | 0.21 | 0.17 | 0.06 | 0.15 | 0.03 | 0.00 |
+| yharnam-fight | play-heal | 7.40 | 0.69 | 0.24 | 0.23 | 0.06 | 0.15 | 0.01 | 0.00 |
+| yharnam-fight | play-fight-strong | 8.22 | 0.93 | 0.35 | 0.27 | 0.10 | 0.20 | 0.02 | 0.00 |
+| yharnam-fight | play-heal-again | 9.45 | 0.96 | 0.38 | 0.29 | 0.08 | 0.16 | 0.04 | 0.00 |
+| yharnam-fight | play-fight-last | 9.39 | 1.16 | 0.52 | 0.37 | 0.11 | 0.15 | 0.01 | 0.00 |
+| yharnam-fight | play-sprint | 6.29 | 0.70 | 0.25 | 0.20 | 0.09 | 0.14 | 0.02 | 0.00 |
 
-`memmove` is 0.3 to 1.0 ms per present, 9 to 12 % of the GPU thread. The flattened user data copy in `Rasterizer::BindBuffers` is the largest share (up to 0.38 ms), then index and vertex buffer binding (up to 0.33 ms). Syncs of CPU-modified pages left the GPU thread with the copy threads (#777) and are 0.02 ms. Texture uploads and detiling don't appear in these steady segments.
+`memmove` is 0.3 to 1.2 ms per present, 9 to 12 % of the GPU thread. The flattened user data copy in `Rasterizer::BindBuffers` is the largest share (up to 0.52 ms in the fight), then index and vertex buffer binding (up to 0.37 ms). Syncs of CPU-modified pages left the GPU thread with the copy threads (#777) and are 0.02 ms. Texture uploads and detiling don't appear in these steady segments.
 
-**What the numbers support.** The heaviest segments miss 8.33 ms at 120 with the GPU thread as the bound, after #776 and #777, and `pipeline`, `vertex` and `state` are above 15 % of its time. That meets #780's condition to start. For #779, the split of the heaviest segments' `commands` between its two stages is about 2.6 to 3.0 ms for stage A (PM4 processing outside the draws, plus `pipeline`) and 6.9 to 7.7 ms for stage B (the rest of `draw`: `bind`, `render`, `vertex`, `state`). Stage B alone would sit just under the 8.33 ms slot, so #779's assessment needs #780's result first.
+**What the numbers support.** The heaviest segments miss 8.33 ms at 120 with the GPU thread as the bound, after #776 and #777, and `pipeline`, `vertex` and `state` are above 15 % of its time. That meets #780's condition to start. For #779, the split of the heaviest segments' `commands` between its two stages is about 2.5 to 2.8 ms for stage A (PM4 processing outside the draws, plus `pipeline`) and 6.8 to 7.4 ms for stage B (the rest of `draw`: `bind`, `render`, `vertex`, `state`). Stage B alone would sit just under the 8.33 ms slot, so #779's assessment needs #780's result first.
 
 ## Distributions (#755)
 
