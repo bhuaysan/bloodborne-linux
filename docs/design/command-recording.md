@@ -86,7 +86,7 @@ A precomputed result is only usable once the GPU thread has checked that its inp
 
 ### The reuse table
 
-- **What the lookup reads.** `PipelineRegs` lists every register field `vk_pipeline_cache.cpp` reads for a graphics lookup (`pipeline_regs.cpp`): about 280 words of the context, uconfig and SH registers. The user data is not in it: through it the lookup reads only the sharps and the fetch shader, which are checked at every draw (below). A field the lookup starts to read has to be added to the list; `--check-pipeline-reuse` catches one that is missing.
+- **What the lookup reads.** `PipelineRegs` lists every register field `vk_pipeline_cache.cpp` reads for a graphics lookup (`pipeline_regs.cpp`): a few hundred words of the context, uconfig and SH registers. The user data is not in it: through it the lookup reads only the sharps and the fetch shader, which are checked at every draw (below). A field the lookup starts to read has to be added to the list; `--check-pipeline-reuse` catches one that is missing.
 - **Register changes.** Liverpool calls `PipelineRegTracker::OnWrite` before it copies the words of every `SET_CONTEXT_REG`, `SET_SH_REG`, `SET_UCONFIG_REG` and `SET_CONFIG_REG` (graphics and compute rings) and `OnReset` at `CLEAR_STATE`. A changed value of a listed register advances the tracker's generation. The draw packets' own writes (index base and type, the number of indices and instances) go past the tracker; the lookup does not read them. `LOAD_*_REG`, which loads registers from memory, is not implemented; when it is, it has to call `OnWrite` with the loaded words. The vertex and pixel shader's program registers and the primitive type change between most draws and are left out of the generation.
 - **States.** When the generation changed since the last draw, `PipelineRegSnapshots` copies the listed registers (without the per-draw ones) and finds an equal earlier copy, or keeps this one, and returns its id. Equal means equal in every word, not only in a hash, so ids never confuse two states. States come back every frame, so a state seen once keeps its id.
 - **Entries.** The reuse table is keyed by the state's id, the per-draw registers and the indirect draw parameters, and holds the pipeline, its key (for the wait on a pipeline a worker still creates) and for each bound stage the program, its hash and the specialization and fetch shader words of the lookup that made the entry.
@@ -95,4 +95,22 @@ A precomputed result is only usable once the GPU thread has checked that its inp
 - **Limits.** 1024 states and 16384 entries; past either both tables start over. The listed fields are whole, so render target addresses are part of a state: targets that move from frame to frame make new states, which only lowers the reuse rate.
 - **Switches.** `bb-run --no-pipeline-reuse` looks up every draw, for comparison runs. `bb-run --check-pipeline-reuse` takes the full lookup after every reuse as well and stops the run when it finds another pipeline. The frame profile counts reuses (`reuse`, including the rare reuse whose draw is skipped while a worker creates its pipeline) and full graphics lookups (`lookup`); the time of a failed reuse check counts only in `pipeline`.
 
-The tracker costs a compare per register word written. The full lookup is about 0.9 µs a draw in `play-walk`, a reuse about 0.4 µs, so the expected gain is about 0.5 µs on each of 1500–2000 draws, 0.7–1 ms of the GPU thread's frame, beyond the spread between runs (0.5–0.8 ms).
+The tracker costs a compare per register word written. The full lookup is about 0.9 µs a draw in `play-walk`, a reuse about 0.4 µs, so the expected gain was about 0.5 µs on each of 1500–2000 draws, 0.7–1 ms of the GPU thread's frame.
+
+### Measured
+
+A first version took every context register into the snapshot. Context registers change between about 40 % of the draws (depth bounds, scissors, viewports, render target addresses), and copying and comparing 10 KB of them each time made `pipeline` slower than before (2.4 ms in `play-walk`). Only the registers the lookup reads changed that: a state changes much less often and its copy is a few hundred words.
+
+- **Reuse rate.** `--check-pipeline-reuse --log profile=debug` at 120: 96 % of the graphics lookups in `yharnam-route` `play-walk`, 97 % in `play-sprint`, 96 % in `play-attack`; 97 %, 94 % and 96 % in `yharnam-fight` `play-walk`, `play-fight-strong` and `play-heal-again`; 98 % in `clinic-fight` `play-walk` at 30. The check found no draw whose full lookup took another pipeline in these three runs.
+- **`pipeline` part.** In `yharnam-route` `play-walk` at 120 the part fell to 1.10 ms for about 2050 lookups (0.53 µs each); a full lookup costs 0.88 µs. A reuse costs 0.39 µs: reading the binary info, the flattened user data and the sharp checks of two stages.
+- **GPU thread CPU per present** (`thread_cpu.py`, `relwithdebinfo`, 120 FPS, three runs per side on a quiet machine, interleaved, a segment dropped where the load from other programs went over 4 cores; ms, median and the runs):
+
+| segment | `main` | this change |
+|---|---|---|
+| `yharnam-route` `play-stand` | 6.19 (6.15–6.94) | 5.93 (5.89–6.57) |
+| `yharnam-route` `play-walk` | 8.35 (8.28, 8.42) | 7.99 (7.97, 8.01) |
+| `yharnam-route` `play-camera` | 6.47 (6.46–6.56) | 6.23 (6.22, 6.25) |
+| `yharnam-route` `play-walk-again` | 5.53 (5.36–5.56) | 5.46 (5.25–6.22) |
+| `yharnam-fight` `play-walk` | 8.49 (8.28–8.77) | 8.22 (7.92–9.14) |
+
+In the segments the route repeats, the GPU thread gets 0.25–0.36 ms cheaper per present, beyond the spread in `play-walk` (108 to 111 FPS) and `play-camera`. That is about half the estimate: the reuse itself still costs 0.4 µs a draw, and the tracker and the resolves add some. The later segments of both routes go where the hunter's dodges, attacks and the enemies take it, and runs of the same build differ there by 1–5 ms per present, so they decide nothing either way. The GPU thread is still the bound at 120 in `play-walk`; the next cut is #779.
