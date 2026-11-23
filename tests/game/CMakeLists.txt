@@ -7,3 +7,7 @@ add_executable(game_eboot_test ai_test.cpp aspect_test.cpp chase_cam_test.cpp ch
                                ../harness/main.cpp)
 target_link_libraries(game_eboot_test PRIVATE bbeboottest bbgame bbhle bbeboottls bb_warnings)
 bb_add_one_entry_test(game_eboot_test)
+
+# symbols/functions.csv against the hooks bbgame registers (#734). Needs no eboot.
+bb_add_test(game_hook_rows_test SOURCES hook_rows_test.cpp LIBS bbgame bbhle)
+target_compile_definitions(game_hook_rows_test PRIVATE BB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
