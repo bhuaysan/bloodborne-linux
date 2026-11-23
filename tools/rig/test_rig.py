@@ -56,13 +56,26 @@ class CommandTests(unittest.TestCase):
     def test_container_needs_a_package_bb_run(self) -> None:
         base = dict(log=None, perf=False, frame_rate=None, bb_run_args=None, bb_run_config=None,
                     user_from=None, container="img")
-        for bad in (dict(target="reference", bb_run=Path("/pkg/bb-run")),
-                    dict(target="bb-run", bb_run=None),
+        for bad in (dict(target="bb-run", bb_run=None),
+                    dict(target="reference", bb_run=None, perf=True),
                     dict(target="bb-run", bb_run=Path("/pkg/bb-run"), perf=True)):
             with self.assertRaises(SystemExit):
                 rig.check_target_options(argparse.Namespace(**{**base, **bad}))
         rig.check_target_options(argparse.Namespace(**{**base, "target": "bb-run",
                                                        "bb_run": Path("/pkg/bb-run")}))
+        rig.check_target_options(argparse.Namespace(**{**base, "target": "reference",
+                                                       "bb_run": None}))
+
+    def test_reference_container_gets_the_input_devices(self) -> None:
+        env = {"HOME": "/h", "XDG_RUNTIME_DIR": "/rt"}
+        plain = rig.container_prefix("img", Path("/games/bb"), Path("/pkg"), Path("/r"), env)
+        self.assertNotIn("/dev/input:/dev/input", plain)
+        pad = rig.container_prefix("img", Path("/games/bb"), Path("/ref"), Path("/r"), env,
+                                   input_devices=True)
+        self.assertIn("/dev/input:/dev/input", pad)
+        self.assertIn("/run/udev:/run/udev:ro", pad)
+        self.assertIn("/ref:/ref:ro", pad)
+        self.assertEqual(pad[-1], "img")
 
     def test_read_only_check_refuses_a_writable_game_dir(self) -> None:
         with unittest.mock.patch("subprocess.run") as run_mock:

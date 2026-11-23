@@ -162,14 +162,16 @@ def read_only_game_prefix(game_dir: Path) -> list[str]:
 
 
 def container_prefix(image: str, game_dir: Path, package: Path, workdir: Path,
-                     environ: Mapping[str, str]) -> list[str]:
+                     environ: Mapping[str, str], input_devices: bool = False) -> list[str]:
     """podman run for a target inside a container of another distribution (#755): what distrobox
     shares with the host (home, the runtime directory with the Wayland, PipeWire and PulseAudio
     sockets, X11, the GPU, the host's network and IPC, the caller's user id) and the game and the
     package directory read-only, but none of the packages distrobox installs, so the image decides
     what the package finds. The container stays in the caller's cgroup (--cgroups=disabled), so the
     scope's memory limit, the samplers and the stop reach the target. It replaces bwrap: rootless
-    podman can't set up its user namespace inside bwrap's."""
+    podman can't set up its user namespace inside bwrap's. `package` is the reference's unpacked
+    AppImage for a reference run, which also gets the host's input devices and udev data
+    (input_devices) for the rig's uinput pad (#793)."""
     if "XDG_RUNTIME_DIR" not in environ:
         raise SystemExit("--container needs XDG_RUNTIME_DIR (the Wayland and sound sockets)")
     home, runtime = environ["HOME"], environ["XDG_RUNTIME_DIR"]
@@ -178,6 +180,8 @@ def container_prefix(image: str, game_dir: Path, package: Path, workdir: Path,
             "--device", "/dev/dri",
             "-v", f"{home}:{home}", "-v", f"{runtime}:{runtime}", "-v", "/tmp/.X11-unix:/tmp/.X11-unix",
             "-v", f"{package}:{package}:ro", "-v", f"{game_dir}:{game_dir}:ro",
+            *(["-v", "/dev/input:/dev/input", "-v", "/run/udev:/run/udev:ro"]
+              if input_devices else []),
             "--env-host", "-w", str(workdir), image]
 
 
@@ -648,16 +652,26 @@ def check_target_options(args: argparse.Namespace) -> None:
                                        or getattr(args, "bb_run_config", None)):
         raise SystemExit("--log, --perf, --frame-rate, --bb-run-args and --bb-run-config only "
                          "apply to the bb-run target")
-    if getattr(args, "container", None) and (args.target == "reference"
-                                             or not getattr(args, "bb_run", None)
+    if getattr(args, "container", None) and ((args.target == "bb-run"
+                                              and not getattr(args, "bb_run", None))
                                              or getattr(args, "perf", False)):
-        raise SystemExit("--container needs the bb-run target and --bb-run (the package's "
-                         "bb-run), and can't be used with --perf")
+        raise SystemExit("--container needs --bb-run (the package's bb-run) on the bb-run target, "
+                         "and can't be used with --perf")
     if getattr(args, "bb_run_config", None) and getattr(args, "user_from", None):
         # bb-run takes the profile from the config file, while the save goes to and comes back
         # from the rig's own profile.
         raise SystemExit("--user-from can't be used with --bb-run-config: bb-run reads the save "
                          "of the config's profile, not the copied one")
+
+
+def target_container(args: argparse.Namespace, game_dir: Path, workdir: Path) -> list[str]:
+    """The container prefix of a --container run: the package's folder for bb-run, the unpacked
+    reference with the input devices for the reference."""
+    if args.target == "reference":
+        return container_prefix(args.container, game_dir, reference_root() / "squashfs-root",
+                                workdir, os.environ, input_devices=True)
+    return container_prefix(args.container, game_dir, args.bb_run.resolve().parent, workdir,
+                            os.environ)
 
 
 def run_target(args: argparse.Namespace) -> int:
@@ -684,8 +698,7 @@ def run_target(args: argparse.Namespace) -> int:
             print(f"bb-run older than the last commit (--allow-stale): {build.path}",
                   file=sys.stderr)
     if getattr(args, "container", None):
-        check_game_read_only(game_dir, container_prefix(
-            args.container, game_dir, args.bb_run.resolve().parent, game_dir, os.environ))
+        check_game_read_only(game_dir, target_container(args, game_dir, game_dir))
     else:
         check_game_read_only(game_dir)
 
@@ -694,11 +707,7 @@ def run_target(args: argparse.Namespace) -> int:
     (run / "shots").mkdir(parents=True)
     os.mkfifo(run / "ctl")
 
-    container = None
-    if getattr(args, "container", None):
-        container = container_prefix(args.container, game_dir, args.bb_run.resolve().parent, run,
-                                     os.environ)
-    layer = build_layer(portable=container is not None)
+    layer = build_layer(portable=bool(getattr(args, "container", None)))
     work_root = None
     if args.target == "reference":
         program = reference_program(run, game_dir, args.user_from)
@@ -718,6 +727,11 @@ def run_target(args: argparse.Namespace) -> int:
         if args.user_from:
             copy_user_for_bb_run(args.user_from, bb_run_profile_data(work_root))
 
+    # The container starts in the target's own working directory, as Popen does without one: the
+    # reference takes work/user as its portable folder only from there, and would otherwise use
+    # the shadPS4 folder in the shared home (#793).
+    container = (target_container(args, game_dir, program.cwd)
+                 if getattr(args, "container", None) else None)
     env = {**os.environ, **program.env, "BB_RIG_DIR": str(run)}
     if "BB_USER_DIR" in program.env and "BB_CACHE_DIR" not in program.env:
         env.pop("BB_CACHE_DIR", None)  # a cold run: not the caller's warm cache
@@ -922,8 +936,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--perf", action="store_true",
                      help="bb-run: sample it with perf record into the run's perf.data")
     run.add_argument("--container", metavar="IMAGE",
-                     help="bb-run (a package's, given with --bb-run) inside a container of this "
-                          "image, for distribution checks")
+                     help="the target inside a container of this image, for distribution checks "
+                          "(bb-run: a package's, given with --bb-run)")
     run.add_argument("--no-layer", action="store_true",
                      help="without the Vulkan layer, so no frame times and no picture steps")
     compared = commands.add_parser("compare", help="compare menu captures with the reference")
