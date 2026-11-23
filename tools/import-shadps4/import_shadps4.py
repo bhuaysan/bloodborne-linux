@@ -26,7 +26,7 @@ reproduces the tree of the import commits, not the current one. --check takes an
 import commit (git archive r5 src/shadps4 third_party). --write takes an empty directory or such
 an export, and a later import is reviewed as the diff between that tree and the files it replaces.
 Without --tree the target is this checkout, which both modes refuse once src/shadps4/ holds edits
-made after the import; a git checkout or worktree given as --tree is refused the same way.
+made after the import (--write also once the owned third_party/ roots do); a git checkout or worktree given as --tree is refused the same way.
 """
 
 from __future__ import annotations
@@ -470,11 +470,12 @@ def edits_after_import(generated: Path, tree: Path) -> list[str]:
 def run(generated: Path, tree: Path, write_tree: bool) -> int:
     """Check or write the target tree against a generated one. Refuses an edited checkout."""
     if is_checkout(tree):
-        edits = edits_after_import(generated, tree)
+        # --write also replaces the owned third_party/ roots, so it refuses any difference there.
+        edits = compare(generated, tree) if write_tree else edits_after_import(generated, tree)
         if edits:
             raise ImportError_(
-                f"{tree} is a checkout whose src/shadps4/ holds {len(edits)} edit(s) made after the "
-                f"import (first: {edits[0]}). Since R6 the tree is edited in place "
+                f"{tree} is a checkout that holds {len(edits)} edit(s) made after the import "
+                f"(first: {edits[0]}). Since R6 the tree is edited in place "
                 "(docs/design/rewrite.md), so the script only reproduces the import commits. Pass "
                 "--tree with an export of one (git archive r5 src/shadps4 third_party) for --check, "
                 "or an empty directory outside the checkout for --write.")
@@ -501,7 +502,7 @@ def main() -> int:
     parser.add_argument("--tree", type=Path, default=REPO_ROOT,
                         help="target tree (default: this checkout, refused once it holds R6 edits)")
     args = parser.parse_args()
-    if args.check and not args.tree.is_dir():
+    if (args.check or args.tree.exists()) and not args.tree.is_dir():
         parser.error(f"--tree {args.tree}: not a directory")
 
     try:

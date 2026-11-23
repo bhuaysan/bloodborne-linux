@@ -224,8 +224,8 @@ class TargetTree(unittest.TestCase):
                 tree = self.checkout(files)
                 with self.assertRaises(tool.ImportError_):
                     self.run_quietly(self.generated, tree, True)
-                self.assertEqual({p for p in files}, {str(p.relative_to(tree)) for p in
-                                                       tree.rglob("*") if p.is_file() and p.name != ".git"})
+                self.assertEqual(files, {str(p.relative_to(tree)): p.read_text() for p in
+                                         tree.rglob("*") if p.is_file() and p.name != ".git"})
                 shutil.rmtree(tree)
 
     def test_this_repository_counts_as_a_checkout(self):
@@ -235,6 +235,12 @@ class TargetTree(unittest.TestCase):
         tree = self.checkout({**IMPORT, "third_party/fmt/LICENSE": "other"})
         status, out = self.run_quietly(self.generated, tree, False)
         self.assertEqual((status, out), (1, "differs: third_party/fmt/LICENSE\n1 difference(s)\n"))
+
+    def test_write_refuses_a_checkout_with_third_party_edits_only(self):
+        tree = self.checkout({**IMPORT, "third_party/fmt/LICENSE": "other"})
+        with self.assertRaises(tool.ImportError_):
+            self.run_quietly(self.generated, tree, True)
+        self.assertEqual((tree / "third_party/fmt/LICENSE").read_text(), "other")
 
     def test_an_export_with_edits_is_compared_not_refused(self):
         export = self.root / "export"
@@ -253,8 +259,31 @@ class TargetTree(unittest.TestCase):
 CACHE = os.environ.get("BB_SHADPS4_CACHE")
 
 
+def has_r5_tag() -> bool:
+    return subprocess.run(["git", "rev-parse", "-q", "--verify", "refs/tags/r5"], cwd=tool.REPO_ROOT,
+                          capture_output=True).returncode == 0
+
+
 @unittest.skipUnless(CACHE, "BB_SHADPS4_CACHE is not set")
 class RealImport(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.generated = Path(cls.temp.name) / "generated"
+        tool.generate(Path(CACHE).resolve(), cls.generated)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
+    def test_this_checkout_is_refused_once_it_holds_r6_edits(self):
+        if not tool.edits_after_import(self.generated, tool.REPO_ROOT):
+            self.skipTest("this checkout holds no edits after the import")
+        for write_tree in (False, True):
+            with self.assertRaisesRegex(tool.ImportError_, "rewrite.md"):
+                tool.run(self.generated, tool.REPO_ROOT, write_tree)
+
+    @unittest.skipUnless(has_r5_tag(), "the r5 tag is not fetched")
     def test_r5_export_checks_clean(self):
         with tempfile.TemporaryDirectory() as temp:
             export = Path(temp) / "r5"
@@ -262,10 +291,8 @@ class RealImport(unittest.TestCase):
             archive = subprocess.run(["git", "archive", "r5", "src/shadps4", "third_party"],
                                      cwd=tool.REPO_ROOT, check=True, capture_output=True).stdout
             subprocess.run(["tar", "-x", "-C", str(export)], input=archive, check=True)
-            generated = Path(temp) / "generated"
-            tool.generate(Path(CACHE).resolve(), generated)
             with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(tool.run(generated, export, False), 0)
+                self.assertEqual(tool.run(self.generated, export, False), 0)
 
 
 if __name__ == "__main__":
