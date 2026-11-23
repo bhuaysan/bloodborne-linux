@@ -117,10 +117,18 @@ esac
 # skipped and neutral count as passed, a run without a conclusion as
 # pending. The conclusion decides, not the status: GitHub can leave a
 # finished run "in_progress" with conclusion "success".
-ci="$(gh api --paginate "repos/{owner}/{repo}/commits/$fetched/check-runs?per_page=100" \
+# GitHub creates the check runs of a job with "needs:" only once its
+# dependencies finish, so every existing run can be green while the
+# workflow still runs: an Actions check suite that isn't completed counts
+# as pending too (other apps can leave suites queued forever).
+ci="$(gh api --paginate "repos/{owner}/{repo}/commits/$fetched/check-runs?filter=latest&per_page=100" \
         --jq '.check_runs[] | [(if .conclusion == null then "pending"
             elif (.conclusion | IN("success", "skipped", "neutral")) then "pass"
             else "fail" end), .name] | @tsv' &&
+      gh api --paginate "repos/{owner}/{repo}/commits/$fetched/check-suites?per_page=100" \
+        --jq '.check_suites[] | select(.app.slug == "github-actions"
+            and .status != "completed")
+            | ["pending", "check suite \(.id) (\(.status))"] | @tsv' &&
       gh api --paginate "repos/{owner}/{repo}/commits/$fetched/status?per_page=100" \
         --jq '.statuses[] | [(if .state == "success" then "pass"
             elif .state == "pending" then "pending" else "fail" end), .context] | @tsv')" ||
@@ -134,6 +142,7 @@ if [ -n "$ci_bad" ]; then
         echo "CI on PR #$pr head $fetched is not green:" >&2
         printf '%s\n' "$ci_bad" >&2
         echo "wait for pending checks; a failure the PR didn't cause goes to the maintainer" >&2
+        echo "(an old failed run on this head blocks too: re-run its failed jobs)" >&2
         exit 1
     fi
     echo "warning: CI on $fetched is not green, merging by maintainer decision:" >&2
@@ -204,7 +213,7 @@ tools/privacy-check.sh "$main_base" ||
     { echo "privacy check fails on the rebased branch" >&2; exit 1; }
 if [ -n "$ci_bad" ]; then
     # the record of the decision, before main moves
-    printf 'Merged with CI not green on %s, by maintainer decision: %s\n\n```\n%s\n```\n' \
+    printf 'Merging with CI not green on %s, by maintainer decision: %s\n\n```\n%s\n```\n' \
         "$fetched" "$red_ci_reason" "$ci_bad" | gh pr comment "$pr" --body-file - >/dev/null ||
         { echo "could not record the CI decision on PR #$pr; main was not updated" >&2; exit 1; }
 fi

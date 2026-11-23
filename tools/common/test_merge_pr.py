@@ -54,7 +54,11 @@ elif a[0] == "api":
     expr = a[a.index("--jq") + 1]
     if "/check-runs" in path:
         jq({"total_count": 0, "check_runs": load("check_runs.json")}, expr)
+    elif "/check-suites" in path:
+        jq({"total_count": 0, "check_suites": load("check_suites.json")}, expr)
     elif path.split("?")[0].endswith("/status"):
+        if os.path.exists(os.path.join(d, "status_error")):
+            sys.exit(1)
         jq({"state": "pending", "statuses": load("statuses.json")}, expr)
     else:
         sys.exit(1)
@@ -71,6 +75,10 @@ def run(*args, cwd, env=None, check=True):
 
 def check_run(name, conclusion, status="completed"):
     return {"name": name, "status": status, "conclusion": conclusion}
+
+
+def suite(sid, status, app):
+    return {"id": sid, "status": status, "app": {"slug": app}}
 
 
 @unittest.skipUnless(shutil.which("jq") and shutil.which("git"),
@@ -126,9 +134,10 @@ class MergePrCiGate(unittest.TestCase):
                         FAKE_HEAD_OID=self.head)
         self.set_ci([check_run("build (release)", "success")], [])
 
-    def set_ci(self, check_runs, statuses):
+    def set_ci(self, check_runs, statuses, suites=()):
         (self.data / "check_runs.json").write_text(json.dumps(check_runs))
         (self.data / "statuses.json").write_text(json.dumps(statuses))
+        (self.data / "check_suites.json").write_text(json.dumps(list(suites)))
 
     def merge(self, *flags):
         return run("sh", "tools/merge-pr.sh", *flags, "1", cwd=self.clone,
@@ -186,6 +195,29 @@ class MergePrCiGate(unittest.TestCase):
         self.set_ci([check_run("build (debug)", "success")],
                     [{"context": "ext", "state": "error"}])
         self.assert_refused(self.merge("--sha", self.head), "fail\text")
+
+    def test_running_suite_refused(self):
+        # the build jobs of a running workflow don't exist yet
+        self.set_ci([check_run("privacy", "success"),
+                     check_run("package", "skipped")], [],
+                    [suite(1, "completed", "github-actions"),
+                     suite(2, "in_progress", "github-actions"),
+                     suite(3, "queued", "other-app")])
+        self.assert_refused(self.merge("--sha", self.head),
+                            "pending\tcheck suite 2 (in_progress)")
+
+    def test_queued_foreign_suite_ignored(self):
+        self.set_ci([check_run("build (release)", "success")], [],
+                    [suite(1, "completed", "github-actions"),
+                     suite(3, "queued", "other-app")])
+        r = self.merge("--sha", self.head)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.origin_main(), self.head)
+
+    def test_status_api_error_refused(self):
+        (self.data / "status_error").write_text("")
+        self.assert_refused(self.merge("--sha", self.head),
+                            "could not read the CI checks")
 
     def test_maintainer_alone_does_not_skip_ci(self):
         self.set_ci([check_run("build (release)", "failure")], [])
