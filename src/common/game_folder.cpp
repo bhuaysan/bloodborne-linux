@@ -7,9 +7,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <cstring>
 #include <memory>
 #include <sstream>
-#include <cstring>
 #include <format>
 #include <optional>
 #include <string>
@@ -163,22 +163,6 @@ std::string sha256_file(const fs::path& path) {
     return to_hex(hash.finish());
 }
 
-// What the hash cache records of eboot.bin: one "key value" line each. Empty when it can't be
-// stat()ed.
-std::string cache_record(const fs::path& eboot, std::string_view eboot_sha256) {
-    std::error_code ec;
-    const fs::path absolute = fs::canonical(eboot, ec);
-    struct stat st {};
-    if (ec || ::stat(absolute.c_str(), &st) != 0) {
-        return {};
-    }
-    const long long mtime_ns =
-        static_cast<long long>(st.st_mtim.tv_sec) * 1'000'000'000LL + st.st_mtim.tv_nsec;
-    return std::format("eboot {}\nsize {}\nmtime_ns {}\ninode {}\nsha256 {}\n", absolute.string(),
-                       static_cast<long long>(st.st_size), mtime_ns,
-                       static_cast<unsigned long long>(st.st_ino), eboot_sha256);
-}
-
 bool cache_matches(const fs::path& cache, const std::string& record) {
     if (cache.empty() || record.empty()) {
         return false;
@@ -213,6 +197,23 @@ void write_cache(const fs::path& cache, const std::string& record) {
 }
 
 }  // namespace
+
+std::string game_check_record(const fs::path& eboot, std::string_view eboot_sha256) {
+    std::error_code ec;
+    const fs::path absolute = fs::canonical(eboot, ec);
+    struct stat st {};
+    if (ec || ::stat(absolute.c_str(), &st) != 0) {
+        return {};
+    }
+    const long long mtime_ns =
+        static_cast<long long>(st.st_mtim.tv_sec) * 1'000'000'000LL + st.st_mtim.tv_nsec;
+    // ctime can't be set from user space: bytes swapped under a restored mtime still miss.
+    const long long ctime_ns =
+        static_cast<long long>(st.st_ctim.tv_sec) * 1'000'000'000LL + st.st_ctim.tv_nsec;
+    return std::format("eboot {}\nsize {}\nmtime_ns {}\nctime_ns {}\ninode {}\nsha256 {}\n",
+                       absolute.string(), static_cast<long long>(st.st_size), mtime_ns, ctime_ns,
+                       static_cast<unsigned long long>(st.st_ino), eboot_sha256);
+}
 
 FolderResult check_game_folder(const fs::path& folder, std::string_view eboot_sha256,
                                const fs::path& hash_cache) {
@@ -284,7 +285,7 @@ FolderResult check_game_folder(const fs::path& folder, std::string_view eboot_sh
     }
     info.message = std::format("Bloodborne version {} found.", *app_version);
     // Taken before the hash: a file changed while it is hashed then misses the cache next time.
-    const std::string record = cache_record(eboot, eboot_sha256);
+    const std::string record = game_check_record(eboot, eboot_sha256);
     if (cache_matches(hash_cache, record)) {
         return info;
     }
@@ -292,18 +293,10 @@ FolderResult check_game_folder(const fs::path& folder, std::string_view eboot_sh
     try {
         digest = sha256_file(eboot);
     } catch (const std::exception& e) {
-        std::error_code ec;
-        if (!hash_cache.empty()) {
-            fs::remove(hash_cache, ec);
-        }
         return failed(FolderCheck::unknown_eboot,
                       std::format("eboot.bin can't be read: {}", e.what()));
     }
     if (digest != eboot_sha256) {
-        std::error_code ec;
-        if (!hash_cache.empty()) {
-            fs::remove(hash_cache, ec);
-        }
         return failed(FolderCheck::unknown_eboot,
                       "This eboot.bin is not the one of Bloodborne 1.09 that the game runs on "
                       "(its checksum is different). Use an unmodified dump with update 1.09 "

@@ -40,9 +40,10 @@ struct FolderResult {
 // docs/source-policy.md. Tests on synthetic trees pass their own.
 //
 // eboot.bin is hashed in chunks. With a `hash_cache` file the hash is skipped when the file names
-// this eboot.bin (absolute path, size, modification time in nanoseconds, inode) and the expected
-// digest: the last check that passed. A hash that passes writes the file, one that fails removes
-// it. A cache file that can't be read or written only costs the hash.
+// this eboot.bin (absolute path, size, modification and change times in nanoseconds, inode) and
+// the expected digest: the last check that passed. A hash that passes writes the file; a failure
+// leaves it alone (it can't match a changed file). A cache file that can't be read or written
+// only costs the hash.
 FolderResult check_game_folder(const std::filesystem::path& folder,
                                std::string_view eboot_sha256 = default_eboot_sha256,
                                const std::filesystem::path& hash_cache = {});
@@ -64,6 +65,10 @@ SetupResult setup_game_folder(const std::filesystem::path& folder,
                               const std::filesystem::path& config,
                               std::string_view eboot_sha256 = default_eboot_sha256,
                               const std::filesystem::path& hash_cache = {});
+
+// What the hash cache holds for `eboot` and the expected digest: one "key value" line each. Empty
+// when the file can't be stat()ed. Public for the tests.
+std::string game_check_record(const std::filesystem::path& eboot, std::string_view eboot_sha256);
 
 // Where the launcher keeps the hash cache: game-check.txt in RuntimeDirs::cache(). bb-run --setup
 // passes none, so it always hashes.

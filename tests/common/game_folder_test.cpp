@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,11 @@ namespace fs = std::filesystem;
 using bb::common::FolderCheck;
 
 constexpr const char* fake_eboot = "not a real eboot";
+
+std::string slurp(const fs::path& file) {
+    std::ifstream in(file, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
 
 std::string fake_hash() {
     const std::string text = fake_eboot;
@@ -208,31 +214,28 @@ TEST_F(GameFolderTest, SetupReportsAConfigFileThatDoesNotParse) {
 class GameFolderCacheTest : public GameFolderTest {
 protected:
     fs::path cache() const { return root_ / "cache/game-check.txt"; }
+    fs::path eboot() const { return game_ / "eboot.bin"; }
     FolderCheck check() { return bb::common::check_game_folder(game_, fake_hash(), cache()).kind; }
-    // Moves eboot.bin's modification time by `ns` nanoseconds.
-    void shift_mtime(long long ns) {
-        const fs::path eboot = game_ / "eboot.bin";
-        fs::last_write_time(eboot, fs::last_write_time(eboot) + std::chrono::nanoseconds(ns));
-    }
-    // Swaps eboot.bin's bytes for `bytes` of the same size and keeps its modification time, so
-    // only the cache decides whether the check sees the change.
-    void replace_keeping_time(const std::string& bytes) {
-        const fs::path eboot = game_ / "eboot.bin";
-        const auto time = fs::last_write_time(eboot);
-        std::fstream(eboot, std::ios::binary | std::ios::in | std::ios::out) << bytes;
-        fs::last_write_time(eboot, time);
+    // Rewrites eboot.bin with bytes of the same size and puts its modification time back.
+    void replace_keeping_mtime(const std::string& bytes) {
+        const auto time = fs::last_write_time(eboot());
+        std::fstream(eboot(), std::ios::binary | std::ios::in | std::ios::out) << bytes;
+        fs::last_write_time(eboot(), time);
     }
 };
 
-TEST_F(GameFolderCacheTest, APassingCheckWritesTheCacheAndTheNextOneSkipsTheHash) {
+TEST_F(GameFolderCacheTest, APassingCheckWritesTheRecordOfTheFile) {
     make_game();
     EXPECT_FALSE(fs::exists(cache()));
     ASSERT_EQ(check(), FolderCheck::ok);
-    ASSERT_TRUE(fs::exists(cache()));
+    EXPECT_EQ(slurp(cache()), bb::common::game_check_record(eboot(), fake_hash()));
     EXPECT_FALSE(fs::exists(cache().string() + ".tmp"));
-    // Same size and time, other bytes: the cache answers, so the hash was skipped.
-    replace_keeping_time("NOT A REAL EBOOT");
-    EXPECT_EQ(check(), FolderCheck::ok);
+}
+
+TEST_F(GameFolderCacheTest, AMatchingRecordSkipsTheHash) {
+    make_game("CUSA03173", "01.09", "NOT A REAL EBOOT");  // fails the hash
+    write(cache(), bb::common::game_check_record(eboot(), fake_hash()));
+    EXPECT_EQ(check(), FolderCheck::ok) << "the record answered, so no hash ran";
     // Without the cache the same file fails.
     EXPECT_EQ(bb::common::check_game_folder(game_, fake_hash()).kind, FolderCheck::unknown_eboot);
 }
@@ -240,40 +243,49 @@ TEST_F(GameFolderCacheTest, APassingCheckWritesTheCacheAndTheNextOneSkipsTheHash
 TEST_F(GameFolderCacheTest, AChangedModificationTimeHashesAgain) {
     make_game();
     ASSERT_EQ(check(), FolderCheck::ok);
-    replace_keeping_time("NOT A REAL EBOOT");
-    shift_mtime(1);  // one nanosecond is enough
+    const std::string old = slurp(cache());
+    fs::last_write_time(eboot(), fs::last_write_time(eboot()) + std::chrono::nanoseconds(1));
+    EXPECT_NE(bb::common::game_check_record(eboot(), fake_hash()), old);
+    replace_keeping_mtime("NOT A REAL EBOOT");
+    fs::last_write_time(eboot(), fs::last_write_time(eboot()) + std::chrono::nanoseconds(1));
     EXPECT_EQ(check(), FolderCheck::unknown_eboot);
-    EXPECT_FALSE(fs::exists(cache())) << "a failed hash drops the cache";
+    EXPECT_EQ(slurp(cache()), old) << "a failure leaves the cache alone";
 }
 
 TEST_F(GameFolderCacheTest, AChangedSizeHashesAgain) {
     make_game();
     ASSERT_EQ(check(), FolderCheck::ok);
-    const fs::path eboot = game_ / "eboot.bin";
-    const auto time = fs::last_write_time(eboot);
-    write(eboot, std::string(fake_eboot) + "!");
-    fs::last_write_time(eboot, time);
+    const auto time = fs::last_write_time(eboot());
+    write(eboot(), std::string(fake_eboot) + "!");
+    fs::last_write_time(eboot(), time);
     EXPECT_EQ(check(), FolderCheck::unknown_eboot);
 }
 
-TEST_F(GameFolderCacheTest, AnotherExpectedDigestOrFolderHashesAgain) {
+TEST_F(GameFolderCacheTest, ChangedBytesUnderARestoredModificationTimeHashAgain) {
     make_game();
     ASSERT_EQ(check(), FolderCheck::ok);
-    replace_keeping_time("NOT A REAL EBOOT");
-    // The cache names the digest it passed for: another one never matches it.
-    EXPECT_EQ(bb::common::check_game_folder(game_, std::string(64, '0'), cache()).kind,
-              FolderCheck::unknown_eboot);
-    // A copy of the folder elsewhere (other path, other inode) is hashed too.
+    replace_keeping_mtime("NOT A REAL EBOOT");  // same size and mtime: the change time differs
+    EXPECT_EQ(check(), FolderCheck::unknown_eboot);
+}
+
+TEST_F(GameFolderCacheTest, AnotherExpectedDigestOrFolderMissesTheRecord) {
     make_game();
-    ASSERT_EQ(check(), FolderCheck::ok);
+    const std::string record = bb::common::game_check_record(eboot(), fake_hash());
+    EXPECT_NE(bb::common::game_check_record(eboot(), std::string(64, '0')), record);
     const fs::path copy = root_ / "copy";
     fs::copy(game_, copy, fs::copy_options::recursive);
-    fs::last_write_time(copy / "eboot.bin", fs::last_write_time(game_ / "eboot.bin"));
-    std::fstream(copy / "eboot.bin", std::ios::binary | std::ios::in | std::ios::out)
-        << "NOT A REAL EBOOT";
-    fs::last_write_time(copy / "eboot.bin", fs::last_write_time(game_ / "eboot.bin"));
-    EXPECT_EQ(bb::common::check_game_folder(copy, fake_hash(), cache()).kind,
-              FolderCheck::unknown_eboot);
+    fs::last_write_time(copy / "eboot.bin", fs::last_write_time(eboot()));
+    EXPECT_NE(bb::common::game_check_record(copy / "eboot.bin", fake_hash()), record);
+    // A record for a symlinked path names the file it leads to.
+    fs::create_directory_symlink(game_, root_ / "link");
+    EXPECT_EQ(bb::common::game_check_record(root_ / "link/eboot.bin", fake_hash()), record);
+}
+
+TEST_F(GameFolderCacheTest, ACorruptCacheHashesAgainAndIsRewritten) {
+    make_game();
+    write(cache(), "eboot nonsense\n");
+    EXPECT_EQ(check(), FolderCheck::ok);
+    EXPECT_EQ(slurp(cache()), bb::common::game_check_record(eboot(), fake_hash()));
 }
 
 TEST_F(GameFolderCacheTest, ACacheFileThatCantBeWrittenOnlyCostsTheHash) {
