@@ -50,9 +50,9 @@ struct LoadSet {
     const LoadedModule& eboot() const;
 };
 
-// Maps the eboot at `base` (as map_eboot does), then each of load_set_prxs (map_prx) at the next address
-// after the previous image that is aligned to the PRX's largest PT_LOAD p_align. Relocates
-// nothing. Throws as map_eboot and map_prx do.
+// Maps the eboot at `base` (as map_eboot does), then each of load_set_prxs (map_prx) at the next
+// address after the previous image that is aligned to the PRX's largest PT_LOAD p_align.
+// Relocates nothing. Throws as map_eboot and map_prx do.
 LoadSet map_load_set(const std::filesystem::path& game_dir, std::uintptr_t base = default_base);
 
 // As map_load_set, with the eboot's ELF given rather than read from `game_dir`: for the tests,
