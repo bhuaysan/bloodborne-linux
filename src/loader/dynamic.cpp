@@ -10,46 +10,6 @@
 namespace bb::loader {
 namespace {
 
-constexpr std::uint64_t dt_needed = 1;
-constexpr std::uint64_t dt_rela = 7;
-
-// A dynamic tag with its name for error messages.
-struct Tag {
-    std::uint64_t value;
-    std::string_view name;
-};
-
-constexpr Tag dt_init{0x0C, "DT_INIT"};
-constexpr Tag dt_fini{0x0D, "DT_FINI"};
-constexpr Tag dt_soname{0x0E, "DT_SONAME"};
-constexpr Tag dt_textrel{0x16, "DT_TEXTREL"};
-constexpr Tag dt_init_array{0x19, "DT_INIT_ARRAY"};
-constexpr Tag dt_fini_array{0x1A, "DT_FINI_ARRAY"};
-constexpr Tag dt_init_arraysz{0x1B, "DT_INIT_ARRAYSZ"};
-constexpr Tag dt_fini_arraysz{0x1C, "DT_FINI_ARRAYSZ"};
-constexpr Tag dt_preinit_array{0x20, "DT_PREINIT_ARRAY"};
-constexpr Tag dt_preinit_arraysz{0x21, "DT_PREINIT_ARRAYSZ"};
-
-// Sony tags, our names (docs/formats/elf-dynamic.md).
-constexpr Tag dt_sce_module_info{0x6100000D, "DT_SCE_MODULE_INFO"};
-constexpr std::uint64_t dt_sce_needed_module = 0x6100000F;
-constexpr std::uint64_t dt_sce_export_lib = 0x61000013;
-constexpr std::uint64_t dt_sce_import_lib = 0x61000015;
-constexpr std::uint64_t dt_sce_export_lib_attr = 0x61000017;
-constexpr std::uint64_t dt_sce_import_lib_attr = 0x61000019;
-constexpr Tag dt_sce_pltgot{0x61000027, "DT_SCE_PLTGOT"};
-constexpr Tag dt_sce_jmprel{0x61000029, "DT_SCE_JMPREL"};
-constexpr Tag dt_sce_pltrel{0x6100002B, "DT_SCE_PLTREL"};
-constexpr Tag dt_sce_pltrelsz{0x6100002D, "DT_SCE_PLTRELSZ"};
-constexpr Tag dt_sce_rela{0x6100002F, "DT_SCE_RELA"};
-constexpr Tag dt_sce_relasz{0x61000031, "DT_SCE_RELASZ"};
-constexpr Tag dt_sce_relaent{0x61000033, "DT_SCE_RELAENT"};
-constexpr Tag dt_sce_strtab{0x61000035, "DT_SCE_STRTAB"};
-constexpr Tag dt_sce_strsz{0x61000037, "DT_SCE_STRSZ"};
-constexpr Tag dt_sce_symtab{0x61000039, "DT_SCE_SYMTAB"};
-constexpr Tag dt_sce_syment{0x6100003B, "DT_SCE_SYMENT"};
-constexpr Tag dt_sce_symtabsz{0x6100003F, "DT_SCE_SYMTABSZ"};
-
 constexpr std::size_t dyn_size = 16;
 constexpr std::size_t sym_size = 24;
 constexpr std::size_t rela_size = 24;
@@ -271,7 +231,7 @@ DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> 
     }
 
     // The value of a tag that may appear at most once.
-    auto optional_tag = [&](const Tag& tag) -> std::optional<std::uint64_t> {
+    auto optional_tag = [&](const DynamicTag& tag) -> std::optional<std::uint64_t> {
         auto same = [&](const auto& entry) { return entry.first == tag.value; };
         if (std::count_if(entries.begin(), entries.end(), same) > 1) {
             throw LoadError(std::format("duplicate {} in the dynamic table", tag.name));
@@ -280,14 +240,14 @@ DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> 
         return it == entries.end() ? std::nullopt : std::optional(it->second);
     };
     // The value of a tag that must appear exactly once.
-    auto required = [&](const Tag& tag) {
+    auto required = [&](const DynamicTag& tag) {
         auto value = optional_tag(tag);
         if (!value) {
             throw LoadError(std::format("missing {} in the dynamic table", tag.name));
         }
         return *value;
     };
-    auto expect = [&](const Tag& tag, std::uint64_t want) {
+    auto expect = [&](const DynamicTag& tag, std::uint64_t want) {
         std::uint64_t value = required(tag);
         if (value != want) {
             throw LoadError(std::format("{} is {:#x}, expected {:#x}", tag.name, value, want));
@@ -296,8 +256,8 @@ DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> 
     expect(dt_sce_pltrel, dt_rela);
     expect(dt_sce_syment, sym_size);
     expect(dt_sce_relaent, rela_size);
-    auto table = [&](const Tag& offset_tag, const Tag& size_tag, std::size_t entry_size,
-                     std::string_view what) {
+    auto table = [&](const DynamicTag& offset_tag, const DynamicTag& size_tag,
+                     std::size_t entry_size, std::string_view what) {
         std::uint64_t offset = required(offset_tag), size = required(size_tag);
         if (!in_bounds(offset, size, blob.size())) {
             throw LoadError(std::format("{} at {:#x} + {:#x} lies outside PT_SCE_DYNLIBDATA", what,
@@ -348,7 +308,7 @@ DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> 
     info.pltgot = required(dt_sce_pltgot);
     info.textrel = optional_tag(dt_textrel).has_value();
     // DT_INIT and DT_FINI point at code.
-    auto entry_point = [&](const Tag& tag) {
+    auto entry_point = [&](const DynamicTag& tag) {
         auto addr = optional_tag(tag);
         if (addr && !find_load(phdrs, *addr, 1, pf_x)) {
             throw LoadError(
@@ -359,7 +319,8 @@ DynamicInfo parse_dynamic(std::span<const std::byte> elf, std::span<const Phdr> 
     info.init = entry_point(dt_init);
     info.fini = entry_point(dt_fini);
     // A function pointer array has both tags or neither.
-    auto func_array = [&](const Tag& addr_tag, const Tag& size_tag) -> std::optional<FuncArray> {
+    auto func_array = [&](const DynamicTag& addr_tag,
+                          const DynamicTag& size_tag) -> std::optional<FuncArray> {
         auto addr = optional_tag(addr_tag), size = optional_tag(size_tag);
         if (addr.has_value() != size.has_value()) {
             throw LoadError(std::format("{} without {}", addr ? addr_tag.name : size_tag.name,

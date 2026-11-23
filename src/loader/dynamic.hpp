@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "loader/elf.hpp"
@@ -25,6 +26,46 @@ inline constexpr std::uint32_t r_x86_64_glob_dat = 6;
 inline constexpr std::uint32_t r_x86_64_jump_slot = 7;
 inline constexpr std::uint32_t r_x86_64_relative = 8;
 inline constexpr std::uint32_t r_x86_64_dtpmod64 = 16;
+
+// A dynamic tag with its name for error messages. It converts to its value.
+struct DynamicTag {
+    std::uint64_t value;
+    std::string_view name;
+    constexpr operator std::uint64_t() const { return value; }
+};
+
+inline constexpr DynamicTag dt_needed{1, "DT_NEEDED"};
+inline constexpr DynamicTag dt_rela{7, "DT_RELA"};
+inline constexpr DynamicTag dt_init{0x0C, "DT_INIT"};
+inline constexpr DynamicTag dt_fini{0x0D, "DT_FINI"};
+inline constexpr DynamicTag dt_soname{0x0E, "DT_SONAME"};
+inline constexpr DynamicTag dt_textrel{0x16, "DT_TEXTREL"};
+inline constexpr DynamicTag dt_init_array{0x19, "DT_INIT_ARRAY"};
+inline constexpr DynamicTag dt_fini_array{0x1A, "DT_FINI_ARRAY"};
+inline constexpr DynamicTag dt_init_arraysz{0x1B, "DT_INIT_ARRAYSZ"};
+inline constexpr DynamicTag dt_fini_arraysz{0x1C, "DT_FINI_ARRAYSZ"};
+inline constexpr DynamicTag dt_preinit_array{0x20, "DT_PREINIT_ARRAY"};
+inline constexpr DynamicTag dt_preinit_arraysz{0x21, "DT_PREINIT_ARRAYSZ"};
+
+// Sony tags, our names (docs/formats/elf-dynamic.md).
+inline constexpr DynamicTag dt_sce_module_info{0x6100000D, "DT_SCE_MODULE_INFO"};
+inline constexpr DynamicTag dt_sce_needed_module{0x6100000F, "DT_SCE_NEEDED_MODULE"};
+inline constexpr DynamicTag dt_sce_export_lib{0x61000013, "DT_SCE_EXPORT_LIB"};
+inline constexpr DynamicTag dt_sce_import_lib{0x61000015, "DT_SCE_IMPORT_LIB"};
+inline constexpr DynamicTag dt_sce_export_lib_attr{0x61000017, "DT_SCE_EXPORT_LIB_ATTR"};
+inline constexpr DynamicTag dt_sce_import_lib_attr{0x61000019, "DT_SCE_IMPORT_LIB_ATTR"};
+inline constexpr DynamicTag dt_sce_pltgot{0x61000027, "DT_SCE_PLTGOT"};
+inline constexpr DynamicTag dt_sce_jmprel{0x61000029, "DT_SCE_JMPREL"};
+inline constexpr DynamicTag dt_sce_pltrel{0x6100002B, "DT_SCE_PLTREL"};
+inline constexpr DynamicTag dt_sce_pltrelsz{0x6100002D, "DT_SCE_PLTRELSZ"};
+inline constexpr DynamicTag dt_sce_rela{0x6100002F, "DT_SCE_RELA"};
+inline constexpr DynamicTag dt_sce_relasz{0x61000031, "DT_SCE_RELASZ"};
+inline constexpr DynamicTag dt_sce_relaent{0x61000033, "DT_SCE_RELAENT"};
+inline constexpr DynamicTag dt_sce_strtab{0x61000035, "DT_SCE_STRTAB"};
+inline constexpr DynamicTag dt_sce_strsz{0x61000037, "DT_SCE_STRSZ"};
+inline constexpr DynamicTag dt_sce_symtab{0x61000039, "DT_SCE_SYMTAB"};
+inline constexpr DynamicTag dt_sce_syment{0x6100003B, "DT_SCE_SYMENT"};
+inline constexpr DynamicTag dt_sce_symtabsz{0x6100003F, "DT_SCE_SYMTABSZ"};
 
 // A loadable file (the eboot, a .prx) as a module record names it.
 struct Module {
