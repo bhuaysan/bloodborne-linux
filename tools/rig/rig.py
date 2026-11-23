@@ -255,11 +255,11 @@ def locate_bb_run(preset: str, allow_stale: bool = False, here: Path | None = No
     own would otherwise test whatever the main checkout last built (#477)."""
     here = here or toolenv.REPO_ROOT
     main = main or toolenv.main_checkout()
+    commit = last_commit_time(here)
     for checkout in dict.fromkeys((here, main)):
         candidate = checkout / "build" / preset / "src" / "tools" / "bb-run"
         if not candidate.is_file():
             continue
-        commit = last_commit_time(here)
         stale = commit is not None and candidate.stat().st_mtime < commit
         if stale and not allow_stale:
             raise SystemExit(

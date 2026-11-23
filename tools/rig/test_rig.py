@@ -84,7 +84,9 @@ class CommandTests(unittest.TestCase):
     def _checkout(self, root: Path, commit_time: int) -> Path:
         """A git checkout at `root` whose last commit is at `commit_time`."""
         root.mkdir()
-        env = {**os.environ, "GIT_COMMITTER_DATE": f"{commit_time} +0000",
+        # No inherited GIT_DIR or GIT_INDEX_FILE (a git hook sets them): never the real repository.
+        env = {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+               "GIT_COMMITTER_DATE": f"{commit_time} +0000",
                "GIT_AUTHOR_DATE": f"{commit_time} +0000", "GIT_AUTHOR_NAME": "t",
                "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
                "GIT_COMMITTER_EMAIL": "t@example.invalid", "GIT_CONFIG_GLOBAL": os.devnull,
