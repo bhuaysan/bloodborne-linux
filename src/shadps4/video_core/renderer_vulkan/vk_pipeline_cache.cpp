@@ -404,6 +404,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         }
     }
     bb::common::frame_profile::Scope profile_lookup(bb::common::frame_profile::Part::lookup);
+    const u32 shaders_before = num_new_shaders.load(std::memory_order_relaxed);
     if (!RefreshGraphicsKey()) {
         ASSERT_MSG(!reused, "Pipeline reuse took a pipeline for a draw the lookup skips");
         return nullptr;
@@ -441,7 +442,10 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                "Pipeline reuse took pipeline {:#x}, the lookup finds {:#x}",
                std::hash<GraphicsPipelineKey>{}(reused->GetGraphicsKey()),
                std::hash<GraphicsPipelineKey>{}(graphics_key));
-    if (reuse_key) {
+    // A lookup that translated a shader is not kept: translating advances the next stage's first
+    // binding by an image's bindings, a known permutation by one per image (AddBindings), so the
+    // next identical draw can pick another vertex permutation than this one did.
+    if (reuse_key && num_new_shaders.load(std::memory_order_relaxed) == shaders_before) {
         RememberLookup(*reuse_key, it->second.get());
     }
     if (!pending_graphics.empty() && !WaitForPending(graphics_key)) {
