@@ -30,29 +30,22 @@ import argparse
 import re
 import struct
 import sys
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "elf2std"))
 from cli import checked_out_dir, convert_each  # noqa: E402
 from toolenv import analysis_dir  # noqa: E402
 from ps4elf import (  # noqa: E402
-    DT_SCE_JMPREL, DT_SCE_PLTRELSZ, ELF_DIR, PINNED_ELFS, PINNED_ELFS_HINT, PT_LOAD, RELA,
-    ElfError, need, parse,
+    DT_SCE_JMPREL, DT_SCE_PLTRELSZ, ELF_DIR, PF_X, PINNED_ELFS, PINNED_ELFS_HINT, PT_LOAD, RELA,
+    ElfError, file_offset, need, parse,
 )
-from elf2std import EH_PE_FORMATS, PF_X, PT_GNU_EH_FRAME, file_offset  # noqa: E402
+from ehframe import EH_PE_FORMATS, pointer_format, read_eh_frame_hdr, read_pointer  # noqa: E402
 
 DEFAULT_OUT = analysis_dir() / "noreturn"
 
 R_X86_64_JUMP_SLOT = 7
 MIN_ENDING = 2
-
-# Encodings of .eh_frame_hdr this tool reads: version 1, eh_frame_ptr pcrel|sdata4, fde_count
-# udata4, search table datarel|sdata4 (the values in every pinned file).
-EH_HDR_ENCODINGS = bytes([1, 0x1B, 0x03, 0x3B])
-EH_PE_PCREL = 0x10
 
 # Padding that may follow the last call of a function: the recommended nop encodings and int3.
 PADDING = (b"\x66\x0f\x1f\x84\x00\x00\x00\x00\x00", b"\x0f\x1f\x84\x00\x00\x00\x00\x00",
@@ -120,19 +113,11 @@ def fde_encoding(data: bytes, cie: int) -> int:
 
 def fde_ranges(data: bytes, phdrs, loads) -> list[tuple[int, int]]:
     """(start, end) of every FDE in the .eh_frame_hdr search table."""
-    hdrs = [ph for ph in phdrs if ph.p_type == PT_GNU_EH_FRAME]
-    need(len(hdrs) == 1, "expected one PT_GNU_EH_FRAME")
-    hdr_vaddr = hdrs[0].p_vaddr
-    hdr, _ = file_offset(data, loads, hdr_vaddr, 12)
-    need(data[hdr: hdr + 4] == EH_HDR_ENCODINGS,
-         f"unsupported .eh_frame_hdr encodings {data[hdr: hdr + 4].hex()}")
-    (count,) = struct.unpack_from("<I", data, hdr + 8)
-    file_offset(data, loads, hdr_vaddr, 12 + 8 * count)
+    hdr = read_eh_frame_hdr(data, phdrs, loads)
+    need(hdr is not None, "no PT_GNU_EH_FRAME")
     encodings: dict[int, int] = {}
     out = []
-    for i in range(count):
-        _, fde_rel = struct.unpack_from("<ii", data, hdr + 12 + 8 * i)
-        fde_vaddr = hdr_vaddr + fde_rel
+    for _, fde_vaddr in hdr.table:
         fde, _ = file_offset(data, loads, fde_vaddr, 8)
         cie_ptr = struct.unpack_from("<I", data, fde + 4)[0]
         need(struct.unpack_from("<I", data, fde)[0] not in (0, 0xFFFFFFFF) and cie_ptr != 0,
@@ -141,15 +126,11 @@ def fde_ranges(data: bytes, phdrs, loads) -> list[tuple[int, int]]:
         if cie_vaddr not in encodings:
             encodings[cie_vaddr] = fde_encoding(data, file_offset(data, loads, cie_vaddr, 9)[0])
         enc = encodings[cie_vaddr]
-        fmt = EH_PE_FORMATS.get(enc & 0x0F)
-        need(fmt is not None and enc & 0xF0 in (0, EH_PE_PCREL),
-             f"unsupported FDE pointer encoding {enc:#x} at {fde_vaddr:#x}")
+        fmt = pointer_format(enc, f"FDE pointer at {fde_vaddr:#x}")
         size = struct.calcsize(fmt)
         file_offset(data, loads, fde_vaddr + 8, 2 * size)
-        begin, length = struct.unpack_from("<" + fmt[1] * 2, data, fde + 8)
-        if enc & 0xF0 == EH_PE_PCREL:
-            begin += fde_vaddr + 8
-        begin &= 0xFFFFFFFFFFFFFFFF
+        begin = read_pointer(data, fde + 8, fde_vaddr + 8, enc)
+        (length,) = struct.unpack_from(fmt, data, fde + 8 + size)
         if length:
             out.append((begin, begin + length))
     return out

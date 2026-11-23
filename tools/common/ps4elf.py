@@ -61,6 +61,9 @@ EM_X86_64 = 62
 PT_LOAD = 1
 PT_DYNAMIC = 2
 PT_SCE_DYNLIBDATA = 0x61000000
+PT_GNU_EH_FRAME = 0x6474E550
+
+PF_X, PF_W, PF_R = 1, 2, 4
 
 DT_NULL = 0
 DT_NEEDED = 1
@@ -119,6 +122,16 @@ class ElfError(Exception):
 def need(cond: bool, what: str) -> None:
     if not cond:
         raise ElfError(what)
+
+
+def file_offset(data: bytes, loads: list[Phdr], vaddr: int, size: int = 1) -> tuple[int, Phdr]:
+    """File offset of vaddr..vaddr+size, which must lie in the file data of one PT_LOAD."""
+    for ph in loads:
+        if ph.p_vaddr <= vaddr and vaddr + size <= ph.p_vaddr + ph.p_filesz:
+            offset = ph.p_offset + vaddr - ph.p_vaddr
+            need(offset + size <= len(data), f"{vaddr:#x} lies past the end of the file")
+            return offset, ph
+    raise ElfError(f"{vaddr:#x}+{size:#x} is not in the file data of a PT_LOAD segment")
 
 
 @dataclass

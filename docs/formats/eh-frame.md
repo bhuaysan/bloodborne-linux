@@ -43,7 +43,7 @@ Observed in all 8 files (**confirmed** by walking every record):
 
 ## What elf2std adds
 
-`elf2std` finds `.eh_frame_hdr` through `PT_GNU_EH_FRAME`, decodes `eh_frame_ptr` (absptr, pcrel or datarel; udata4/sdata4/udata8/sdata8) and walks the records from there. The walk stops after the zero terminator. Without one it stops at the end of the containing segment's file data, or at the start of `.eh_frame_hdr` when that follows in the same segment. A record that crosses that limit is an error. It then writes a section header table at the end of the file (not loaded):
+`elf2std` and `noreturn` read `.eh_frame_hdr` with one reader, `tools/common/ehframe.py`. It finds the header through `PT_GNU_EH_FRAME` and decodes `eh_frame_ptr` and the search table. Both pointer fields take absptr, pcrel or datarel applications with absptr (8 bytes), udata4, sdata4, udata8 or sdata8; `fde_count` takes the same formats, and omit in either count or table encoding means no table. These cover what x86-64 linkers emit; LEB128, 2-byte and indirect encodings are rejected. `elf2std` then walks the records from `eh_frame_ptr`. The walk stops after the zero terminator. Without one it stops at the end of the containing segment's file data, or at the start of `.eh_frame_hdr` when that follows in the same segment. A record that crosses that limit is an error. It then writes a section header table at the end of the file (not loaded):
 
 | Section | Type | Flags | Covers |
 |---|---|---|---|

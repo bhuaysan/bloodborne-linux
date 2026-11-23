@@ -44,15 +44,14 @@ from ps4elf import (  # noqa: E402
     DT_RELASZ, DT_SCE_FIRST, DT_SCE_JMPREL, DT_SCE_LAST, DT_SCE_PLTGOT, DT_SCE_PLTREL,
     DT_SCE_PLTRELSZ, DT_SCE_RELA, DT_SCE_RELAENT, DT_SCE_RELASZ, DT_SCE_STRSZ, DT_SCE_STRTAB,
     DT_SCE_SYMENT, DT_SCE_SYMTAB, DT_STRSZ, DT_STRTAB, DT_SYMENT, DT_SYMTAB, DYN, ELF_DIR,
-    ELF_HEADER, ELF_PHDR, ET_EXEC, PINNED_ELFS, PINNED_ELFS_HINT, PT_DYNAMIC, PT_LOAD, RELA,
-    ElfError, Phdr, need, parse,
+    ELF_HEADER, ELF_PHDR, ET_EXEC, PF_R, PF_W, PF_X, PINNED_ELFS, PINNED_ELFS_HINT, PT_DYNAMIC,
+    PT_LOAD, RELA, ElfError, Phdr, file_offset, need, parse,
 )
+from ehframe import read_eh_frame_hdr  # noqa: E402
 
 DEFAULT_OUT = analysis_dir() / "elf-std"
 
-PF_X, PF_W, PF_R = 1, 2, 4
 SEGMENT_ALIGN = 0x4000
-PT_GNU_EH_FRAME = 0x6474E550
 
 ELF_SHDR = struct.Struct("<IIQQQQIIQQ")  # 0x40 bytes
 SHT_PROGBITS = 1
@@ -60,10 +59,6 @@ SHT_STRTAB = 3
 SHT_DYNAMIC = 6
 SHT_NOBITS = 8
 SHF_WRITE, SHF_ALLOC, SHF_EXECINSTR = 1, 2, 4
-
-# DWARF pointer encodings (DW_EH_PE_*) accepted for eh_frame_ptr in .eh_frame_hdr.
-EH_PE_FORMATS = {0x00: "<Q", 0x03: "<I", 0x04: "<Q", 0x0B: "<i", 0x0C: "<q"}
-EH_PE_ABSPTR, EH_PE_PCREL, EH_PE_DATAREL = 0x00, 0x10, 0x30
 
 # Sony tag -> standard tag. Offsets are relative to the dynlibdata segment.
 OFFSET_TAGS = {
@@ -125,16 +120,6 @@ def build_hash_table(names: list[bytes]) -> bytes:
     return struct.pack(f"<II{nbucket}I{nchain}I", nbucket, nchain, *buckets, *chains)
 
 
-def file_offset(data: bytes, loads: list[Phdr], vaddr: int, size: int = 1) -> tuple[int, Phdr]:
-    """File offset of vaddr..vaddr+size, which must lie in the file data of one PT_LOAD."""
-    for ph in loads:
-        if ph.p_vaddr <= vaddr and vaddr + size <= ph.p_vaddr + ph.p_filesz:
-            offset = ph.p_offset + vaddr - ph.p_vaddr
-            need(offset + size <= len(data), f"{vaddr:#x} lies past the end of the file")
-            return offset, ph
-    raise ElfError(f"{vaddr:#x}+{size:#x} is not in the file data of a PT_LOAD segment")
-
-
 def walk_eh_frame(data: bytes, loads: list[Phdr], start: int, limit: int) -> tuple[int, int]:
     """Walks the CIE/FDE records of .eh_frame from start (vaddr).
 
@@ -167,24 +152,10 @@ def find_eh_frame(data: bytes, phdrs: list[Phdr],
     """Locates .eh_frame through PT_GNU_EH_FRAME (.eh_frame_hdr).
 
     Returns (the PT_GNU_EH_FRAME header, .eh_frame vaddr, size, FDE count), or None."""
-    hdrs = [ph for ph in phdrs if ph.p_type == PT_GNU_EH_FRAME]
-    if not hdrs:
+    hdr = read_eh_frame_hdr(data, phdrs, loads)
+    if hdr is None:
         return None
-    need(len(hdrs) == 1, "more than one PT_GNU_EH_FRAME")
-    (eh_hdr,) = hdrs
-    need(eh_hdr.p_filesz >= 4, "PT_GNU_EH_FRAME is too small")
-    hdr_off, hdr_load = file_offset(data, loads, eh_hdr.p_vaddr, eh_hdr.p_filesz)
-    version, ptr_enc = data[hdr_off], data[hdr_off + 1]
-    need(version == 1, f"unsupported .eh_frame_hdr version {version}")
-    fmt = EH_PE_FORMATS.get(ptr_enc & 0x0F)
-    app = ptr_enc & 0xF0
-    need(fmt is not None and app in (EH_PE_ABSPTR, EH_PE_PCREL, EH_PE_DATAREL),
-         f"unsupported eh_frame_ptr encoding {ptr_enc:#x}")
-    need(4 + struct.calcsize(fmt) <= eh_hdr.p_filesz, "PT_GNU_EH_FRAME is too small")
-    (value,) = struct.unpack_from(fmt, data, hdr_off + 4)
-    # pcrel: relative to the field itself, datarel: relative to the start of .eh_frame_hdr.
-    base = {EH_PE_ABSPTR: 0, EH_PE_PCREL: eh_hdr.p_vaddr + 4, EH_PE_DATAREL: eh_hdr.p_vaddr}[app]
-    start = (base + value) & 0xFFFFFFFFFFFFFFFF
+    eh_hdr, hdr_load, start = hdr.phdr, hdr.load, hdr.eh_frame
     _, load = file_offset(data, loads, start)
     limit = load.p_vaddr + load.p_filesz
     if load is hdr_load and start < eh_hdr.p_vaddr:

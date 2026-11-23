@@ -133,7 +133,7 @@ def build_elf(e_type=p.ET_SCE_DYNEXEC, eh=None, **kwargs) -> bytes:
     ]
     if eh:
         hdr_vaddr, hdr = eh[2], eh[3]
-        phdrs.append(e.Phdr(e.PT_GNU_EH_FRAME, 4, TEXT_OFF + hdr_vaddr - TEXT_VADDR, hdr_vaddr,
+        phdrs.append(e.Phdr(p.PT_GNU_EH_FRAME, 4, TEXT_OFF + hdr_vaddr - TEXT_VADDR, hdr_vaddr,
                             hdr_vaddr, len(hdr), len(hdr), 4))
     ident = b"\x7fELF\x02\x01\x01\x09" + bytes(8)
     out = bytearray(DYNLIB_OFF + len(blob))
@@ -531,7 +531,7 @@ class GameTests(unittest.TestCase):
                     self.assertNotEqual(img.lookup(dyn, name), 0, name)
                 # In every pinned file .eh_frame ends with a terminator right before
                 # .eh_frame_hdr.
-                (eh_hdr,) = [ph for ph in img.phdrs if ph.p_type == e.PT_GNU_EH_FRAME]
+                (eh_hdr,) = [ph for ph in img.phdrs if ph.p_type == p.PT_GNU_EH_FRAME]
                 self.assertEqual(sum(result.eh_frame), eh_hdr.p_vaddr)
                 self.assertEqual(img.read(eh_hdr.p_vaddr - 4, 4), bytes(4))
                 self.assertGreater(result.fdes, 0)

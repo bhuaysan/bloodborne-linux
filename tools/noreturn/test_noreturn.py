@@ -98,10 +98,24 @@ class AnalyzeTests(unittest.TestCase):
         with self.assertRaisesRegex(nr.ElfError, "PT_GNU_EH_FRAME"):
             nr.analyze(t.build_elf())
 
-    def test_other_header_encoding_rejected(self):
+    def test_header_encodings(self):
+        # The shared reader (tools/common/ehframe.py) decides which encodings are accepted;
+        # noreturn must find the same FDEs through each.
         frame_vaddr, frame, hdr_vaddr, _ = t.eh_layout()
-        hdr = t.build_eh_frame_hdr(hdr_vaddr, frame_vaddr, [], ptr_enc=0x03)
-        with self.assertRaisesRegex(nr.ElfError, "encodings"):
+        for ptr_enc in (0x1B, 0x3B, 0x04):
+            with self.subTest(ptr_enc=hex(ptr_enc)):
+                _, table = t.build_eh_frame(frame_vaddr)
+                hdr = t.build_eh_frame_hdr(hdr_vaddr, frame_vaddr, table, ptr_enc=ptr_enc)
+                data = t.build_elf(eh=(frame_vaddr, frame, hdr_vaddr, hdr))
+                img = nr.parse(data)
+                loads = [ph for ph in img.phdrs if ph.p_type == nr.PT_LOAD]
+                self.assertEqual(nr.fde_ranges(data, img.phdrs, loads),
+                                 [(func, func + 0x10) for func, _ in table])
+
+    def test_bad_header_encoding_rejected(self):
+        frame_vaddr, frame, hdr_vaddr, hdr = t.eh_layout()
+        hdr = hdr[:1] + b"\x9b" + hdr[2:]  # indirect
+        with self.assertRaisesRegex(nr.ElfError, "eh_frame_ptr encoding"):
             nr.analyze(t.build_elf(eh=(frame_vaddr, frame, hdr_vaddr, hdr)))
 
 
