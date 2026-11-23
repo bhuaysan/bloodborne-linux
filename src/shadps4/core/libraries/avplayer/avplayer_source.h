@@ -174,6 +174,7 @@ private:
     Core::MemoryManager& m_memory;
 
     u64 DurationMillis() const;
+    u64 CurrentTimeLocked();  // the caller holds m_current_frames_mutex
     AvPlayerStreamInfo CreateStreamInfo(u32 stream_index);
 
     static void ReleaseAVPacket(AVPacket* packet);
@@ -231,8 +232,8 @@ private:
     AvPlayerQueue<Frame> m_video_frames;
 
     // Held by the frame getters, by Stop() while it resets the current frames, the queues and
-    // the clock, and by Start() while it sets m_start_time (#785). Pause(), Resume() and
-    // CurrentTime() from the state layer still run without it. Taken before a queue's lock.
+    // the clock, by Start() while it sets m_start_time (#785), and by Pause(), Resume() and
+    // CurrentTime() for the clock (#808). Taken before a queue's lock.
     std::mutex m_current_frames_mutex{};
     std::optional<Frame> m_current_video_frame;
     std::optional<Frame> m_current_audio_frame;

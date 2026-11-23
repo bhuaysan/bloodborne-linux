@@ -367,12 +367,16 @@ bool AvPlayerSource::Stop() {
     return true;
 }
 
+// Pause(), Resume() and CurrentTime() take the frames lock too: GetAudioData() and Stop() write
+// the clock under it, and the time points are std::optional (#808).
 void AvPlayerSource::Pause() {
+    std::scoped_lock frames_lock(m_current_frames_mutex);
     m_pause_time = std::chrono::high_resolution_clock::now();
     m_is_paused = true;
 }
 
 void AvPlayerSource::Resume() {
+    std::scoped_lock frames_lock(m_current_frames_mutex);
     m_pause_duration += std::chrono::high_resolution_clock::now() - m_pause_time;
     m_is_paused = false;
 }
@@ -400,7 +404,7 @@ bool AvPlayerSource::GetVideoData(AvPlayerFrameInfoEx& video_info) {
 
     // The check of the front frame's time and its pop are one step under the queue's lock, so
     // Stop() emptying the queue meanwhile can't leave a dangling front reference (#539).
-    const auto current_time = CurrentTime();
+    const auto current_time = CurrentTimeLocked();
     const bool sync = m_state.GetSyncMode() == AvPlayerAvSyncMode::Default;
     auto frame = m_video_frames.PopIf(
         [&](const Frame& f) { return !sync || f.info.timestamp <= current_time; });
@@ -493,6 +497,11 @@ u64 AvPlayerSource::DurationMillis() const {
 }
 
 u64 AvPlayerSource::CurrentTime() {
+    std::scoped_lock frames_lock(m_current_frames_mutex);
+    return CurrentTimeLocked();
+}
+
+u64 AvPlayerSource::CurrentTimeLocked() {
     if (!m_start_time.has_value()) {
         return 0;
     }

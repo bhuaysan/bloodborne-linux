@@ -406,6 +406,85 @@ TEST(AvPlayerGame, StopIsSafeAgainstAThreadPullingFrames) {
     EXPECT_EQ(rounds_with_frames, rounds / 2);
 }
 
+// Pause(), Resume() and CurrentTime() against the frame puller (#808): GetAudioData() writes the
+// audio clock (last timestamp, its wall time, the pause duration) and Stop() resets it, both under
+// the frames lock. With the clock under the same lock, no getter writes it once Pause() returned,
+// so the paused clock stands still, and a getter can't set the audio time after the pause began,
+// which would make the elapsed time negative and wrap the u64 result.
+TEST(AvPlayerGame, ClockIsSafeAgainstAThreadPullingFrames) {
+    BB_REQUIRE_GAME(game);
+    const std::filesystem::path movie = game / "dvdroot_ps4/movie/sprj_opening.mp4";
+    BB_REQUIRE_GAME_DATA(movie, "nothing: the game dump lacks its opening movie");
+    if (avcodec_find_decoder(AV_CODEC_ID_H264) == nullptr ||
+        avcodec_find_decoder(AV_CODEC_ID_AAC) == nullptr) {
+        GTEST_SKIP() << "no H.264 or AAC decoder in this FFmpeg build";
+    }
+    Common::Log::g_class_levels[static_cast<std::size_t>(Common::Log::Class::Lib_AvPlayer)] =
+        Common::Log::Level::Error;
+    bb::hle::kernel::path_map().mount_game(game);
+
+    NoSyncCallback callback;
+    AvPlayerInitData init{};
+    init.memory_replacement = {nullptr, allocate_counted, deallocate_counted, allocate_counted,
+                               deallocate_counted};
+    init.num_output_video_framebuffers = 2;
+    AvPlayerSource source(callback, guest_memory());
+    ASSERT_TRUE(source.Init(init, "/app0/dvdroot_ps4/movie/sprj_opening.mp4"));
+    ASSERT_TRUE(source.FindStreams());
+    const s32 streams = source.GetStreamCount();
+    ASSERT_GE(streams, 2);
+    for (s32 i = 0; i < streams; ++i) {
+        ASSERT_TRUE(source.EnableStream(i));
+    }
+
+    std::atomic<bool> done{false};
+    std::atomic<int> audio_frames{0};
+    std::thread puller([&] {
+        while (!done) {
+            AvPlayerFrameInfoEx video{};
+            source.GetVideoData(video);
+            AvPlayerFrameInfo audio{};
+            if (source.GetAudioData(audio)) {
+                ++audio_frames;
+            }
+        }
+    });
+    struct JoinPuller {
+        std::atomic<bool>& done;
+        std::thread& thread;
+        ~JoinPuller() {
+            done = true;
+            thread.join();
+        }
+    } join_puller{done, puller};
+
+    // Far above the opening movie's length; a wrapped negative elapsed time is near 2^64.
+    constexpr u64 max_time_ms = 60 * 60 * 1000;
+    constexpr int rounds = 20, pauses = 100;
+    for (int round = 0; round < rounds; ++round) {
+        ASSERT_TRUE(source.Start()) << "round " << round;
+        const int before = audio_frames.load();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (audio_frames.load() == before && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        ASSERT_GT(audio_frames.load(), before) << "round " << round;
+        for (int pause = 0; pause < pauses; ++pause) {
+            ASSERT_LE(source.CurrentTime(), max_time_ms) << "round " << round;
+            source.Pause();
+            const u64 paused = source.CurrentTime();
+            ASSERT_LE(paused, max_time_ms) << "round " << round << " pause " << pause;
+            std::this_thread::yield();
+            ASSERT_EQ(source.CurrentTime(), paused) << "round " << round << " pause " << pause;
+            source.Resume();
+            std::this_thread::yield();
+        }
+        ASSERT_TRUE(source.Stop()) << "round " << round;
+        ASSERT_EQ(source.CurrentTime(), 0u) << "round " << round;
+        ASSERT_EQ(live_buffers.load(), 0) << "round " << round;
+    }
+}
+
 }  // namespace
 
 // Its own main, ending with _exit like shadps4_syslibs_test: the libraries' static UI would
