@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import import_shadps4 as tool
@@ -279,9 +280,13 @@ class RealImport(unittest.TestCase):
     def test_this_checkout_is_refused_once_it_holds_r6_edits(self):
         if not tool.edits_after_import(self.generated, tool.REPO_ROOT):
             self.skipTest("this checkout holds no edits after the import")
-        for write_tree in (False, True):
-            with self.assertRaisesRegex(tool.ImportError_, "rewrite.md"):
-                tool.run(self.generated, tool.REPO_ROOT, write_tree)
+        # A broken refusal must not wipe the real checkout: the write calls fail instead.
+        no_write = AssertionError("run() tried to write into this checkout")
+        with mock.patch.object(tool.shutil, "rmtree", side_effect=no_write), \
+                mock.patch.object(tool.shutil, "copytree", side_effect=no_write):
+            for write_tree in (False, True):
+                with self.assertRaisesRegex(tool.ImportError_, "rewrite.md"):
+                    tool.run(self.generated, tool.REPO_ROOT, write_tree)
 
     @unittest.skipUnless(has_r5_tag(), "the r5 tag is not fetched")
     def test_r5_export_checks_clean(self):
