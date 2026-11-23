@@ -148,14 +148,14 @@ TEST(BbLoadGame, PrintsTheLoadSet) {
               std::format("0 3 {} 0", facts::imports_of("libSceNet").functions - 3));
 
     EXPECT_EQ(modules[1].header.at(0), "module     libSceFios2.prx id 2");
-    EXPECT_EQ(modules[1].header.at(1), 
+    EXPECT_EQ(modules[1].header.at(1),
               std::format("base       {:#x}", bb::loader::default_base + facts::fios2_offset));
     EXPECT_EQ(modules[1].header.back(),
               std::format("reloc      R_X86_64_DTPMOD64 {}", facts::fios2_dtpmod_relocs));
     EXPECT_EQ(modules[1].imports, "imports    81 in 4 libraries");
     EXPECT_EQ(modules[1].bindings["libSceLibcInternal"], "15 0 1 0");
     EXPECT_EQ(modules[2].header.at(0), "module     libc.prx id 3");
-    EXPECT_EQ(modules[2].header.at(1), 
+    EXPECT_EQ(modules[2].header.at(1),
               std::format("base       {:#x}", bb::loader::default_base + facts::libc_offset));
     EXPECT_EQ(modules[2].header.back(),
               std::format("reloc      R_X86_64_DTPMOD64 {}", facts::libc_dtpmod_relocs));
