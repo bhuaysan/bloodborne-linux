@@ -205,7 +205,7 @@ void remove_old_cache(const fs::path& folder) {
         return;
     }
     // A folder shared with other files (~/Games, say): only what the runtime makes in cache/.
-    for (const char* sub : {"system", "pipeline", "profiles"}) {
+    for (const char* sub : {"system", "pipeline", "profiles", "game-check.txt"}) {
         fs::remove_all(folder / "cache" / sub, ec);
     }
     fs::remove(folder / "cache", ec);  // only when that left it empty

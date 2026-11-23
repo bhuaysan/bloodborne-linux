@@ -1,6 +1,14 @@
 #include "common/game_folder.hpp"
 
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <cerrno>
 #include <cstdint>
+#include <cstdio>
+#include <fstream>
+#include <memory>
+#include <sstream>
 #include <cstring>
 #include <format>
 #include <optional>
@@ -133,9 +141,81 @@ FolderResult no_eboot(const fs::path& folder) {
                 std::format("This folder has no eboot.bin.{}", hint));
 }
 
+// SHA-256 of a file, read in chunks so a 90 MB eboot.bin never sits in memory whole. Throws
+// std::system_error naming the path when it can't be read.
+std::string sha256_file(const fs::path& path) {
+    const auto fail = [&](int err) {
+        return std::system_error(err, std::generic_category(), "cannot read " + path.string());
+    };
+    using File = std::unique_ptr<std::FILE, int (*)(std::FILE*)>;
+    File file(std::fopen(path.c_str(), "rb"), std::fclose);
+    if (!file) {
+        throw fail(errno);
+    }
+    std::vector<std::byte> chunk(std::size_t{1} << 20);
+    Sha256 hash;
+    while (const std::size_t n = std::fread(chunk.data(), 1, chunk.size(), file.get())) {
+        hash.update(std::span(chunk.data(), n));
+    }
+    if (std::ferror(file.get())) {
+        throw fail(errno ? errno : EIO);
+    }
+    return to_hex(hash.finish());
+}
+
+// What the hash cache records of eboot.bin: one "key value" line each. Empty when it can't be
+// stat()ed.
+std::string cache_record(const fs::path& eboot, std::string_view eboot_sha256) {
+    std::error_code ec;
+    const fs::path absolute = fs::canonical(eboot, ec);
+    struct stat st {};
+    if (ec || ::stat(absolute.c_str(), &st) != 0) {
+        return {};
+    }
+    const long long mtime_ns =
+        static_cast<long long>(st.st_mtim.tv_sec) * 1'000'000'000LL + st.st_mtim.tv_nsec;
+    return std::format("eboot {}\nsize {}\nmtime_ns {}\ninode {}\nsha256 {}\n", absolute.string(),
+                       static_cast<long long>(st.st_size), mtime_ns,
+                       static_cast<unsigned long long>(st.st_ino), eboot_sha256);
+}
+
+bool cache_matches(const fs::path& cache, const std::string& record) {
+    if (cache.empty() || record.empty()) {
+        return false;
+    }
+    std::ifstream in(cache, std::ios::binary);
+    std::ostringstream text;
+    text << in.rdbuf();
+    return in.good() && text.str() == record;
+}
+
+// Best effort: a temporary file renamed over the old one, so a crash leaves no half record.
+void write_cache(const fs::path& cache, const std::string& record) {
+    std::error_code ec;
+    if (cache.empty() || record.empty()) {
+        return;
+    }
+    fs::create_directories(cache.parent_path(), ec);
+    const fs::path temp = cache.string() + ".tmp";
+    {
+        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+        out << record;
+        out.close();
+        if (!out) {
+            fs::remove(temp, ec);
+            return;
+        }
+    }
+    fs::rename(temp, cache, ec);
+    if (ec) {
+        fs::remove(temp, ec);
+    }
+}
+
 }  // namespace
 
-FolderResult check_game_folder(const fs::path& folder, std::string_view eboot_sha256) {
+FolderResult check_game_folder(const fs::path& folder, std::string_view eboot_sha256,
+                               const fs::path& hash_cache) {
     std::error_code ec;
     if (!fs::is_directory(folder, ec)) {
         return fail(FolderCheck::not_a_folder,
@@ -202,27 +282,41 @@ FolderResult check_game_folder(const fs::path& folder, std::string_view eboot_sh
                                   "update 1.09 to the dump, then choose the folder again.",
                                   *app_version));
     }
+    info.message = std::format("Bloodborne version {} found.", *app_version);
+    // Taken before the hash: a file changed while it is hashed then misses the cache next time.
+    const std::string record = cache_record(eboot, eboot_sha256);
+    if (cache_matches(hash_cache, record)) {
+        return info;
+    }
     std::string digest;
     try {
-        digest = to_hex(sha256(read_file(eboot)));
+        digest = sha256_file(eboot);
     } catch (const std::exception& e) {
+        std::error_code ec;
+        if (!hash_cache.empty()) {
+            fs::remove(hash_cache, ec);
+        }
         return failed(FolderCheck::unknown_eboot,
                       std::format("eboot.bin can't be read: {}", e.what()));
     }
     if (digest != eboot_sha256) {
+        std::error_code ec;
+        if (!hash_cache.empty()) {
+            fs::remove(hash_cache, ec);
+        }
         return failed(FolderCheck::unknown_eboot,
                       "This eboot.bin is not the one of Bloodborne 1.09 that the game runs on "
                       "(its checksum is different). Use an unmodified dump with update 1.09 "
                       "applied.");
     }
-    info.message = std::format("Bloodborne version {} found.", *app_version);
+    write_cache(hash_cache, record);
     return info;
 }
 
 SetupResult setup_game_folder(const fs::path& folder, const fs::path& config,
-                              std::string_view eboot_sha256) {
+                              std::string_view eboot_sha256, const fs::path& hash_cache) {
     SetupResult result;
-    result.folder = check_game_folder(folder, eboot_sha256);
+    result.folder = check_game_folder(folder, eboot_sha256, hash_cache);
     if (!result.folder.ok()) {
         return result;
     }

@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -200,6 +201,93 @@ TEST_F(GameFolderTest, SetupReportsAConfigFileThatDoesNotParse) {
     EXPECT_TRUE(r.folder.ok());
     EXPECT_FALSE(r.config_written);
     EXPECT_NE(r.message().find("fsr"), std::string::npos);
+}
+
+// ---- the hash cache ---------------------------------------------------------------------------
+
+class GameFolderCacheTest : public GameFolderTest {
+protected:
+    fs::path cache() const { return root_ / "cache/game-check.txt"; }
+    FolderCheck check() { return bb::common::check_game_folder(game_, fake_hash(), cache()).kind; }
+    // Moves eboot.bin's modification time by `ns` nanoseconds.
+    void shift_mtime(long long ns) {
+        const fs::path eboot = game_ / "eboot.bin";
+        fs::last_write_time(eboot, fs::last_write_time(eboot) + std::chrono::nanoseconds(ns));
+    }
+    // Swaps eboot.bin's bytes for `bytes` of the same size and keeps its modification time, so
+    // only the cache decides whether the check sees the change.
+    void replace_keeping_time(const std::string& bytes) {
+        const fs::path eboot = game_ / "eboot.bin";
+        const auto time = fs::last_write_time(eboot);
+        std::fstream(eboot, std::ios::binary | std::ios::in | std::ios::out) << bytes;
+        fs::last_write_time(eboot, time);
+    }
+};
+
+TEST_F(GameFolderCacheTest, APassingCheckWritesTheCacheAndTheNextOneSkipsTheHash) {
+    make_game();
+    EXPECT_FALSE(fs::exists(cache()));
+    ASSERT_EQ(check(), FolderCheck::ok);
+    ASSERT_TRUE(fs::exists(cache()));
+    EXPECT_FALSE(fs::exists(cache().string() + ".tmp"));
+    // Same size and time, other bytes: the cache answers, so the hash was skipped.
+    replace_keeping_time("NOT A REAL EBOOT");
+    EXPECT_EQ(check(), FolderCheck::ok);
+    // Without the cache the same file fails.
+    EXPECT_EQ(bb::common::check_game_folder(game_, fake_hash()).kind, FolderCheck::unknown_eboot);
+}
+
+TEST_F(GameFolderCacheTest, AChangedModificationTimeHashesAgain) {
+    make_game();
+    ASSERT_EQ(check(), FolderCheck::ok);
+    replace_keeping_time("NOT A REAL EBOOT");
+    shift_mtime(1);  // one nanosecond is enough
+    EXPECT_EQ(check(), FolderCheck::unknown_eboot);
+    EXPECT_FALSE(fs::exists(cache())) << "a failed hash drops the cache";
+}
+
+TEST_F(GameFolderCacheTest, AChangedSizeHashesAgain) {
+    make_game();
+    ASSERT_EQ(check(), FolderCheck::ok);
+    const fs::path eboot = game_ / "eboot.bin";
+    const auto time = fs::last_write_time(eboot);
+    write(eboot, std::string(fake_eboot) + "!");
+    fs::last_write_time(eboot, time);
+    EXPECT_EQ(check(), FolderCheck::unknown_eboot);
+}
+
+TEST_F(GameFolderCacheTest, AnotherExpectedDigestOrFolderHashesAgain) {
+    make_game();
+    ASSERT_EQ(check(), FolderCheck::ok);
+    replace_keeping_time("NOT A REAL EBOOT");
+    // The cache names the digest it passed for: another one never matches it.
+    EXPECT_EQ(bb::common::check_game_folder(game_, std::string(64, '0'), cache()).kind,
+              FolderCheck::unknown_eboot);
+    // A copy of the folder elsewhere (other path, other inode) is hashed too.
+    make_game();
+    ASSERT_EQ(check(), FolderCheck::ok);
+    const fs::path copy = root_ / "copy";
+    fs::copy(game_, copy, fs::copy_options::recursive);
+    fs::last_write_time(copy / "eboot.bin", fs::last_write_time(game_ / "eboot.bin"));
+    std::fstream(copy / "eboot.bin", std::ios::binary | std::ios::in | std::ios::out)
+        << "NOT A REAL EBOOT";
+    fs::last_write_time(copy / "eboot.bin", fs::last_write_time(game_ / "eboot.bin"));
+    EXPECT_EQ(bb::common::check_game_folder(copy, fake_hash(), cache()).kind,
+              FolderCheck::unknown_eboot);
+}
+
+TEST_F(GameFolderCacheTest, ACacheFileThatCantBeWrittenOnlyCostsTheHash) {
+    make_game();
+    write(root_ / "cache", "a file where the folder should be");
+    EXPECT_EQ(check(), FolderCheck::ok);
+    EXPECT_EQ(check(), FolderCheck::ok);
+}
+
+TEST_F(GameFolderCacheTest, SetupUsesTheCache) {
+    make_game();
+    const fs::path config = root_ / "cfg/config.toml";
+    ASSERT_TRUE(bb::common::setup_game_folder(game_, config, fake_hash(), cache()).ok());
+    EXPECT_TRUE(fs::exists(cache()));
 }
 
 TEST(GameFolderReal, TheRealDumpPasses) {

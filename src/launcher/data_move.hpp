@@ -35,7 +35,8 @@ struct PlanInput {
 DataPlan plan_data_folder(const PlanInput& in);
 
 // Removes what the runtime's libraries wrote to `folder`/cache: all of cache/ when the folder
-// holds only the runtime's own entries, else only cache/system, pipeline and profiles.
+// holds only the runtime's own entries, else only cache/system, pipeline, profiles and the
+// launcher's game-check.txt.
 void remove_old_cache(const std::filesystem::path& folder);
 
 enum class MoveProblem { none, not_absolute, same_folder, nested, overlaps, is_game, inside_game,

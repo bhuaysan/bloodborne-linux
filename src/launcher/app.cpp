@@ -253,6 +253,7 @@ private:
         }
         data_root_ = dirs->root();
         config_path_ = dirs->config() / "config.toml";
+        check_cache_ = common::game_check_cache(dirs->cache());
         std::error_code ec;
         if (!fs::exists(config_path_, ec)) {
             return;
@@ -261,7 +262,8 @@ private:
             const common::ParsedConfig parsed = common::read_config(config_path_);
             if (parsed.config.game_dir) {
                 tried_folder_ = true;
-                accept_check(common::check_game_folder(*parsed.config.game_dir),
+                accept_check(common::check_game_folder(*parsed.config.game_dir,
+                                                       common::default_eboot_sha256, check_cache_),
                              *parsed.config.game_dir);
             }
         } catch (const common::ConfigError& e) {
@@ -396,6 +398,7 @@ private:
         notice_.clear();
         data_root_.clear();
         config_path_.clear();
+        check_cache_.clear();
         load_config();
         try {
             common::redirect_library_caches(
@@ -513,7 +516,8 @@ private:
                 return;
             }
         }
-        const common::SetupResult r = common::setup_game_folder(folder, config_path_);
+        const common::SetupResult r = common::setup_game_folder(
+            folder, config_path_, common::default_eboot_sha256, check_cache_);
         if (r.folder.ok() && !r.config_written) {
             notice_ = r.config_error;
             return;
@@ -1020,6 +1024,7 @@ private:
     bool refocus_ = false;  // a page was closed in the last frame
     bool popup_open_ = false;  // a choice list of the page was open in the last frame
     fs::path config_path_;
+    fs::path check_cache_;  // the last eboot.bin that passed (common::game_check_cache)
     fs::path data_root_;  // the data folder (user/ next to the program, or the AppImage's choice)
     bool need_data_folder_ = false;  // an AppImage without a data folder: ask first
     fs::path data_proposed_;

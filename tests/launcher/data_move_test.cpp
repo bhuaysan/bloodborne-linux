@@ -358,8 +358,10 @@ TEST_F(DataMoveTest, ASharedOldFolderKeepsItsOwnFilesAndOnlyLosesOurCache) {
     put(from_ / "cache/other/keep.bin", "not ours");
     put(from_ / "cache/system/m.bin", "mesa");
     put(from_ / "cache/pipeline/p.bin", "pipe");
+    put(from_ / "cache/game-check.txt", "eboot x\n");
     const MoveResult r = move_data_folder(request_);
     ASSERT_TRUE(r.ok()) << r.detail;
+    EXPECT_FALSE(fs::exists(from_ / "cache/game-check.txt"));
     EXPECT_EQ(slurp(from_ / "notes.txt"), "mine");
     EXPECT_EQ(slurp(from_ / "cache/other/keep.bin"), "not ours");
     EXPECT_FALSE(fs::exists(from_ / "cache/system"));
