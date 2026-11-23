@@ -43,11 +43,13 @@ float widened_fov(float fov, float degrees) {
     return fov + (degrees - game_fov) * (std::numbers::pi_v<float> / 180.0f);
 }
 
-void ChaseFovWidener::restore() {
-    // Also before another camera's update: the one widened last gets its value back, so that its
-    // next update eases from the game's angle and doesn't widen the widened one again.
-    if (cam_ != nullptr && load<float>(cam_, chase_cam_fov) == widened_) {
-        store<float>(cam_, chase_cam_fov, game_);
+void ChaseFovWidener::restore(void* cam) {
+    // Only the camera being updated, which is alive. Both calls of the update (cam_mode_update,
+    // 0x01436c00 and 0x01436e15) pass the camera manager's one chase camera, [mgr + 0x60], so
+    // another `cam` means the manager built a new one (a load) and the old one is gone: writing
+    // to it could hit whatever took its memory (#725).
+    if (cam == cam_ && load<float>(cam, chase_cam_fov) == widened_) {
+        store<float>(cam, chase_cam_fov, game_);
     }
     cam_ = nullptr;
 }

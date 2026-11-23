@@ -136,7 +136,7 @@ void chase_cam_update_scaled(ChaseCamUpdate* original, double calls, bool eases,
 void chase_cam_update_with(ChaseCamUpdate* original, bool eases, void* cam, void* chr,
                            void* world, float dt) {
     ChaseFovWidener& fov = chase_fov_widener();
-    fov.restore();
+    fov.restore(cam);
     chase_cam_update_scaled(original, static_cast<double>(frame_rate()) / default_frame_rate,
                             eases, cam, chr, world, dt);
     fov.widen(cam, field_of_view());

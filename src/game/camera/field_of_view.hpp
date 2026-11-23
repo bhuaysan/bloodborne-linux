@@ -41,16 +41,16 @@ float widened_fov(float fov, float degrees);
 // updates the field holds the widened value.
 class ChaseFovWidener {
 public:
-    // Before an update: puts the game's value back into the camera widened last, unless something
-    // else wrote its field since widen (then that value is the game's). Also before the update of
-    // another camera, so that the last one starts from its own angle when it is updated again.
-    void restore();
+    // Before the update of `cam`: puts the game's value back, unless something else wrote the
+    // field since widen (then that value is the game's). Another camera than the one widened last
+    // is left alone, and so is the old one: the game has one chase camera at a time.
+    void restore(void* cam);
     // After the update: keeps the game's value and writes it widened to `degrees`; at game_fov
     // it leaves the field alone.
     void widen(void* cam, float degrees);
 
 private:
-    void* cam_ = nullptr;
+    const void* cam_ = nullptr;
     float game_ = 0.0f;
     float widened_ = 0.0f;
 };

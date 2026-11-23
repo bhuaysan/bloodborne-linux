@@ -49,7 +49,7 @@ void stand_in(Camera& cam, float target) {
 
 // One update as the wrap runs it.
 void update(ChaseFovWidener& w, Camera& cam, float target, float degrees) {
-    w.restore();
+    w.restore(&cam);
     stand_in(cam, target);
     w.widen(&cam, degrees);
 }
@@ -140,19 +140,16 @@ TEST(FieldOfView, SwitchingTheOptionOffGivesTheGamesAngleBack) {
     EXPECT_FLOAT_EQ(cam.fov(), 43.0f * deg);
 }
 
-TEST(FieldOfView, AnOldCameraGetsItsAngleBackWhenAnotherIsUpdated) {
+TEST(FieldOfView, LeavesAnOldCameraAlone) {
+    // The old camera of a load is gone when the new one is updated: nothing writes to it.
     ChaseFovWidener w;
     Camera a, b;
     a.set_fov(43.0f * deg);
     b.set_fov(43.0f * deg);
     update(w, a, 43.0f * deg, 63.0f);
     update(w, b, 43.0f * deg, 63.0f);
-    EXPECT_FLOAT_EQ(a.fov(), 43.0f * deg);
-    // a's next update eases from the game's angle and widens it once.
-    update(w, a, 43.0f * deg, 63.0f);
-    EXPECT_FLOAT_EQ(seen_fov, 43.0f * deg);
     EXPECT_FLOAT_EQ(a.fov(), 63.0f * deg);
-    EXPECT_FLOAT_EQ(b.fov(), 43.0f * deg);
+    EXPECT_FLOAT_EQ(b.fov(), 63.0f * deg);
 }
 
 TEST(FieldOfView, HorizontalAngle) {
