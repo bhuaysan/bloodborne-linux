@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -264,7 +265,14 @@ TEST_F(GameFolderCacheTest, AChangedSizeHashesAgain) {
 TEST_F(GameFolderCacheTest, ChangedBytesUnderARestoredModificationTimeHashAgain) {
     make_game();
     ASSERT_EQ(check(), FolderCheck::ok);
-    replace_keeping_mtime("NOT A REAL EBOOT");  // same size and mtime: the change time differs
+    // Same size and mtime: only the change time differs. A coarse kernel clock may stamp the
+    // rewrite with the old ctime, so it is repeated until the record shows the change.
+    const std::string old = slurp(cache());
+    for (int i = 0; i < 100 && bb::common::game_check_record(eboot(), fake_hash()) == old; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        replace_keeping_mtime("NOT A REAL EBOOT");
+    }
+    ASSERT_NE(bb::common::game_check_record(eboot(), fake_hash()), old);
     EXPECT_EQ(check(), FolderCheck::unknown_eboot);
 }
 
