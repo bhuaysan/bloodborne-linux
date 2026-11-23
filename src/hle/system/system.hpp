@@ -124,11 +124,33 @@ std::int32_t app_content_get_int(std::int32_t key, std::int32_t* value);
 //   0x56a0250, 0x56a0254 are referenced only by the calls).
 inline constexpr std::int32_t app_param_value[app_param_keys] = {0, 13, 0, 0, 0};
 
-// sceAppContentGetAddcontInfoList (NID xnd8BJzAxmk): writes the number of add-on content items to
-// *count (0). The game passes (0, list, list size, count) and only reads the list when the count is
-// non-zero (0x1fb67cf, 0x1fb6818).
-std::int32_t app_content_get_addcont_count(std::uint32_t arg, void* list, std::uint32_t list_size,
-                                           std::uint32_t* count);
+// One item of sceAppContentGetAddcontInfoList: the entitlement label (16 characters and a NUL,
+// padded to 20 bytes) and the download status, 24 bytes in all as the game allocates them
+// (0x1fb6818).
+struct AddcontInfo {
+    char entitlement_label[20];
+    std::uint32_t status;
+};
+static_assert(sizeof(AddcontInfo) == 0x18);
+
+// The status of an add-on that is a licence only, with no data to install. The game never reads
+// the status.
+inline constexpr std::uint32_t addcont_status_no_extra_data = 0;
+
+// The label we report for The Old Hunters. CUSA03173 is the Game of the Year edition (its
+// param.sfo keeps saves under the base title CUSA00207), which owns the add-on; its areas are in
+// the base game's data (map/m34 to m36), and the eboot mounts no add-on content. The game reads
+// only the label's last two characters, as a decimal index (0x1fb6730), and index 3 is the one it
+// tests (wrapper at 0x55403d0, byte +0x13). The rest of the label is ours.
+inline constexpr std::string_view old_hunters_label = "BBOLDHUNTERS0003";
+
+// sceAppContentGetAddcontInfoList (NID xnd8BJzAxmk): the add-ons of service label 0, which is the
+// one item above; none for other labels. With a null list or a list size of 0 it writes the
+// number of items to *count, else it fills up to list_size items and writes how many. The game
+// passes service label 0, first with a null list and then with a list of the count (0x1fb67cf,
+// 0x1fb6818).
+std::int32_t app_content_get_addcont_info_list(std::uint32_t service_label, AddcontInfo* list,
+                                              std::uint32_t list_size, std::uint32_t* count);
 
 // --- libScePlayGo ---------------------------------------------------------------------------
 

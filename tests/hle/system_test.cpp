@@ -3,8 +3,10 @@
 #include <array>
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
 #include <regex>
 #include <string>
+#include <string_view>
 
 #include <gtest/gtest.h>
 
@@ -65,7 +67,7 @@ TEST(SystemRegistration, EveryNidResolvesToItsImplementation) {
         {"libSceSystemService", "Vo5V8KAwCmk", address(&system_service_notify)},
         {"libSceAppContent", "R9lA82OraNs", address(&app_content_initialize)},
         {"libSceAppContent", "99b82IKXpH4", address(&app_content_get_int)},
-        {"libSceAppContent", "xnd8BJzAxmk", address(&app_content_get_addcont_count)},
+        {"libSceAppContent", "xnd8BJzAxmk", address(&app_content_get_addcont_info_list)},
         {"libScePlayGo", "ts6GlZOKRrE", address(&playgo_initialize)},
         {"libScePlayGo", "M1Gma1ocrGE", address(&playgo_open)},
         {"libScePlayGo", "73fF1MFU8hA", address(&playgo_get_chunk_ids)},
@@ -234,14 +236,35 @@ TEST_F(SystemTest, AppContentParameters) {
     EXPECT_TRUE(contains(log, "integer parameter: unknown key -1 (caller 0x")) << log;
 }
 
-TEST_F(SystemTest, AppContentHasNoAddcont) {
+TEST_F(SystemTest, AppContentReportsTheOldHunters) {
+    // The game's sequence (0x1fb67cf, 0x1fb6818): the count with a null list, then the list.
     std::uint32_t count = 7;
-    std::array<std::byte, 64> list{};
-    EXPECT_EQ(app_content_get_addcont_count(0, nullptr, 0, &count), 0);
-    EXPECT_EQ(count, 0u);
+    EXPECT_EQ(app_content_get_addcont_info_list(0, nullptr, 0, &count), 0);
+    EXPECT_EQ(count, 1u);
+    std::array<AddcontInfo, 2> list{};
+    std::memset(list.data(), 0xcc, sizeof(list));
     count = 7;
-    EXPECT_EQ(app_content_get_addcont_count(0, list.data(), 2, &count), 0);
+    EXPECT_EQ(app_content_get_addcont_info_list(0, list.data(), 2, &count), 0);
+    EXPECT_EQ(count, 1u);
+    EXPECT_STREQ(list[0].entitlement_label, "BBOLDHUNTERS0003");
+    EXPECT_EQ(list[0].entitlement_label[19], '\0');
+    EXPECT_EQ(list[0].status, addcont_status_no_extra_data);
+    // The second item stays as it was.
+    EXPECT_EQ(static_cast<unsigned char>(list[1].entitlement_label[0]), 0xccu);
+
+    // The game reads the last two characters as a decimal index; 3 is The Old Hunters.
+    const std::string_view label = list[0].entitlement_label;
+    EXPECT_EQ((label[label.size() - 2] - '0') * 10 + (label[label.size() - 1] - '0'), 3);
+
+    // A list of one with no count pointer, other service labels, and a null list without one.
+    list = {};
+    EXPECT_EQ(app_content_get_addcont_info_list(0, list.data(), 1, nullptr), 0);
+    EXPECT_STREQ(list[0].entitlement_label, "BBOLDHUNTERS0003");
+    count = 7;
+    EXPECT_EQ(app_content_get_addcont_info_list(1, nullptr, 0, &count), 0);
     EXPECT_EQ(count, 0u);
+    EXPECT_EQ(app_content_get_addcont_info_list(0, nullptr, 0, nullptr),
+              app_content_bb_error_invalid_argument);
 }
 
 TEST_F(SystemTest, PlayGoNeedsOpen) {
