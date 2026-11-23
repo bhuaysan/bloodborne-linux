@@ -19,17 +19,43 @@ from unittest import mock
 
 TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS / "noreturn"))
-sys.path.insert(0, str(TOOLS / "elf2std"))
 sys.path.insert(0, str(TOOLS / "self2elf"))
+sys.path.insert(0, str(TOOLS / "common"))
 import noreturn as nr  # noqa: E402
 import cli  # noqa: E402  (on the path through noreturn)
+import ps4elf as p  # noqa: E402
 import self2elf  # noqa: E402
-import test_elf2std as t  # noqa: E402  (synthetic ELF builders)
+from elfbuilder import Builder, build_eh_frame, build_eh_frame_hdr  # noqa: E402
 from toolenv import load_game_dir  # noqa: E402
 
+TEXT_SIZE, DATA_VADDR = 0x200, 0x4000
+EH_FRAME = 0x100  # vaddr of .eh_frame in the text segment, .eh_frame_hdr right after it
 STUB_A, STUB_B = 0x1E0, 0x1F0  # PLT stubs of the two imports of the synthetic ELF
-SLOT_A, SLOT_B = t.DATA_VADDR + 0x18, t.DATA_VADDR + 0x20  # their JUMP_SLOT relocations
-NAME_A, NAME_B = (name.decode() for name in t.NAMES[1:3])
+SLOT_A, SLOT_B = DATA_VADDR + 0x18, DATA_VADDR + 0x20  # their JUMP_SLOT relocations
+NAME_A, NAME_B = "AAAAAAAAAAA#A#B", "BBBBBBBBBBB#A#B"
+
+
+def build_elf(eh=None) -> bytes:
+    """Text at 0 and data at DATA_VADDR, the imports NAME_A and NAME_B with their JUMP_SLOT
+    relocations. eh: (eh_frame vaddr, eh_frame bytes, eh_frame_hdr vaddr, eh_frame_hdr bytes,
+    further (vaddr, bytes) pairs...) in the text segment."""
+    b = (Builder(entry=0x10).needed("libkernel.prx", 1, "libkernel")
+         .load(0, bytes([0xCC]) * TEXT_SIZE)
+         .load(DATA_VADDR, bytes(0x80), 0x1234, p.PF_R | p.PF_W)
+         .sym(NAME_A).sym(NAME_B).sym("module_start")
+         .jump_slot(SLOT_A, 1).jump_slot(SLOT_B, 2).table(p.DT_SCE_PLTGOT, DATA_VADDR))
+    if eh:
+        b.place(eh[0], eh[1]).eh_frame_hdr(eh[2], eh[3])
+        for vaddr, chunk in zip(eh[4::2], eh[5::2]):
+            b.place(vaddr, chunk)
+    return b.build()
+
+
+def eh_layout(fdes=2):
+    """.eh_frame at EH_FRAME with one FDE per function at 0x10, 0x20, ..., the header after it."""
+    frame, table = build_eh_frame(EH_FRAME, fdes)
+    hdr_vaddr = EH_FRAME + len(frame)
+    return EH_FRAME, frame, hdr_vaddr, build_eh_frame_hdr(hdr_vaddr, EH_FRAME, table)
 
 
 def call(at: int, target: int) -> bytes:
@@ -51,11 +77,11 @@ def function(start: int, *calls: tuple[int, int], tail: bytes = b"\xc3") -> byte
 
 def build(functions: list[bytes]) -> bytes:
     """Synthetic ELF with one FDE per function at 0x10, 0x20, ... and the two PLT stubs."""
-    frame_vaddr, frame, hdr_vaddr, hdr = t.eh_layout(fdes=len(functions))
+    frame_vaddr, frame, hdr_vaddr, hdr = eh_layout(fdes=len(functions))
     code = b"".join(functions)
     assert hdr_vaddr + len(hdr) <= STUB_A and 0x10 + len(code) <= frame_vaddr
-    return t.build_elf(eh=(frame_vaddr, frame, hdr_vaddr, hdr, 0x10, code,
-                           STUB_A, stub(STUB_A, SLOT_A), STUB_B, stub(STUB_B, SLOT_B)))
+    return build_elf(eh=(frame_vaddr, frame, hdr_vaddr, hdr, 0x10, code,
+                         STUB_A, stub(STUB_A, SLOT_A), STUB_B, stub(STUB_B, SLOT_B)))
 
 
 class AnalyzeTests(unittest.TestCase):
@@ -96,27 +122,27 @@ class AnalyzeTests(unittest.TestCase):
 
     def test_no_eh_frame_rejected(self):
         with self.assertRaisesRegex(nr.ElfError, "PT_GNU_EH_FRAME"):
-            nr.analyze(t.build_elf())
+            nr.analyze(build_elf())
 
     def test_header_encodings(self):
         # The shared reader (tools/common/ehframe.py) decides which encodings are accepted;
         # noreturn must find the same FDEs through each.
-        frame_vaddr, frame, hdr_vaddr, _ = t.eh_layout()
+        frame_vaddr, frame, hdr_vaddr, _ = eh_layout()
         for ptr_enc in (0x1B, 0x3B, 0x04):
             with self.subTest(ptr_enc=hex(ptr_enc)):
-                _, table = t.build_eh_frame(frame_vaddr)
-                hdr = t.build_eh_frame_hdr(hdr_vaddr, frame_vaddr, table, ptr_enc=ptr_enc)
-                data = t.build_elf(eh=(frame_vaddr, frame, hdr_vaddr, hdr))
+                _, table = build_eh_frame(frame_vaddr)
+                hdr = build_eh_frame_hdr(hdr_vaddr, frame_vaddr, table, ptr_enc=ptr_enc)
+                data = build_elf(eh=(frame_vaddr, frame, hdr_vaddr, hdr))
                 img = nr.parse(data)
                 loads = [ph for ph in img.phdrs if ph.p_type == nr.PT_LOAD]
                 self.assertEqual(nr.fde_ranges(data, img.phdrs, loads),
                                  [(func, func + 0x10) for func, _ in table])
 
     def test_bad_header_encoding_rejected(self):
-        frame_vaddr, frame, hdr_vaddr, hdr = t.eh_layout()
+        frame_vaddr, frame, hdr_vaddr, hdr = eh_layout()
         hdr = hdr[:1] + b"\x9b" + hdr[2:]  # indirect
         with self.assertRaisesRegex(nr.ElfError, "eh_frame_ptr encoding"):
-            nr.analyze(t.build_elf(eh=(frame_vaddr, frame, hdr_vaddr, hdr)))
+            nr.analyze(build_elf(eh=(frame_vaddr, frame, hdr_vaddr, hdr)))
 
 
 class MainTests(unittest.TestCase):

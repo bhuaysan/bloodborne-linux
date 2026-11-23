@@ -23,130 +23,49 @@ from unittest import mock
 TOOLS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS / "elf2std"))
 sys.path.insert(0, str(TOOLS / "self2elf"))
+sys.path.insert(0, str(TOOLS / "common"))
 import elf2std as e  # noqa: E402
 import ps4elf as p  # noqa: E402
 import self2elf  # noqa: E402
+from elfbuilder import R_X86_64_RELATIVE, Builder, build_eh_frame, build_eh_frame_hdr  # noqa: E402
 from toolenv import load_game_dir  # noqa: E402
 
 PHDR_OFF = 0x40
-TEXT_OFF, TEXT_VADDR, TEXT_SIZE = 0x1000, 0x0, 0x200
-DATA_OFF, DATA_VADDR, DATA_SIZE, DATA_MEMSZ = 0x2000, 0x4000, 0x80, 0x1234
-DYNLIB_OFF = 0x3000
+TEXT_VADDR, TEXT_SIZE = 0x0, 0x200
+DATA_VADDR, DATA_SIZE, DATA_MEMSZ = 0x4000, 0x80, 0x1234
 
 NAMES = [b"", b"AAAAAAAAAAA#A#B", b"BBBBBBBBBBB#A#B", b"module_start"]
 
 
-def build_dynlib(extra_tags=(), drop_tags=(), override=None):
-    """A dynlibdata segment with string, symbol, relocation and dynamic tables.
+def builder(e_type=p.ET_SCE_DYNEXEC, eh=None, extra_tags=(), drop_tags=(), override=None):
+    """Text and data segments, two PLT and one other relocation, the Sony hash table.
 
-    Returns (blob, dynamic table offset inside the blob)."""
-    strtab = bytearray(b"\0libkernel.prx\0")
-    needed = 1
-    name_offs = []
-    for name in NAMES:
-        if not name:
-            name_offs.append(0)
-            continue
-        name_offs.append(len(strtab))
-        strtab += name + b"\0"
-    while len(strtab) % 8:
-        strtab += b"\0"
-    symtab = b"".join(p.SYM.pack(off, (1 << 4) | 2, 0, 0, 0, 0) for off in name_offs)
-    jmprel = (p.RELA.pack(DATA_VADDR + 0x18, (1 << 32) | 7, 0)
-              + p.RELA.pack(DATA_VADDR + 0x20, (2 << 32) | 7, 0))
-    rela = p.RELA.pack(DATA_VADDR + 0x40, 8, 0x100)
-    sony_hash = bytes(0x10)  # contents are ignored by the converter
-
-    blob = bytearray(bytes(0x10))  # leading padding, so offsets are non-zero
-    def put(chunk):
-        off = len(blob)
-        blob.extend(chunk)
-        return off
-    hash_off = put(sony_hash)
-    str_off = put(strtab)
-    sym_off = put(symtab)
-    jmp_off = put(jmprel)
-    rela_off = put(rela)
-
-    tags = {
-        p.DT_SCE_HASH: hash_off, p.DT_SCE_HASHSZ: len(sony_hash),
-        p.DT_SCE_PLTGOT: DATA_VADDR,
-        p.DT_SCE_JMPREL: jmp_off, p.DT_SCE_PLTREL: p.DT_RELA, p.DT_SCE_PLTRELSZ: len(jmprel),
-        p.DT_SCE_RELA: rela_off, p.DT_SCE_RELASZ: len(rela), p.DT_SCE_RELAENT: p.RELA.size,
-        p.DT_SCE_STRTAB: str_off, p.DT_SCE_STRSZ: len(strtab),
-        p.DT_SCE_SYMTAB: sym_off, p.DT_SCE_SYMENT: p.SYM.size, p.DT_SCE_SYMTABSZ: len(symtab),
-    }
-    tags.update(override or {})
-    entries = [(1, needed), (0xD, 0x80)]  # DT_NEEDED, DT_FINI
-    entries += [(t, v) for t, v in tags.items() if t not in drop_tags]
-    entries += [(0x6100000D, 0x1234), *extra_tags, (0, 0)]  # a Sony module tag
-    dyn_off = put(b"".join(p.DYN.pack(t, v) for t, v in entries))
-    return bytes(blob), dyn_off
-
-
-def build_eh_frame(vaddr: int, fdes: int = 2, terminator: bool = True,
-                   extended: bool = False) -> tuple[bytes, list[tuple[int, int]]]:
-    """.eh_frame at vaddr: one CIE, then FDEs (pointer encoding pcrel|sdata4) for the functions
-    at 0x10, 0x20, ... (16 bytes each). Returns the bytes and (function, FDE vaddr) pairs."""
-    def record(body: bytes) -> bytes:
-        body += bytes(-(len(body) + 4) % 4)  # DW_CFA_nop padding
-        if extended:
-            return struct.pack("<IQ", 0xFFFFFFFF, len(body)) + body
-        return struct.pack("<I", len(body)) + body
-    # id 0, version 1, "zR", code align 1, data align -8, return address r16, R = 0x1b
-    out = bytearray(record(struct.pack("<I", 0) + b"\x01zR\x00\x01\x78\x10\x01\x1b"))
-    table = []
-    id_field = 12 if extended else 4  # offset of the CIE id / CIE pointer in a record
-    for i in range(fdes):
-        func, here = 0x10 * (i + 1), vaddr + len(out)
-        table.append((func, here))
-        pc_field = here + id_field + 4
-        out += record(struct.pack("<Iii", len(out) + id_field, func - pc_field, 0x10) + b"\x00")
-    if terminator:
-        out += bytes(4)
-    return bytes(out), table
-
-
-def build_eh_frame_hdr(vaddr: int, eh_frame: int, table: list[tuple[int, int]],
-                       ptr_enc: int = 0x1B) -> bytes:
-    """.eh_frame_hdr at vaddr pointing at eh_frame, with a datarel|sdata4 search table."""
-    if ptr_enc == 0x1B:
-        ptr = struct.pack("<i", eh_frame - (vaddr + 4))
-    elif ptr_enc == 0x3B:
-        ptr = struct.pack("<i", eh_frame - vaddr)
-    else:
-        ptr = struct.pack("<Q", eh_frame)
-    return (bytes([1, ptr_enc, 0x03, 0x3B]) + ptr + struct.pack("<I", len(table))
-            + b"".join(struct.pack("<ii", func - vaddr, fde - vaddr) for func, fde in table))
-
-
-def build_elf(e_type=p.ET_SCE_DYNEXEC, eh=None, **kwargs) -> bytes:
-    """eh: (eh_frame vaddr, eh_frame bytes, eh_frame_hdr vaddr, eh_frame_hdr bytes) in the text
-    segment, described by PT_GNU_EH_FRAME."""
-    blob, dyn_off = build_dynlib(**kwargs)
-    phdrs = [
-        e.Phdr(p.PT_LOAD, 5, TEXT_OFF, TEXT_VADDR, TEXT_VADDR, TEXT_SIZE, TEXT_SIZE, 0x4000),
-        e.Phdr(p.PT_LOAD, 6, DATA_OFF, DATA_VADDR, DATA_VADDR, DATA_SIZE, DATA_MEMSZ, 0x4000),
-        e.Phdr(p.PT_DYNAMIC, 6, DYNLIB_OFF + dyn_off, 0, 0, len(blob) - dyn_off,
-               len(blob) - dyn_off, 8),
-        e.Phdr(p.PT_SCE_DYNLIBDATA, 4, DYNLIB_OFF, 0, 0, len(blob), 0, 0x10),
-    ]
+    eh: (eh_frame vaddr, eh_frame bytes, eh_frame_hdr vaddr, eh_frame_hdr bytes, further
+    (vaddr, bytes) pairs...) in the text segment; the header gets PT_GNU_EH_FRAME."""
+    b = (Builder(e_type=e_type, entry=0x10)
+         .needed("libkernel.prx", 1, "libkernel").tag(0xD, 0x80)  # DT_FINI
+         .load(TEXT_VADDR, bytes([0xCC]) * TEXT_SIZE)
+         .load(DATA_VADDR, bytes(range(DATA_SIZE)), DATA_MEMSZ, p.PF_R | p.PF_W)
+         .jump_slot(DATA_VADDR + 0x18, 1).jump_slot(DATA_VADDR + 0x20, 2)
+         .rela(DATA_VADDR + 0x40, R_X86_64_RELATIVE, addend=0x100)
+         .sony_hash().table(p.DT_SCE_PLTGOT, DATA_VADDR))
+    for name in NAMES[1:]:
+        b.sym(name.decode())
+    for tag, value in extra_tags:
+        b.tag(tag, value)
+    for tag in drop_tags:
+        b.table(tag, None)
+    for tag, value in (override or {}).items():
+        b.table(tag, value)
     if eh:
-        hdr_vaddr, hdr = eh[2], eh[3]
-        phdrs.append(e.Phdr(p.PT_GNU_EH_FRAME, 4, TEXT_OFF + hdr_vaddr - TEXT_VADDR, hdr_vaddr,
-                            hdr_vaddr, len(hdr), len(hdr), 4))
-    ident = b"\x7fELF\x02\x01\x01\x09" + bytes(8)
-    out = bytearray(DYNLIB_OFF + len(blob))
-    out[:0x40] = e.ELF_HEADER.pack(ident, e_type, p.EM_X86_64, 1, 0x10, PHDR_OFF, 0, 0, 0x40,
-                                   e.ELF_PHDR.size, len(phdrs), 0x40, 0, 0)
-    for i, ph in enumerate(phdrs):
-        out[PHDR_OFF + i * e.ELF_PHDR.size: PHDR_OFF + (i + 1) * e.ELF_PHDR.size] = ph.pack()
-    out[TEXT_OFF: TEXT_OFF + TEXT_SIZE] = bytes([0xCC]) * TEXT_SIZE
-    for vaddr, chunk in zip(eh[::2], eh[1::2]) if eh else ():
-        out[TEXT_OFF + vaddr - TEXT_VADDR: TEXT_OFF + vaddr - TEXT_VADDR + len(chunk)] = chunk
-    out[DATA_OFF: DATA_OFF + DATA_SIZE] = bytes(range(DATA_SIZE))
-    out[DYNLIB_OFF:] = blob
-    return bytes(out)
+        b.place(eh[0], eh[1]).eh_frame_hdr(eh[2], eh[3])
+        for vaddr, chunk in zip(eh[4::2], eh[5::2]):
+            b.place(vaddr, chunk)
+    return b
+
+
+def build_elf(**kwargs) -> bytes:
+    return builder(**kwargs).build()
 
 
 class Image:
@@ -220,7 +139,7 @@ class SyntheticTests(unittest.TestCase):
         # First free page above the highest loaded byte (data memsz, not filesz).
         self.assertEqual(new.p_vaddr, e.align_up(DATA_VADDR + DATA_MEMSZ, e.SEGMENT_ALIGN))
         self.assertEqual(new.p_offset % e.SEGMENT_ALIGN, 0)
-        blob, _ = build_dynlib()
+        blob, _ = builder().dynlib()
         self.assertEqual(self.img.read(new.p_vaddr, len(blob)), blob)
 
     def test_original_bytes_kept(self):
@@ -256,7 +175,8 @@ class SyntheticTests(unittest.TestCase):
         self.assertEqual(dyn.p_flags, e.PF_R)
 
     def test_prx_type(self):
-        self.assertEqual(Image(e.convert(build_elf(p.ET_SCE_DYNAMIC)).data).e_type, p.ET_EXEC)
+        prx = build_elf(e_type=p.ET_SCE_DYNAMIC)
+        self.assertEqual(Image(e.convert(prx).data).e_type, p.ET_EXEC)
 
     def test_sysv_hash_vectors(self):
         # Values from the System V ABI hash function (cross-checked against libelf's elf_hash).
