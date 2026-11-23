@@ -231,12 +231,46 @@ PAD_ONLY_VIRTUAL = {
 }
 
 
-def find_bb_run(preset: str) -> Path:
-    for checkout in (toolenv.REPO_ROOT, toolenv.main_checkout()):
+@dataclass
+class BbRunBuild:
+    path: Path
+    from_main_checkout: bool  # this checkout has no build of the preset, the main checkout's runs
+    stale: bool  # older than the last commit of this checkout (run anyway with --allow-stale)
+
+
+def last_commit_time(checkout: Path) -> int | None:
+    """Commit time of HEAD in `checkout`, or None outside a git checkout (an exported tarball)."""
+    try:
+        run = subprocess.run(["git", "log", "-1", "--format=%ct"], cwd=checkout,
+                             capture_output=True, text=True, check=True)
+        return int(run.stdout.strip())
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        return None
+
+
+def locate_bb_run(preset: str, allow_stale: bool = False, here: Path | None = None,
+                  main: Path | None = None) -> BbRunBuild:
+    """The preset's bb-run, from this checkout or else from the main checkout. A binary older than
+    this checkout's last commit is refused unless allow_stale: a worktree without a build of its
+    own would otherwise test whatever the main checkout last built (#477)."""
+    here = here or toolenv.REPO_ROOT
+    main = main or toolenv.main_checkout()
+    for checkout in dict.fromkeys((here, main)):
         candidate = checkout / "build" / preset / "src" / "tools" / "bb-run"
-        if candidate.is_file():
-            return candidate
+        if not candidate.is_file():
+            continue
+        commit = last_commit_time(here)
+        stale = commit is not None and candidate.stat().st_mtime < commit
+        if stale and not allow_stale:
+            raise SystemExit(
+                f"{candidate} is older than the last commit of {here}: build the preset first "
+                f"(cmake --build --preset {preset}), or pass --allow-stale to run it anyway")
+        return BbRunBuild(candidate, checkout != here, stale)
     raise SystemExit(f"no bb-run in build/{preset}, build the preset first")
+
+
+def find_bb_run(preset: str) -> Path:
+    return locate_bb_run(preset).path
 
 
 def bb_run_profile_data(work_root: Path) -> Path:
@@ -639,6 +673,16 @@ def run_target(args: argparse.Namespace) -> int:
     seconds = args.time or scenario.time_limit or DEFAULT_TIME
     memory = args.memory or scenario.memory_limit or DEFAULT_MEMORY
     check_target_options(args)
+    build = None
+    if args.target == "bb-run" and not getattr(args, "bb_run", None):
+        # Before anything starts: a stale binary stops the run here.
+        build = locate_bb_run(args.preset, getattr(args, "allow_stale", False))
+        if build.from_main_checkout:
+            print(f"bb-run from the main checkout, this one has no build/{args.preset}: "
+                  f"{build.path}", file=sys.stderr)
+        if build.stale:
+            print(f"bb-run older than the last commit (--allow-stale): {build.path}",
+                  file=sys.stderr)
     if getattr(args, "container", None):
         check_game_read_only(game_dir, container_prefix(
             args.container, game_dir, args.bb_run.resolve().parent, game_dir, os.environ))
@@ -664,7 +708,8 @@ def run_target(args: argparse.Namespace) -> int:
         if scenario.uses_pad():
             os.mkfifo(run / "pad")
         program = bb_run_program(run, game_dir, args.preset, args.window, work_root, args.cache_home,
-                                 getattr(args, "bb_run", None), getattr(args, "log", None),
+                                 build.path if build else getattr(args, "bb_run", None),
+                                 getattr(args, "log", None),
                                  getattr(args, "perf", False),
                                  run / "pad" if scenario.uses_pad() else None,
                                  getattr(args, "frame_rate", None),
@@ -786,6 +831,9 @@ def run_target(args: argparse.Namespace) -> int:
         "zenity_called": zenity.exists(), "shot_errors": conversion_errors,
         "missing_shots": missing,
     }
+    if build:
+        summary["bb_run"] = {"binary": str(build.path),
+                             "from_main_checkout": build.from_main_checkout, "stale": build.stale}
     if args.audio and audio_file.exists():
         try:
             # The time limit is the span, so two runs of different length stay comparable.
@@ -818,6 +866,7 @@ def perf_runs(args: argparse.Namespace) -> dict[str, list[Path]]:
                 target=target, scenario=args.scenario, time=args.time, memory=None, hold=0,
                 user_from=user, preset=args.preset, window=True, cache_home=None, audio=False,
                 no_layer=False, bb_run=binary, run_dir_out=dirs[column],
+                allow_stale=getattr(args, "allow_stale", False),
                 frame_rate=args.frame_rate if target == "bb-run" else None)
             run_target(run_args)
     return dirs
@@ -855,6 +904,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--preset", default="relwithdebinfo", help="bb-run build preset")
     run.add_argument("--window", action="store_true", help="let bb-run open its window")
     run.add_argument("--bb-run", type=Path, help="this bb-run binary instead of the preset's")
+    run.add_argument("--allow-stale", action="store_true",
+                     help="run the preset's bb-run even if it is older than the last commit")
     run.add_argument("--cache-home", type=Path,
                      help="bb-run's cache folder (BB_CACHE_DIR), so its shader and pipeline cache persists "
                           "from run to run (default: a fresh directory per run, so every run is cold)")
@@ -893,6 +944,8 @@ def main(argv: list[str] | None = None) -> int:
     perf.add_argument("--reference-user", type=Path, help="user/ directory for reference runs")
     perf.add_argument("--main-bb-run", type=Path, help="bb-run binary built from main")
     perf.add_argument("--preset", default="relwithdebinfo", help="bb-run build preset")
+    perf.add_argument("--allow-stale", action="store_true",
+                      help="run the preset's bb-run even if it is older than the last commit")
     perf.add_argument("--time", type=int, help="time limit of each run in seconds")
     perf.add_argument("--only", default="*", help="glob: only the segments with a matching name")
     perf.add_argument("--frame-rate", type=int, choices=[30, 60, 120, 144],

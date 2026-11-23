@@ -81,6 +81,79 @@ class CommandTests(unittest.TestCase):
             run_mock.return_value = subprocess.CompletedProcess([], 1, stdout="-- No entries --\n")
             self.assertIsNotNone(rig.kernel_journal(0))
 
+    def _checkout(self, root: Path, commit_time: int) -> Path:
+        """A git checkout at `root` whose last commit is at `commit_time`."""
+        root.mkdir()
+        env = {**os.environ, "GIT_COMMITTER_DATE": f"{commit_time} +0000",
+               "GIT_AUTHOR_DATE": f"{commit_time} +0000", "GIT_AUTHOR_NAME": "t",
+               "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
+               "GIT_COMMITTER_EMAIL": "t@example.invalid", "GIT_CONFIG_GLOBAL": os.devnull,
+               "GIT_CONFIG_NOSYSTEM": "1"}
+        for argv in (["git", "init", "-q"], ["git", "commit", "-q", "--allow-empty", "-m", "c"]):
+            subprocess.run(argv, cwd=root, env=env, check=True, capture_output=True)
+        return root
+
+    def _build(self, checkout: Path, preset: str, mtime: int) -> Path:
+        binary = checkout / "build" / preset / "src" / "tools" / "bb-run"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("")
+        os.utime(binary, (mtime, mtime))
+        return binary
+
+    def test_stale_bb_run_is_refused_unless_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            here = self._checkout(Path(tmp) / "here", 2_000_000_000)
+            binary = self._build(here, "debug", 2_000_000_000 - 60)
+            with self.assertRaises(SystemExit) as refused:
+                rig.locate_bb_run("debug", here=here, main=here)
+            self.assertIn(str(binary), str(refused.exception))
+            self.assertIn("--allow-stale", str(refused.exception))
+            allowed = rig.locate_bb_run("debug", allow_stale=True, here=here, main=here)
+            self.assertEqual(allowed, rig.BbRunBuild(binary, False, True))
+
+    def test_current_bb_run_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            here = self._checkout(Path(tmp) / "here", 2_000_000_000)
+            binary = self._build(here, "debug", 2_000_000_000 + 60)
+            self.assertEqual(rig.locate_bb_run("debug", here=here, main=here),
+                             rig.BbRunBuild(binary, False, False))
+
+    def test_main_checkout_fallback_is_reported_and_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            here = self._checkout(Path(tmp) / "here", 2_000_000_000)
+            main = self._checkout(Path(tmp) / "main", 1_900_000_000)
+            # Newer than the main checkout's last commit, older than this one's: still stale.
+            binary = self._build(main, "debug", 1_950_000_000)
+            with self.assertRaises(SystemExit):
+                rig.locate_bb_run("debug", here=here, main=main)
+            os.utime(binary, (2_000_000_060, 2_000_000_060))
+            self.assertEqual(rig.locate_bb_run("debug", here=here, main=main),
+                             rig.BbRunBuild(binary, True, False))
+            # The worktree's own build wins over the main checkout's.
+            own = self._build(here, "debug", 2_000_000_060)
+            self.assertEqual(rig.locate_bb_run("debug", here=here, main=main).path, own)
+
+    def test_no_bb_run_build_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            here = self._checkout(Path(tmp) / "here", 2_000_000_000)
+            with self.assertRaises(SystemExit):
+                rig.locate_bb_run("debug", here=here, main=here)
+
+    def test_stale_bb_run_stops_the_run_before_it_starts(self) -> None:
+        args = argparse.Namespace(target="bb-run", scenario=None, no_layer=False, time=None,
+                                  memory=None, preset="debug", bb_run=None, allow_stale=False)
+        with unittest.mock.patch.object(rig.toolenv, "load_game_dir", return_value=Path("/g")), \
+                unittest.mock.patch.object(rig.toolenv, "read_pinned"), \
+                unittest.mock.patch.object(rig, "locate_bb_run",
+                                           side_effect=SystemExit("stale")) as locate, \
+                unittest.mock.patch.object(rig, "check_game_read_only") as checked, \
+                unittest.mock.patch.object(rig, "rig_dir") as runs:
+            with self.assertRaises(SystemExit):
+                rig.run_target(args)
+        locate.assert_called_once_with("debug", False)
+        checked.assert_not_called()
+        runs.assert_not_called()
+
     def test_bb_run_uses_a_per_run_user_dir_and_no_window(self) -> None:
         with unittest.mock.patch.object(rig, "find_bb_run", return_value=Path("/b/bb-run")):
             program = rig.bb_run_program(Path("/run"), Path("/g"), "debug", False, Path("/w"))
