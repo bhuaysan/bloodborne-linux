@@ -1,5 +1,10 @@
 """Tests for the changes import_shadps4.py makes to imported files."""
 
+import contextlib
+import io
+import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -164,6 +169,103 @@ class Compare(unittest.TestCase):
             self.assertEqual(tool.compare(generated, checkout),
                              ["missing: src/shadps4/gone", "not generated: src/shadps4/extra",
                               "differs: src/shadps4/changed"])
+
+
+def make_tree(root: Path, files: dict[str, str]) -> None:
+    for name, content in files.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+
+
+IMPORT = {"src/shadps4/a.h": "1", "src/shadps4/video_core/b.cpp": "2", "third_party/fmt/LICENSE": "3"}
+
+
+class TargetTree(unittest.TestCase):
+    def run_quietly(self, generated, tree, write_tree):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            status = tool.run(generated, tree, write_tree)
+        return status, out.getvalue()
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.generated = self.root / "generated"
+        make_tree(self.generated, IMPORT)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def checkout(self, files):
+        tree = self.root / "checkout"
+        make_tree(tree, files)
+        (tree / ".git").write_text("gitdir: elsewhere\n")  # a worktree's .git is a file
+        return tree
+
+    def test_an_export_of_the_import_checks_clean(self):
+        export = self.root / "export"
+        make_tree(export, IMPORT)
+        self.assertEqual(self.run_quietly(self.generated, export, False), (0, "0 difference(s)\n"))
+
+    def test_an_unedited_checkout_checks_clean(self):
+        self.assertEqual(self.run_quietly(self.generated, self.checkout(IMPORT), False)[0], 0)
+
+    def test_a_checkout_with_an_added_file_is_refused(self):
+        tree = self.checkout({**IMPORT, "src/shadps4/video_core/vk_options.h": "r6"})
+        for write_tree in (False, True):
+            with self.assertRaisesRegex(tool.ImportError_, "rewrite.md"):
+                self.run_quietly(self.generated, tree, write_tree)
+        self.assertEqual((tree / "src/shadps4/video_core/vk_options.h").read_text(), "r6")
+
+    def test_a_checkout_with_a_changed_or_removed_file_is_refused(self):
+        for files in ({**IMPORT, "src/shadps4/a.h": "edited"},
+                      {k: v for k, v in IMPORT.items() if k != "src/shadps4/a.h"}):
+            with self.subTest(files=files):
+                tree = self.checkout(files)
+                with self.assertRaises(tool.ImportError_):
+                    self.run_quietly(self.generated, tree, True)
+                self.assertEqual({p for p in files}, {str(p.relative_to(tree)) for p in
+                                                       tree.rglob("*") if p.is_file() and p.name != ".git"})
+                shutil.rmtree(tree)
+
+    def test_this_repository_counts_as_a_checkout(self):
+        self.assertTrue(tool.is_checkout(tool.REPO_ROOT))
+
+    def test_edits_outside_src_shadps4_are_listed_not_refused(self):
+        tree = self.checkout({**IMPORT, "third_party/fmt/LICENSE": "other"})
+        status, out = self.run_quietly(self.generated, tree, False)
+        self.assertEqual((status, out), (1, "differs: third_party/fmt/LICENSE\n1 difference(s)\n"))
+
+    def test_an_export_with_edits_is_compared_not_refused(self):
+        export = self.root / "export"
+        make_tree(export, {**IMPORT, "src/shadps4/extra.h": "x"})
+        status, out = self.run_quietly(self.generated, export, False)
+        self.assertEqual((status, out), (1, "not generated: src/shadps4/extra.h\n1 difference(s)\n"))
+
+    def test_write_fills_an_empty_directory(self):
+        out = self.root / "new"
+        self.assertEqual(self.run_quietly(self.generated, out, True)[0], 0)
+        self.assertEqual(tool.compare(self.generated, out), [])
+
+
+# The check the issue names (#504), on a real export of the r5 tag. It needs the fetched
+# repositories (BB_SHADPS4_CACHE, the --cache directory) and the tag, so CI skips it.
+CACHE = os.environ.get("BB_SHADPS4_CACHE")
+
+
+@unittest.skipUnless(CACHE, "BB_SHADPS4_CACHE is not set")
+class RealImport(unittest.TestCase):
+    def test_r5_export_checks_clean(self):
+        with tempfile.TemporaryDirectory() as temp:
+            export = Path(temp) / "r5"
+            export.mkdir()
+            archive = subprocess.run(["git", "archive", "r5", "src/shadps4", "third_party"],
+                                     cwd=tool.REPO_ROOT, check=True, capture_output=True).stdout
+            subprocess.run(["tar", "-x", "-C", str(export)], input=archive, check=True)
+            generated = Path(temp) / "generated"
+            tool.generate(Path(CACHE).resolve(), generated)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(tool.run(generated, export, False), 0)
 
 
 if __name__ == "__main__":

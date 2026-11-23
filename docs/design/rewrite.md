@@ -7,7 +7,7 @@ R3 to R5 imported shadPS4 code nearly unchanged (`src/shadps4/`) behind a host l
 From R6 on, files under `src/shadps4/` are edited in place, like any of our files. There is no fork kept in sync with upstream: we follow v.0.21.0 and take later upstream fixes by hand when an issue needs them.
 
 - A file that changes keeps its copyright, SPDX and `// Source:` lines. Its `// Changed for bloodborne-linux, <date>` line gets the date of the latest change (the notice of changes that `docs/source-policy.md` asks for).
-- `tools/import-shadps4/import_shadps4.py` stays as the record of how the import was made. `--check` reproduces the tree of the import commits, not the current one, and no test runs it.
+- `tools/import-shadps4/import_shadps4.py` stays as the record of how the import was made. It reproduces the tree of the import commits, not the current one: `--check` and `--write` take an export or a separate directory with `--tree` and refuse a checkout whose `src/shadps4/` holds later edits. Its unit tests check an `r5` export when `BB_SHADPS4_CACHE` names the fetched repositories.
 - `third_party/` stays unchanged copies.
 - A host stub in `src/shadps4_host/` whose last caller is gone is deleted in the same change.
 

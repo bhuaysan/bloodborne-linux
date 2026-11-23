@@ -16,13 +16,17 @@ an #include walk over common/ for shadPS4's own files (common_closure()), and th
 headers (boost-headers.txt). Files outside the closure, or under a license that is not allowed
 by docs/source-policy.md, stay out. HOST_PROVIDED lists what the host layer writes instead.
 
-Usage: import_shadps4.py --cache DIR --write    regenerate the tree in this checkout
-       import_shadps4.py --cache DIR --check    compare the tree with a fresh generation
+Usage: import_shadps4.py --cache DIR --write --tree OUT    generate the import into OUT
+       import_shadps4.py --cache DIR --check --tree OLD   compare OLD with a fresh generation
 
 DIR holds the fetched repositories and may be reused. It must be outside the tracked tree.
 
-Since R6 the files under src/shadps4/ are edited in place (docs/design/rewrite.md), so --check
-reproduces the tree of the import commits, not the current one.
+Since R6 the files under src/shadps4/ are edited in place (docs/design/rewrite.md), so the script
+reproduces the tree of the import commits, not the current one. --check takes an export of an
+import commit (git archive r5 src/shadps4 third_party). --write takes an empty directory or such
+an export, and a later import is reviewed as the diff between that tree and the files it replaces.
+Without --tree the target is this checkout, which both modes refuse once src/shadps4/ holds edits
+made after the import; a git checkout or worktree given as --tree is refused the same way.
 """
 
 from __future__ import annotations
@@ -453,29 +457,58 @@ def compare(generated: Path, checkout: Path) -> list[str]:
     return problems
 
 
+def is_checkout(tree: Path) -> bool:
+    """True for this repository's checkout and for any git checkout or worktree."""
+    return tree.resolve() == REPO_ROOT or (tree / ".git").exists()
+
+
+def edits_after_import(generated: Path, tree: Path) -> list[str]:
+    """The differences under src/shadps4/: files R6 added, removed or changed."""
+    return [p for p in compare(generated, tree) if p.split(": ", 1)[1].startswith("src/shadps4/")]
+
+
+def run(generated: Path, tree: Path, write_tree: bool) -> int:
+    """Check or write the target tree against a generated one. Refuses an edited checkout."""
+    if is_checkout(tree):
+        edits = edits_after_import(generated, tree)
+        if edits:
+            raise ImportError_(
+                f"{tree} is a checkout whose src/shadps4/ holds {len(edits)} edit(s) made after the "
+                f"import (first: {edits[0]}). Since R6 the tree is edited in place "
+                "(docs/design/rewrite.md), so the script only reproduces the import commits. Pass "
+                "--tree with an export of one (git archive r5 src/shadps4 third_party) for --check, "
+                "or an empty directory outside the checkout for --write.")
+    if not write_tree:
+        problems = compare(generated, tree)
+        for problem in problems:
+            print(problem)
+        print(f"{len(problems)} difference(s)")
+        return 1 if problems else 0
+    for name in owned_roots():
+        shutil.rmtree(tree / name, ignore_errors=True)
+        if (generated / name).is_dir():
+            shutil.copytree(generated / name, tree / name)
+    print(f"wrote {len(files_below(tree, owned_roots()))} files to {tree}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--cache", type=Path, required=True, help="directory for the fetched repositories")
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--write", action="store_true", help="regenerate the tree in this checkout")
-    mode.add_argument("--check", action="store_true", help="compare the tree with a fresh generation")
+    mode.add_argument("--write", action="store_true", help="generate the import into the target tree")
+    mode.add_argument("--check", action="store_true", help="compare the target tree with a fresh generation")
+    parser.add_argument("--tree", type=Path, default=REPO_ROOT,
+                        help="target tree (default: this checkout, refused once it holds R6 edits)")
     args = parser.parse_args()
+    if args.check and not args.tree.is_dir():
+        parser.error(f"--tree {args.tree}: not a directory")
 
     try:
         with tempfile.TemporaryDirectory() as temp:
             generated = Path(temp)
             generate(args.cache.resolve(), generated)
-            if args.check:
-                problems = compare(generated, REPO_ROOT)
-                for problem in problems:
-                    print(problem)
-                print(f"{len(problems)} difference(s)")
-                return 1 if problems else 0
-            for name in owned_roots():
-                shutil.rmtree(REPO_ROOT / name, ignore_errors=True)
-                shutil.copytree(generated / name, REPO_ROOT / name)
-            print(f"wrote {len(files_below(REPO_ROOT, owned_roots()))} files")
-            return 0
+            return run(generated, args.tree.resolve(), args.write)
     except (ImportError_, subprocess.CalledProcessError) as error:
         print(f"import_shadps4: {error}", file=sys.stderr)
         return 1
