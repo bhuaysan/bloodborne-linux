@@ -1,7 +1,5 @@
 #include "launcher/data_move.hpp"
 
-#include <algorithm>
-#include <array>
 #include <cerrno>
 #include <cstring>
 #include <fstream>
@@ -31,32 +29,19 @@ struct Failure {
 };
 
 std::string digest(const fs::path& file) {
-    std::ifstream in(file, std::ios::binary);
-    common::Sha256 hash;
-    std::array<char, 65536> buffer;
-    while (in.read(buffer.data(), buffer.size()) || in.gcount() > 0) {
-        hash.update(std::as_bytes(std::span(buffer.data(), static_cast<std::size_t>(in.gcount()))));
-    }
-    if (!in.eof()) {
+    try {
+        return common::sha256_file(file);
+    } catch (const std::system_error&) {
         throw Failure{MoveProblem::verify_failed, file.string() + ": cannot read the file"};
     }
-    return common::to_hex(hash.finish());
 }
 
 // Flushes a file or folder to disk. A file that can't be flushed fails the move; a folder is best
 // effort (some file systems can't sync one).
 void flush_path(const fs::path& path, bool is_file) {
-    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | (is_file ? 0 : O_DIRECTORY));
-    if (fd < 0) {
-        if (is_file) {
-            throw Failure{MoveProblem::copy_failed, path.string() + ": " + std::strerror(errno)};
-        }
-        return;
-    }
-    const bool ok = ::fsync(fd) == 0;
-    const int err = errno;
-    ::close(fd);
-    if (!ok && is_file) {
+    if (!is_file) {
+        common::sync_directory(path);
+    } else if (const int err = common::sync_file(path)) {
         throw Failure{MoveProblem::copy_failed, path.string() + ": " + std::strerror(err)};
     }
 }
@@ -171,11 +156,6 @@ void copy_config(const fs::path& src, const fs::path& dst, const MoveRequest& re
     }
 }
 
-bool within(const fs::path& inner, const fs::path& outer) {
-    return std::mismatch(outer.begin(), outer.end(), inner.begin(), inner.end()).first ==
-           outer.end();
-}
-
 // The entries the runtime keeps in a data folder. Anything else in it is the player's.
 bool is_runtime_entry(const std::string& name) {
     for (const char* own : {"config.toml", "profiles", "logs", "cache", "game", "data-dir"}) {
@@ -261,7 +241,7 @@ MoveResult move_data_folder(const MoveRequest& request) {
     if (from == to) {
         return fail(MoveProblem::same_folder, to.string());
     }
-    if (within(to, from) || within(from, to) || aliases(from, to)) {
+    if (common::is_within(to, from) || common::is_within(from, to) || aliases(from, to)) {
         return fail(MoveProblem::nested, to.string());
     }
     if (inside_game_folder(to)) {

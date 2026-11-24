@@ -170,4 +170,15 @@ private:
 // environment.
 void redirect_library_caches(const RuntimeDirs& dirs);
 
+// True when `inner` is `outer` or lies below it, compared component by component after both
+// are lexically normalised (so a trailing separator or a `.` doesn't matter).
+bool is_within(const std::filesystem::path& inner, const std::filesystem::path& outer);
+
+// Flushes a file to disk. Returns 0, or the errno of the failed open or fsync.
+int sync_file(const std::filesystem::path& file);
+
+// Flushes a directory's entries (after a create or rename). Best effort: some file systems can't
+// sync a folder.
+void sync_directory(const std::filesystem::path& dir);
+
 }  // namespace bb::common

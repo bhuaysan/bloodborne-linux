@@ -3,13 +3,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <cerrno>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <format>
 #include <fstream>
-#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -139,28 +136,6 @@ FolderResult no_eboot(const fs::path& folder) {
     }
     return fail(FolderCheck::no_eboot,
                 std::format("This folder has no eboot.bin.{}", hint));
-}
-
-// SHA-256 of a file, read in chunks so a 90 MB eboot.bin never sits in memory whole. Throws
-// std::system_error naming the path when it can't be read.
-std::string sha256_file(const fs::path& path) {
-    const auto fail = [&](int err) {
-        return std::system_error(err, std::generic_category(), "cannot read " + path.string());
-    };
-    using File = std::unique_ptr<std::FILE, int (*)(std::FILE*)>;
-    File file(std::fopen(path.c_str(), "rb"), std::fclose);
-    if (!file) {
-        throw fail(errno);
-    }
-    std::vector<std::byte> chunk(std::size_t{1} << 20);
-    Sha256 hash;
-    while (const std::size_t n = std::fread(chunk.data(), 1, chunk.size(), file.get())) {
-        hash.update(std::span(chunk.data(), n));
-    }
-    if (std::ferror(file.get())) {
-        throw fail(errno ? errno : EIO);
-    }
-    return to_hex(hash.finish());
 }
 
 bool cache_matches(const fs::path& cache, const std::string& record) {

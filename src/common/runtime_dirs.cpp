@@ -42,13 +42,6 @@ fs::path normal(const fs::path& path) {
     return result;
 }
 
-// True when `inner` is `outer` or lies below it, compared component by component.
-bool is_within(const fs::path& inner, const fs::path& outer) {
-    fs::path in = normal(inner);
-    fs::path out = normal(outer);
-    return std::mismatch(out.begin(), out.end(), in.begin(), in.end()).first == out.end();
-}
-
 // `path` normalised, with symlinks resolved where it exists, so the containment checks compare
 // real paths.
 fs::path real(const fs::path& path) { return normal(fs::weakly_canonical(path)); }
@@ -168,7 +161,24 @@ bool write_synced(const fs::path& file, const std::string& text) {
     return ::close(fd) == 0 && ok;
 }
 
-// Flushes the directory entry of a rename. Best effort: some file systems can't sync a folder.
+}  // namespace
+
+bool is_within(const fs::path& inner, const fs::path& outer) {
+    fs::path in = normal(inner);
+    fs::path out = normal(outer);
+    return std::mismatch(out.begin(), out.end(), in.begin(), in.end()).first == out.end();
+}
+
+int sync_file(const fs::path& file) {
+    const int fd = ::open(file.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        return errno;
+    }
+    const int err = ::fsync(fd) == 0 ? 0 : errno;
+    ::close(fd);
+    return err;
+}
+
 void sync_directory(const fs::path& dir) {
     const int fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (fd >= 0) {
@@ -176,8 +186,6 @@ void sync_directory(const fs::path& dir) {
         ::close(fd);
     }
 }
-
-}  // namespace
 
 void write_data_dir_pointer(const fs::path& folder) {
     write_data_dir_pointer(folder, data_dir_pointer_path());

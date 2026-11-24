@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <string>
 
@@ -31,5 +32,9 @@ Sha256Digest sha256(std::span<const std::byte> data);
 
 // Lower-case hex, as printed by sha256sum.
 std::string to_hex(const Sha256Digest& digest);
+
+// SHA-256 of a file, read in chunks so a 90 MB eboot.bin never sits in memory whole. Throws
+// std::system_error naming the path when it can't be read.
+std::string sha256_file(const std::filesystem::path& path);
 
 }  // namespace bb::common

@@ -2,7 +2,12 @@
 
 #include <algorithm>
 #include <bit>
+#include <cerrno>
+#include <cstdio>
 #include <cstring>
+#include <memory>
+#include <system_error>
+#include <vector>
 
 namespace bb::common {
 namespace {
@@ -120,6 +125,27 @@ std::string to_hex(const Sha256Digest& digest) {
         out += digits[b & 0xf];
     }
     return out;
+}
+
+
+std::string sha256_file(const std::filesystem::path& path) {
+    const auto fail = [&](int err) {
+        return std::system_error(err, std::generic_category(), "cannot read " + path.string());
+    };
+    using File = std::unique_ptr<std::FILE, int (*)(std::FILE*)>;
+    File file(std::fopen(path.c_str(), "rb"), std::fclose);
+    if (!file) {
+        throw fail(errno);
+    }
+    std::vector<std::byte> chunk(std::size_t{1} << 20);
+    Sha256 hash;
+    while (const std::size_t n = std::fread(chunk.data(), 1, chunk.size(), file.get())) {
+        hash.update(std::span(chunk.data(), n));
+    }
+    if (std::ferror(file.get())) {
+        throw fail(errno ? errno : EIO);
+    }
+    return to_hex(hash.finish());
 }
 
 }  // namespace bb::common
