@@ -177,6 +177,44 @@ TEST(PostEffects, TheWrapHandsOnTheEditedBlockAndRestoresIt) {
     }
 }
 
+// A pfx_apply that plays the game thread writing the live block during the call (#726).
+std::uint32_t* game_writes_into = nullptr;
+void apply_while_game_writes(void* self, void* context, std::uint32_t* block) {
+    fake_apply(self, context, block);
+    game_writes_into[0x77] = 5;               // the game's new value of a field the edit changed
+    game_writes_into[0x2d] = bits(0.003f);  // and one equal to what the edit wrote
+}
+
+TEST(PostEffects, TheRestoreKeepsWhatTheGameWroteInBetween) {
+    PostEffects e;
+    e.motion_blur = false;
+    e.chromatic_aberration_strength = 0.5f;
+    const EffectsGuard guard(e);
+    auto block = clinic_block();
+    game_writes_into = block.data();
+    int self = 0;
+    int context = 0;
+    bb::game::pfx_apply_edited(&apply_while_game_writes, &self, &context, block.data());
+    EXPECT_EQ(seen[0x77], 0u);
+    EXPECT_EQ(block[0x77], 5u);
+    // A field that still holds the edit's value is restored, also when the game wrote it.
+    EXPECT_EQ(as_float(block[0x2d]), 0.006f);
+    EXPECT_EQ(changed(block, clinic_block()), (std::vector<std::size_t>{0x77}));
+}
+
+TEST(PostEffects, CountsCallsWithTheLiveBlock) {
+    auto block = clinic_block();
+    auto live = clinic_block();
+    int self = 0;
+    int context = 0;
+    const auto before = bb::game::pfx_live_block_calls();
+    bb::game::pfx_apply_edited(&fake_apply, &self, &context, block.data(), live.data());
+    EXPECT_EQ(bb::game::pfx_live_block_calls(), before);
+    bb::game::pfx_apply_edited(&fake_apply, &self, &context, live.data(), live.data());
+    bb::game::pfx_apply_edited(&fake_apply, &self, &context, live.data(), live.data());
+    EXPECT_EQ(bb::game::pfx_live_block_calls(), before + 2);
+}
+
 TEST(PostEffects, IsRegisteredWithItsPrologue) {
     auto all = bb::hook::replacements();
     auto it = std::find_if(all.begin(), all.end(), [](const bb::hook::Replacement& r) {
