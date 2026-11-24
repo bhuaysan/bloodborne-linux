@@ -47,7 +47,7 @@ The launcher of R9 is our own SDL3 and Dear ImGui window and starts `bb-run` as 
 
 `src/gpu` was removed in R4 (#435), with the memory mirror, `bb-gcn` and the options of the old path (maintainer decision, 2026-11-09).
 
-Each completed milestone ends with a minor release after its review (`docs/releasing.md`). The milestones up to R11 have tags of their own (`m1` to `r11`) and no release.
+Each completed milestone ends with a minor release after its review (`docs/releasing.md`). Some milestones up to R11 have a tag of their own (`m1` to `r11`, see `git tag`) and none has a release.
 
 ## The reference run
 

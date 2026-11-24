@@ -158,7 +158,7 @@ The 144 runs are bimodal (7 or 14 ms a frame, p95 14 to 14.7 ms on both sides), 
 
 ### What an option needs
 
-A larger size works without a fault, so an option is possible (#718): multiply the table at 0x048a9668 before the game starts, rather than poke the immediates in 0x022979b0, which the first frame overrides. It must grow `GFX_GraphicsPrivate` by the target's extra bytes (192 MiB at twice the size; four times would be 960 MiB, 16384² D32) the way `--resolution` does (`docs/design/resolution.md`), or a large frame buffer and a large shadow map together run the heap dry. At 1920×1080 it shows nothing on these routes. Where it could show is above 1080p, where a cascade texel covers more pixels, and with a harder screen-space filter. The option issue's check has to find such a place first; it is low priority.
+A larger size works without a fault, so an option is possible (#718): multiply the table at 0x048a9668 before the game starts, rather than poke the immediates in 0x022979b0, which the first frame overrides. It must grow `GFX_GraphicsPrivate` by the target's extra bytes (192 MiB at twice the size; four times would be 960 MiB, 16384² D32) the way `--resolution` does (`docs/design/resolution.md`), or a large frame buffer and a large shadow map together run the heap dry. At 1920×1080 it shows nothing on these routes. Where it could show is above 1080p, where a cascade texel covers more pixels, and with a harder screen-space filter. No such place was found, so there is no option: #718 was closed as not planned (no visible gain at 1080p).
 
 ## Not switched yet
 
@@ -299,7 +299,7 @@ What limits how far the game draws and in how much detail, for a draw-distance o
 
 | Parameter | Where | Value | Larger |
 |---|---|---|---|
-| Model LOD distances | LOD_BANK rows (game parameters), picked per model in `0x01d42ef0` | d01 / d12 pairs seen in Central Yharnam: 5 / 10, 10 / 15, 10 / 20, 15 / 30, 40 / 1000, 1000 / 2000, with 1 to 2 of hysteresis | 1.5× and 2× run without a fault. More models keep a finer mesh (below), but the shots match the default within the run-to-run spread, and the cost is within the spread too. Option: #720, low priority |
+| Model LOD distances | LOD_BANK rows (game parameters), picked per model in `0x01d42ef0` | d01 / d12 pairs seen in Central Yharnam: 5 / 10, 10 / 15, 10 / 20, 15 / 30, 40 / 1000, 1000 / 2000, with 1 to 2 of hysteresis | 1.5× and 2× run without a fault. More models keep a finer mesh (below), but the shots match the default within the run-to-run spread, and the cost is within the spread too. No option: #720 was closed as not planned (no visible gain at 1080p) |
 | LOD scale | view `+0x150`, written every frame by `0x02291c30` | tan(fov / 2) / tan(27.5°) × 720 / 1080: 0.504 at 43°, 0.785 at `--fov 63` | the knob for the option: the distance is multiplied by it, so dividing it lengthens every LOD distance at once |
 | LOD bias | global 0x05587d20, copied every frame by `0x01d41d60` from the render manager's `+0x530` | 0 in these runs (not logged; read from the code) | added to every model's level before the 0..2 clamp; −1 would draw one level finer everywhere. Not tried |
 | Far plane | game camera `+0x5c`, render camera `+0x58` (#660) | 3000 m | 2× changes nothing in `yharnam-route`: nothing there is that far. No option |

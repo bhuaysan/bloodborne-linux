@@ -49,7 +49,7 @@ Check the download with `sha256sum -c --ignore-missing SHA256SUMS`. Then:
 
 The launcher works with the gamepad, too. Cross (A) chooses, Circle (B) goes back.
 
-**Settings → Picture and sound** sets window or fullscreen, monitor, graphics card, resolution, frame rate, VSync, sharpening, field of view, texture filtering, motion blur and colour fringes. The defaults look like the PS4. **Settings → Advanced** can shorten the loading screen after you die.
+**Settings → Picture and sound** sets window or fullscreen, monitor, graphics card, resolution, frame rate, VSync, sharpening, field of view, texture filtering, motion blur and colour fringes. The defaults look like the PS4. **Settings → Advanced** can shorten the loading screen after you die and turn on a frame rate counter (F10 shows or hides it in the game).
 
 **Saves** keeps separate profiles, for example one for testing and one for your playthrough. **Open folder** shows a profile's saves, so you can back them up.
 
@@ -109,6 +109,7 @@ If the game hitches for one frame (50 to 100 ms) about once a minute, look for a
 - At 60 FPS and above, a few small differences from 30 remain. They are listed in [docs/design/frame-rate.md](docs/design/frame-rate.md).
 - 120 FPS holds only where the GPU keeps up. Faster frames are still work in progress.
 - No PKG installs. Bring the game as a folder.
+- Steam's Game Mode (Bazzite, SteamOS) is not checked yet (#757). The desktop mode works.
 
 ## Build it yourself
 

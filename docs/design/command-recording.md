@@ -56,6 +56,8 @@ The spread between runs of one placement (0.5–0.8 ms) is larger than any diffe
 
 ## Steps
 
+All three are done: step 1 merged in #687, steps 2 and 3 in the PRs that followed (R10).
+
 1. **The deferred command buffer, replayed synchronously** (Core). `DeferredCommandBuffer`, its records and replay, `Scheduler` returning it, replay at hand-over on the GPU thread. Nothing moves to another thread yet. Unit tests replay recorded streams against lavapipe and compare the results with direct recording. Measured: the record cost on the GPU thread, as the change of `commands` against `main`; the `frame_profile` part `replay` times the Vulkan calls that step 2 moves. **Gate:** if it costs more than 0.5 ms per frame in `play-stand` at 120, stop and rethink before step 2.
 2. **The recording thread** (Core). Chunk hand-over, submit records, the thread, pool ownership (`UploadCommandBuffer()` still returns a raw command buffer after step 1 and has no callers: convert or remove it), `--sync-recording`. Tests: `Finish`, `Wait` and deferred destruction across the thread boundary, a submit with no records, shutdown with queued chunks, a sparse arena bind while chunks are queued, and the present thread's wait for a tick the recording thread has not submitted yet.
 3. **Measurement** (in step 2's PR). `rig.py perf clinic-fight --frame-rate 120`, three runs per side: the issue's check. 30 and 60 against `main` (`compare main-menu`, `perf clinic-fight` at 60). Fault paths: the `fault` part of `frame_profile` and the p99 of `yharnam-route` at 60. The present interval at 120 against step 1, so a late frame from the present thread's wait shows. The thread placement runs above.

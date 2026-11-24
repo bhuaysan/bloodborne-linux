@@ -91,7 +91,7 @@ Replacing the pacer moved `bb-run`'s main-loop probe: it counted the pacer's `ge
 
 30 FPS stays the default, and at 30 every replacement in this note does what the game's code does: each has a differential test against the original at 30, and `rig.py compare` of `main-menu` against `main` was within the noise floor for each change.
 
-## What is left at 60 FPS
+## Sites checked at 60 FPS
 
 Each site below was checked at 60 against 30 FPS runs, by pictures or by a local probe build that logged positions:
 
@@ -353,7 +353,7 @@ Some events differ in distance by more than this: the dodges and punches in the 
 
 ## Above 60 FPS (#663)
 
-Every site of "What is left at 60 FPS", every `BB_REPLACE`, `BB_WRAP` and `BB_PATCH` in `src/game/`, and the open questions that touch the step, checked for 120 FPS (k = F / 30 = 4) and 144 FPS (k = 4.8). Verdicts: **works** as built, **change** needed (with its issue), **run** (needs a check by run, named in the row).
+Every site of "Sites checked at 60 FPS", every `BB_REPLACE`, `BB_WRAP` and `BB_PATCH` in `src/game/`, and the open questions that touch the step, checked for 120 FPS (k = F / 30 = 4) and 144 FPS (k = 4.8). Verdicts: **works** as built, **change** needed (with its issue), **run** (needs a check by run, named in the row).
 
 **The common cause at 144** (fixed by #673, see "Rates that aren't multiples of 30"). Five wrappers took the frame rate as `frame_rate_scale()` = `frame_rate() / 30` in unsigned ints, which is 4 at 144. They then pace their sites as if the game ran at 120: 36 runs a game second where the game counts 30. Each of them counts whole calls or whole frames (the k-th call, the k-th frame, k · u frames), so a ratio of 4.8 can't be set by fixing the division alone: the site has to run on the frames where a 30 Hz clock of game time ticks, which gives 4 or 5 frames between runs. At 120 all of them are exact: 4 × 1/120 is the game's 1/30 bit for bit (a power of two times the float), as 2 × 1/60 is.
 
