@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/buffer_cache.h @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-16
+// Changed for bloodborne-linux, 2026-11-24
 // License texts: third_party/shadps4/LICENSES/
 
 #pragma once
 
 #include <deque>
+#include <span>
+#include <utility>
 #include <boost/container/small_vector.hpp>
 
 #include "common/enum.h"
@@ -133,6 +135,16 @@ public:
 
     /// Mark region as modified from the GPU
     void MarkRegionAsGpuModified(VAddr addr, size_t size);
+
+    /// Ours (#832): copies the runs of guest memory, each (address, size), one after the other
+    /// into new staging of `total` bytes, on a copy thread when there are many (as uploads do,
+    /// #777). Neither syncs the runs nor changes their pages' tracking: the caller reads guest
+    /// memory as it is and has to know that the GPU modified none of it.
+    [[nodiscard]] Vulkan::StagingBufferRef StageGuestMemory(
+        std::span<const std::pair<VAddr, u64>> runs, u64 total);
+
+    /// Ours (#832): reads guest memory as it is, without syncing, for checks.
+    void ReadGuestMemory(VAddr addr, u8* out, u64 size);
 
     /// Commits pending sparse buffer memory binds. Must be called before every scheduler submit.
     void SubmitPendingArenaBinds(Vulkan::SubmitInfo& info);

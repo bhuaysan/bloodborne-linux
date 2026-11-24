@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Source: shadPS4 src/video_core/buffer_cache/buffer_cache.cpp @11557f2eb60b3b00712c8887c30852de7615d6df
-// Changed for bloodborne-linux, 2026-11-22
+// Changed for bloodborne-linux, 2026-11-24
 // License texts: third_party/shadps4/LICENSES/
 
 #include <algorithm>
@@ -333,6 +333,39 @@ void BufferCache::MarkRegionAsGpuModified(VAddr addr, size_t size) {
     texture_cache.MarkAsMaybeGpuDirty(addr, size);
     memory_tracker->MarkRegionAsGpuModified(addr, size);
     gpu_modified_ranges.Add(addr, size);
+}
+
+// Ours (#832): the copy shader HLE's sources are about 240 bytes each, scattered over spans of
+// up to 64 MB, so even a few KiB of them cost more to gather than the hand-over to a copy thread.
+static constexpr size_t ASYNC_STAGE_BYTES = 4_KB;
+
+Vulkan::StagingBufferRef BufferCache::StageGuestMemory(std::span<const std::pair<VAddr, u64>> runs,
+                                                       u64 total) {
+    const auto staging = staging_pool.Request(total, MemoryType::HostUncached);
+    if (total >= ASYNC_STAGE_BYTES) {
+        // The submit of the command that reads the staging waits for the job (#777).
+        std::vector<std::pair<VAddr, u64>> job_runs{runs.begin(), runs.end()};
+        scheduler.Copies().Push([this, staging, job_runs = std::move(job_runs)] {
+            u8* out = staging.mapped;
+            for (const auto& [addr, size] : job_runs) {
+                memory.CopySparseMemory(addr, out, size);
+                out += size;
+            }
+            staging.Flush();
+        });
+    } else {
+        u8* out = staging.mapped;
+        for (const auto& [addr, size] : runs) {
+            memory.CopySparseMemory(addr, out, size);
+            out += size;
+        }
+        staging.Flush();
+    }
+    return staging;
+}
+
+void BufferCache::ReadGuestMemory(VAddr addr, u8* out, u64 size) {
+    memory.CopySparseMemory(addr, out, size);
 }
 
 void BufferCache::ReadEdgeImagePages(const Image& image) {

@@ -224,6 +224,10 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
             options.pipeline_reuse = RunOptions::PipelineReuse::off;
         } else if (arg == "--check-pipeline-reuse") {
             options.pipeline_reuse = RunOptions::PipelineReuse::check;
+        } else if (arg == "--no-copy-shader-staging") {
+            options.copy_shader_staging = RunOptions::CopyShaderStaging::off;
+        } else if (arg == "--check-copy-shader-staging") {
+            options.copy_shader_staging = RunOptions::CopyShaderStaging::check;
         } else if (arg == "--pad-input") {
             options.pad_input = std::filesystem::path(value());
         } else if (arg == "--frame-rate") {

@@ -79,6 +79,7 @@
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_shader_hle.h"
 #include "shadps4_host/fault_handler.hpp"
 #endif
 #ifdef BB_HAVE_WINDOW
@@ -286,6 +287,17 @@ void open_display(const bb::tools::RunOptions& options) {
         break;
     case bb::tools::RunOptions::PipelineReuse::check:
         Vulkan::pipeline_reuse = Vulkan::PipelineReuse::check;
+        break;
+    }
+    switch (options.copy_shader_staging) {
+    case bb::tools::RunOptions::CopyShaderStaging::off:
+        Vulkan::copy_shader_staging = Vulkan::CopyShaderStaging::off;
+        break;
+    case bb::tools::RunOptions::CopyShaderStaging::on:
+        Vulkan::copy_shader_staging = Vulkan::CopyShaderStaging::on;
+        break;
+    case bb::tools::RunOptions::CopyShaderStaging::check:
+        Vulkan::copy_shader_staging = Vulkan::CopyShaderStaging::check;
         break;
     }
     const Vulkan::RendererOptions renderer = bb::tools::renderer_options(options, *gpu_id);

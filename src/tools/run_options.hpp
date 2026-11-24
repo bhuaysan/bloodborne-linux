@@ -25,6 +25,7 @@ inline constexpr std::string_view run_usage =
     "              [--present-mode fifo|mailbox|immediate] [--no-pipeline-cache]\n"
     "              [--sync-pipelines] [--sync-recording]\n"
     "              [--no-pipeline-reuse | --check-pipeline-reuse]\n"
+    "              [--no-copy-shader-staging | --check-copy-shader-staging]\n"
     "              [--pad-input PATH]\n"
     "              [--frame-rate 30|60|120|144] [--load-hold SECONDS]\n"
     "              [--window-size WIDTHxHEIGHT] [--fullscreen]\n"
@@ -77,6 +78,11 @@ inline constexpr std::string_view run_usage =
     "                       same (the default), for comparison runs\n"
     "  --check-pipeline-reuse  look up every reused pipeline again and stop the run if the\n"
     "                       lookup finds another one\n"
+    "  --no-copy-shader-staging  sync the whole source span of every copy shader call instead\n"
+    "                       of staging only the bytes it copies (the default), for comparison\n"
+    "                       runs\n"
+    "  --check-copy-shader-staging  sync as with --no-copy-shader-staging and log copied source\n"
+    "                       bytes that differ from guest memory\n"
     "  --pad-input PATH     read pad states from the file or FIFO PATH and give them to the game\n"
     "                       through a gamepad that exists only in this process (docs/test-rig.md);\n"
     "                       needs a window; other controllers are then ignored\n"
@@ -159,6 +165,8 @@ struct RunOptions {
     bool threaded_recording = true;  // false with --sync-recording
     // --no-pipeline-reuse, --check-pipeline-reuse
     enum class PipelineReuse { off, on, check } pipeline_reuse = PipelineReuse::on;
+    // --no-copy-shader-staging, --check-copy-shader-staging
+    enum class CopyShaderStaging { off, on, check } copy_shader_staging = CopyShaderStaging::on;
     std::optional<std::filesystem::path> pad_input;  // --pad-input
     unsigned frame_rate = 30;  // --frame-rate: 30, 60, 120 or 144
     float load_hold = max_load_hold;  // --load-hold: 0 to 12 seconds

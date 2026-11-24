@@ -102,6 +102,13 @@ TEST(RunOptions, PipelineReuseCanBeOffOrChecked) {
     EXPECT_EQ(parse({"--check-pipeline-reuse"}).pipeline_reuse, Reuse::check);
 }
 
+TEST(RunOptions, CopyShaderStagingCanBeOffOrChecked) {
+    using Staging = RunOptions::CopyShaderStaging;
+    EXPECT_EQ(parse({}).copy_shader_staging, Staging::on);
+    EXPECT_EQ(parse({"--no-copy-shader-staging"}).copy_shader_staging, Staging::off);
+    EXPECT_EQ(parse({"--check-copy-shader-staging"}).copy_shader_staging, Staging::check);
+}
+
 TEST(RunOptions, ParsesEveryOption) {
     const RunOptions o = parse({"--game-dir", "/games/bb", "--profile", "test_1-a", "--timeout",
                                 "10", "--stop-at-main-loop", "--log", "hle=trace,warn",
