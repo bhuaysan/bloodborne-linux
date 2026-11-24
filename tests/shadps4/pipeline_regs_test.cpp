@@ -2,7 +2,13 @@
 // registers belong to the snapshot, the tracker that counts their value changes and the snapshot
 // table that names equal states by one id. Needs no Vulkan device.
 
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <regex>
+#include <set>
+#include <sstream>
+#include <string>
 
 #include <gtest/gtest.h>
 
@@ -181,6 +187,75 @@ TEST(PipelineRegs, DrawRegsAreTheProgramsAndThePrimitiveType) {
     EXPECT_EQ(draw.ps_program, (std::array<u32, 4>{0x100, 0x101, 0x102, 0x103}));
     EXPECT_EQ(draw.vs_program, (std::array<u32, 4>{0x200, 0x201, 0x202, 0x203}));
     EXPECT_EQ(draw.primitive_type, 4u);
+}
+
+// The text of a source file of the repository.
+std::string SourceText(const char* relative) {
+    std::ifstream in(std::filesystem::path{BB_SOURCE_DIR} / relative);
+    EXPECT_TRUE(in.is_open()) << relative;
+    std::stringstream text;
+    text << in.rdbuf();
+    return text.str();
+}
+
+// Every `regs.<name>` of a text. The helpers of Regs that the pipeline cache calls are no
+// registers.
+std::set<std::string> RegsFieldsRead(const std::string& text) {
+    static const std::set<std::string> not_fields{"Generation", "IsClipDisabled",
+                                                  "ProgramForStage"};
+    std::set<std::string> names;
+    static const std::regex re{R"(\bregs\.([A-Za-z_0-9]+))"};
+    for (std::sregex_iterator it{text.begin(), text.end(), re}, end; it != end; ++it) {
+        if (!not_fields.contains((*it)[1])) {
+            names.insert((*it)[1]);
+        }
+    }
+    return names;
+}
+
+// The fields ReadFields names through BB_REG_FIELD and BB_REG_PROGRAM, from the source of
+// pipeline_regs.cpp (the array's text only, not the macro definitions).
+std::set<std::string> ReadFieldsNames(const std::string& text) {
+    const auto begin = text.find("constexpr std::array ReadFields{");
+    const auto end = text.find("};", begin);
+    EXPECT_NE(begin, std::string::npos);
+    EXPECT_NE(end, std::string::npos);
+    const std::string array = text.substr(begin, end - begin);
+    std::set<std::string> names;
+    static const std::regex re{R"(BB_REG_(?:FIELD|PROGRAM)\(([A-Za-z_0-9]+)\))"};
+    for (std::sregex_iterator it{array.begin(), array.end(), re}, e; it != e; ++it) {
+        names.insert((*it)[1]);
+    }
+    return names;
+}
+
+// The lookup's registers are a list kept by hand (#780). A register that vk_pipeline_cache.cpp
+// starts reading and ReadFields lacks would make a reused pipeline stale; one it stopped reading
+// only splits states for nothing. Both fail here.
+TEST(PipelineRegs, ReadFieldsMatchTheRegistersThePipelineCacheReads) {
+    const auto read = RegsFieldsRead(
+        SourceText("src/shadps4/video_core/renderer_vulkan/vk_pipeline_cache.cpp"));
+    const auto listed =
+        ReadFieldsNames(SourceText("src/shadps4/video_core/amdgpu/pipeline_regs.cpp"));
+    EXPECT_GT(read.size(), 20u);
+    EXPECT_GT(listed.size(), 20u);
+
+    // Bit fields have no offsetof: ReadFields lists their word as a range of its own.
+    const std::set<std::string> bit_fields{"num_interp", "vgt_gs_max_vert_out"};
+    EXPECT_EQ(Class(Word(offsetof(Regs, ps_input_addr)) + 2), PipelineRegClass::Snapshot);
+    EXPECT_EQ(Class(Word(offsetof(Regs, vgt_gsvs_ring_itemsize)) + 34),
+              PipelineRegClass::Snapshot);
+
+    for (const auto& name : read) {
+        if (!bit_fields.contains(name)) {
+            EXPECT_TRUE(listed.contains(name))
+                << "vk_pipeline_cache.cpp reads regs." << name << ", ReadFields lacks it";
+        }
+    }
+    for (const auto& name : listed) {
+        EXPECT_TRUE(read.contains(name))
+            << "ReadFields lists " << name << ", vk_pipeline_cache.cpp no longer reads it";
+    }
 }
 
 } // namespace

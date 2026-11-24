@@ -12,6 +12,8 @@ bb_add_test(shadps4_range_run_test SOURCES range_run_test.cpp LIBS bbshadps4 bbc
 bb_add_test(shadps4_pack_copies_test SOURCES pack_copies_test.cpp LIBS bbshadps4 bbcommon)
 # The registers of the pipeline lookup reuse (#780); needs no Vulkan device.
 bb_add_test(shadps4_pipeline_regs_test SOURCES pipeline_regs_test.cpp LIBS bbshadps4 bbcommon)
+target_compile_definitions(shadps4_pipeline_regs_test PRIVATE
+    BB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 # The anisotropy of a sampler under bb-run --anisotropy (#658); header-only, needs no Vulkan device.
 bb_add_test(shadps4_sampler_anisotropy_test SOURCES sampler_anisotropy_test.cpp
     LIBS bbshadps4 bbcommon)
