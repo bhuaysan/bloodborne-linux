@@ -260,7 +260,7 @@ Each of the small parts is 2 % of the frame or less, so they get no issue of the
 
 Measured on 2026-11-24 after #827 found a third of the GPU's frame in `play-walk` in the copy shader HLE. `relwithdebinfo`, `yharnam-route` at 120, `--window`, warm cache, three runs with the staged copies (the default) and three with `--no-copy-shader-staging` (today's path before #832), alternating; load from other programs 0.4 cores on average, at most 2.7. One run each with #827's timestamp probe.
 
-**The sources never hold GPU-written data.** A probe counted every HLE call over the whole route: about 14,000 copies a second in 6,500 calls, and not one source range on a page the GPU modified. `--check-copy-shader-staging` compared 13.5 GB of source bytes the arena held after today's sync with guest memory: no byte differed.
+**The sources never hold GPU-written data.** A probe counted every HLE call over the whole route: about 14,000 copies in 6,500 calls a second in the play segments, and not one source range on a page the GPU modified. `--check-copy-shader-staging` compared 14.0 GB of source bytes the arena held after today's sync with guest memory over the route: no byte differed, and no call fell back to today's path.
 
 | segment | FPS staged | FPS today | GPU ms/frame staged (probe) | today (probe) | GPU thread CPU ms/present staged | today |
 |---|---|---|---|---|---|---|
