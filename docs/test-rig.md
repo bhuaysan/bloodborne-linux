@@ -218,6 +218,44 @@ Left out by the load rule: `yharnam-route` at 120 has two runs in `play-attack`,
 
 **What the numbers support.** The heaviest segments miss 8.33 ms at 120 with the GPU thread as the bound, after #776 and #777, and `pipeline`, `vertex` and `state` are above 15 % of its time. That meets #780's condition to start. For #779, the split of the heaviest segments' `commands` between its two stages is about 2.5 to 2.8 ms for stage A (PM4 processing outside the draws, plus `pipeline`) and 6.8 to 7.4 ms for stage B (the rest of `draw`: `bind`, `render`, `vertex`, `state`). Stage B alone would sit just under the 8.33 ms slot, so #779's assessment needs #780's result first.
 
+### GPU time per frame in Yharnam (#827)
+
+Measured on 2026-11-24 to find what the GPU spends a heavy frame on, after #779 found the GPU bounding `yharnam-route` `play-walk` at 120. `relwithdebinfo` build of `main` at `fafd4393` with a local probe (not committed) that writes a Vulkan timestamp at the end of every render pass, at every change of command kind or caller outside render passes (buffer cache uploads, copy-shader HLE copies, game dispatches, tiling, detiling, texture uploads), and at the start of every command buffer. Each part's time is its timestamp minus the one before it in GPU order, or minus the start of its command buffer when the GPU sat idle in between, so the parts add up to the GPU's busy time. `--window`, warm cache, 120 FPS, three runs with the probe and three without. The GPU's busy share and clock (`hwmon` `freq1_input`) were sampled every 0.1 s beside them. Load from other programs stayed under 1.5 cores for most of the runs, with bursts of 4–10 cores for up to a minute. The GPU times barely depend on it; the FPS do.
+
+**The probe's sum matches the GPU's busy time.** In `play-walk` the timestamps add up to 8.59, 8.91 and 8.65 ms per frame. The busy share times the frame interval gives 8.79, 9.27 and 8.79 ms, 2–4 % more. In `play-stand`, which holds 120, the GPU needs 7.21–7.30 ms per present with the probe and 7.15–7.34 ms without, so the probe's cost is within the run-to-run spread.
+
+**`yharnam-route` `play-walk` at 120**, ms per frame (three probe runs and their median; 97–110 FPS, GPU busy 90–96 % at 2335–2557 MHz):
+
+| part | runs | median | share | per frame |
+|---|---|---|---|---|
+| G-buffer pass (1920x1080, 6 colour targets + depth and stencil) | 1.98, 2.10, 2.06 | 2.06 | 24 % | ~700 draws in 16 parts |
+| copy-shader HLE: source uploads (buffer cache, staging to arena) | 1.88, 1.87, 1.90 | 1.88 | 22 % | ~20 uploads, 7.8–7.9 MB |
+| copy-shader HLE: the copies | 0.86, 0.89, 0.85 | 0.86 | 10 % | 55 copies, ~5250 regions, 1.27 MB |
+| full-screen passes, 1920x1080, one colour target, no depth | 0.61, 0.63, 0.60 | 0.61 | 7 % | 22 passes |
+| 1920x1080, 2 colour targets + depth | 0.54, 0.55, 0.53 | 0.54 | 6 % | ~370 draws |
+| shadow map, 4096x4096 | 0.51, 0.52, 0.51 | 0.51 | 6 % | ~285 draws in 8 parts |
+| half resolution (960x540) passes | 0.47, 0.51, 0.50 | 0.50 | 6 % | ~210 draws |
+| other render passes (small targets, mip chains) | 0.50, 0.51, 0.49 | 0.50 | 6 % | ~85 passes |
+| 1920x1080, one colour target + depth | 0.38, 0.40, 0.37 | 0.38 | 4 % | ~120 draws in ~49 passes |
+| game compute dispatches | 0.29, 0.29, 0.28 | 0.29 | 3 % | ~47 |
+| image downloads: tiling and copy to a buffer | 0.20, 0.21, 0.20 | 0.20 | 2 % | 3 images |
+| buffer cache uploads for draws | 0.16, 0.18, 0.14 | 0.16 | 2 % | ~7 uploads, 0.5–0.7 MB |
+| texture uploads and detiling | 0.14, 0.15, 0.13 | 0.14 | 2 % | ~4 textures |
+| other copies, clears and fills | 0.08, 0.08, 0.07 | 0.08 | 1 % | |
+| **sum** | 8.59, 8.91, 8.65 | 8.65 | | |
+
+Per frame: about 210 render passes, 230 barriers and 1860 draws. A part's time includes the barrier before it. `play-sprint` (8.07–8.30 ms per frame) and `play-dodge` (6.86–9.00) have the same mix; the HLE's two parts are 2.4 and 2.1 ms there (one run each). In `play-stand` (6.91–7.02) the HLE's copies and all buffer uploads together take 2.0 ms.
+
+**What is our cost.** The game's own passes and dispatches take about 5.3 ms of the 8.65. Our translation adds about 3.3 ms (38 %):
+- **The copy-shader HLE, 2.7 ms (32 %).** Each batch of the HLE (`ExecuteCopyShaderHLE`) obtains the whole merged source span, up to 64 MB, and the buffer cache uploads every CPU-written page in it: 7.8–7.9 MB a frame at about 4 GB/s, for 1.27 MB that is then copied. The copies run as 5250 regions of about 240 bytes each, at about 1.5 GB/s in device-local memory. #676 found the span upload cheap on the GPU thread; on the GPU it is the largest part of the frame after the G-buffer pass. A cut is #832, expected to take about 2.4 ms per present off `play-walk`.
+- **Image downloads, 0.20 ms.** Three images are tiled and copied to guest memory every frame.
+- **Buffer uploads for draws, 0.16 ms, and texture uploads, 0.14 ms.**
+- **Render pass splits.** Every copy outside a render pass ends the pass it falls into: the G-buffer pass runs in about 16 parts a frame, most of them split by the HLE's copies. Their cost is inside the parts above and is not measured apart.
+
+Each of the small parts is 2 % of the frame or less, so they get no issue of their own. The game's passes were not compared against the console: there is no PS4 timing to compare with, so whether a translated shader is slower than it has to be stays open. The G-buffer pass alone takes 2.1 ms for about 700 draws.
+
+**What the numbers support.** With #832 the GPU would need about 6.4 ms per present in `play-walk`, below the GPU thread's 8.0–8.9 ms of CPU (#779), so the GPU thread would bound the heaviest segments again. Until then the GPU bounds them, a third of it through the HLE.
+
 ## Distributions (#755)
 
 `run bb-run --container IMAGE --bb-run PACKAGE/bb-run` plays a portable package inside a container
