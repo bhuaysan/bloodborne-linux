@@ -8,6 +8,7 @@ bb_add_test(shadps4_fault_handler_test SOURCES fault_handler_test.cpp LIBS bbsha
 bb_add_test(shadps4_buffer_barriers_test SOURCES buffer_barriers_test.cpp LIBS bbshadps4 bbcommon)
 # The runs of the copy shader's destination ranges (#676); header-only, needs no Vulkan device.
 bb_add_test(shadps4_range_run_test SOURCES range_run_test.cpp LIBS bbshadps4 bbcommon)
+# The copy shader HLE's staging layout (#832); header-only, needs no Vulkan device.
 bb_add_test(shadps4_pack_copies_test SOURCES pack_copies_test.cpp LIBS bbshadps4 bbcommon)
 # The registers of the pipeline lookup reuse (#780); needs no Vulkan device.
 bb_add_test(shadps4_pipeline_regs_test SOURCES pipeline_regs_test.cpp LIBS bbshadps4 bbcommon)

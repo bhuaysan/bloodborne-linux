@@ -5,7 +5,6 @@
 // License texts: third_party/shadps4/LICENSES/
 
 #include <atomic>
-#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -28,8 +27,11 @@ static constexpr vk::DeviceSize MaxDistanceForMerge = 64_MB;
 // yharnam-route at 120 that uploaded about 7.9 MB a frame for 1.3 MB copied and took 1.9 ms of
 // GPU time, the copies another 0.9 ms in about 5250 regions. Staged, the regions whose
 // destinations follow each other merge (about 530 a frame), and the source pages keep their
-// tracking. The caller has checked that the GPU modified no source page, so guest memory holds
-// what a sync would have put into the buffers.
+// tracking. The caller has checked that the GPU modified no source page and that no destination
+// overlaps a source, so guest memory holds what a sync would have put into the buffers. One case
+// stays unchecked: a texel buffer sync that filled the arena from an image or its metadata
+// (SynchronizeMemoryFromImage) leaves the pages unmarked; --check-copy-shader-staging would show
+// it in a source.
 static void CopyFromStaging(const AmdGpu::Buffer& src_sharp, const AmdGpu::Buffer& dst_sharp,
                             std::span<const CopyRange> copies, Rasterizer& rasterizer) {
     auto& runtime = rasterizer.GetRuntime();
@@ -88,10 +90,12 @@ static void CopyFromStaging(const AmdGpu::Buffer& src_sharp, const AmdGpu::Buffe
 }
 
 // Ours (#832): --check-copy-shader-staging. Today's path did the copies; this compares the source
-// bytes they read from the buffer with guest memory, read before the sync at the same point of
-// the command stream, once the GPU is done.
+// bytes they read from the buffer with guest memory, read right after the sync was recorded,
+// once the GPU is done. A guest write between this read and the sync's memmove on a copy thread
+// shows as a difference that is not one.
 struct StagingCheck {
     std::atomic<u64> calls{};
+    std::atomic<u64> unstaged_calls{}; // GPU modified sources or overlapping destinations
     std::atomic<u64> bytes{};
     std::atomic<u64> mismatched_bytes{};
     std::atomic<u64> mismatched_copies{};
@@ -116,6 +120,9 @@ static void CheckSourceBytes(const VideoCore::Buffer* src_buf, VAddr src_base,
     reads.reserve(copies.size());
     u64 packed = 0;
     for (size_t i = 0; i < copies.size(); ++i) {
+        if (copies[i].size == 0) {
+            continue;
+        }
         buffer_cache.ReadGuestMemory(src_base + copies[i].src, expected.data() + packed,
                                      copies[i].size);
         reads.push_back({vk_copies[i].srcOffset, packed, copies[i].size});
@@ -188,20 +195,40 @@ static bool ExecuteCopyShaderHLE(const Shader::Info& info, const AmdGpu::Compute
         copies.emplace_back(local_src_offset, local_dst_offset, local_size);
     }
 
-    // Ours (#832): staged when the GPU modified no source page. In yharnam-route no call's
-    // sources did; today's path stays for those that do and as the switch to compare.
+    // Ours (#832): staged when the GPU modified no source page and the destinations stay apart
+    // from the sources (a copy reading an earlier copy's result needs today's batches). In
+    // yharnam-route no call's sources were GPU modified; today's path stays for those that are
+    // and as the switch to compare.
     static std::vector<CopyRange> ranges;
     ranges.clear();
     bool staged = copy_shader_staging != CopyShaderStaging::off;
     if (staged) {
         ranges.reserve(copies.size());
+        u64 src_min = ~u64{0}, src_max = 0, dst_min = ~u64{0}, dst_max = 0;
         for (const auto& copy : copies) {
             ranges.push_back({copy.srcOffset, copy.dstOffset, copy.size});
+            if (copy.size == 0) {
+                continue;
+            }
             if (buffer_cache.IsRegionGpuModified(src_buf_sharp.base_address + copy.srcOffset,
                                                  copy.size)) {
                 staged = false;
                 break;
             }
+            src_min = std::min<u64>(src_min, copy.srcOffset);
+            src_max = std::max<u64>(src_max, copy.srcOffset + copy.size);
+            dst_min = std::min<u64>(dst_min, copy.dstOffset);
+            dst_max = std::max<u64>(dst_max, copy.dstOffset + copy.size);
+        }
+        const VAddr src_start = src_buf_sharp.base_address + src_min;
+        const VAddr dst_start = dst_buf_sharp.base_address + dst_min;
+        if (staged && src_min < src_max && dst_min < dst_max &&
+            src_start < dst_buf_sharp.base_address + dst_max &&
+            dst_start < src_buf_sharp.base_address + src_max) {
+            staged = false;
+        }
+        if (!staged) {
+            staging_check.unstaged_calls.fetch_add(1, std::memory_order_relaxed);
         }
     }
     const bool check = staged && copy_shader_staging == CopyShaderStaging::check;
@@ -244,8 +271,11 @@ static bool ExecuteCopyShaderHLE(const Shader::Info& info, const AmdGpu::Compute
         }
 
         // Obtain buffers for the total source and destination ranges.
+        // Ours (#832): the check needs the arena, not the stream buffer, which is a guest copy.
         const auto [src_buf, src_buf_offset] = buffer_cache.ObtainBuffer(
-            src_buf_sharp.base_address + src_offset_min, src_offset_max - src_offset_min);
+            src_buf_sharp.base_address + src_offset_min, src_offset_max - src_offset_min,
+            check ? VideoCore::ObtainBufferFlags::IgnoreStreamBuffer
+                  : VideoCore::ObtainBufferFlags::None);
         const auto [dst_buf, dst_buf_offset] = buffer_cache.ObtainBuffer(
             dst_buf_sharp.base_address + dst_offset_min, dst_offset_max - dst_offset_min,
             VideoCore::ObtainBufferFlags::IgnoreStreamBuffer);
@@ -285,11 +315,12 @@ static bool ExecuteCopyShaderHLE(const Shader::Info& info, const AmdGpu::Compute
         buffer_cache.MarkRegionAsGpuModified(start, size);
     });
 
-    if (check && staging_check.calls.fetch_add(1) % 10000 == 9999) {
+    if (const u64 n = check ? staging_check.calls.fetch_add(1) : 1; n % 10000 == 0) {
         LOG_WARNING(Render_Vulkan,
-                    "copy shader staging check: {} calls, {} source bytes compared, {} bytes in "
-                    "{} copies differ",
-                    staging_check.calls.load(), staging_check.bytes.load(),
+                    "copy shader staging check: {} calls checked, {} not staged, {} source bytes "
+                    "compared, {} bytes in {} copies differ",
+                    staging_check.calls.load(), staging_check.unstaged_calls.load(),
+                    staging_check.bytes.load(),
                     staging_check.mismatched_bytes.load(), staging_check.mismatched_copies.load());
     }
 

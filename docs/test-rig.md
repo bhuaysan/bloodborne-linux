@@ -247,7 +247,7 @@ Measured on 2026-11-24 to find what the GPU spends a heavy frame on, after #779 
 Per frame: about 210 render passes, 230 barriers and 1860 draws. A part's time includes the barrier before it. `play-sprint` (8.07–8.30 ms per frame) and `play-dodge` (6.86–9.00) have the same mix; the HLE's two parts are 2.4 and 2.1 ms there (one run each). In `play-stand` (6.91–7.02) the HLE's copies and all buffer uploads together take 2.0 ms.
 
 **What is our cost.** The game's own passes and dispatches take about 5.3 ms of the 8.65. Our translation adds about 3.3 ms (38 %):
-- **The copy-shader HLE, 2.7 ms (32 %).** Each batch of the HLE (`ExecuteCopyShaderHLE`) obtains the whole merged source span, up to 64 MB, and the buffer cache uploads every CPU-written page in it: 7.8–7.9 MB a frame at about 4 GB/s, for 1.27 MB that is then copied. The copies run as 5250 regions of about 240 bytes each, at about 1.5 GB/s in device-local memory. #676 found the span upload cheap on the GPU thread; on the GPU it is the largest part of the frame after the G-buffer pass. A cut is #832, expected to take about 2.4 ms per present off `play-walk`.
+- **The copy-shader HLE, 2.7 ms (32 %).** Each batch of the HLE (`ExecuteCopyShaderHLE`) obtains the whole merged source span, up to 64 MB, and the buffer cache uploads every CPU-written page in it: 7.8–7.9 MB a frame at about 4 GB/s, for 1.27 MB that is then copied. The copies run as 5250 regions of about 240 bytes each, at about 1.5 GB/s in device-local memory. #676 found the span upload cheap on the GPU thread; on the GPU it is the largest part of the frame after the G-buffer pass. #832 cut it to about 0.7 ms (below).
 - **Image downloads, 0.20 ms.** Three images are tiled and copied to guest memory every frame.
 - **Buffer uploads for draws, 0.16 ms, and texture uploads, 0.14 ms.**
 - **Render pass splits.** Every copy outside a render pass ends the pass it falls into: the G-buffer pass runs in about 16 parts a frame, most of them split by the HLE's copies. Their cost is inside the parts above and is not measured apart.
@@ -255,6 +255,22 @@ Per frame: about 210 render passes, 230 barriers and 1860 draws. A part's time i
 Each of the small parts is 2 % of the frame or less, so they get no issue of their own. The game's passes were not compared against the console: there is no PS4 timing to compare with, so whether a translated shader is slower than it has to be stays open. The G-buffer pass alone takes 2.1 ms for about 700 draws.
 
 **What the numbers support.** With #832 the GPU would need about 6.4 ms per present in `play-walk`, below the GPU thread's 8.0–8.9 ms of CPU (#779), so the GPU thread would bound the heaviest segments again. Until then the GPU bounds them, a third of it through the HLE.
+
+### Copy shader HLE from staging (#832)
+
+Measured on 2026-11-24 after #827 found a third of the GPU's frame in `play-walk` in the copy shader HLE. `relwithdebinfo`, `yharnam-route` at 120, `--window`, warm cache, three runs with the staged copies (the default) and three with `--no-copy-shader-staging` (today's path before #832), alternating; load from other programs 0.4 cores on average, at most 2.7. One run each with #827's timestamp probe.
+
+**The sources never hold GPU-written data.** A probe counted every HLE call over the whole route: about 14,000 copies a second in 6,500 calls, and not one source range on a page the GPU modified. `--check-copy-shader-staging` compared 13.5 GB of source bytes the arena held after today's sync with guest memory: no byte differed.
+
+| segment | FPS staged | FPS today | GPU ms/frame staged (probe) | today (probe) | GPU thread CPU ms/present staged | today |
+|---|---|---|---|---|---|---|
+| `play-walk` | 116.3, 118.2, 118.2 | 111.3, 110.8, 110.9 | 6.53 | 8.68 | 7.54, 7.40, 7.40 | 7.97, 7.93, 7.98 |
+| `play-sprint` | 119.7, 119.4, 119.6 | 118.4, 119.3, 119.0 | 6.37 | 8.30 | 6.95, 6.89, 6.91 | 7.04, 6.30, 6.89 |
+| `play-dodge` | 119.7, 119.6, 119.8 | 119.8, 119.7, 119.7 | 6.40 | 8.45 | 7.59, 5.40, 5.59 | 5.03, 5.12, 4.98 |
+
+In `play-walk` the probe's parts went from 2.06 ms of buffer uploads and 0.85 ms of HLE copies to 0.35 and 0.53 ms: the sources are no longer uploaded, the destinations' uploads remain, and the copies run as about 530 regions a frame from staging instead of 5250 from the arena. The GPU's busy share fell from 97–98 % to 81 % at a lower clock, so the GPU no longer bounds these segments. The GPU thread's system time fell by 0.25 ms per present in `play-walk`, from fewer write faults on the source pages, which keep their tracking. `play-dodge` held 120 on both paths; there the GPU thread took 0.3–0.5 ms more per present staged in two runs and 2.5 ms more in the third, against a tight 5.0–5.1 ms today. Its cause is not known; it stays below the frame interval.
+
+`play-walk` misses 120 now by its long frames (p99 10–13 ms staged, 17 ms today), with neither the GPU (81 % busy) nor the GPU thread (7.4–7.5 ms of CPU per present) saturated on average.
 
 ## Distributions (#755)
 
