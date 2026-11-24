@@ -54,6 +54,7 @@ TEST(Config, ParsesEverySetting) {
         "chromatic_aberration_strength = 0.25\n"
         "fov = 55.5\n"
         "load_hold = 2.5\n"
+        "show_fps = true\n"
         "present_mode = \"immediate\"\n"
         "device = \"AMD Radeon RX 7900 XTX (RADV NAVI31)\"\n"
         "display = \"DELL U2723QE\"\n"
@@ -77,6 +78,7 @@ TEST(Config, ParsesEverySetting) {
     EXPECT_EQ(c.chromatic_aberration_strength, 0.25f);
     EXPECT_EQ(c.fov, 55.5f);
     EXPECT_EQ(c.load_hold, 2.5f);
+    EXPECT_EQ(c.show_fps, true);
     EXPECT_EQ(c.present_mode, bb::common::PresentMode::immediate);
     EXPECT_EQ(c.device, "AMD Radeon RX 7900 XTX (RADV NAVI31)");
     EXPECT_EQ(c.display, "DELL U2723QE");
@@ -277,6 +279,7 @@ TEST_F(ConfigFileTest, WriteThenReadGivesTheSameConfig) {
     c.chromatic_aberration_strength = 0.75f;
     c.fov = 62.5f;
     c.load_hold = 0.0f;
+    c.show_fps = true;
     c.present_mode = bb::common::PresentMode::fifo;
     c.device = "GPU \"one\"";
     c.display = "Monitor\twith tab";

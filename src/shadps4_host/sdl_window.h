@@ -5,7 +5,7 @@
 // window bb-run opens (docs/design/renderer.md, "The window is ours, the surface is upstream's").
 // No input of its own, settings or fullscreen; Open and PumpEvents are ours. 2026-11-21: Open
 // takes the display to open on. 2026-11-22: PumpEvents ends the run on the controller's quit chord;
-// SyncTextInput (#795).
+// SyncTextInput (#795). 2026-11-24: F10 toggles the frame rate counter.
 // License texts: third_party/shadps4/LICENSES/
 #pragma once
 
@@ -68,6 +68,8 @@ public:
     // touchpad, sensors): the pad lives in a library the window does not link.
     using EventHandler = void (*)(const SDL_Event&);
     static void SetGamepadEventHandler(EventHandler handler);
+    // What F10 does: show or hide the frame rate counter (hle/video/fps_overlay.hpp).
+    static void SetFpsKeyHandler(void (*handler)());
 
 private:
     void OnResize();

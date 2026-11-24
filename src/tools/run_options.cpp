@@ -101,6 +101,7 @@ RunOptions options_from_config(const common::Config& config) {
         options.resolution_height = config.resolution->second;
     }
     options.fullscreen = config.fullscreen.value_or(options.fullscreen);
+    options.show_fps = config.show_fps.value_or(options.show_fps);
     options.fsr = config.fsr.value_or(options.fsr);
     options.rcas = config.rcas.value_or(options.rcas);
     options.rcas_attenuation = config.rcas_attenuation.value_or(options.rcas_attenuation);
@@ -267,6 +268,10 @@ RunOptions parse_run_options(std::span<const std::string_view> args, RunOptions 
         } else if (arg == "--fov") {
             options.fov = parse_float(arg, value(), common::min_fov, common::max_fov,
                                       "a number of degrees");
+        } else if (arg == "--show-fps") {
+            options.show_fps = true;
+        } else if (arg == "--no-show-fps") {
+            options.show_fps = false;
         } else if (arg == "--fullscreen") {
             options.fullscreen = true;
         } else if (arg == "--fsr") {

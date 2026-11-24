@@ -27,4 +27,16 @@ inline void apply_load_hold(common::Config& config, int before, int after) {
     }
 }
 
+// The frame rate counter switch: on writes show_fps = true, off removes the key (the default).
+// A switch the player left alone writes nothing.
+inline bool show_fps_choice(const common::Config& config) {
+    return config.show_fps.value_or(false);
+}
+
+inline void apply_show_fps(common::Config& config, bool before, bool after) {
+    if (after != before) {
+        config.show_fps = after ? std::optional(true) : std::nullopt;
+    }
+}
+
 }  // namespace bb::launcher

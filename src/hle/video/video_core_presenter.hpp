@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 
+#include "hle/video/fps_overlay.hpp"
 #include "hle/video/gnm_driver.hpp"
 #include "hle/video/video_out.hpp"
 #include "video_core/renderer_vulkan/vk_options.h"
@@ -66,6 +67,10 @@ public:
 
     // The number of presents of the game's frames so far.
     std::uint64_t game_frames() const { return game_frames_; }
+
+    // The frame rate counter over the window (fps_overlay.hpp); does nothing without a window.
+    void set_fps_shown(bool shown);
+    void toggle_fps();
     // The rasterizer's draws and dispatches so far (GpuStats' counters).
     static std::uint64_t draws();
     static std::uint64_t dispatches();
@@ -74,6 +79,7 @@ private:
     std::unique_ptr<AmdGpu::Liverpool> liverpool_;
     std::unique_ptr<Vulkan::Presenter> presenter_;
     std::atomic<std::uint64_t> game_frames_{0};
+    FpsOverlay fps_overlay_;
 };
 
 // The index RendererOptions::gpu_id takes for the --device selector: the first Vulkan device whose

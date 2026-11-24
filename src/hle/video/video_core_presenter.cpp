@@ -89,6 +89,7 @@ void VideoCorePresenter::present(Vulkan::Frame* frame, bool is_reusing_frame,
     if (!is_game_frame || is_reusing_frame) {
         return;
     }
+    fps_overlay_.frame();
     const std::uint64_t n = ++game_frames_;
     if (n == 1) {
         common::log(common::LogLevel::info, channel, "first game frame presented");
@@ -102,6 +103,18 @@ void VideoCorePresenter::present(Vulkan::Frame* frame, bool is_reusing_frame,
 void VideoCorePresenter::release_frame(Vulkan::Frame* frame) {
     if (presenter_) {
         presenter_->ReleaseFrame(frame);
+    }
+}
+
+void VideoCorePresenter::set_fps_shown(bool shown) {
+    if (presenter_) {
+        fps_overlay_.set_shown(shown);
+    }
+}
+
+void VideoCorePresenter::toggle_fps() {
+    if (presenter_) {
+        fps_overlay_.toggle();
     }
 }
 

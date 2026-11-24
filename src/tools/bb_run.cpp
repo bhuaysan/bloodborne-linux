@@ -229,6 +229,13 @@ struct Display {
 };
 Display* display = nullptr;
 
+// F10 in the window: shows or hides the frame rate counter.
+void toggle_fps() {
+    if (display != nullptr && display->presenter) {
+        display->presenter->toggle_fps();
+    }
+}
+
 // Opens the window and creates the presenter on it. Without a display (neither WAYLAND_DISPLAY
 // nor DISPLAY set) it logs that and leaves `display` null: the run then goes on headless. A window
 // that fails to open on a display ends the run with status 1, a --device that names no device
@@ -259,6 +266,7 @@ void open_display(const bb::tools::RunOptions& options) {
     // The window passes the SDL gamepad events on to the imported pad, which the libraries
     // registered before.
     Frontend::WindowSDL::SetGamepadEventHandler(&Libraries::Pad::HandleGamepadEvent);
+    Frontend::WindowSDL::SetFpsKeyHandler(&toggle_fps);
     Libraries::Pad::StartPolling();
     // After the window: the device order depends on its window system type.
     const Vulkan::RendererOptions wanted = bb::tools::renderer_options(options, -1);
@@ -316,6 +324,7 @@ void open_display(const bb::tools::RunOptions& options) {
     }
     d->presenter = std::make_unique<bb::hle::video::VideoCorePresenter>(d->window.get(),
                                                                          *guest_memory, renderer);
+    d->presenter->set_fps_shown(options.show_fps);
     display = d.release();
 }
 

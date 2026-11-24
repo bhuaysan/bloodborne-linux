@@ -131,6 +131,7 @@ struct Config {
     std::optional<float> chromatic_aberration_strength;  // chromatic_aberration_strength: 0 to 1
     std::optional<float> fov;                       // fov: min_fov to max_fov degrees
     std::optional<float> load_hold;                 // load_hold: 0 to max_load_hold seconds
+    std::optional<bool> show_fps;                   // show_fps: the in-game frame rate counter
     std::optional<PresentMode> present_mode;        // present_mode = "fifo"|"mailbox"|"immediate"
     // device: a part of the Vulkan device's name, display: of the SDL display's name, ignoring
     // case (bb-run --device, --display). Not empty.

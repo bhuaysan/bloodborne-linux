@@ -7,6 +7,7 @@
 // switching or hotkeys. 2026-11-21: Open takes the display to open on (FindDisplay). 2026-11-22:
 // PumpEvents ends the run when Back and Start are held together (common/quit_chord.hpp, #757),
 // and hands keyboard, text and mouse events to ImGui while the IME dialog is open (#795).
+// 2026-11-24: F10 shows or hides the frame rate counter.
 // License texts: third_party/shadps4/LICENSES/
 
 #include "sdl_window.h"
@@ -24,6 +25,7 @@ namespace Frontend {
 
 namespace {
 WindowSDL::EventHandler gamepad_handler = nullptr;
+void (*fps_key_handler)() = nullptr;
 
 bool ContainsIgnoringCase(std::string_view text, std::string_view part) {
     const auto lower = [](char c) { return std::tolower(static_cast<unsigned char>(c)); };
@@ -67,6 +69,10 @@ SDL_DisplayID FindDisplay(std::string_view name, std::string& note) {
 
 void WindowSDL::SetGamepadEventHandler(EventHandler handler) {
     gamepad_handler = handler;
+}
+
+void WindowSDL::SetFpsKeyHandler(void (*handler)()) {
+    fps_key_handler = handler;
 }
 
 std::unique_ptr<WindowSDL> WindowSDL::Open(std::string_view title, s32 width_, s32 height_,
@@ -186,6 +192,13 @@ bool WindowSDL::PumpEvents(s32 timeout_ms) {
         case SDL_EVENT_WINDOW_MINIMIZED:
         case SDL_EVENT_WINDOW_EXPOSED:
             OnResize();
+            break;
+        case SDL_EVENT_KEY_DOWN:
+            // Not while the IME dialog takes the keyboard.
+            if (event.key.key == SDLK_F10 && !event.key.repeat && !text_input_active &&
+                fps_key_handler != nullptr) {
+                fps_key_handler();
+            }
             break;
         case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         case SDL_EVENT_GAMEPAD_BUTTON_UP: {

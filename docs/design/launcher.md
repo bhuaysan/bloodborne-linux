@@ -161,6 +161,7 @@ Settings that change how the game behaves rather than how it looks, in the same 
 | Row | Control | Config / `bb-run` |
 |---|---|---|
 | Loading after death | slider in whole seconds from 0 to 12; 12 reads "12 s (default)" | `load_hold`, `--load-hold` (#704): no key at the game's 12, else the seconds. A fraction in the file shows rounded and stays until the slider moves |
+| Frame rate counter | dropdown: Off, On (F10 in the game) | `show_fps`, `--show-fps`: no key when off. F10 in the game window shows or hides the counter for that run only |
 
 Under the row a line says what it does: the least time the loading page of a death's reload stays up; the game still waits until the area is ready, so 0 s loads about 7 s faster (measured with `load-death-travel`, docs/test-rig.md, "The death's loading hold"). The page saves when it closes, like Picture and sound. The form's rows, dropdowns and sliders are shared in `form.hpp`.
 

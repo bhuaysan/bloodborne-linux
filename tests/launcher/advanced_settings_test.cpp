@@ -38,4 +38,19 @@ TEST(AdvancedSettings, AFractionSetByHandStaysUntilTheSliderMoves) {
     EXPECT_EQ(config.load_hold, 2.0f);
 }
 
+TEST(AdvancedSettings, MapsTheFpsCounterOntoItsKey) {
+    Config config;
+    EXPECT_FALSE(show_fps_choice(config));
+    apply_show_fps(config, false, false);
+    EXPECT_EQ(config, Config{});
+    apply_show_fps(config, false, true);
+    EXPECT_TRUE(show_fps_choice(config));
+    EXPECT_EQ(bb::common::format_config(config), "show_fps = true\n");
+    apply_show_fps(config, true, false);  // off removes the key
+    EXPECT_FALSE(config.show_fps);
+    config.show_fps = false;  // written by hand
+    apply_show_fps(config, false, false);
+    EXPECT_EQ(config.show_fps, false);
+}
+
 }  // namespace

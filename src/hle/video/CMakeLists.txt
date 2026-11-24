@@ -15,7 +15,7 @@ set_source_files_properties(gnm_driver.cpp PROPERTIES
 # video_core's presenter behind video out, for bb-run's window: Liverpool and the Presenter in
 # upstream's order (video_core_presenter.hpp). Only where bbvideocore is built.
 if(TARGET bbvideocore)
-    add_library(bbvideopresenter STATIC video_core_presenter.cpp)
+    add_library(bbvideopresenter STATIC video_core_presenter.cpp fps_overlay.cpp)
     target_link_libraries(bbvideopresenter PUBLIC bbvideocore bbshadps4 PRIVATE bbcommon bb_warnings)
     target_include_directories(bbvideopresenter PUBLIC ${PROJECT_SOURCE_DIR}/src)
 endif()

@@ -25,6 +25,8 @@ struct Text {
     const char* seconds;          // a hold in whole seconds
     const char* seconds_default;  // the game's hold
     const char* load_hold_help;  // a no-break space between a number and its unit
+    const char* show_fps;
+    const char* off_on[2];
     const char* data_folder;
     const char* change;
     const char* back_to_default;
@@ -38,6 +40,8 @@ constexpr Text english{
     .seconds_default = "{} s (default)",
     .load_hold_help = "The shortest time the loading screen stays up after you die. The game "
                       "still waits until the area is ready, so 0\xC2\xA0s loads about 7\xC2\xA0s faster.",
+    .show_fps = "Frame rate counter",
+    .off_on = {"Off", "On (F10 in the game)"},
     .data_folder = "Data folder",
     .change = "Change...",
     .back_to_default = "Back to default",
@@ -52,6 +56,8 @@ constexpr Text german{
     .load_hold_help = "Die k\xc3\xbcrzeste Zeit, die der Ladebildschirm nach dem Tod zu sehen "
                       "ist. Das Spiel wartet trotzdem, bis das Gebiet bereit ist; mit "
                       "0\xC2\xA0s l\xc3\xa4" "dt es etwa 7\xC2\xA0s schneller.",
+    .show_fps = "Bildratenanzeige",
+    .off_on = {"Aus", "An (F10 im Spiel)"},
     .data_folder = "Datenordner",
     .change = "\xc3\x84ndern...",
     .back_to_default = "Zur\xc3\xbc" "ck zum Standard",
@@ -87,6 +93,11 @@ public:
             return line_slider("##hold", hold_, 0, game_load_hold, game_load_hold, 1,
                                value_column({label(game_load_hold)}, s), label, s);
         });
+        int fps = show_fps_ ? 1 : 0;
+        if (form.row(t.show_fps,
+                     [&] { return dropdown("##fps", {t.off_on[0], t.off_on[1]}, fps); })) {
+            show_fps_ = fps == 1;
+        }
         Action action = Action::none;
         ImGui::BeginDisabled(ctx.data_locked || !ctx.data_changeable);
         if (form.row(t.data_folder, [&] { return row_button(t.change); })) {
@@ -111,13 +122,15 @@ public:
     }
 
     void on_close(const Context& ctx) override {
-        if (!loaded_ || hold_ == before_ || ctx.config_path.empty()) {
+        if (!loaded_ || (hold_ == before_ && show_fps_ == show_fps_before_) ||
+            ctx.config_path.empty()) {
             return;
         }
         // Read again: the file is the only state, and the other keys stay.
         try {
             common::update_config(ctx.config_path, [&](common::Config& config) {
                 apply_load_hold(config, before_, hold_);
+                apply_show_fps(config, show_fps_before_, show_fps_);
             });
         } catch (const common::ConfigError&) {
             // An unreadable file is left as it is; the player sees the old setting next time.
@@ -139,11 +152,14 @@ private:
             config = {};
         }
         before_ = hold_ = load_hold_choice(config);
+        show_fps_before_ = show_fps_ = show_fps_choice(config);
     }
 
     bool loaded_ = false;
     int before_ = game_load_hold;
     int hold_ = game_load_hold;
+    bool show_fps_before_ = false;
+    bool show_fps_ = false;
 };
 
 }  // namespace
@@ -154,8 +170,9 @@ std::unique_ptr<Page> make_advanced_page() {
 
 std::vector<const char*> advanced_strings(Lang lang) {
     const Text& t = text(lang);
-    return {t.title, t.load_hold, t.seconds, t.seconds_default, t.load_hold_help, t.data_folder,
-            t.change, t.back_to_default, t.locked, t.read_only};
+    return {t.title,     t.load_hold,   t.seconds,   t.seconds_default, t.load_hold_help,
+            t.show_fps,  t.off_on[0],   t.off_on[1], t.data_folder,     t.change,
+            t.back_to_default, t.locked, t.read_only};
 }
 
 std::string move_problem_text(Lang lang, MoveProblem problem) {

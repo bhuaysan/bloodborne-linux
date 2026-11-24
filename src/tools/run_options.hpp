@@ -34,7 +34,7 @@ inline constexpr std::string_view run_usage =
     "              [--anisotropy game|1|2|4|8|16]\n"
     "              [--no-motion-blur] [--motion-blur-strength S]\n"
     "              [--no-chromatic-aberration] [--chromatic-aberration-strength S]\n"
-    "              [--fov DEGREES]\n"
+    "              [--fov DEGREES] [--show-fps | --no-show-fps]\n"
     "Loads eboot.bin and the bundled PRXs of the game in DIR and runs the game from its entry\n"
     "point. DIR defaults to $BB_GAME_DIR, else BB_GAME_DIR in ./local.env.\n"
     "  --version            print the version of this build and exit\n"
@@ -120,7 +120,10 @@ inline constexpr std::string_view run_usage =
     "                       of the game's 43 (about 70 horizontal at 16:9); the game's other\n"
     "                       angles for it move by the same amount, cutscenes keep their own;\n"
     "                       at a wide --resolution the angle across grows (65 at 5120x1440 is\n"
-    "                       about 132), and bb-run warns above 120 across\n";
+    "                       about 132), and bb-run warns above 120 across\n"
+    "  --show-fps           show the game's frame rate and frame times in the window's top left\n"
+    "                       corner; F10 shows or hides it while the game runs\n"
+    "  --no-show-fps        hide it, when the config shows it\n";
 
 // The exit status of a run that hit --timeout, as timeout(1) has it.
 inline constexpr int timeout_status = 124;
@@ -184,6 +187,7 @@ struct RunOptions {
     bool chromatic_aberration = true;  // false with --no-chromatic-aberration
     float chromatic_aberration_strength = 1.0f;  // --chromatic-aberration-strength: 0 to 1
     float fov = common::game_fov;  // --fov: common::min_fov to common::max_fov degrees
+    bool show_fps = false;  // --show-fps, --no-show-fps
     bool help = false;  // -h or --help: print run_usage and exit 0
     bool check_system = false;  // --check-system: check the system and exit (system_check.hpp)
 };

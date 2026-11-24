@@ -246,6 +246,8 @@ ParsedConfig parse_config(std::string_view text, std::string_view source) {
             c.fov = want_number(max_fov, min_fov);
         } else if (key == "load_hold") {
             c.load_hold = want_number(max_load_hold);
+        } else if (key == "show_fps") {
+            c.show_fps = want_bool();
         } else if (key == "present_mode") {
             c.present_mode = parse_present_mode(want_string());
             if (!c.present_mode) {
@@ -350,6 +352,7 @@ std::string format_config(const Config& c) {
     if (c.load_hold) {
         out += std::format("load_hold = {}\n", *c.load_hold);
     }
+    flag("show_fps", c.show_fps);
     if (c.present_mode) {
         out += std::format("present_mode = \"{}\"\n", present_mode_name(*c.present_mode));
     }

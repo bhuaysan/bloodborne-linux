@@ -395,6 +395,16 @@ RunOptions with_config(const Config& config, std::vector<std::string_view> args)
     return parse_run_options(args, bb::tools::options_from_config(config));
 }
 
+TEST(RunOptionsConfig, ParsesTheFpsCounterOptions) {
+    EXPECT_FALSE(parse({}).show_fps);
+    EXPECT_TRUE(parse({"--show-fps"}).show_fps);
+    EXPECT_FALSE(parse({"--show-fps", "--no-show-fps"}).show_fps);
+    Config c;
+    c.show_fps = true;
+    EXPECT_TRUE(with_config(c, {}).show_fps);
+    EXPECT_FALSE(with_config(c, {"--no-show-fps"}).show_fps);
+}
+
 TEST(RunOptionsConfig, AppliesEverySetting) {
     Config c;
     c.game_dir = std::filesystem::path("/g");
@@ -413,6 +423,7 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     c.chromatic_aberration_strength = 0.25f;
     c.fov = 58.0f;
     c.load_hold = 3.0f;
+    c.show_fps = true;
     c.present_mode = bb::common::PresentMode::immediate;
     c.device = "Radeon";
     c.display = "Lenovo";
@@ -425,6 +436,7 @@ TEST(RunOptionsConfig, AppliesEverySetting) {
     EXPECT_EQ(o.resolution_width, 5120u);
     EXPECT_EQ(o.resolution_height, 1440u);
     EXPECT_TRUE(o.fullscreen);
+    EXPECT_TRUE(o.show_fps);
     EXPECT_TRUE(o.fsr);
     EXPECT_FALSE(o.rcas);
     EXPECT_EQ(o.rcas_attenuation, 0.5f);
