@@ -2,7 +2,6 @@
 // without a window and go down again cleanly (under AddressSanitizer in the debug preset). Skips
 // where there is no Vulkan loader or device.
 
-#include <dlfcn.h>
 #include <unistd.h>
 
 #include <array>
@@ -28,6 +27,7 @@
 #include "hle/video/video_core_presenter.hpp"
 #include "imgui/renderer/imgui_impl_vulkan.h"
 #include "sdl_window.h"
+#include "support/vulkan_probe.hpp"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_copy_queue.h"
@@ -48,44 +48,6 @@ namespace {
 // These tests run without the on-disk pipeline cache, so they never read or write the user's
 // cache directory. The cache's own test (video_core_test.cpp) opens a directory of its own.
 [[maybe_unused]] const bool no_disk_cache = (Storage::pipeline_cache_enabled = false);
-
-// Selects lavapipe unless the caller chose drivers, and returns why video_core can't run, or an
-// empty string. Asks the plain loader first, so that a missing loader or device skips instead of
-// failing an assertion inside video_core.
-std::string no_vulkan_reason() {
-    ::setenv("VK_LOADER_DRIVERS_SELECT", "*lvp*", 0);
-    void* loader = ::dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
-    if (loader == nullptr) {
-        return "no Vulkan loader";
-    }
-    std::string reason;
-    const auto get_proc =
-        reinterpret_cast<PFN_vkGetInstanceProcAddr>(::dlsym(loader, "vkGetInstanceProcAddr"));
-    const auto create = reinterpret_cast<PFN_vkCreateInstance>(
-        get_proc != nullptr ? get_proc(nullptr, "vkCreateInstance") : nullptr);
-    VkApplicationInfo app{};
-    app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    app.apiVersion = VK_API_VERSION_1_3;
-    VkInstanceCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    info.pApplicationInfo = &app;
-    VkInstance instance = VK_NULL_HANDLE;
-    if (create == nullptr || create(&info, nullptr, &instance) != VK_SUCCESS) {
-        reason = "no Vulkan instance";
-    } else {
-        const auto enumerate = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
-            get_proc(instance, "vkEnumeratePhysicalDevices"));
-        uint32_t count = 0;
-        enumerate(instance, &count, nullptr);
-        if (count == 0) {
-            reason = "no Vulkan device";
-        }
-        reinterpret_cast<PFN_vkDestroyInstance>(get_proc(instance, "vkDestroyInstance"))(instance,
-                                                                                         nullptr);
-    }
-    ::dlclose(loader);
-    return reason;
-}
 
 // What ImGui::Core::Initialize sets up and ~Instance tears down (ImGui::Core::Shutdown), without
 // the window parts: the context, the Vulkan backend and the texture worker.
