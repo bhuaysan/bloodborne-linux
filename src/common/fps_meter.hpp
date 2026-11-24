@@ -45,7 +45,8 @@ public:
         const double elapsed_s = std::chrono::duration<double>(now - window_start_).count();
         reading_.fps = frames_ / elapsed_s;
         reading_.frame_ms = frames_ > 0 ? sum_ms_ / frames_ : 0.0;
-        // A frame still in progress counts once it is longer than every finished one.
+        // In a window without frames the frame still in progress is the worst; otherwise it shows
+        // in the next window, once it ends.
         const double open_ms = std::chrono::duration<double, std::milli>(now - last_).count();
         reading_.worst_ms = std::max(worst_ms_, frames_ > 0 ? 0.0 : open_ms);
         reading_.valid = true;

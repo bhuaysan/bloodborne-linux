@@ -19,7 +19,8 @@ public:
     // A game frame was presented. Any thread.
     void frame();
 
-    // Shows or hides the counter, from any thread; it changes between two presents.
+    // Shows or hides the counter; it changes between two presents. The window's thread only (the
+    // start option and F10): two threads at once could queue the layer changes out of order.
     void set_shown(bool shown);
     void toggle() { set_shown(!shown_.load(std::memory_order_relaxed)); }
     bool shown() const { return shown_.load(std::memory_order_relaxed); }
